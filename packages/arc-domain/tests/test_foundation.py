@@ -101,6 +101,34 @@ def test_expansion_adds_only_verified_ids_present_in_metadata() -> None:
     assert report["added_papers"] == [verified["paper_id"]]
 
 
+def test_expansion_keeps_the_verified_id_when_metadata_uses_an_alias() -> None:
+    verified_id = "arXiv:2101.00001"
+    metadata = _paper("INSPIRE:123", title="Verified", year=2021, citations=500)
+    expanded, report = foundation.apply_reference_inference_result(
+        [],
+        {
+            "candidate_set_sufficient": False,
+            "confidence": "complete",
+            "search_queries": [
+                {"query": "missing canonical scope", "reason": "gap", "confidence": "complete"}
+            ],
+        },
+        {
+            "paper_ids": [verified_id],
+            "verified_references": [
+                {"paper_id": verified_id, "evidence_urls": [], "reasoning": "verified"}
+            ],
+            "warnings": [],
+            "focus_scope": "one_domain",
+        },
+        {verified_id: metadata},
+        "scope",
+    )
+
+    assert expanded[0]["paper_id"] == verified_id
+    assert report["added_papers"] == [verified_id]
+
+
 def test_selection_unknown_ids_repair_to_known_candidates() -> None:
     candidate = _paper("arXiv:2301.00001", title="Known", year=2023, citations=300)
     selection = foundation.normalize_foundation_selection(

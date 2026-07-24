@@ -346,8 +346,14 @@ def audit_expansion_request(audit: Mapping[str, Any], intent: str) -> str | None
         "Find and verify up to two missing foundational or canonical same-scope papers.",
         "Use the following independent, identifier-free search hints:",
     ]
-    lines.extend(f"- {item['query']}" for item in hints)
-    reasons = [item["reason"] for item in hints if item["reason"] and not extract_paper_ids(item["reason"])]
+    lines.extend(f"- {query}" for query in dict.fromkeys(item["query"] for item in hints))
+    reasons = list(
+        dict.fromkeys(
+            item["reason"]
+            for item in hints
+            if item["reason"] and not extract_paper_ids(item["reason"])
+        )
+    )
     if reasons:
         lines.append("Audit reasons:")
         lines.extend(f"- {reason}" for reason in reasons)
@@ -601,7 +607,7 @@ def _metadata_candidate_record(
     title = _text(metadata.get("title")) or _text(fallback.get("title"))
     abstract = _text(metadata.get("abstract")) or _text(fallback.get("abstract"))
     citation_count = _citation_count(metadata) or _citation_count(fallback)
-    paper_id = _paper_id(metadata) or _normalized_id(candidate_id)
+    paper_id = _normalized_id(candidate_id)
     record = {
         "paper_id": paper_id,
         "rank": rank,
