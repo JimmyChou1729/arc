@@ -1,3 +1,10 @@
+"""Pure contracts and rendering for an ARC domain summary.
+
+LLM execution, durable state, and artifact publication deliberately live outside
+this module.  Keeping this boundary pure means a resumed build always validates
+exactly the same model payload against exactly the same evidence snapshot.
+"""
+
 from __future__ import annotations
 
 import json
@@ -7,12 +14,6 @@ from typing import Any
 from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema import validate as validate_json_schema
 from jsonschema.exceptions import SchemaError as JsonSchemaError
-
-from arc_llm import run_json
-from arc_llm.call_record import ARC_LLM_CALL_RECORD_FIELD, ARC_LLM_CALL_RECORD_SCHEMA, strip_arc_llm_call_records
-
-from .cache import DomainPaths, now_iso, read_json, update_status, write_json, write_text
-from .llm_safety import raise_if_llm_fatal
 
 
 SUMMARY_ABSTRACT_CHAR_LIMIT = 1600
@@ -230,341 +231,59 @@ DOMAIN_SUMMARY_SCHEMA: dict[str, Any] = {
             },
         },
         "warnings": {"type": "array", "items": {"type": "string"}},
-        ARC_LLM_CALL_RECORD_FIELD: ARC_LLM_CALL_RECORD_SCHEMA,
     },
 }
 
 
-def _schema_error(payload: dict[str, Any], schema: dict[str, Any]) -> str | None:
+def _schema_error(payload: Any, schema: dict[str, Any]) -> str | None:
     try:
         validate_json_schema(instance=payload, schema=schema)
-        return None
     except (JsonSchemaValidationError, JsonSchemaError) as exc:
         return str(exc)
+    return None
 
 
 def mathematical_opportunities_validation_error(value: Any) -> str | None:
-    schema = DOMAIN_SUMMARY_SCHEMA["properties"]["mathematical_opportunities"]
-    try:
-        validate_json_schema(instance=value, schema=schema)
-        return None
-    except (JsonSchemaValidationError, JsonSchemaError) as exc:
-        return str(exc)
+    """Return the v5 opportunities-schema error, if any."""
+    return _schema_error(value, DOMAIN_SUMMARY_SCHEMA["properties"]["mathematical_opportunities"])
 
 
-def _call_record_warning(payload: dict[str, Any]) -> str | None:
-    record = payload.get(ARC_LLM_CALL_RECORD_FIELD)
-    if not isinstance(record, dict):
-        return None
-    structured = record.get("structured_output")
-    if not isinstance(structured, dict) or structured.get("mode") != "recovered":
-        return None
-    bits = []
-    if structured.get("severity"):
-        bits.append(f"severity={structured['severity']}")
-    if structured.get("recovery_strategy"):
-        bits.append(f"strategy={structured['recovery_strategy']}")
-    warnings = structured.get("warnings")
-    if isinstance(warnings, list) and warnings:
-        bits.append("; ".join(str(item) for item in warnings[:3]))
-    return "domain_summary_structured_recovery:" + " | ".join(bits) if bits else None
-
-
-def _raw_text_from_call_record(payload: dict[str, Any]) -> str:
-    record = payload.get(ARC_LLM_CALL_RECORD_FIELD)
-    if not isinstance(record, dict):
-        return ""
-    structured = record.get("structured_output")
-    if not isinstance(structured, dict):
-        return ""
-    return str(structured.get("raw_text_excerpt") or "").strip()
-
-
-def summarize_domain(
+def normalize_summary_output(
+    payload: Any,
     *,
-    paths: DomainPaths,
-    provider: str = "auto",
-    model: str | None = None,
-    model_tier: str | None = None,
+    graph: dict[str, Any],
+    evidence: dict[str, Any],
+    selection: dict[str, Any],
 ) -> dict[str, Any]:
-    update_status(paths, stage="summary_started")
-    graph = read_json(paths.domain_graph, {})
-    evidence = read_json(paths.evidence_pack, {})
-    selection = read_json(paths.foundation_selection, {})
-    prompt = _summary_prompt(graph=graph, evidence=evidence, selection=selection)
-    try:
-        raw_summary = run_json(
-            prompt,
-            schema=DOMAIN_SUMMARY_SCHEMA,
-            provider=provider,
-            model=model,
-            model_tier=model_tier,
-            output_recovery="warn",
-        )
-    except Exception as exc:
-        raise_if_llm_fatal(exc)
-        warning = {
-            "code": "domain_summary_llm_failed",
-            "message": f"LLM domain summary failed; proceeding without domain summary: {type(exc).__name__}: {exc}",
-            "created_at": now_iso(),
-        }
-        _append_status_warnings(paths, [warning])
-        _remove_stale_domain_summary_artifacts(paths)
-        update_status(
-            paths,
-            stage="summary_warning_no_summary",
-            domain_summary_path=None,
-            domain_summary_markdown_path=None,
-            summary_available=False,
-            domain_summary_available=False,
-        )
-        return {
-            "domain_id": paths.domain_id,
-            "summary_available": False,
-            "domain_summary_path": None,
-            "domain_summary_markdown_path": None,
-            "summary": None,
-            "warnings": [warning],
-        }
-    summary, method, relaxed_warnings = _normalize_domain_summary_output(
-        raw_summary,
-        paths=paths,
+    """Validate one model response against v5 and its evidence-paper whitelist.
+
+    A malformed output is an error for the caller to handle.  In particular, no
+    field is recovered, added, or filtered here: the returned object is
+    exactly the model's validated JSON object.
+    """
+    error = _schema_error(payload, DOMAIN_SUMMARY_SCHEMA)
+    if error is not None:
+        raise ValueError(f"domain_summary_schema_invalid: {error}")
+    assert isinstance(payload, dict)  # guaranteed by the schema above
+
+    allowed_paper_ids = _allowed_target_domain_paper_ids(
         graph=graph,
         evidence=evidence,
         selection=selection,
     )
-    summary["summary_method"] = method
-    summary["schema_version"] = "arc.domain_summary.v5"
-    summary["domain_id"] = paths.domain_id
-    summary["created_at"] = now_iso()
-    write_json(paths.domain_summary, summary)
-    write_text(paths.domain_summary_markdown, render_summary_markdown(summary))
-    update_status(
-        paths,
-        stage="summary_done",
-        domain_summary_path=str(paths.domain_summary),
-        domain_summary_markdown_path=str(paths.domain_summary_markdown),
-        summary_available=True,
-        domain_summary_available=True,
-    )
-    if relaxed_warnings:
-        status = read_json(paths.status, {}) or {}
-        prior = status.get("warnings") if isinstance(status.get("warnings"), list) else []
-        update_status(
-            paths,
-            warnings=[
-                *prior,
-                *[
-                    {"code": "domain_summary_relaxed", "message": warning, "created_at": now_iso()}
-                    for warning in relaxed_warnings
-                ],
-            ],
-        )
-    return {
-        "domain_id": paths.domain_id,
-        "summary_available": True,
-        "domain_summary_path": str(paths.domain_summary),
-        "domain_summary_markdown_path": str(paths.domain_summary_markdown),
-        "summary": summary,
-    }
-
-
-def _append_status_warnings(paths: DomainPaths, warnings: list[dict[str, Any]]) -> None:
-    status = read_json(paths.status, {}) or {}
-    prior = status.get("warnings") if isinstance(status.get("warnings"), list) else []
-    update_status(paths, warnings=[*prior, *warnings])
-
-
-def _remove_stale_domain_summary_artifacts(paths: DomainPaths) -> None:
-    for path in (paths.domain_summary, paths.domain_summary_markdown):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-
-
-def _normalize_domain_summary_output(
-    raw: Any,
-    *,
-    paths: DomainPaths,
-    graph: dict[str, Any],
-    evidence: dict[str, Any],
-    selection: dict[str, Any],
-) -> tuple[dict[str, Any], str, list[str]]:
-    del paths
-    warnings: list[str] = []
-    if isinstance(raw, dict):
-        raw_dict = dict(raw)
-        raw_non_dict_text = ""
-    else:
-        raw_dict = {}
-        raw_non_dict_text = _compact_text(str(raw or ""), SUMMARY_REASON_CHAR_LIMIT)
-        warnings.append("domain_summary_non_object_relaxed: LLM returned non-object output; preserved as text.")
-    raw = raw_dict
-    schema_error = _schema_error(raw, DOMAIN_SUMMARY_SCHEMA)
-    recovery_warning = _call_record_warning(raw)
-    if schema_error is None and recovery_warning is None:
-        mathematical_opportunities, evidence_warnings = _mathematical_opportunities_from_relaxed(
-            raw,
-            allowed_paper_ids=_allowed_target_domain_paper_ids(
-                graph=graph,
-                evidence=evidence,
-                selection=selection,
-            ),
-        )
-        if not evidence_warnings:
-            return raw, "llm", []
-        normalized = dict(raw)
-        normalized["mathematical_opportunities"] = mathematical_opportunities
-        normalized["warnings"] = [*raw.get("warnings", []), *evidence_warnings]
-        return normalized, "llm_relaxed", evidence_warnings
-
-    if schema_error is not None:
-        warnings.append("domain_summary_schema_relaxed:" + _compact_text(schema_error, SUMMARY_REASON_CHAR_LIMIT))
-    if recovery_warning:
-        warnings.append(recovery_warning)
-
-    raw_without_record = strip_arc_llm_call_records(raw)
-    raw_text = _raw_text_from_call_record(raw) or raw_non_dict_text or _best_relaxed_summary_text(raw_without_record)
-    foundation = _paper_summary_from_any(
-        raw_without_record.get("foundation_paper") or selection.get("selected_foundation") or {},
-        fallback_reason="Foundation paper from ARC selection.",
-    )
-    best_reference = _paper_summary_from_any(
-        raw_without_record.get("best_reference_paper")
-        or raw_without_record.get("best_reference")
-        or selection.get("best_reference_paper")
-        or selection.get("selected_foundation")
-        or {},
-        fallback_reason="Best reference paper from ARC selection.",
-    )
-    raw_warnings = raw_without_record.get("warnings")
-    normalized_warnings = [str(item) for item in raw_warnings if item] if isinstance(raw_warnings, list) else []
-    mathematical_opportunities, evidence_warnings = _mathematical_opportunities_from_relaxed(
-        raw_without_record,
-        allowed_paper_ids=_allowed_target_domain_paper_ids(
-            graph=graph,
-            evidence=evidence,
-            selection=selection,
-        ),
-    )
-    warnings.extend(evidence_warnings)
-    normalized = {
-        "schema_version": "arc.domain_summary.v5",
-        "domain_title": str(
-            raw_without_record.get("domain_title")
-            or raw_without_record.get("domain")
-            or raw_without_record.get("title")
-            or "Research Domain"
-        ),
-        "brief_introduction": raw_text or "LLM returned a malformed domain summary; inspect relaxed_payload for details.",
-        "task_focus": _task_focus_from_relaxed(raw_without_record, selection=selection),
-        "foundation_paper": foundation,
-        "best_reference_paper": best_reference,
-        "methodology": _methodology_from_relaxed(raw_without_record),
-        "mathematical_opportunities": mathematical_opportunities,
-        "known_solved_cases": _solved_cases_from_relaxed(raw_without_record),
-        "open_axes_for_new_work": _open_axes_from_relaxed(raw_without_record),
-        "warnings": [*normalized_warnings, *warnings],
-        "relaxed_payload": raw_without_record,
-    }
-    if isinstance(raw.get(ARC_LLM_CALL_RECORD_FIELD), dict):
-        normalized[ARC_LLM_CALL_RECORD_FIELD] = raw[ARC_LLM_CALL_RECORD_FIELD]
-    method = "llm_relaxed_text" if (_raw_text_from_call_record(raw) or raw_non_dict_text) and not raw_without_record else "llm_relaxed"
-    return normalized, method, warnings
-
-
-def _best_relaxed_summary_text(raw: dict[str, Any]) -> str:
-    for key in (
-        "brief_introduction",
-        "summary",
-        "overview",
-        "domain",
-        "core_methodology",
-        "methodology",
-        "priority_rules",
-        "open_axes",
-        "open_axes_for_new_work",
-    ):
-        value = raw.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    if raw:
-        return json.dumps(raw, ensure_ascii=False, indent=2, default=str)[:8000]
-    return ""
-
-
-def _paper_summary_from_any(value: Any, *, fallback_reason: str) -> dict[str, str]:
-    if isinstance(value, dict):
-        return {
-            "paper_id": str(value.get("paper_id") or value.get("id") or ""),
-            "title": str(value.get("title") or ""),
-            "reason": str(value.get("reason") or fallback_reason),
+    unknown_ids = sorted(
+        {
+            paper_id
+            for problem in payload["mathematical_opportunities"]["well_defined_problems"]
+            for paper_id in problem["target_domain_papers"]
+            if paper_id not in allowed_paper_ids
         }
-    return {"paper_id": "", "title": "", "reason": fallback_reason}
-
-
-def _task_focus_from_relaxed(raw: dict[str, Any], *, selection: dict[str, Any]) -> dict[str, Any]:
-    task_focus = raw.get("task_focus") if isinstance(raw.get("task_focus"), dict) else {}
-    priority_rules = task_focus.get("priority_rules") or raw.get("priority_rules") or []
-    if isinstance(priority_rules, str):
-        priority_rules = [priority_rules]
-    if not isinstance(priority_rules, list):
-        priority_rules = []
-    return {
-        "user_intent": str(task_focus.get("user_intent") or selection.get("intent") or ""),
-        "research_scope": str(task_focus.get("research_scope") or raw.get("research_scope") or raw.get("domain") or ""),
-        "priority_rules": [str(item) for item in priority_rules if item],
-    }
-
-
-def _methodology_from_relaxed(raw: dict[str, Any]) -> list[dict[str, Any]]:
-    source = raw.get("methodology") or raw.get("core_methodology") or []
-    return _items_as_claims(source, claim_key="claim")
-
-
-def _mathematical_opportunities_from_relaxed(
-    raw: dict[str, Any],
-    *,
-    allowed_paper_ids: set[str],
-) -> tuple[dict[str, Any], list[str]]:
-    source = raw.get("mathematical_opportunities")
-    if isinstance(source, dict):
-        problems = source.get("well_defined_problems")
-    elif isinstance(source, list):
-        problems = source
-    else:
-        problems = []
-
-    normalized = []
-    warnings = []
-    item_schema = DOMAIN_SUMMARY_SCHEMA["properties"]["mathematical_opportunities"]["properties"][
-        "well_defined_problems"
-    ]["items"]
-    for item in _listify(problems):
-        if not isinstance(item, dict):
-            warnings.append("domain_summary_invalid_mathematical_opportunity_dropped")
-            continue
-        if _schema_error(item, item_schema) is not None:
-            warnings.append("domain_summary_invalid_mathematical_opportunity_dropped")
-            continue
-        papers = [str(value).strip() for value in item["target_domain_papers"] if str(value).strip()]
-        supported_papers = [paper_id for paper_id in papers if paper_id in allowed_paper_ids]
-        unknown_papers = [paper_id for paper_id in papers if paper_id not in allowed_paper_ids]
-        if unknown_papers:
-            warnings.append(
-                "domain_summary_unknown_target_domain_papers_filtered:" + ",".join(unknown_papers)
-            )
-        if not supported_papers:
-            warnings.append("domain_summary_mathematical_opportunity_dropped_without_target_evidence")
-            continue
-        normalized_item = dict(item)
-        normalized_item["target_domain_papers"] = supported_papers
-        normalized.append(normalized_item)
-    return (
-        {"well_defined_problems": normalized[:SUMMARY_MATHEMATICAL_OPPORTUNITY_LIMIT]},
-        warnings,
     )
+    if unknown_ids:
+        raise ValueError(
+            "domain_summary_unknown_target_domain_papers: " + ", ".join(unknown_ids)
+        )
+    return payload
 
 
 def _allowed_target_domain_paper_ids(
@@ -588,87 +307,10 @@ def _allowed_target_domain_paper_ids(
     return {paper_id for paper_id in paper_ids if paper_id}
 
 
-def _solved_cases_from_relaxed(raw: dict[str, Any]) -> list[dict[str, Any]]:
-    source = raw.get("known_solved_cases") or raw.get("solved_cases") or []
-    items = []
-    for item in _listify(source):
-        if isinstance(item, dict):
-            items.append(
-                {
-                    "solved_case": str(item.get("solved_case") or item.get("title") or item.get("case") or ""),
-                    "why_it_is_solved": str(item.get("why_it_is_solved") or item.get("description") or ""),
-                    "transferable_form": str(item.get("transferable_form") or ""),
-                    "forbidden_reuse": str(item.get("forbidden_reuse") or ""),
-                    "valid_new_axes": [str(value) for value in _listify(item.get("valid_new_axes"))],
-                    "papers": [str(value) for value in _listify(item.get("papers"))],
-                }
-            )
-        else:
-            text = str(item)
-            items.append(
-                {
-                    "solved_case": text,
-                    "why_it_is_solved": "Recovered from relaxed domain summary text.",
-                    "transferable_form": "",
-                    "forbidden_reuse": "",
-                    "valid_new_axes": [],
-                    "papers": [],
-                }
-            )
-    return items[:SUMMARY_LIST_ITEM_LIMIT]
-
-
-def _open_axes_from_relaxed(raw: dict[str, Any]) -> list[dict[str, Any]]:
-    source = raw.get("open_axes_for_new_work") or raw.get("open_axes") or []
-    items = []
-    for item in _listify(source):
-        if isinstance(item, dict):
-            items.append(
-                {
-                    "axis": str(item.get("axis") or item.get("title") or item.get("direction") or ""),
-                    "guidance": str(item.get("guidance") or item.get("description") or ""),
-                    "example_variations": [str(value) for value in _listify(item.get("example_variations"))],
-                    "papers": [str(value) for value in _listify(item.get("papers"))],
-                }
-            )
-        else:
-            items.append(
-                {
-                    "axis": str(item),
-                    "guidance": "Recovered from relaxed domain summary text.",
-                    "example_variations": [],
-                    "papers": [],
-                }
-            )
-    return items[:SUMMARY_LIST_ITEM_LIMIT]
-
-
-def _items_as_claims(source: Any, *, claim_key: str) -> list[dict[str, Any]]:
-    items = []
-    for item in _listify(source):
-        if isinstance(item, dict):
-            items.append(
-                {
-                    "claim": str(item.get(claim_key) or item.get("description") or item.get("method") or item),
-                    "papers": [str(value) for value in _listify(item.get("papers"))],
-                }
-            )
-        else:
-            items.append({"claim": str(item), "papers": []})
-    return items[:SUMMARY_LIST_ITEM_LIMIT]
-
-
-def _listify(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple):
-        return list(value)
-    return [value]
-
-
-def _summary_prompt(*, graph: dict[str, Any], evidence: dict[str, Any], selection: dict[str, Any]) -> str:
+def summary_prompt(
+    graph: dict[str, Any], evidence: dict[str, Any], selection: dict[str, Any]
+) -> str:
+    """Render bounded source context for a domain-summary model call."""
     compact_evidence = _compact_summary_evidence(
         graph=graph,
         evidence=evidence,
@@ -716,16 +358,17 @@ def _compact_summary_evidence(
         abstract_limit=abstract_limit,
         conclusion_limit=conclusion_limit,
     )
-    return strip_arc_llm_call_records({
+    return {
         "foundation_selection": _compact_selection(selection),
         "foundation_paper": selection.get("selected_foundation") or {},
-        "best_reference_paper": selection.get("best_reference_paper") or selection.get("selected_foundation"),
+        "best_reference_paper": selection.get("best_reference_paper")
+        or selection.get("selected_foundation"),
         "graph": _compact_graph(graph, node_limit=graph_node_limit),
         "paper_detail_limit": paper_limit,
         "papers": detailed_papers,
         "omitted_detail_counts": omitted_detail_counts,
         "warnings": _compact_strings(evidence.get("warnings", [])),
-    })
+    }
 
 
 def _render_summary_prompt(compact_evidence: dict[str, Any]) -> str:
@@ -792,7 +435,7 @@ def _render_summary_prompt(compact_evidence: dict[str, Any]) -> str:
             ),
             "Keep warnings in the warnings JSON field only; do not ask downstream Markdown renderers to include a warnings section.",
             "Keep the result concise enough to fit comfortably in a research-agent context.",
-            f"Evidence pack:\n{compact_evidence}",
+            "Evidence pack:\n" + json.dumps(compact_evidence, ensure_ascii=False, sort_keys=True),
             "Return JSON only.",
         ]
     )
@@ -875,7 +518,9 @@ def _compact_evidence_papers(
     return detailed, _omitted_detail_counts(omitted, total_paper_count=len(papers), detail_limit=paper_limit)
 
 
-def _omitted_detail_counts(items: list[dict[str, Any]], *, total_paper_count: int, detail_limit: int) -> dict[str, Any]:
+def _omitted_detail_counts(
+    items: list[dict[str, Any]], *, total_paper_count: int, detail_limit: int
+) -> dict[str, Any]:
     return {
         "total_paper_count": total_paper_count,
         "paper_detail_limit": detail_limit,
@@ -890,7 +535,9 @@ def _counts_by_field(items: list[dict[str, Any]], field: str) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda entry: entry[0]))
 
 
-def _compact_evidence_paper(item: dict[str, Any], *, abstract_limit: int, conclusion_limit: int) -> dict[str, Any]:
+def _compact_evidence_paper(
+    item: dict[str, Any], *, abstract_limit: int, conclusion_limit: int
+) -> dict[str, Any]:
     conclusion = item.get("conclusion") or {}
     conclusion_text = conclusion.get("text", "") if isinstance(conclusion, dict) else conclusion
     return {
@@ -917,19 +564,16 @@ def _compact_strings(values: Any, *, max_items: int = SUMMARY_LIST_ITEM_LIMIT) -
 
 
 def _bounded_items(values: Any, max_items: int) -> list[Any]:
-    if not isinstance(values, list):
-        return []
-    return values[:max_items]
+    return values[:max_items] if isinstance(values, list) else []
 
 
 def _compact_text(value: Any, limit: int) -> str:
     text = "" if value is None else str(value)
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + "\n[truncated]"
+    return text if len(text) <= limit else text[:limit].rstrip() + "\n[truncated]"
 
 
 def render_summary_markdown(summary: dict[str, Any]) -> str:
+    """Render a human-readable view of a validated summary without warnings."""
     lines: list[str] = [f"# {summary.get('domain_title') or 'Research Domain'}", ""]
     if intro := summary.get("brief_introduction"):
         lines.extend([str(intro), ""])
@@ -940,11 +584,9 @@ def render_summary_markdown(summary: dict[str, Any]) -> str:
             lines.append(f"- User intent: {intent}")
         if scope := task_focus.get("research_scope"):
             lines.append(f"- Research scope: {scope}")
-        rules = task_focus.get("priority_rules") or []
-        if rules:
+        if rules := task_focus.get("priority_rules") or []:
             lines.append("- Priority rules:")
-            for rule in rules:
-                lines.append(f"  - {rule}")
+            lines.extend(f"  - {rule}" for rule in rules)
         lines.append("")
     foundation_paper = summary.get("foundation_paper") or {}
     best_reference = summary.get("best_reference_paper") or {}
@@ -963,18 +605,15 @@ def render_summary_markdown(summary: dict[str, Any]) -> str:
     opportunities = summary.get("mathematical_opportunities") or {}
     problems = opportunities.get("well_defined_problems") if isinstance(opportunities, dict) else []
     if problems:
-        lines.extend(
-            [
-                "## Mathematical Opportunities",
-                "",
-                (
-                    "These evidence-grounded cards are bounded research interfaces, not complete proposals or "
-                    "verified novelty findings. External-search methods are leads that require literature and "
-                    "applicability checks."
-                ),
-                "",
-            ]
-        )
+        lines.extend([
+            "## Mathematical Opportunities", "",
+            (
+                "These evidence-grounded cards are bounded research interfaces, not complete proposals or "
+                "verified novelty findings. External-search methods are leads that require literature and "
+                "applicability checks."
+            ),
+            "",
+        ])
         for item in problems:
             lines.append(f"- {item.get('problem', '')}")
             if importance := item.get("importance"):
@@ -989,24 +628,14 @@ def render_summary_markdown(summary: dict[str, Any]) -> str:
                 lines.append("  Available systematic methods:")
                 for method in methods:
                     origin = str(method.get("origin") or "")
-                    origin_label = "external search lead" if origin == "external_search_lead" else "in domain"
-                    lines.append(f"    - {method.get('method', '')} ({origin_label})")
+                    label = "external search lead" if origin == "external_search_lead" else "in domain"
+                    lines.append(f"    - {method.get('method', '')} ({label})")
                     if source_area := method.get("source_area"):
                         lines.append(f"      Source area: {source_area}")
                     if adaptation := method.get("required_adaptation"):
                         lines.append(f"      Required adaptation: {adaptation}")
-                    _append_named_values(
-                        lines,
-                        "Applicability conditions",
-                        method.get("applicability_conditions"),
-                        indent="      ",
-                    )
-                    _append_named_values(
-                        lines,
-                        "Validation checks",
-                        method.get("validation_checks"),
-                        indent="      ",
-                    )
+                    _append_named_values(lines, "Applicability conditions", method.get("applicability_conditions"), indent="      ")
+                    _append_named_values(lines, "Validation checks", method.get("validation_checks"), indent="      ")
             if first_calculation := item.get("bounded_first_calculation"):
                 lines.append(f"  Bounded first calculation: {first_calculation}")
             feasibility = item.get("feasibility") if isinstance(item.get("feasibility"), dict) else {}
@@ -1020,18 +649,15 @@ def render_summary_markdown(summary: dict[str, Any]) -> str:
         lines.append("")
     solved_cases = summary.get("known_solved_cases") or []
     if solved_cases:
-        lines.extend(
-            [
-                "## Known Solved Cases",
-                "",
-                (
-                    "Use these solved cases as examples of strong research form, not as new ideas. "
-                    "Do not propose a solved case itself as the core deliverable unless the proposal "
-                    "adds a genuinely new scientific component with substantial impact."
-                ),
-                "",
-            ]
-        )
+        lines.extend([
+            "## Known Solved Cases", "",
+            (
+                "Use these solved cases as examples of strong research form, not as new ideas. "
+                "Do not propose a solved case itself as the core deliverable unless the proposal "
+                "adds a genuinely new scientific component with substantial impact."
+            ),
+            "",
+        ])
         for item in solved_cases:
             lines.append(f"- {item.get('solved_case', '')}")
             if why := item.get("why_it_is_solved"):
@@ -1046,44 +672,23 @@ def render_summary_markdown(summary: dict[str, Any]) -> str:
         lines.append("")
     open_axes = summary.get("open_axes_for_new_work") or []
     if open_axes:
-        lines.extend(
-            [
-                "## Open Axes for New Work",
-                "",
-                (
-                    "These axes are examples, not a complete list. Use them to look for substantial "
-                    "differences from solved work, and actively discover additional axes from the "
-                    "user prompt, source papers, and novelty checks."
-                ),
-                "",
-            ]
-        )
+        lines.extend([
+            "## Open Axes for New Work", "",
+            (
+                "These axes are examples, not a complete list. Use them to look for substantial "
+                "differences from solved work, and actively discover additional axes from the "
+                "user prompt, source papers, and novelty checks."
+            ),
+            "",
+        ])
         for item in open_axes:
             lines.append(f"- {item.get('axis', '')}")
             if guidance := item.get("guidance"):
                 lines.append(f"  Guidance: {guidance}")
             if variations := item.get("example_variations"):
-                joined_variations = ", ".join(str(variation) for variation in variations if variation)
-                lines.append(f"  Example variations: {joined_variations}")
+                lines.append(f"  Example variations: {', '.join(str(item) for item in variations if item)}")
             _append_papers(lines, item.get("papers"))
         lines.append("")
-    relaxed_payload = summary.get("relaxed_payload")
-    if relaxed_payload:
-        lines.extend(
-            [
-                "## Relaxed LLM Output Warning",
-                "",
-                (
-                    "The domain summary did not fully match the strict schema. ARC preserved the recovered content "
-                    "below for downstream reading."
-                ),
-                "",
-                "```json",
-                json.dumps(relaxed_payload, ensure_ascii=False, indent=2, default=str)[:12000],
-                "```",
-                "",
-            ]
-        )
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -1096,6 +701,16 @@ def _append_named_values(lines: list[str], label: str, values: Any, *, indent: s
     rendered = ", ".join(str(item) for item in _listify(values) if item)
     if rendered:
         lines.append(f"{indent}{label}: {rendered}")
+
+
+def _listify(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
 
 
 def _append_key_paper(lines: list[str], label: str, paper: dict[str, Any]) -> None:

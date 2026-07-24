@@ -19,6 +19,7 @@ from .contracts import (
 )
 from .paths import domain_id_for
 from .render import render_network_html
+from .summary import mathematical_opportunities_validation_error
 
 __all__ = [
     "DOMAIN_BUILD_POLICY_SCHEMA_VERSION",
@@ -37,5 +38,6 @@ __all__ = [
     "encode_domain_build_request",
     "encode_domain_build_result",
     "encode_domain_build_warning",
+    "mathematical_opportunities_validation_error",
     "render_network_html",
 ]
