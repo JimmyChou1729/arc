@@ -1,185 +1,400 @@
+"""Protocol-only command line interface for durable ARC domain builds."""
+
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
-from . import service
+from arc_jobs import (
+    ArcJobsError,
+    CommandError,
+    CommandResult,
+    CommandRun,
+    CommandStatus,
+    ImmutableArtifactStore,
+    RunRepository,
+    RunStatus,
+    command_result_from_snapshot,
+    command_result_json,
+    decode_artifact_ref,
+    run_control_main,
+    snapshot_data,
+)
+from arc_llm import ModelSelection, decode_resume_input
+
+from . import (
+    DomainBuildRequest,
+    DomainBuildRunner,
+    decode_domain_build_policy,
+    decode_domain_build_result,
+    encode_domain_build_policy,
+)
+from .catalog import DomainPublicationError, publish_domain_result, read_domain_catalog
+from .paths import DomainPaths
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build ARC research-domain artifacts from a seed paper")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    init = _seed_command(sub, "init")
-    foundation = _seed_command(sub, "identify-foundation")
-    _llm_args(foundation)
-    llm_foundation = _seed_command(sub, "llm-identify-foundation")
-    _llm_args(llm_foundation)
-    network = _seed_command(sub, "build-network")
-    _llm_args(network)
-    llm_network = _seed_command(sub, "llm-build-network")
-    _llm_args(llm_network)
-    _seed_command(sub, "build-paper-json-pack")
-    evidence = _seed_command(sub, "build-evidence")
-    summary = _seed_command(sub, "summarize")
-    _llm_args(summary)
-    llm_summary = _seed_command(sub, "llm-summarize")
-    _llm_args(llm_summary)
-    build = _seed_command(sub, "build")
-    _llm_args(build)
-    llm_build = _seed_command(sub, "llm-build")
-    _llm_args(llm_build)
-    status = sub.add_parser("status")
-    status.add_argument("seed_paper", nargs="?")
-    status.add_argument("--intent", default="")
-    status.add_argument("--domain-id", default=None)
-    status.add_argument("--json", action="store_true")
-    get_summary = sub.add_parser("get-summary")
-    get_summary.add_argument("seed_paper", nargs="?")
-    get_summary.add_argument("--intent", default="")
-    get_summary.add_argument("--domain-id", default=None)
-    get_summary.add_argument("--json", action="store_true")
-    get_graph = sub.add_parser("get-graph")
-    get_graph.add_argument("seed_paper", nargs="?")
-    get_graph.add_argument("--intent", default="")
-    get_graph.add_argument("--domain-id", default=None)
-    get_graph.add_argument("--json", action="store_true")
-
-    args = parser.parse_args(argv)
-    try:
-        result = _dispatch(args)
-    except Exception as exc:
-        if not getattr(args, "json", False):
-            raise
-        result = _exception_result(exc)
-    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    if (
-        isinstance(result, dict)
-        and result.get("ok") is False
-        and result.get("status") != "needs_llm"
-    ):
-        return 1
-    return 0
+class _UsageError(ValueError):
+    """An invalid invocation that should use the command's usage exit code."""
 
 
-def _exception_result(exc: Exception) -> dict[str, Any]:
-    """Return the stable failure envelope promised by ``--json`` commands."""
-    return {
-        "ok": False,
-        "status": "error",
-        "error": {
-            "code": "command_failed",
-            "message": str(exc) or exc.__class__.__name__,
-            "type": exc.__class__.__name__,
-        },
-        "errors": [],
-        "meta": {},
-    }
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise _UsageError(message)
 
 
-def _seed_command(sub, name: str) -> argparse.ArgumentParser:
-    parser = sub.add_parser(name)
-    parser.add_argument("seed_paper")
-    parser.add_argument("--intent", default="")
-    parser.add_argument("--domain-id", default=None)
-    parser.add_argument("--refresh", action="store_true")
-    parser.add_argument("--workers", type=int, default=8)
-    parser.add_argument("--recent-window-days", type=int, default=365)
-    parser.add_argument("--as-of-date", default=datetime.now(timezone.utc).date().isoformat())
-    parser.add_argument("--json", action="store_true")
+def _parser() -> _Parser:
+    parser = _Parser(prog="arc-domain")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    build = commands.add_parser("build")
+    build.add_argument("seed_paper")
+    build.add_argument("--intent", default="")
+    build.add_argument("--policy")
+    build.add_argument("--recent-window-days", type=int)
+    build.add_argument("--citer-pool-limit", type=int)
+    build.add_argument("--ranked-paper-limit", type=int)
+    build.add_argument("--graph-node-limit", type=int)
+    build.add_argument("--llm-provider", default="auto")
+    build.add_argument("--model")
+    build.add_argument(
+        "--model-tier", choices=("low", "medium", "high", "xhigh"), default="medium"
+    )
+    build.add_argument("--workers", type=int, default=8)
+    build.add_argument("--cache-root")
+    build.add_argument("--run-id")
+
+    resume = commands.add_parser("resume")
+    resume.add_argument("run_id")
+    resume.add_argument("--input")
+    resume.add_argument("--cache-root")
+
+    status = commands.add_parser("status")
+    selectors = status.add_mutually_exclusive_group(required=True)
+    selectors.add_argument("--run-id")
+    selectors.add_argument("--domain-id")
+    status.add_argument("--cache-root")
+
+    for name in ("get-summary", "get-graph"):
+        command = commands.add_parser(name)
+        command.add_argument("--domain-id", required=True)
+        command.add_argument("--cache-root")
+
+    cancel = commands.add_parser("cancel")
+    cancel.add_argument("run_id")
+    cancel.add_argument("--cache-root")
+    cancel.add_argument("--reason")
+
+    validate = commands.add_parser("validate")
+    validate.add_argument("run_id")
+    validate.add_argument("--cache-root")
     return parser
 
 
-def _llm_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--provider", default="auto")
-    parser.add_argument("--model", default=None)
-    parser.add_argument("--model-tier", choices=["max", "high", "medium", "low"], default="medium")
+def _emit(result: CommandResult, *, exit_code: int) -> int:
+    sys.stdout.write(command_result_json(result) + "\n")
+    return exit_code
 
 
-def _dispatch(args: argparse.Namespace) -> Any:
-    if args.command == "init":
-        return service.init_domain(args.seed_paper, intent=args.intent, domain_id=args.domain_id,
-            recent_window_days=args.recent_window_days, as_of_date=args.as_of_date)
-    if args.command in {"identify-foundation", "llm-identify-foundation"}:
-        return service.identify_foundation(
-            args.seed_paper,
+def _paths(cache_root: str | None) -> DomainPaths:
+    return DomainPaths.resolve(cache_root)
+
+
+def _repository(paths: DomainPaths) -> RunRepository:
+    return RunRepository(paths.root)
+
+
+def _request_from_args(args: argparse.Namespace) -> DomainBuildRequest:
+    if args.policy is None:
+        policy_document: dict[str, Any] = {
+            "schema_version": "arc.domain_build_policy.v1",
+            "as_of_date": datetime.now(timezone.utc).date().isoformat(),
+            "recent_window_days": 365,
+            "citer_pool_limit": 1000,
+            "ranked_paper_limit": 50,
+            "graph_node_limit": 90,
+        }
+    else:
+        try:
+            policy_document = json.loads(args.policy)
+        except json.JSONDecodeError as exc:
+            raise _UsageError(f"--policy must be a JSON object: {exc.msg}") from exc
+        if not isinstance(policy_document, dict):
+            raise _UsageError("--policy must be a JSON object")
+    try:
+        policy = decode_domain_build_policy(policy_document)
+        overrides = {
+            name: value
+            for name, value in {
+                "recent_window_days": args.recent_window_days,
+                "citer_pool_limit": args.citer_pool_limit,
+                "ranked_paper_limit": args.ranked_paper_limit,
+                "graph_node_limit": args.graph_node_limit,
+            }.items()
+            if value is not None
+        }
+        if overrides:
+            policy_document = encode_domain_build_policy(policy)
+            policy_document.update(overrides)
+            policy = decode_domain_build_policy(policy_document)
+        if args.workers < 1:
+            raise _UsageError("--workers must be at least one")
+        return DomainBuildRequest(
+            seed_paper=args.seed_paper,
             intent=args.intent,
-            domain_id=args.domain_id,
-            provider=args.provider,
-            model=args.model,
-            model_tier=args.model_tier,
-            refresh=args.refresh,
-            workers=args.workers,
-            recent_window_days=args.recent_window_days,
-            as_of_date=args.as_of_date,
+            policy=policy,
+            model=ModelSelection(
+                provider=args.llm_provider,
+                model=args.model,
+                tier=args.model_tier,
+            ),
         )
-    if args.command in {"build-network", "llm-build-network"}:
-        return service.build_network(
-            args.seed_paper,
-            intent=args.intent,
-            domain_id=args.domain_id,
-            provider=args.provider,
-            model=args.model,
-            model_tier=args.model_tier,
-            refresh=args.refresh,
-            workers=args.workers,
-            recent_window_days=args.recent_window_days,
-            as_of_date=args.as_of_date,
+    except _UsageError:
+        raise
+    except ValueError as exc:
+        raise _UsageError(str(exc)) from exc
+
+
+def _decode_succeeded_result(repository: RunRepository, run_id: str):
+    snapshot = repository.inspect(run_id).snapshot
+    if snapshot.status is not RunStatus.SUCCEEDED or snapshot.result_ref is None:
+        raise DomainPublicationError(
+            f"run {run_id!r} has no succeeded domain-build result to publish"
         )
-    if args.command == "build-paper-json-pack":
-        return service.build_paper_json_pack(
-            args.seed_paper,
-            intent=args.intent,
-            domain_id=args.domain_id,
-            refresh=args.refresh,
-            workers=args.workers,
-            recent_window_days=args.recent_window_days,
-            as_of_date=args.as_of_date,
+    artifacts = ImmutableArtifactStore(
+        repository.run_directory(snapshot.run_id), repository_root=repository.root
+    )
+    try:
+        document = json.loads(artifacts.read_bytes(snapshot.result_ref).decode("utf-8"))
+        if not isinstance(document, dict):
+            raise ValueError("result artifact must contain a JSON object")
+        return decode_domain_build_result(document)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise DomainPublicationError(
+            "succeeded run result artifact is not a valid DomainBuildResult"
+        ) from exc
+
+
+def _published_result(repository: RunRepository, paths: DomainPaths, snapshot) -> CommandResult:
+    base = command_result_from_snapshot(snapshot)
+    if base.status is not CommandStatus.COMPLETED:
+        return base
+    try:
+        result = _decode_succeeded_result(repository, snapshot.run_id)
+        publication = publish_domain_result(
+            repository,
+            paths,
+            run_id=snapshot.run_id,
+            result=result,
         )
-    if args.command == "build-evidence":
-        return service.build_evidence_pack(
-            args.seed_paper,
-            intent=args.intent,
-            domain_id=args.domain_id,
-            refresh=args.refresh,
-            workers=args.workers,
-            recent_window_days=args.recent_window_days,
-            as_of_date=args.as_of_date,
+    except (DomainPublicationError, OSError, ValueError) as exc:
+        return CommandResult(
+            CommandStatus.FAILED,
+            run=CommandRun(snapshot.run_id, snapshot.revision),
+            data={"run": snapshot_data(snapshot)},
+            error=CommandError("domain_publication_failed", str(exc)),
         )
-    if args.command in {"summarize", "llm-summarize"}:
-        return service.summarize_domain(
-            args.seed_paper,
-            intent=args.intent,
-            domain_id=args.domain_id,
-            provider=args.provider,
-            model=args.model,
-            model_tier=args.model_tier,
-            recent_window_days=args.recent_window_days,
-            as_of_date=args.as_of_date,
+    return CommandResult(
+        CommandStatus.COMPLETED,
+        run=base.run,
+        data={
+            "run": snapshot_data(snapshot),
+            "domain": {
+                "id": publication.domain_id,
+                "active": publication.active,
+            },
+        },
+        artifacts=base.artifacts,
+        warnings=base.warnings,
+    )
+
+
+def _build(args: argparse.Namespace) -> tuple[CommandResult, int]:
+    request = _request_from_args(args)
+    paths = _paths(args.cache_root)
+    repository = _repository(paths)
+    snapshot = DomainBuildRunner(repository).execute(
+        request,
+        run_id=args.run_id,
+        max_workers=args.workers,
+    )
+    result = _published_result(repository, paths, snapshot)
+    return result, _exit_code(result)
+
+
+def _resume(args: argparse.Namespace) -> tuple[CommandResult, int]:
+    paths = _paths(args.cache_root)
+    repository = _repository(paths)
+    snapshot = DomainBuildRunner(repository).resume(
+        args.run_id, input=_resume_input(args.input)
+    )
+    result = _published_result(repository, paths, snapshot)
+    return result, _exit_code(result)
+
+
+def _status(args: argparse.Namespace) -> CommandResult:
+    paths = _paths(args.cache_root)
+    repository = _repository(paths)
+    domain_id = args.domain_id
+    if args.run_id is not None:
+        snapshot = repository.inspect(args.run_id).snapshot
+    else:
+        catalog = read_domain_catalog(paths, domain_id=domain_id)
+        if catalog is None or catalog.latest is None:
+            raise DomainPublicationError(
+                f"domain {domain_id!r} has no registered build run"
+            )
+        snapshot = repository.inspect(catalog.latest).snapshot
+    base = command_result_from_snapshot(snapshot, query=True)
+    data = dict(base.data)
+    if domain_id is not None:
+        data["domain"] = {
+            "id": domain_id,
+            "latest": catalog.latest if catalog is not None else None,
+            "active": catalog.active if catalog is not None else None,
+        }
+    return CommandResult(
+        base.status,
+        run=base.run,
+        data=data,
+        artifacts=base.artifacts,
+        warnings=base.warnings,
+        error=base.error,
+        resume=base.resume,
+    )
+
+
+def _active_export(paths: DomainPaths, domain_id: str, filename: str) -> tuple[str, Any]:
+    catalog = read_domain_catalog(paths, domain_id=domain_id)
+    if catalog is None or catalog.active is None:
+        raise DomainPublicationError(
+            f"domain {domain_id!r} has no active published export"
         )
-    if args.command in {"build", "llm-build"}:
-        return service.build_domain(
-            args.seed_paper,
-            intent=args.intent,
-            domain_id=args.domain_id,
-            provider=args.provider,
-            model=args.model,
-            model_tier=args.model_tier,
-            refresh=args.refresh,
-            workers=args.workers,
-            recent_window_days=args.recent_window_days,
-            as_of_date=args.as_of_date,
-        )
+    generation = paths.export_generation(domain_id, catalog.active)
+    manifest_path = generation / "export-manifest.json"
+    artifact_path = generation / filename
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        files = manifest.get("files") if isinstance(manifest, dict) else None
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("schema_version") != "arc.domain.export_manifest.v1"
+            or manifest.get("run_id") != catalog.active
+            or not isinstance(files, dict)
+            or filename not in files
+        ):
+            raise ValueError("active export manifest does not describe the requested artifact")
+        artifact = decode_artifact_ref(files[filename])
+        content = artifact_path.read_bytes()
+        if (
+            len(content) != artifact.digest.size_bytes
+            or hashlib.sha256(content).hexdigest() != artifact.digest.value
+        ):
+            raise ValueError("active export does not match its manifest digest")
+        return catalog.active, json.loads(content.decode("utf-8"))
+    except (ArcJobsError, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise DomainPublicationError(
+            f"active {filename} export is unavailable for domain {domain_id!r}"
+        ) from exc
+
+
+def _get(args: argparse.Namespace, *, filename: str, data_name: str) -> CommandResult:
+    paths = _paths(args.cache_root)
+    run_id, document = _active_export(paths, args.domain_id, filename)
+    return CommandResult(
+        CommandStatus.COMPLETED,
+        data={"domain": {"id": args.domain_id, "active": run_id}, data_name: document},
+    )
+
+
+def _resume_input(value: str | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        document = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise _UsageError(f"--input must be a ResumeInput JSON object: {exc.msg}") from exc
+    if not isinstance(document, dict):
+        raise _UsageError("--input must be a ResumeInput JSON object")
+    try:
+        decode_resume_input(document)
+    except Exception as exc:
+        raise _UsageError(f"--input is not a valid ResumeInput: {exc}") from exc
+    return document
+
+
+def _run_control(args: argparse.Namespace, *, command: str) -> int:
+    paths = _paths(args.cache_root)
+    argv = [command, "--run-root", str(paths.root), "--run-id", args.run_id]
+    if command == "cancel" and args.reason is not None:
+        argv.extend(["--reason", args.reason])
+    # arc-jobs owns these controls and writes the sole command envelope itself.
+    return run_control_main(argv)
+
+
+def _exit_code(result: CommandResult) -> int:
+    return 1 if result.status is CommandStatus.FAILED else 0
+
+
+def _dispatch(args: argparse.Namespace) -> tuple[CommandResult, int] | int:
+    if args.command == "build":
+        return _build(args)
+    if args.command == "resume":
+        return _resume(args)
     if args.command == "status":
-        return service.status(args.seed_paper, intent=args.intent, domain_id=args.domain_id)
+        return _status(args), 0
     if args.command == "get-summary":
-        return service.get_domain_summary(args.seed_paper, intent=args.intent, domain_id=args.domain_id)
+        return _get(args, filename="summary.json", data_name="summary"), 0
     if args.command == "get-graph":
-        return service.get_domain_graph(args.seed_paper, intent=args.intent, domain_id=args.domain_id)
-    raise AssertionError(f"Unhandled command: {args.command}")
+        return _get(args, filename="graph.json", data_name="graph"), 0
+    if args.command in {"cancel", "validate"}:
+        return _run_control(args, command=args.command)
+    raise AssertionError(args.command)
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
+        dispatched = _dispatch(args)
+        if isinstance(dispatched, int):
+            return dispatched
+        result, exit_code = dispatched
+        return _emit(result, exit_code=exit_code)
+    except _UsageError as exc:
+        return _emit(
+            CommandResult(
+                CommandStatus.FAILED,
+                error=CommandError("invalid_request", str(exc)),
+            ),
+            exit_code=2,
+        )
+    except (ArcJobsError, DomainPublicationError, OSError, ValueError) as exc:
+        code = {
+            "RunNotFoundError": "run_not_found",
+            "RunBusyError": "run_busy",
+            "IdempotencyConflictError": "idempotency_conflict",
+        }.get(type(exc).__name__, "domain_command_failed")
+        return _emit(
+            CommandResult(
+                CommandStatus.FAILED,
+                error=CommandError(code, str(exc)),
+            ),
+            exit_code=1,
+        )
+    except Exception as exc:
+        return _emit(
+            CommandResult(
+                CommandStatus.FAILED,
+                error=CommandError(
+                    "internal_error", f"{type(exc).__name__}: {str(exc)[:300]}"
+                ),
+            ),
+            exit_code=1,
+        )
+
+
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
