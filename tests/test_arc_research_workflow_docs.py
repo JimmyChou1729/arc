@@ -11,7 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins/arc"
-MCP_PLUGIN = ROOT / "plugins/arc-mcp"
 SKILL = PLUGIN / "skills/arc"
 RULES = SKILL / "rules"
 WF = SKILL / "workflows"
@@ -256,7 +255,7 @@ def test_domain_summary_warnings_are_visible_and_recorded() -> None:
 
 
 def test_manuals_do_not_hardcode_checkout_cache_paths() -> None:
-    for manual in ["arc-paper.md", "arc-domain.md", "arc-mcp.md"]:
+    for manual in ["arc-paper.md", "arc-domain.md"]:
         text = (SKILL / "manuals" / manual).read_text(encoding="utf-8")
         assert "/arc-dev/cache/" not in text
     assert "doctor-cache" in (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
@@ -638,9 +637,7 @@ def test_calculate_uses_phase_specific_source_defaults() -> None:
     assert "reviewer_reference_claim" in text
     assert "proposer_runtime" in text
     assert '"allow_internet": false' in text
-    assert '"allow_mcp": false' in text
     assert '"allow_internet": true' in text
-    assert '"allow_mcp": true' not in text
     assert "controller arc-paper access" in text
     assert '"arc_paper_access": "none"' in text
     assert '"arc_paper_access": "full"' in text
@@ -911,12 +908,10 @@ def test_ideas_workflow_has_deterministic_ranked_report_deliverable() -> None:
     assert "<project-dir>/suggested-ideas.md" not in text
 
 
-def test_ideas_loop_reviewer_template_uses_controller_evidence_without_mcp() -> None:
+def test_ideas_loop_reviewer_template_uses_controller_evidence() -> None:
     reviewer = json.loads((WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8"))
 
     assert reviewer["id"] == "reviewer_001"
-    assert reviewer["runtime"]["allow_mcp"] is False
-    assert "mcp_mode" not in reviewer["runtime"]
     assert "controller-supplied" in reviewer["prompt"]["template"]
 
 
@@ -1055,8 +1050,6 @@ def test_ideas_full_info_template_includes_domain_and_controller_context() -> No
     assert "domain_markdown_files" in loop["caller_context"]
     assert "arc_paper_tool_notes" in loop["caller_context"]
     assert proposer["runtime"]["allow_internet"] is True
-    assert proposer["runtime"]["allow_mcp"] is False
-    assert "mcp_mode" not in proposer["runtime"]
     assert "controller-supplied" in proposer["prompt"]["template"]
 
 
@@ -1068,7 +1061,7 @@ def test_ideas_no_info_description_mentions_shared_marking_scheme() -> None:
     assert "common marking scheme" in description
     assert "no ARC domain Markdown" in description
     assert "no ARC paper-tool guidance" in description
-    assert "no MCP access" in description
+    assert "no inherited host-tool access" in description
 
 
 def test_readme_documents_domain_only_ideas_release_default() -> None:
@@ -1252,15 +1245,14 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
     assert "cancellation" in ideas
 
 
-def test_core_skill_docs_keep_mcp_optional_and_external() -> None:
+def test_core_skill_docs_keep_arc_cli_only() -> None:
     operating = (SKILL / "rules/operating.md").read_text(encoding="utf-8")
-    mcp = (SKILL / "manuals/arc-mcp.md").read_text(encoding="utf-8")
     codex_manifest = json.loads((PLUGIN / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
     claude_manifest = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
 
     assert "CLI-only" in operating
-    assert "separately installed optional `arc-mcp`" in operating
-    assert "base `arc` plugin does not contain an MCP manifest" in mcp
+    assert "does not register or ship an MCP server" in operating
+    assert not (SKILL / "manuals/arc-mcp.md").exists()
     assert "mcpServers" not in codex_manifest
     assert "mcpServers" not in claude_manifest
     assert not (PLUGIN / ".mcp.json").exists()
@@ -1292,24 +1284,10 @@ def test_generated_python_caches_are_ignored_for_release_artifacts() -> None:
         assert pattern in text
 
 
-def test_optional_mcp_plugin_uses_bundled_arc_mcp_launcher() -> None:
-    manifest = json.loads((MCP_PLUGIN / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
-    mcp_config = json.loads((MCP_PLUGIN / ".mcp.json").read_text(encoding="utf-8"))
-    arc_server = mcp_config["mcpServers"]["arc"]
-
-    assert manifest["name"] == "arc-mcp"
-    assert manifest["mcpServers"] == "./.mcp.json"
-    assert arc_server["command"] == "./bin/arc-mcp"
-    assert arc_server["args"] == []
-    assert arc_server["cwd"] == "."
-
-
 def test_readme_documents_marketplace_first_install() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "plugins/arc/bin/arc-runtime setup --profile core" in text
-    assert "codex plugin add arc-mcp@arc" in text
-    assert "separate `arc-mcp` plugin" in text
     assert "ARC_MCP_INSTALL_RETRY=1" not in text
     assert "arc-runtime setup --profile core --retry" in text
     assert "Python `venv` + `pip` is the" in text

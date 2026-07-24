@@ -1,7 +1,7 @@
 # ARC Operating Reference
 
 This reference contains general operating rules for ARC workflows. Package
-commands and MCP tool names live in the package-specific references.
+commands live in the package-specific references.
 
 ## General Rules
 
@@ -10,10 +10,8 @@ commands and MCP tool names live in the package-specific references.
 - Paper IDs may omit the `arXiv:` prefix.
 - For slow or large work, use the protocol-neutral background-job procedure in
   `manuals/arc-jobs.md`.
-- Use the package CLI with structured output by default. Use the optional MCP
-  adapter only when the user or host configuration explicitly selects it.
-- The core `arc` plugin is CLI-only and must not register an MCP server. MCP is
-  available only through the separately installed optional `arc-mcp` plugin.
+- Use the package CLI with structured output by default.
+- The `arc` plugin is CLI-only and does not register or ship an MCP server.
 - For user choices and confirmations, use
   `rules/interaction.md`.
 - Do not cancel a job unless the user explicitly asks.
@@ -27,8 +25,7 @@ commands and MCP tool names live in the package-specific references.
 Step 1: For single-paper work, read `manuals/arc-paper.md`.
 Step 2: For domain or research-field work, read
 `manuals/arc-domain.md`.
-Step 3: For background jobs, read `manuals/arc-jobs.md`. For an explicitly
-enabled MCP adapter, also read `manuals/arc-mcp.md`.
+Step 3: For background jobs, read `manuals/arc-jobs.md`.
 Step 4: For provider/model/runtime diagnosis, read
 `manuals/arc-llm.md`.
 

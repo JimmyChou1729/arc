@@ -595,7 +595,6 @@ def _proposer_runtime(config: CalculateConfig, step: CalculateStep) -> dict[str,
     if step.reviewer_reference_claim:
         runtime = {
             "allow_internet": False,
-            "allow_mcp": False,
             "codex_sandbox": "read-only",
             "arc_paper_access": "none",
             "inherit_host_tools": False,
@@ -603,7 +602,6 @@ def _proposer_runtime(config: CalculateConfig, step: CalculateStep) -> dict[str,
     elif step.kind == "new_calculation":
         runtime = {
             "allow_internet": True,
-            "allow_mcp": False,
             "codex_sandbox": "read-only",
             "arc_paper_access": "full",
             "inherit_host_tools": False,
@@ -611,13 +609,14 @@ def _proposer_runtime(config: CalculateConfig, step: CalculateStep) -> dict[str,
     else:
         runtime = {
             "allow_internet": False,
-            "allow_mcp": False,
             "codex_sandbox": "read-only",
             "arc_paper_access": "full",
             "inherit_host_tools": False,
         }
     runtime.update(_dict(config.defaults.get("proposer_runtime", {}), "defaults.proposer_runtime"))
     runtime.update(step.proposer_runtime)
+    for retired_key in ("allow_mcp", "mcp_mode", "arc_mcp_command"):
+        runtime.pop(retired_key, None)
     runtime = _canonical_paper_access_runtime(runtime, f"{step.step_id}.proposer_runtime")
     if step.reviewer_reference_claim:
         # Blind validation is a hard isolation boundary; ordinary runtime
@@ -629,12 +628,11 @@ def _proposer_runtime(config: CalculateConfig, step: CalculateStep) -> dict[str,
 
 def _proposer_source_policy(runtime: Mapping[str, Any]) -> str:
     runtime = _canonical_paper_access_runtime(dict(runtime), "proposer_runtime")
-    allow_mcp = _bool_default(runtime.get("allow_mcp", False), False)
     allow_internet = _bool_default(runtime.get("allow_internet", False), False)
     paper_access = str(runtime.get("arc_paper_access", "full"))
-    if paper_access == "none" and not allow_mcp and not allow_internet:
+    if paper_access == "none" and not allow_internet:
         return (
-            "Do not use internet search. Do not use ARC paper MCP tools. "
+            "Do not use internet search. Do not invoke ARC CLIs, shell commands, or MCP tools. "
             "Do not read paper source sections, arXiv pages, INSPIRE pages, "
             "cached paper text, or any external source. Use only the supplied "
             "caller_context, accepted locked_outputs, and your own local algebra. "
@@ -644,20 +642,17 @@ def _proposer_source_policy(runtime: Mapping[str, Any]) -> str:
     if paper_access == "full":
         parts.append(
             "Use structured Controller requests for deterministic cached or missing-paper evidence; "
-            "do not invoke any other ARC CLI or nested LLM command."
-        )
-    elif allow_mcp:
-        parts.append(
-            "You may use ARC paper MCP tools only to read the main reference and cited "
-            "sections explicitly named in caller_context."
+            "do not invoke ARC CLIs, shell commands, MCP tools, or nested LLM commands."
         )
     else:
-        parts.append("Do not use ARC paper MCP tools or cached paper text.")
+        parts.append(
+            "Do not invoke ARC CLIs, shell commands, or MCP tools, and do not use cached paper text."
+        )
     if allow_internet:
         parts.append("Internet search is allowed only for source discovery or uncached paper access.")
     else:
         parts.append("Do not use internet search.")
-    parts.append("Cite any paper tool or internet source you use.")
+    parts.append("Cite any controller-provided paper evidence or internet source you use.")
     parts.append("Do not use validation-only final formulas as derivation inputs.")
     return " ".join(parts)
 

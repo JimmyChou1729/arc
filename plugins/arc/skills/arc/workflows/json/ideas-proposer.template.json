@@ -28,7 +28,6 @@
   },
   "runtime": {
     "allow_internet": true,
-    "allow_mcp": false,
     "codex_sandbox": "read-only"
   }
 }

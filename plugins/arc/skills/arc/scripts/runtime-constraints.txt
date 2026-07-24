@@ -4,5 +4,4 @@ httpx==0.28.1
 json-repair==0.59.10
 jsonschema==4.26.0
 lxml==6.1.1
-mcp==1.27.1
 pydantic==2.13.4

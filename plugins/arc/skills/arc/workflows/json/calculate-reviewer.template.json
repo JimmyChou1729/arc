@@ -6,7 +6,6 @@
   },
   "output_schema": "<filled by calculate_runner.py>",
   "runtime": {
-    "allow_mcp": false,
     "codex_sandbox": "read-only"
   }
 }

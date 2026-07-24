@@ -8,7 +8,6 @@
   "output_schema": "<copy ideas-cross-domain-reviewer-output.schema.json here>",
   "runtime": {
     "allow_internet": true,
-    "allow_mcp": false,
     "codex_sandbox": "read-only"
   }
 }

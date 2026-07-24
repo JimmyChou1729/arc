@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "arc": {
-      "command": "./bin/arc-mcp",
-      "args": [],
-      "cwd": "."
-    }
-  }
-}

@@ -89,8 +89,6 @@ not optional.
   `manuals/arc-domain.md`.
 - Any background job, job watcher, timeout, cancellation, or asynchronous
   report export: read `manuals/arc-jobs.md`.
-- Optional MCP calls: read `manuals/arc-mcp.md`, but only when the user
-  explicitly installed or requested the separate MCP companion.
 - Host LLM/provider detection, model choice, direct prompt tests, or provider
   troubleshooting: read `manuals/arc-llm.md`.
 - Companion-reading PDF generation: read `workflows/companion.md` and

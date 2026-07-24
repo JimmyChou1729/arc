@@ -39,7 +39,7 @@ domain result rather than old cache paths.
 
 ## arc-typeset
 
-Package removed on 2026-07-24: reuse was limited to the retiring arc-mcp
+Package removed on 2026-07-24: reuse was limited to the now-removed arc-mcp
 adapter and episodic CLI calls, and document-producing packages
 (arc-companion, arc-domain) build their own integrated rendering/translation
 pipelines, so the generic typesetting abstraction had no reuse potential.
@@ -70,22 +70,17 @@ new domain result, catalog, or export layout in this release.
 
 ## arc-mcp
 
-`arc-mcp` is the deliberately retained transitional MCP package and is not part
-of the new core. It retains the previous domain service/cache dependencies and
-is not migrated to the durable domain CLI, result contracts, catalog, or export
-generations in this release:
+ARC 0.9.4 was the final release line that shipped the legacy ARC-owned MCP
+adapter. ARC 1.x is CLI-and-Skill only.
 
-- `cli.py` and `jobs.py` import removed `JobManager`/`JobCancelled` and cache
-  topology.
-- `server.py` imports removed jobs CLI command generation, host/provider
-  diagnostics and old LLM config.
-- `server.py` also imports removed `arc_paper.batch` and
-  `arc_paper.summary.model` modules, calls removed paper summary/parse/TOC/
-  section/full-text operations, and expects the old paper result envelopes.
-- `worker.py` imports the removed detached jobs worker.
-
-The package will be retired only in the later migration stage, together with
-its plugin and entrypoints.
+Package, plugin, launcher, entrypoint, runtime-profile wiring, and dependency
+matrix row removed on 2026-07-24. The adapter depended on retired service,
+cache, detached-worker, and result-envelope surfaces and had no independent
+contract worth preserving. No compatibility shim or state migration is
+provided. Consumers must use the supported package CLIs and the agent-facing
+Skill workflows. Historical pre-v1 closure fixtures remain as audit records,
+while generic host-inherited MCP warnings and worker no-host-tool instructions
+remain safety policy rather than an ARC MCP compatibility surface.
 
 ## Skill workflow scripts
 

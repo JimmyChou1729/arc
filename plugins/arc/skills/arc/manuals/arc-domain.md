@@ -125,7 +125,5 @@ provider-unavailable conditions remain paused for external resolution.
 
 ## MCP Status
 
-`arc-mcp` is not migrated with this domain interface. Do not use legacy domain
-MCP tools as an alternative to the CLI above. See
-`docs/architecture/core-refactor-downstream-breakage.md` for the explicitly
-deferred adapter migration.
+ARC-owned MCP integration is retired. Use the durable `arc-domain` CLI above;
+there is no legacy domain MCP compatibility surface.

@@ -46,7 +46,7 @@ and `result` carries the command's success or failure envelope.
 remains an earlier-layout override, and otherwise jobs use `ARC_HOME/jobs`.
 Submission snapshots only the allowlisted ARC runtime, cache,
 host, and idle-timeout context. It never persists tokens, API keys, or arbitrary
-environment variables. This setting is independent of optional MCP
+environment variables. This setting is independent of any host-level MCP
 configuration.
 
 Removed `ARC_LLM_TIMEOUT_SECONDS`, `ARC_CODEX_TIMEOUT_SECONDS`,

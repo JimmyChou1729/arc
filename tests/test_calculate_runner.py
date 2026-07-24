@@ -69,7 +69,6 @@ def test_calculate_runner_uses_templates_and_hides_reviewer_reference_claim(tmp_
     assert "reviewer_reference_claim" in loop["reviewers"][0]["prompt"]["template"]
     assert "reviewer_reference_claim" not in loop["proposers"][0]["prompt"]["template"]
     assert loop["proposers"][0]["runtime"]["allow_internet"] is False
-    assert loop["proposers"][0]["runtime"]["allow_mcp"] is False
     assert result["warnings_summary"]["structured_output_warning_count"] == 0
 
 
@@ -647,29 +646,41 @@ def test_calculate_rejects_invalid_config_bool_strings(tmp_path, override: dict[
         runner.load_calculation_config(minimal_config(tmp_path, **override))
 
 
-def test_proposer_source_policy_parses_string_false() -> None:
+def test_proposer_source_policy_parses_internet_string_false() -> None:
     runner = load_calculate_runner()
 
     policy = runner._proposer_source_policy(  # noqa: SLF001
-        {"allow_mcp": "false", "allow_internet": "false", "arc_paper_cli_access": "none"}
+        {"allow_internet": "false", "arc_paper_access": "none"}
     )
 
     assert "Do not use internet search" in policy
-    assert "Do not use ARC paper MCP tools" in policy
+    assert "Do not invoke ARC CLIs, shell commands, or MCP tools" in policy
 
 
-def test_new_calculation_worker_defaults_to_no_mcp(tmp_path: Path) -> None:
+def test_new_calculation_worker_uses_controller_paper_access(tmp_path: Path) -> None:
     runner = load_calculate_runner()
-    config = runner.load_calculation_config(minimal_config(tmp_path))
+    payload = minimal_config(tmp_path)
+    payload["defaults"] = {
+        "proposer_runtime": {
+            "allow_mcp": True,
+            "mcp_mode": "all",
+            "arc_mcp_command": "legacy-arc-mcp",
+        }
+    }
+    payload["steps"][0]["proposer_runtime"] = {
+        "allow_mcp": True,
+        "mcp_mode": "arc-only",
+        "arc_mcp_command": "arc-mcp",
+    }
+    config = runner.load_calculation_config(payload)
 
     runtime = runner._proposer_runtime(config, config.steps[0])  # noqa: SLF001
 
     assert runtime["allow_internet"] is True
-    assert runtime["allow_mcp"] is False
     assert runtime["arc_paper_access"] == "full"
     assert "arc_paper_cli_access" not in runtime
     assert runtime["inherit_host_tools"] is False
-    assert "mcp_mode" not in runtime
+    assert {"allow_mcp", "mcp_mode", "arc_mcp_command"}.isdisjoint(runtime)
 
 
 def test_blind_reference_runtime_cannot_override_paper_isolation(tmp_path: Path) -> None:
@@ -710,7 +721,7 @@ def test_calculate_worker_schemas_are_codex_strict(tmp_path) -> None:
     proposer_schema = runner._proposer_config(  # noqa: SLF001
         config,
         "proposer_001",
-        runtime={"allow_internet": False, "allow_mcp": False},
+        runtime={"allow_internet": False},
     )["output_schema"]
     reviewer_schema = runner._reviewer_config(  # noqa: SLF001
         config,

@@ -422,8 +422,8 @@ Never select the `max` model tier automatically. Use it only when the user
 explicitly requests the `max` model tier; no workflow default or automatic task
 mapping may select it.
 Python API calls with no exact model or tier resolve to `medium`. Workflow
-`context.json` files should write the explicit string `"medium"` so CLI and MCP
-calls never pass an invalid `"auto"` tier.
+`context.json` files should write the explicit string `"medium"` so callers
+never pass an invalid `"auto"` tier.
 `auto` is valid for `provider`, not for `model_tier`.
 Exact model names are advanced overrides for project contexts that intentionally
 pin a provider model. Exact `model` requires explicit `provider`; with
@@ -460,9 +460,6 @@ Runtime capability options:
 ```text
 --idle-timeout-seconds <positive-seconds>
 --allow-internet
---allow-mcp
---mcp-mode arc-only
---arc-mcp-command arc-mcp
 --codex-reasoning-effort low
 --codex-sandbox read-only
 --codex-work-dir <project-dir>
@@ -537,27 +534,12 @@ failures open a persistent provider circuit; rate limits cool down for at least
 15 minutes and then admit one half-open probe. Inspect or reset these states
 with `arc-llm circuit status` and `arc-llm circuit reset`.
 
-`--allow-mcp` is an explicit advanced opt-in for standalone LLM tasks using
-caller-configured servers. ARC workflow workers must leave it disabled and use
-controller-supplied evidence. Use `--allow-internet` only when fresh web access
-is required.
-
-For proposers-reviewer JSON configs, keep MCP disabled and place resolved ARC
-paper/domain evidence in caller context:
-
-```json
-{
-  "runtime": {
-    "allow_mcp": false,
-    "codex_sandbox": "read-only"
-  }
-}
-```
-
-For Codex and Claude, disabling MCP scrubs inherited user/profile MCP
-configuration for the noninteractive worker. Kimi may still inherit its own
-MCP, hooks, plugins, and tool configuration; ACP reverse-request denial is not
-a filesystem or process sandbox. If a Codex worker also needs bounded
-filesystem access, use `codex_sandbox: "workspace-write"` with
+ARC workflow workers use controller-supplied evidence rather than an ARC-owned
+MCP integration. Codex and Claude noninteractive workers scrub inherited
+user/profile MCP configuration. Kimi may still inherit its own MCP, hooks,
+plugins, and tool configuration; ACP reverse-request denial is not a filesystem
+or process sandbox. Use `--allow-internet` only when fresh web access is
+required. If a Codex worker also needs bounded filesystem access, use
+`codex_sandbox: "workspace-write"` with
 `codex_work_dir` and `codex_add_dirs`; do not use `danger-full-access` for
 normal research workflows.

@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "ARC",
     "shortDescription": "Paper query, research workflows, PDF typesetting, and translation",
-    "longDescription": "Agent Skills and lazy-installed CLIs for cache-first paper access, research-domain construction, planning, calculation, typesetting, and translation. MCP is available as a separate optional plugin.",
+    "longDescription": "Agent Skills and lazy-installed CLIs for cache-first paper access, research-domain construction, planning, calculation, typesetting, and translation.",
     "developerName": "ARC",
     "category": "Productivity",
     "capabilities": ["Research"],
