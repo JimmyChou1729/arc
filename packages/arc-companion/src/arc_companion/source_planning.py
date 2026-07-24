@@ -1,0 +1,187 @@
+"""Deterministic source sampling and exact chapter coverage."""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from typing import Any
+
+from arc_jobs import canonical_json_bytes
+from arc_paper import RichBlock, RichBlockKind, RichDocument, rich_block_to_document
+
+
+@dataclass(frozen=True)
+class SourceChapter:
+    chapter_id: str
+    title: str
+    block_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.chapter_id or not self.title or not self.block_ids:
+            raise ValueError("source chapter requires identity, title, and blocks")
+        if len(set(self.block_ids)) != len(self.block_ids):
+            raise ValueError("source chapter contains duplicate blocks")
+
+
+def plan_source_chapters(document: RichDocument) -> tuple[SourceChapter, ...]:
+    """Use the shallowest source headings, preserving exact block coverage."""
+
+    if not document.blocks:
+        raise ValueError("Companion source must contain at least one block")
+    headings = [
+        block
+        for block in document.blocks
+        if block.kind is RichBlockKind.HEADING
+    ]
+    if not headings:
+        return (
+            _chapter(
+                document,
+                title=_document_title(document),
+                blocks=document.blocks,
+            ),
+        )
+    levels = [int(block.payload["level"]) for block in headings]
+    chapter_level = min(levels)
+    starts = [
+        block.ordinal
+        for block in headings
+        if int(block.payload["level"]) == chapter_level
+    ]
+    # Front matter belongs to the first chapter so every source block is
+    # covered exactly once without inventing a synthetic LLM segment.
+    starts[0] = 0
+    output: list[SourceChapter] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(document.blocks)
+        blocks = document.blocks[start:end]
+        heading = next(
+            (
+                block
+                for block in blocks
+                if block.kind is RichBlockKind.HEADING
+                and int(block.payload["level"]) == chapter_level
+            ),
+            None,
+        )
+        title = (
+            str(heading.payload["text"]).strip()
+            if heading is not None
+            else _document_title(document)
+        )
+        output.append(_chapter(document, title=title, blocks=blocks))
+    validate_chapter_coverage(document, tuple(output))
+    return tuple(output)
+
+
+def validate_chapter_coverage(
+    document: RichDocument, chapters: tuple[SourceChapter, ...]
+) -> None:
+    expected = tuple(block.block_id for block in document.blocks)
+    actual = tuple(block_id for chapter in chapters for block_id in chapter.block_ids)
+    if actual != expected:
+        raise ValueError(
+            "source chapters must cover every block exactly once in source order"
+        )
+
+
+def deterministic_language_samples(
+    document: RichDocument,
+    *,
+    maximum_characters: int = 2400,
+) -> tuple[str, ...]:
+    """Return stable beginning/middle/end samples without token estimation."""
+
+    if maximum_characters < 3:
+        raise ValueError("maximum_characters must be at least three")
+    values = [
+        text
+        for text in (_block_text(block) for block in document.blocks)
+        if text.strip()
+    ]
+    if not values:
+        return ("",)
+    joined = "\n\n".join(values)
+    per_sample = maximum_characters // 3
+    if len(joined) <= maximum_characters:
+        return (joined,)
+    middle_start = max(0, (len(joined) - per_sample) // 2)
+    return (
+        joined[:per_sample],
+        joined[middle_start : middle_start + per_sample],
+        joined[-per_sample:],
+    )
+
+
+def block_prompt_document(block: RichBlock) -> dict[str, Any]:
+    """Public-codec projection used in all source-anchored prompts."""
+
+    return rich_block_to_document(block)
+
+
+def same_primary_language(source_tag: str, target_tag: str) -> bool:
+    """Compare normalized BCP-47 primary subtags only."""
+
+    source = _primary_language(source_tag)
+    target = _primary_language(target_tag)
+    return bool(source and target and source == target)
+
+
+def _primary_language(tag: str) -> str:
+    value = str(tag or "").strip().replace("_", "-").casefold()
+    primary = value.split("-", 1)[0]
+    if not primary or not primary.isalpha() or not 2 <= len(primary) <= 8:
+        return ""
+    return primary
+
+
+def _chapter(
+    document: RichDocument, *, title: str, blocks: tuple[RichBlock, ...]
+) -> SourceChapter:
+    material = {
+        "document_digest": document.document_digest,
+        "block_ids": [block.block_id for block in blocks],
+    }
+    digest = hashlib.sha256(canonical_json_bytes(material)).hexdigest()[:24]
+    return SourceChapter(
+        chapter_id=f"chapter-{digest}",
+        title=title or "Document",
+        block_ids=tuple(block.block_id for block in blocks),
+    )
+
+
+def _document_title(document: RichDocument) -> str:
+    title = document.metadata.get("title")
+    return str(title).strip() if isinstance(title, str) and title.strip() else "Document"
+
+
+def _block_text(block: RichBlock) -> str:
+    payload = block.payload
+    if block.kind in {RichBlockKind.HEADING, RichBlockKind.PARAGRAPH}:
+        return str(payload["text"])
+    if block.kind is RichBlockKind.LIST:
+        return "\n".join(str(item) for item in payload["items"])
+    if block.kind is RichBlockKind.CODE:
+        return str(payload["text"])
+    if block.kind is RichBlockKind.EQUATION:
+        return str(payload["tex"])
+    if block.kind is RichBlockKind.TABLE:
+        rows = [payload["headers"], *payload["rows"]]
+        return "\n".join(" | ".join(map(str, row)) for row in rows)
+    if block.kind is RichBlockKind.FIGURE:
+        return " ".join(
+            str(payload[name])
+            for name in ("alt_text", "caption")
+            if payload[name]
+        )
+    raise ValueError(f"unsupported rich block kind: {block.kind}")
+
+
+__all__ = [
+    "SourceChapter",
+    "block_prompt_document",
+    "deterministic_language_samples",
+    "plan_source_chapters",
+    "same_primary_language",
+    "validate_chapter_coverage",
+]
