@@ -1,5 +1,11 @@
 """Durable research-domain construction for ARC."""
 
+from .build import (
+    DOMAIN_BUILD_HANDLER,
+    DomainBuildHandler,
+    DomainBuildRunner,
+    domain_build_run_id,
+)
 from .contracts import (
     DOMAIN_BUILD_POLICY_SCHEMA_VERSION,
     DOMAIN_BUILD_REQUEST_SCHEMA_VERSION,
@@ -25,14 +31,18 @@ __all__ = [
     "DOMAIN_BUILD_POLICY_SCHEMA_VERSION",
     "DOMAIN_BUILD_REQUEST_SCHEMA_VERSION",
     "DOMAIN_BUILD_RESULT_SCHEMA_VERSION",
+    "DOMAIN_BUILD_HANDLER",
+    "DomainBuildHandler",
     "DomainBuildPolicy",
     "DomainBuildRequest",
     "DomainBuildResult",
+    "DomainBuildRunner",
     "DomainBuildWarning",
     "decode_domain_build_policy",
     "decode_domain_build_request",
     "decode_domain_build_result",
     "decode_domain_build_warning",
+    "domain_build_run_id",
     "domain_id_for",
     "encode_domain_build_policy",
     "encode_domain_build_request",
