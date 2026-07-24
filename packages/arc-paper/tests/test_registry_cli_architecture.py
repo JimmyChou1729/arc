@@ -42,6 +42,22 @@ def test_registry_has_one_typed_spec_per_operation_and_safe_default_projection()
         OperationEffect.ARBITRARY_LOCAL_PATH
         in OPERATION_REGISTRY["import-source"].effect_flags
     )
+    assert {
+        "arc-paper.get-arxiv-table-of-contents.v1",
+        "arc-paper.get-arxiv-section.v1",
+        "arc-paper.search-arxiv-full-text.v1",
+        "arc-paper.search-arxiv-equations.v1",
+    } <= set(OPERATION_REGISTRY)
+    assert all(
+        "cache_root"
+        not in OPERATION_REGISTRY[name].input_codec.schema["properties"]
+        for name in (
+            "get-arxiv-table-of-contents",
+            "get-arxiv-section",
+            "search-arxiv-full-text",
+            "search-arxiv-equations",
+        )
+    )
     assert registry_document()["schema_version"] == "arc.paper.operation_registry.v1"
 
 
@@ -131,6 +147,53 @@ def test_cli_stdout_is_exactly_one_command_result(
             ["search-metadata", "specific", "mechanism", "--limit", "7"],
             "search-metadata",
             {"query": "specific mechanism", "limit": 7},
+        ),
+        (
+            ["get-arxiv-table-of-contents", "0911.3380", "--refresh"],
+            "get-arxiv-table-of-contents",
+            {"arxiv_id": "0911.3380", "refresh": True},
+        ),
+        (
+            ["get-arxiv-section", "0911.3380", "Introduction"],
+            "get-arxiv-section",
+            {
+                "arxiv_id": "0911.3380",
+                "selector": "Introduction",
+                "refresh": False,
+            },
+        ),
+        (
+            [
+                "search-arxiv-full-text",
+                "0911.3380",
+                "Hamiltonian",
+                "constraint",
+                "--limit",
+                "7",
+                "--context-lines",
+                "2",
+                "--case-sensitive",
+            ],
+            "search-arxiv-full-text",
+            {
+                "arxiv_id": "0911.3380",
+                "query": "Hamiltonian constraint",
+                "limit": 7,
+                "context_lines": 2,
+                "case_sensitive": True,
+                "refresh": False,
+            },
+        ),
+        (
+            ["search-arxiv-equations", "0911.3380", "H^2", "--limit", "3"],
+            "search-arxiv-equations",
+            {
+                "arxiv_id": "0911.3380",
+                "query": "H^2",
+                "limit": 3,
+                "case_sensitive": False,
+                "refresh": False,
+            },
         ),
         (
             ["fetch-arxiv-pdf", "hep-th/0601001", "--cache-root", "/cache"],

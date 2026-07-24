@@ -11,6 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from ._cache_root import resolve_cache_root
+from ._parsed_document_cache import ParsedDocumentCache
+from .arxiv_document import (
+    ArxivDocumentProvenance,
+    ArxivEquationSearch,
+    ArxivFullTextSearch,
+    ArxivSection,
+    ArxivTableOfContents,
+)
 from .document_search import (
     EquationSearchResult,
     FullTextSearchResult,
@@ -21,6 +29,7 @@ from .document_search import (
     table_of_contents as _table_of_contents,
 )
 from .ids import extract_paper_ids as _extract_paper_ids
+from .ids import arxiv_path_id
 from .ids import paper_ids_safe_dir_name as _paper_ids_safe_dir_name
 from .parse import (
     PDFTextExtractor,
@@ -43,6 +52,11 @@ class PaperInputError(ValueError):
     """A stable invalid-request error raised before external effects."""
 
     code = "invalid_request"
+
+    def __init__(self, message: str, *, code: str = "invalid_request"):
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 def default_cache_root() -> Path:
@@ -80,6 +94,13 @@ class ArcPaperService:
             self.repository,
             pdf_text_extractor=pdf_text_extractor,
         )
+        self._parsed_document_cache = ParsedDocumentCache(
+            root,
+            repository=self.repository,
+        )
+        self._parsed_document_memo: dict[
+            tuple[str, str, str, int], ParsedDocument
+        ] = {}
 
     def import_source(
         self,
@@ -245,6 +266,139 @@ class ArcPaperService:
     ) -> ParsedSection:
         return _select_section(document, selector)
 
+    def get_arxiv_table_of_contents(
+        self,
+        arxiv_id: str,
+        *,
+        refresh: bool = False,
+    ) -> ArxivTableOfContents:
+        document, provenance, warnings = self._resolve_arxiv_document(
+            arxiv_id, refresh=refresh
+        )
+        return ArxivTableOfContents(
+            provenance=provenance,
+            entries=_table_of_contents(document),
+            warnings=warnings,
+        )
+
+    def get_arxiv_section(
+        self,
+        arxiv_id: str,
+        selector: str | int,
+        *,
+        refresh: bool = False,
+    ) -> ArxivSection:
+        document, provenance, warnings = self._resolve_arxiv_document(
+            arxiv_id, refresh=refresh
+        )
+        section = _select_section(document, selector)
+        return ArxivSection(
+            provenance=provenance,
+            section_id=section.section_id,
+            title=section.title,
+            text=section.text,
+            level=section.level,
+            ordinal=section.ordinal,
+            page_start=section.page_start,
+            page_end=section.page_end,
+            warnings=warnings,
+        )
+
+    def search_arxiv_full_text(
+        self,
+        arxiv_id: str,
+        query: str,
+        *,
+        limit: int = 20,
+        context_lines: int = 1,
+        case_sensitive: bool = False,
+        refresh: bool = False,
+    ) -> ArxivFullTextSearch:
+        document, provenance, warnings = self._resolve_arxiv_document(
+            arxiv_id, refresh=refresh
+        )
+        result = _search_full_text(
+            document,
+            query,
+            limit=limit,
+            context_lines=context_lines,
+            case_sensitive=case_sensitive,
+        )
+        return ArxivFullTextSearch(
+            provenance=provenance,
+            query=result.query,
+            matches=result.matches,
+            limit=result.limit,
+            context_lines=result.context_lines,
+            case_sensitive=result.case_sensitive,
+            truncated=result.truncated,
+            warnings=warnings,
+        )
+
+    def search_arxiv_equations(
+        self,
+        arxiv_id: str,
+        query: str,
+        *,
+        limit: int = 20,
+        case_sensitive: bool = False,
+        refresh: bool = False,
+    ) -> ArxivEquationSearch:
+        document, provenance, warnings = self._resolve_arxiv_document(
+            arxiv_id, refresh=refresh
+        )
+        result = _search_equations(
+            document,
+            query,
+            limit=limit,
+            case_sensitive=case_sensitive,
+        )
+        return ArxivEquationSearch(
+            provenance=provenance,
+            query=result.query,
+            matches=result.matches,
+            limit=result.limit,
+            case_sensitive=result.case_sensitive,
+            truncated=result.truncated,
+            warnings=warnings,
+        )
+
+    def _resolve_arxiv_document(
+        self,
+        arxiv_id: str,
+        *,
+        refresh: bool,
+    ) -> tuple[
+        ParsedDocument,
+        ArxivDocumentProvenance,
+        tuple[str, ...],
+    ]:
+        path_id = arxiv_path_id(str(arxiv_id or ""))
+        if not path_id:
+            raise PaperInputError(
+                f"arXiv document operation requires an arXiv ID: {arxiv_id}",
+                code="not_arxiv_id",
+            )
+        canonical_id = f"arXiv:{path_id}"
+        source = self.fetch_arxiv_auto(canonical_id, refresh=refresh)
+        identity = source.content_identity
+        warnings: tuple[str, ...] = ()
+        document = self._parsed_document_memo.get(identity)
+        if document is None:
+            document, warnings = self._parsed_document_cache.get_or_parse(
+                source,
+                self.parser.parse_source,
+            )
+            self._parsed_document_memo[identity] = document
+        provenance = ArxivDocumentProvenance(
+            canonical_arxiv_id=canonical_id,
+            provider="ar5iv",
+            source_format=source.source_format.value,
+            source_digest=source.artifact_digest,
+            document_digest=document.document_digest,
+        )
+        return document, provenance, warnings
+
 
 def extract_paper_ids(text: str) -> list[str]:
     return _extract_paper_ids(str(text))
@@ -353,6 +507,63 @@ def select_section(
     return _select_section(document, selector)
 
 
+def get_arxiv_table_of_contents(
+    arxiv_id: str,
+    *,
+    refresh: bool = False,
+) -> ArxivTableOfContents:
+    return ArcPaperService().get_arxiv_table_of_contents(
+        arxiv_id, refresh=refresh
+    )
+
+
+def get_arxiv_section(
+    arxiv_id: str,
+    selector: str | int,
+    *,
+    refresh: bool = False,
+) -> ArxivSection:
+    return ArcPaperService().get_arxiv_section(
+        arxiv_id, selector, refresh=refresh
+    )
+
+
+def search_arxiv_full_text(
+    arxiv_id: str,
+    query: str,
+    *,
+    limit: int = 20,
+    context_lines: int = 1,
+    case_sensitive: bool = False,
+    refresh: bool = False,
+) -> ArxivFullTextSearch:
+    return ArcPaperService().search_arxiv_full_text(
+        arxiv_id,
+        query,
+        limit=limit,
+        context_lines=context_lines,
+        case_sensitive=case_sensitive,
+        refresh=refresh,
+    )
+
+
+def search_arxiv_equations(
+    arxiv_id: str,
+    query: str,
+    *,
+    limit: int = 20,
+    case_sensitive: bool = False,
+    refresh: bool = False,
+) -> ArxivEquationSearch:
+    return ArcPaperService().search_arxiv_equations(
+        arxiv_id,
+        query,
+        limit=limit,
+        case_sensitive=case_sensitive,
+        refresh=refresh,
+    )
+
+
 def import_source(
     path: str | Path,
     *,
@@ -412,6 +623,8 @@ __all__ = [
     "fetch_arxiv_auto",
     "fetch_arxiv_pdf",
     "get_abstract",
+    "get_arxiv_section",
+    "get_arxiv_table_of_contents",
     "get_authors",
     "get_citer_count",
     "get_citers",
@@ -423,6 +636,8 @@ __all__ = [
     "parse_local",
     "select_section",
     "search_equations",
+    "search_arxiv_equations",
+    "search_arxiv_full_text",
     "search_full_text",
     "search_metadata",
     "table_of_contents",

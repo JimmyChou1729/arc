@@ -64,6 +64,26 @@ def _parser() -> _Parser:
     search.add_argument("query", nargs="+")
     search.add_argument("--limit", type=int, default=20)
 
+    toc = commands.add_parser("get-arxiv-table-of-contents", add_help=False)
+    _arxiv_arguments(toc)
+
+    section = commands.add_parser("get-arxiv-section", add_help=False)
+    _arxiv_arguments(section)
+    section.add_argument("selector")
+
+    full_text = commands.add_parser("search-arxiv-full-text", add_help=False)
+    _arxiv_arguments(full_text)
+    full_text.add_argument("query", nargs="+")
+    full_text.add_argument("--limit", type=int, default=20)
+    full_text.add_argument("--context-lines", type=int, default=1)
+    full_text.add_argument("--case-sensitive", action="store_true")
+
+    equations = commands.add_parser("search-arxiv-equations", add_help=False)
+    _arxiv_arguments(equations)
+    equations.add_argument("query", nargs="+")
+    equations.add_argument("--limit", type=int, default=20)
+    equations.add_argument("--case-sensitive", action="store_true")
+
     for name in ("fetch-arxiv-auto", "fetch-arxiv-pdf"):
         command = commands.add_parser(name, add_help=False)
         _paper_arguments(command)
@@ -107,6 +127,11 @@ def _paper_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--refresh", action="store_true")
 
 
+def _arxiv_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("arxiv_id")
+    parser.add_argument("--refresh", action="store_true")
+
+
 def _parameters(args: argparse.Namespace) -> dict[str, Any]:
     command = args.command
     if command == "extract-paper-ids":
@@ -136,6 +161,31 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
         }
     if command == "search-metadata":
         return {"query": " ".join(args.query), "limit": args.limit}
+    if command == "get-arxiv-table-of-contents":
+        return {"arxiv_id": args.arxiv_id, "refresh": args.refresh}
+    if command == "get-arxiv-section":
+        return {
+            "arxiv_id": args.arxiv_id,
+            "selector": args.selector,
+            "refresh": args.refresh,
+        }
+    if command == "search-arxiv-full-text":
+        return {
+            "arxiv_id": args.arxiv_id,
+            "query": " ".join(args.query),
+            "limit": args.limit,
+            "context_lines": args.context_lines,
+            "case_sensitive": args.case_sensitive,
+            "refresh": args.refresh,
+        }
+    if command == "search-arxiv-equations":
+        return {
+            "arxiv_id": args.arxiv_id,
+            "query": " ".join(args.query),
+            "limit": args.limit,
+            "case_sensitive": args.case_sensitive,
+            "refresh": args.refresh,
+        }
     if command in {"fetch-arxiv-auto", "fetch-arxiv-pdf"}:
         return {
             "paper_id": args.paper_id,
@@ -174,6 +224,10 @@ def _help_data() -> dict[str, Any]:
             "get-citers",
             "get-citer-count",
             "search-metadata",
+            "get-arxiv-table-of-contents",
+            "get-arxiv-section",
+            "search-arxiv-full-text",
+            "search-arxiv-equations",
             "fetch-arxiv-auto",
             "fetch-arxiv-pdf",
             "import-source",

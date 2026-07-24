@@ -28,6 +28,13 @@ from .document_search import (  # noqa: E402
     search_full_text,
     table_of_contents,
 )
+from .arxiv_document import (  # noqa: E402
+    ArxivDocumentProvenance,
+    ArxivEquationSearch,
+    ArxivFullTextSearch,
+    ArxivSection,
+    ArxivTableOfContents,
+)
 from .source_repository import (  # noqa: E402
     SOURCE_ASSET_SCHEMA,
     SOURCE_REPOSITORY_SCHEMA,
@@ -77,7 +84,14 @@ from .parse import (  # noqa: E402
     parsed_document_to_document,
     visual_page_review_schema,
 )
-from .service import ArcPaperService, PaperInputError  # noqa: E402
+from .service import (  # noqa: E402
+    ArcPaperService,
+    PaperInputError,
+    get_arxiv_section,
+    get_arxiv_table_of_contents,
+    search_arxiv_equations,
+    search_arxiv_full_text,
+)
 from .rich_document import (  # noqa: E402
     AssetImporter,
     PDF_VALIDATOR_MISSING_WARNING,
@@ -129,6 +143,11 @@ from .workflows import (  # noqa: E402
 
 __all__ = [
     "ArcPaperService",
+    "ArxivDocumentProvenance",
+    "ArxivEquationSearch",
+    "ArxivFullTextSearch",
+    "ArxivSection",
+    "ArxivTableOfContents",
     "arxiv_path_id",
     "DEFAULT_EXCLUDED_EFFECTS",
     "DocumentSearchError",
@@ -147,6 +166,8 @@ __all__ = [
     "REGISTRY_SCHEMA_VERSION",
     "dispatch_operation",
     "get_operation",
+    "get_arxiv_section",
+    "get_arxiv_table_of_contents",
     "registry_document",
     "resolve_operations",
     "ParseOutcome",
@@ -216,6 +237,8 @@ __all__ = [
     "TextMatchLocation",
     "select_section",
     "search_equations",
+    "search_arxiv_equations",
+    "search_arxiv_full_text",
     "search_full_text",
     "table_of_contents",
     "parse_outcome_to_document",

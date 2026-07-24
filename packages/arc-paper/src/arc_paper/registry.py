@@ -183,6 +183,7 @@ def _spec(
 
 
 _PAPER = {"paper_id": {"type": "string", "minLength": 1}}
+_ARXIV = {"arxiv_id": {"type": "string", "minLength": 1}}
 _REFRESH = {"refresh": {"type": "boolean", "default": False}}
 _NETWORK_CACHE = frozenset(
     {OperationEffect.NETWORK, OperationEffect.CACHE_WRITE}
@@ -292,6 +293,24 @@ _SECTION_SCHEMA = _object(
         "title",
         "level",
         "text",
+        "ordinal",
+        "page_start",
+        "page_end",
+    ),
+)
+_TOC_ENTRY_SCHEMA = _object(
+    {
+        "section_id": _NONEMPTY_STRING,
+        "title": _STRING,
+        "level": {"type": "integer", "minimum": 1},
+        "ordinal": {"type": "integer", "minimum": 0},
+        "page_start": _NULLABLE_INTEGER,
+        "page_end": _NULLABLE_INTEGER,
+    },
+    required=(
+        "section_id",
+        "title",
+        "level",
         "ordinal",
         "page_start",
         "page_end",
@@ -414,6 +433,81 @@ _PARSE_OUTCOME_SCHEMA = _object(
     },
     required=("document", "report", "warnings"),
 )
+_ARXIV_PROVENANCE_SCHEMA = _object(
+    {
+        "canonical_arxiv_id": {
+            "type": "string",
+            "pattern": "^arXiv:",
+        },
+        "provider": {"const": "ar5iv"},
+        "source_format": {"const": "html"},
+        "source_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "document_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    },
+    required=(
+        "canonical_arxiv_id",
+        "provider",
+        "source_format",
+        "source_digest",
+        "document_digest",
+    ),
+)
+_FULL_TEXT_MATCH_SCHEMA = _object(
+    {
+        "document_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "location": {"enum": ["section", "page"]},
+        "location_id": _NONEMPTY_STRING,
+        "title": _STRING,
+        "ordinal": {"type": "integer", "minimum": 0},
+        "page_number": _NULLABLE_INTEGER,
+        "matched_in": _NONEMPTY_STRING,
+        "snippet": _STRING,
+    },
+    required=(
+        "document_digest",
+        "source_digest",
+        "location",
+        "location_id",
+        "title",
+        "ordinal",
+        "page_number",
+        "matched_in",
+        "snippet",
+    ),
+)
+_EQUATION_MATCH_SCHEMA = _object(
+    {
+        "document_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "span_id": _NONEMPTY_STRING,
+        "kind": {"enum": ["inline", "display"]},
+        "normalized_tex": _NONEMPTY_STRING,
+        "source_label": _STRING,
+        "source_line_start": {"type": "integer", "minimum": 1},
+        "source_column_start": {"type": "integer", "minimum": 1},
+        "source_line_end": {"type": "integer", "minimum": 1},
+        "source_column_end": {"type": "integer", "minimum": 1},
+        "context_before": _STRING,
+        "context_after": _STRING,
+        "matched_in": _NONEMPTY_STRING,
+    },
+    required=(
+        "document_digest",
+        "source_digest",
+        "span_id",
+        "kind",
+        "normalized_tex",
+        "source_label",
+        "source_line_start",
+        "source_column_start",
+        "source_line_end",
+        "source_column_end",
+        "context_before",
+        "context_after",
+        "matched_in",
+    ),
+)
 
 _OPERATIONS = (
     _spec(
@@ -512,6 +606,138 @@ _OPERATIONS = (
         ),
         service.search_metadata,
         output_schema={"type": "array", "items": _METADATA_SCHEMA},
+        effects=_NETWORK_CACHE,
+    ),
+    _spec(
+        "get-arxiv-table-of-contents",
+        _object({**_ARXIV, **_REFRESH}, required=("arxiv_id",)),
+        service.get_arxiv_table_of_contents,
+        output_schema=_object(
+            {
+                "provenance": _ARXIV_PROVENANCE_SCHEMA,
+                "entries": {"type": "array", "items": _TOC_ENTRY_SCHEMA},
+                "warnings": _STRING_ARRAY,
+            },
+            required=("provenance", "entries", "warnings"),
+        ),
+        effects=_NETWORK_CACHE,
+    ),
+    _spec(
+        "get-arxiv-section",
+        _object(
+            {
+                **_ARXIV,
+                "selector": {"type": ["string", "integer"]},
+                **_REFRESH,
+            },
+            required=("arxiv_id", "selector"),
+        ),
+        service.get_arxiv_section,
+        output_schema=_object(
+            {
+                "provenance": _ARXIV_PROVENANCE_SCHEMA,
+                "section_id": _NONEMPTY_STRING,
+                "title": _STRING,
+                "text": _STRING,
+                "level": {"type": "integer", "minimum": 1},
+                "ordinal": {"type": "integer", "minimum": 0},
+                "page_start": _NULLABLE_INTEGER,
+                "page_end": _NULLABLE_INTEGER,
+                "warnings": _STRING_ARRAY,
+            },
+            required=(
+                "provenance",
+                "section_id",
+                "title",
+                "text",
+                "level",
+                "ordinal",
+                "page_start",
+                "page_end",
+                "warnings",
+            ),
+        ),
+        effects=_NETWORK_CACHE,
+    ),
+    _spec(
+        "search-arxiv-full-text",
+        _object(
+            {
+                **_ARXIV,
+                "query": _NONEMPTY_STRING,
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                "context_lines": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5,
+                },
+                "case_sensitive": {"type": "boolean", "default": False},
+                **_REFRESH,
+            },
+            required=("arxiv_id", "query"),
+        ),
+        service.search_arxiv_full_text,
+        output_schema=_object(
+            {
+                "provenance": _ARXIV_PROVENANCE_SCHEMA,
+                "query": _NONEMPTY_STRING,
+                "matches": {"type": "array", "items": _FULL_TEXT_MATCH_SCHEMA},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                "context_lines": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5,
+                },
+                "case_sensitive": {"type": "boolean"},
+                "truncated": {"type": "boolean"},
+                "warnings": _STRING_ARRAY,
+            },
+            required=(
+                "provenance",
+                "query",
+                "matches",
+                "limit",
+                "context_lines",
+                "case_sensitive",
+                "truncated",
+                "warnings",
+            ),
+        ),
+        effects=_NETWORK_CACHE,
+    ),
+    _spec(
+        "search-arxiv-equations",
+        _object(
+            {
+                **_ARXIV,
+                "query": _NONEMPTY_STRING,
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                "case_sensitive": {"type": "boolean", "default": False},
+                **_REFRESH,
+            },
+            required=("arxiv_id", "query"),
+        ),
+        service.search_arxiv_equations,
+        output_schema=_object(
+            {
+                "provenance": _ARXIV_PROVENANCE_SCHEMA,
+                "query": _NONEMPTY_STRING,
+                "matches": {"type": "array", "items": _EQUATION_MATCH_SCHEMA},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                "case_sensitive": {"type": "boolean"},
+                "truncated": {"type": "boolean"},
+                "warnings": _STRING_ARRAY,
+            },
+            required=(
+                "provenance",
+                "query",
+                "matches",
+                "limit",
+                "case_sensitive",
+                "truncated",
+                "warnings",
+            ),
+        ),
         effects=_NETWORK_CACHE,
     ),
     _spec(
