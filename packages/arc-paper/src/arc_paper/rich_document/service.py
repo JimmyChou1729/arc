@@ -149,7 +149,10 @@ class RichDocumentParserService:
                 f"PDF validator {status} for source subjects: {subjects}",
             )
         page_map = _build_page_map(
-            parsed.document, entries, legacy_primary.sections
+            parsed.document,
+            entries,
+            legacy_primary.sections,
+            parsed_validator.pages,
         )
         document = RichDocument(
             source=parsed.document.source,
@@ -219,10 +222,11 @@ def _build_page_map(
     document: RichDocument,
     entries: tuple[ReconciliationEntry, ...],
     legacy_sections,
+    pages,
 ) -> tuple[RichPageMapEntry, ...]:
     entries_by_subject = {entry.subject_id: entry for entry in entries}
     unused_legacy = list(legacy_sections)
-    page_by_section: dict[str, int] = {}
+    heading_page_by_section: dict[str, int] = {}
     for section in document.sections:
         starts_with_heading = (
             section.block_start < len(document.blocks)
@@ -248,22 +252,59 @@ def _build_page_map(
         entry = entries_by_subject.get(f"section:{legacy.section_id}")
         if entry is None or entry.status is not ReconciliationStatus.VERIFIED:
             continue
-        pages = entry.provenance.get("page_candidates")
+        evidence_pages = entry.provenance.get("page_candidates")
         if (
-            isinstance(pages, list)
-            and len(pages) == 1
-            and isinstance(pages[0], int)
+            isinstance(evidence_pages, list)
+            and len(evidence_pages) == 1
+            and isinstance(evidence_pages[0], int)
         ):
-            page_by_section[section.section_id] = pages[0]
-    return tuple(
-        RichPageMapEntry(
-            block_id=block.block_id,
-            page_number=page_by_section[block.section_path[-1]],
-        )
-        for block in document.blocks
-        if block.section_path
-        and block.section_path[-1] in page_by_section
+            heading_page_by_section[section.section_id] = evidence_pages[0]
+
+    page_fingerprints = tuple(
+        (page.page_number, _text_fingerprint(page.text))
+        for page in pages
     )
+    mapped: list[RichPageMapEntry] = []
+    for block in document.blocks:
+        if (
+            block.kind is RichBlockKind.HEADING
+            and block.section_path
+            and block.section_path[-1] in heading_page_by_section
+        ):
+            mapped.append(
+                RichPageMapEntry(
+                    block_id=block.block_id,
+                    page_number=heading_page_by_section[
+                        block.section_path[-1]
+                    ],
+                )
+            )
+            continue
+        phrase = _text_fingerprint(_block_text(block))
+        if not _has_sufficient_page_evidence(phrase):
+            continue
+        candidates = [
+            page_number
+            for page_number, page_phrase in page_fingerprints
+            if _phrase_occurs_on_page(phrase, page_phrase)
+        ]
+        if len(candidates) == 1:
+            mapped.append(
+                RichPageMapEntry(
+                    block_id=block.block_id,
+                    page_number=candidates[0],
+                )
+            )
+    return tuple(mapped)
+
+
+def _has_sufficient_page_evidence(phrase: str) -> bool:
+    tokens = phrase.split()
+    return len(tokens) >= 2 and len("".join(tokens)) >= 8
+
+
+def _phrase_occurs_on_page(phrase: str, page_phrase: str) -> bool:
+    return f" {phrase} " in f" {page_phrase} "
 
 
 def _reconcile_synthetic_section(document, entries, pages):

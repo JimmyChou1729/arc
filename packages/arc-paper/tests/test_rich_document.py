@@ -203,12 +203,99 @@ def test_inline_images_are_imported_as_figure_blocks(tmp_path, source_format):
         SourceBundle(primary=repository.import_path(source))
     ).document
 
-    figures = [
-        block for block in document.blocks if block.kind is RichBlockKind.FIGURE
+    assert [block.kind for block in document.blocks] == [
+        RichBlockKind.PARAGRAPH,
+        RichBlockKind.FIGURE,
+        RichBlockKind.PARAGRAPH,
     ]
-    assert len(figures) == 1
-    assert figures[0].payload["alt_text"] == "inline plot"
-    assert figures[0].payload["asset_digest"] == document.assets[0].artifact_digest
+    before, figure, after = document.blocks
+    assert before.payload["text"] == "Before"
+    assert after.payload["text"] == "after."
+    assert figure.payload["alt_text"] == "inline plot"
+    assert figure.payload["asset_digest"] == document.assets[0].artifact_digest
+    assert before.locator == figure.locator == after.locator
+
+
+@pytest.mark.parametrize("source_format", [SourceFormat.MARKDOWN, SourceFormat.HTML])
+def test_list_inline_image_preserves_order_and_asset(tmp_path, source_format):
+    image = tmp_path / "inline.png"
+    image.write_bytes(b"\x89PNG list inline")
+    if source_format is SourceFormat.MARKDOWN:
+        source = tmp_path / "list.md"
+        source.write_text(
+            "- first\n- before ![list plot](inline.png) after\n- last",
+            encoding="utf-8",
+        )
+    else:
+        source = tmp_path / "list.html"
+        source.write_text(
+            "<article><ul><li>first</li><li>before "
+            "<img src='inline.png' alt='list plot'> after</li>"
+            "<li>last</li></ul></article>",
+            encoding="utf-8",
+        )
+    repository = SourceRepository(tmp_path / "cache")
+
+    document = RichDocumentParserService(repository).parse(
+        SourceBundle(primary=repository.import_path(source))
+    ).document
+
+    assert [block.kind for block in document.blocks] == [
+        RichBlockKind.LIST,
+        RichBlockKind.FIGURE,
+        RichBlockKind.LIST,
+    ]
+    before, figure, after = document.blocks
+    assert [item["text"] for item in before.payload["items"]] == [
+        "first",
+        "before",
+    ]
+    assert [item["text"] for item in after.payload["items"]] == [
+        "after",
+        "last",
+    ]
+    assert figure.payload["alt_text"] == "list plot"
+    assert figure.payload["asset_digest"] == document.assets[0].artifact_digest
+    assert before.locator == figure.locator == after.locator
+
+
+@pytest.mark.parametrize("source_format", [SourceFormat.MARKDOWN, SourceFormat.HTML])
+def test_table_inline_image_preserves_order_and_asset(tmp_path, source_format):
+    image = tmp_path / "inline.png"
+    image.write_bytes(b"\x89PNG table inline")
+    if source_format is SourceFormat.MARKDOWN:
+        source = tmp_path / "table.md"
+        source.write_text(
+            "| Result |\n| --- |\n"
+            "| before ![table plot](inline.png) after |",
+            encoding="utf-8",
+        )
+    else:
+        source = tmp_path / "table.html"
+        source.write_text(
+            "<article><table><tr><th>Result</th></tr><tr><td>before "
+            "<img src='inline.png' alt='table plot'> after</td></tr>"
+            "</table></article>",
+            encoding="utf-8",
+        )
+    repository = SourceRepository(tmp_path / "cache")
+
+    document = RichDocumentParserService(repository).parse(
+        SourceBundle(primary=repository.import_path(source))
+    ).document
+
+    assert [block.kind for block in document.blocks] == [
+        RichBlockKind.TABLE,
+        RichBlockKind.FIGURE,
+        RichBlockKind.TABLE,
+    ]
+    before, figure, after = document.blocks
+    assert before.payload["headers"] == ("Result",)
+    assert before.payload["rows"] == (("before",),)
+    assert after.payload["headers"] == ("",)
+    assert after.payload["rows"] == (("after",),)
+    assert figure.payload["alt_text"] == "table plot"
+    assert figure.payload["asset_digest"] == document.assets[0].artifact_digest
 
 
 def test_flattened_tex_rich_parse_and_multifile_rejection(tmp_path):
@@ -481,12 +568,12 @@ def test_matching_pdf_builds_page_map_and_mismatch_fails(tmp_path):
         SourceBundle(primary=primary, validators=(matching,))
     )
 
-    assert len(outcome.document.page_map) == len(outcome.document.blocks)
     pages = {
         entry.block_id: entry.page_number for entry in outcome.document.page_map
     }
     assert pages[outcome.document.blocks[0].block_id] == 1
     assert pages[outcome.document.blocks[-1].block_id] == 2
+    assert outcome.document.blocks[1].block_id not in pages
     assert PDF_VALIDATOR_MISSING_WARNING not in outcome.warnings
 
     with pytest.raises(RichDocumentValidationError) as error:
@@ -544,6 +631,78 @@ def test_preface_does_not_shift_heading_page_map(tmp_path):
     assert preface.block_id not in page_by_block
     assert page_by_block[introduction.block_id] == 1
     assert page_by_block[method.block_id] == 2
+
+
+def test_page_map_matches_late_block_on_second_page_of_same_section(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        (
+            b"# Results\n"
+            b"Opening explanation appears only near the start.\n\n"
+            b"Late conclusion appears only at the end.\n"
+        ),
+        SourceFormat.MARKDOWN,
+    )
+    pdf_payload = b"%PDF multi-page section"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            pdf_payload: PDFTextLayer(
+                (
+                    "Results\nOpening explanation appears only near the start.",
+                    "Late conclusion appears only at the end.",
+                )
+            )
+        }
+    )
+
+    document = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,))).document
+
+    page_by_block = {
+        item.block_id: item.page_number for item in document.page_map
+    }
+    heading, opening, late = document.blocks
+    assert page_by_block[heading.block_id] == 1
+    assert page_by_block[opening.block_id] == 1
+    assert page_by_block[late.block_id] == 2
+
+
+def test_page_map_omits_block_with_ambiguous_page_text(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        (
+            b"# Results\n"
+            b"Repeated explanatory sentence appears here.\n"
+        ),
+        SourceFormat.MARKDOWN,
+    )
+    pdf_payload = b"%PDF repeated block"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            pdf_payload: PDFTextLayer(
+                (
+                    "Results\nRepeated explanatory sentence appears here.",
+                    "Repeated explanatory sentence appears here.",
+                )
+            )
+        }
+    )
+
+    document = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,))).document
+
+    page_by_block = {
+        item.block_id: item.page_number for item in document.page_map
+    }
+    heading, repeated = document.blocks
+    assert page_by_block[heading.block_id] == 1
+    assert repeated.block_id not in page_by_block
 
 
 def test_ambiguous_or_invalid_pdf_fails_deterministically(tmp_path):

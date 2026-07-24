@@ -23,6 +23,10 @@ from .models import (
 
 
 AssetImporter = Callable[[str], RichAsset | None]
+_MarkdownImage = tuple[str, str, str]
+_MARKDOWN_IMAGE_RE = re.compile(
+    r'!\[([^\]]*)\]\((\S+?)(?:\s+["\'](.*?)["\'])?\)'
+)
 
 
 @dataclass(frozen=True)
@@ -185,14 +189,14 @@ def _parse_markdown(
         table = _markdown_table(lines, index)
         if table is not None:
             end, headers, rows = table
-            output.append(
-                _raw(
-                    artifact,
-                    RichBlockKind.TABLE,
-                    index + 1,
-                    end + 1,
-                    {"headers": headers, "rows": rows, "caption": ""},
-                )
+            _append_markdown_table_blocks(
+                output,
+                artifact,
+                line_start=index + 1,
+                line_end=end + 1,
+                headers=headers,
+                rows=rows,
+                import_asset=import_asset,
             )
             index = end + 1
             continue
@@ -200,22 +204,21 @@ def _parse_markdown(
         if list_match:
             ordered = bool(re.match(r"\d", list_match.group(1)))
             start = index
-            items: list[dict[str, Any]] = []
+            contents: list[str] = []
             while index < len(lines):
                 item = re.match(r"^\s{0,3}([-+*]|\d+[.)])\s+(.+)$", lines[index])
                 if not item or bool(re.match(r"\d", item.group(1))) != ordered:
                     break
-                content = item.group(2).strip()
-                items.append(_markdown_inline_payload(content))
+                contents.append(item.group(2).strip())
                 index += 1
-            output.append(
-                _raw(
-                    artifact,
-                    RichBlockKind.LIST,
-                    start + 1,
-                    index,
-                    {"ordered": ordered, "items": items},
-                )
+            _append_markdown_list_blocks(
+                output,
+                artifact,
+                line_start=start + 1,
+                line_end=index,
+                ordered=ordered,
+                contents=contents,
+                import_asset=import_asset,
             )
             continue
         figure = _markdown_figure(line)
@@ -247,31 +250,14 @@ def _parse_markdown(
             paragraph_lines.append(candidate.strip())
             index += 1
         raw_text = "\n".join(paragraph_lines)
-        output.append(
-            _raw(
-                artifact,
-                RichBlockKind.PARAGRAPH,
-                start + 1,
-                index,
-                _markdown_inline_payload(raw_text),
-            )
+        _append_markdown_paragraph_blocks(
+            output,
+            artifact,
+            line_start=start + 1,
+            line_end=index,
+            value=raw_text,
+            import_asset=import_asset,
         )
-        for alt_text, target, caption in _markdown_figures(raw_text):
-            asset = import_asset(target)
-            output.append(
-                _raw(
-                    artifact,
-                    RichBlockKind.FIGURE,
-                    start + 1,
-                    index,
-                    _figure_payload(
-                        asset,
-                        alt_text=alt_text,
-                        caption=caption,
-                        target=target,
-                    ),
-                )
-            )
     return output
 
 
@@ -332,16 +318,11 @@ def _markdown_table(
         re.fullmatch(r":?-{3,}:?", cell.strip()) is None for cell in separator
     ):
         return None
-    headers = [_markdown_plain_text(cell.strip()) for cell in _split_pipe_row(lines[index])]
+    headers = [cell.strip() for cell in _split_pipe_row(lines[index])]
     rows: list[list[str]] = []
     current = index + 2
     while current < len(lines) and "|" in lines[current] and lines[current].strip():
-        rows.append(
-            [
-                _markdown_plain_text(cell.strip())
-                for cell in _split_pipe_row(lines[current])
-            ]
-        )
+        rows.append([cell.strip() for cell in _split_pipe_row(lines[current])])
         current += 1
     return current - 1, headers, rows
 
@@ -359,14 +340,175 @@ def _markdown_figure(value: str) -> tuple[str, str, str] | None:
     return match.groups(default="") if match else None
 
 
-def _markdown_figures(value: str) -> list[tuple[str, str, str]]:
-    return [
-        match.groups(default="")
-        for match in re.finditer(
-            r'!\[([^\]]*)\]\((\S+?)(?:\s+["\'](.*?)["\'])?\)',
-            value,
+def _markdown_image_segments(value: str) -> list[str | _MarkdownImage]:
+    segments: list[str | _MarkdownImage] = []
+    cursor = 0
+    for match in _MARKDOWN_IMAGE_RE.finditer(value):
+        segments.append(value[cursor : match.start()])
+        segments.append(match.groups(default=""))
+        cursor = match.end()
+    segments.append(value[cursor:])
+    return segments
+
+
+def _append_markdown_paragraph_blocks(
+    output: list[_RawBlock],
+    artifact: SourceArtifact,
+    *,
+    line_start: int,
+    line_end: int,
+    value: str,
+    import_asset: AssetImporter,
+) -> None:
+    for segment in _markdown_image_segments(value):
+        if isinstance(segment, str):
+            payload = _markdown_inline_payload(segment)
+            if payload["text"]:
+                output.append(
+                    _raw(
+                        artifact,
+                        RichBlockKind.PARAGRAPH,
+                        line_start,
+                        line_end,
+                        payload,
+                    )
+                )
+            continue
+        output.append(
+            _markdown_image_block(
+                artifact,
+                line_start,
+                line_end,
+                segment,
+                import_asset,
+            )
         )
-    ]
+
+
+def _append_markdown_list_blocks(
+    output: list[_RawBlock],
+    artifact: SourceArtifact,
+    *,
+    line_start: int,
+    line_end: int,
+    ordered: bool,
+    contents: list[str],
+    import_asset: AssetImporter,
+) -> None:
+    pending: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        if not pending:
+            return
+        output.append(
+            _raw(
+                artifact,
+                RichBlockKind.LIST,
+                line_start,
+                line_end,
+                {"ordered": ordered, "items": list(pending)},
+            )
+        )
+        pending.clear()
+
+    for content in contents:
+        for segment in _markdown_image_segments(content):
+            if isinstance(segment, str):
+                payload = _markdown_inline_payload(segment)
+                if payload["text"]:
+                    pending.append(payload)
+                continue
+            flush()
+            output.append(
+                _markdown_image_block(
+                    artifact,
+                    line_start,
+                    line_end,
+                    segment,
+                    import_asset,
+                )
+            )
+    flush()
+
+
+def _append_markdown_table_blocks(
+    output: list[_RawBlock],
+    artifact: SourceArtifact,
+    *,
+    line_start: int,
+    line_end: int,
+    headers: list[str],
+    rows: list[list[str]],
+    import_asset: AssetImporter,
+) -> None:
+    shape = [headers, *rows]
+    pending = [["" for _ in row] for row in shape]
+
+    def flush() -> None:
+        if not any(cell for row in pending for cell in row):
+            return
+        output.append(
+            _raw(
+                artifact,
+                RichBlockKind.TABLE,
+                line_start,
+                line_end,
+                {
+                    "headers": list(pending[0]),
+                    "rows": [list(row) for row in pending[1:]],
+                    "caption": "",
+                },
+            )
+        )
+        for row in pending:
+            for column in range(len(row)):
+                row[column] = ""
+
+    for row_index, row in enumerate(shape):
+        for column, cell in enumerate(row):
+            for segment in _markdown_image_segments(cell):
+                if isinstance(segment, str):
+                    text = _markdown_plain_text(segment)
+                    if text:
+                        pending[row_index][column] = " ".join(
+                            value
+                            for value in (pending[row_index][column], text)
+                            if value
+                        )
+                    continue
+                flush()
+                output.append(
+                    _markdown_image_block(
+                        artifact,
+                        line_start,
+                        line_end,
+                        segment,
+                        import_asset,
+                    )
+                )
+    flush()
+
+
+def _markdown_image_block(
+    artifact: SourceArtifact,
+    line_start: int,
+    line_end: int,
+    image: _MarkdownImage,
+    import_asset: AssetImporter,
+) -> _RawBlock:
+    alt_text, target, caption = image
+    return _raw(
+        artifact,
+        RichBlockKind.FIGURE,
+        line_start,
+        line_end,
+        _figure_payload(
+            import_asset(target),
+            alt_text=alt_text,
+            caption=caption,
+            target=target,
+        ),
+    )
 
 
 def _markdown_inline_payload(value: str) -> dict[str, Any]:
@@ -478,41 +620,18 @@ def _parse_html(
                 )
             )
         elif node.name == "p":
-            output.append(
-                _RawBlock(
-                    RichBlockKind.PARAGRAPH,
-                    locator,
-                    _html_inline_payload(node),
-                )
+            _append_html_paragraph_blocks(
+                output,
+                locator=locator,
+                node=node,
+                import_asset=import_asset,
             )
-            for image in node.find_all("img"):
-                target = str(image.get("src") or "")
-                asset = import_asset(target)
-                output.append(
-                    _RawBlock(
-                        RichBlockKind.FIGURE,
-                        locator,
-                        _figure_payload(
-                            asset,
-                            alt_text=str(image.get("alt") or ""),
-                            caption="",
-                            target=target,
-                        ),
-                    )
-                )
         elif node.name in {"ul", "ol"}:
-            output.append(
-                _RawBlock(
-                    RichBlockKind.LIST,
-                    locator,
-                    {
-                        "ordered": node.name == "ol",
-                        "items": [
-                            _html_inline_payload(item)
-                            for item in node.find_all("li", recursive=False)
-                        ],
-                    },
-                )
+            _append_html_list_blocks(
+                output,
+                locator=locator,
+                node=node,
+                import_asset=import_asset,
             )
         elif node.name == "pre":
             code = node.find("code")
@@ -564,28 +683,20 @@ def _parse_html(
             rows = node.find_all("tr")
             header_cells = rows[0].find_all(["th", "td"]) if rows else []
             data_start = 1 if rows and rows[0].find("th") else 0
-            output.append(
-                _RawBlock(
-                    RichBlockKind.TABLE,
-                    locator,
-                    {
-                        "headers": [
-                            cell.get_text(" ", strip=True) for cell in header_cells
-                        ]
-                        if data_start
-                        else [],
-                        "rows": [
-                            [
-                                cell.get_text(" ", strip=True)
-                                for cell in row.find_all(["th", "td"])
-                            ]
-                            for row in rows[data_start:]
-                        ],
-                        "caption": caption.get_text(" ", strip=True)
-                        if isinstance(caption, Tag)
-                        else "",
-                    },
-                )
+            _append_html_table_blocks(
+                output,
+                locator=locator,
+                headers=header_cells if data_start else [],
+                rows=[
+                    row.find_all(["th", "td"])
+                    for row in rows[data_start:]
+                ],
+                caption=(
+                    caption.get_text(" ", strip=True)
+                    if isinstance(caption, Tag)
+                    else ""
+                ),
+                import_asset=import_asset,
             )
         elif node.name in {"figure", "img"}:
             image = node.find("img") if node.name == "figure" else node
@@ -629,15 +740,152 @@ def _html_selector(node: Tag, ordinal: int) -> str:
     return f"{node.name}:nth-block({ordinal + 1})"
 
 
-def _html_inline_payload(node: Tag) -> dict[str, Any]:
+def _append_html_paragraph_blocks(
+    output: list[_RawBlock],
+    *,
+    locator: SourceLocator,
+    node: Tag,
+    import_asset: AssetImporter,
+) -> None:
+    for segment in _html_inline_segments(node):
+        if isinstance(segment, Tag):
+            output.append(_html_image_block(locator, segment, import_asset))
+        elif segment["text"]:
+            output.append(
+                _RawBlock(RichBlockKind.PARAGRAPH, locator, segment)
+            )
+
+
+def _append_html_list_blocks(
+    output: list[_RawBlock],
+    *,
+    locator: SourceLocator,
+    node: Tag,
+    import_asset: AssetImporter,
+) -> None:
+    ordered = node.name == "ol"
+    pending: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        if not pending:
+            return
+        output.append(
+            _RawBlock(
+                RichBlockKind.LIST,
+                locator,
+                {"ordered": ordered, "items": list(pending)},
+            )
+        )
+        pending.clear()
+
+    for item in node.find_all("li", recursive=False):
+        for segment in _html_inline_segments(item):
+            if isinstance(segment, Tag):
+                flush()
+                output.append(_html_image_block(locator, segment, import_asset))
+            elif segment["text"]:
+                pending.append(segment)
+    flush()
+
+
+def _append_html_table_blocks(
+    output: list[_RawBlock],
+    *,
+    locator: SourceLocator,
+    headers: list[Tag],
+    rows: list[list[Tag]],
+    caption: str,
+    import_asset: AssetImporter,
+) -> None:
+    shape = [headers, *rows]
+    pending = [["" for _ in row] for row in shape]
+    emitted_table = False
+
+    def flush(*, force: bool = False) -> None:
+        nonlocal emitted_table
+        if not force and not any(cell for row in pending for cell in row):
+            return
+        output.append(
+            _RawBlock(
+                RichBlockKind.TABLE,
+                locator,
+                {
+                    "headers": list(pending[0]),
+                    "rows": [list(row) for row in pending[1:]],
+                    "caption": caption,
+                },
+            )
+        )
+        emitted_table = True
+        for row in pending:
+            for column in range(len(row)):
+                row[column] = ""
+
+    for row_index, row in enumerate(shape):
+        for column, cell in enumerate(row):
+            for segment in _html_inline_segments(cell):
+                if isinstance(segment, Tag):
+                    flush()
+                    output.append(
+                        _html_image_block(locator, segment, import_asset)
+                    )
+                elif segment["text"]:
+                    pending[row_index][column] = " ".join(
+                        value
+                        for value in (
+                            pending[row_index][column],
+                            segment["text"],
+                        )
+                        if value
+                    )
+    flush(force=not emitted_table)
+
+
+def _html_image_block(
+    locator: SourceLocator,
+    image: Tag,
+    import_asset: AssetImporter,
+) -> _RawBlock:
+    target = str(image.get("src") or "")
+    return _RawBlock(
+        RichBlockKind.FIGURE,
+        locator,
+        _figure_payload(
+            import_asset(target),
+            alt_text=str(image.get("alt") or ""),
+            caption="",
+            target=target,
+        ),
+    )
+
+
+def _html_inline_segments(node: Tag) -> list[dict[str, Any] | Tag]:
+    segments: list[dict[str, Any] | Tag] = []
     parts: list[dict[str, str]] = []
 
-    def visit(value: Tag | NavigableString) -> None:
+    def flush() -> None:
+        payload = _inline_payload(parts)
+        if payload["text"]:
+            segments.append(payload)
+        parts.clear()
+
+    def visit(
+        value: Tag | NavigableString,
+        *,
+        link_target: str | None = None,
+    ) -> None:
         if isinstance(value, NavigableString):
-            _append_inline_part(parts, "text", re.sub(r"\s+", " ", str(value)))
+            text = re.sub(r"\s+", " ", str(value))
+            if link_target is None:
+                _append_inline_part(parts, "text", text)
+            else:
+                _append_inline_part(
+                    parts, "link", text, target=link_target
+                )
             return
         if value.name == "img":
-            _append_inline_part(parts, "text", str(value.get("alt") or ""))
+            flush()
+            segments.append(value)
             return
         if value.name == "math":
             if str(value.get("display") or "").casefold() == "block":
@@ -649,21 +897,18 @@ def _html_inline_payload(node: Tag) -> dict[str, Any]:
                     parts, "math", source, tex=tex, source=source
                 )
             return
-        if value.name == "a":
-            text = value.get_text(" ", strip=True)
-            _append_inline_part(
-                parts,
-                "link",
-                text,
-                target=str(value.get("href") or ""),
-            )
-            return
+        nested_link = (
+            str(value.get("href") or "")
+            if value.name == "a"
+            else link_target
+        )
         for child in value.children:
             if isinstance(child, (Tag, NavigableString)):
-                visit(child)
+                visit(child, link_target=nested_link)
 
     visit(node)
-    return _inline_payload(parts)
+    flush()
+    return segments
 
 
 def _html_math_tex(node: Tag) -> str:
