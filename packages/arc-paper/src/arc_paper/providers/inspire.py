@@ -428,28 +428,6 @@ def _reference_arxiv_id(item: dict[str, Any]) -> str:
     return _normalize_arxiv_value(raw.get("arxiv_eprint") or raw.get("arxiv_id") or raw.get("eprint") or "")
 
 
-def _references_cache_is_current(cached: Any) -> bool:
-    if not isinstance(cached, list):
-        return False
-    if not cached:
-        return True
-    return all(isinstance(item, dict) and "paper_id" in item and "title" in item for item in cached)
-
-
-def _references_cache_is_enriched(cached: Any) -> bool:
-    if not _references_cache_is_current(cached):
-        return False
-    for item in cached:
-        if not _reference_lookup_id(item):
-            continue
-        if item.get("metadata_enriched") is not True:
-            return False
-        for key in ("title", "abstract", "authors", "arxiv_id", "inspire_recid"):
-            if key not in item:
-                return False
-    return True
-
-
 def _first_title(metadata: dict[str, Any]) -> str:
     titles = metadata.get("titles") or []
     if titles and isinstance(titles[0], dict):
@@ -517,25 +495,6 @@ def _string_or_first(value: Any) -> str:
             return str(first.get("title") or first.get("value") or first.get("summary") or "").strip()
         return str(first).strip()
     return str(value or "").strip()
-
-
-def _clean_cached_paper_items(items: list[Any]) -> tuple[list[Any], bool]:
-    changed = False
-    cleaned: list[Any] = []
-    for item in items:
-        if not isinstance(item, dict):
-            cleaned.append(item)
-            continue
-        record = dict(item)
-        for key in ("title", "abstract"):
-            if key not in record:
-                continue
-            value = _clean_inspire_text(record.get(key))
-            if value != record.get(key):
-                record[key] = value
-                changed = True
-        cleaned.append(record)
-    return cleaned, changed
 
 
 def _clean_inspire_text(value: Any) -> str:
