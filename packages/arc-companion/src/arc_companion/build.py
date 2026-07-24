@@ -53,6 +53,7 @@ from .generation_validation import (
     validate_language_result,
 )
 from .llm_runtime import (
+    CompanionLLMError,
     awaiting_from_pause,
     ensure_not_cancelled,
     execute_task,
@@ -166,6 +167,7 @@ class CompanionBuildHandler:
                 plans,
                 glossary,
                 blocks,
+                language_result=language,
                 translation_required=translation_required,
             )
             if isinstance(chapters_outcome, (Paused, Failed)):
@@ -204,6 +206,8 @@ class CompanionBuildHandler:
             )
             return Succeeded(result_ref)
         except CompanionContentError as exc:
+            return Failed(RunError(exc.code, str(exc)))
+        except CompanionLLMError as exc:
             return Failed(RunError(exc.code, str(exc)))
         except (TypeError, ValueError) as exc:
             return Failed(
@@ -412,6 +416,7 @@ class CompanionBuildHandler:
         glossary: Sequence[Mapping[str, Any]],
         blocks: Mapping[str, Any],
         *,
+        language_result: Mapping[str, Any],
         translation_required: bool,
     ) -> tuple[AcceptedChapter, ...] | Paused | Failed:
         glossary_digest = hashlib.sha256(
@@ -427,9 +432,8 @@ class CompanionBuildHandler:
                     "chapter_id": chapter.chapter_id,
                     "block_ids": list(chapter.block_ids),
                     "target_language": self.request.target_language,
-                    "language": (
-                        "translate" if translation_required else "skip"
-                    ),
+                    "language_result": dict(language_result),
+                    "translation_required": translation_required,
                     "intent": self.request.effective_intent,
                     "glossary_digest": glossary_digest,
                     "content_contract": self.request.content_contract,
@@ -459,6 +463,7 @@ class CompanionBuildHandler:
                     blocks=source_documents,
                     glossary=glossary,
                     target_language=self.request.target_language,
+                    language_result=language_result,
                     translation_required=translation_required,
                     # Interaction responses are continued by arc-llm and are
                     # deliberately not spliced into the stable task prompt.

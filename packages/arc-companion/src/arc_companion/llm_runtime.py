@@ -28,7 +28,12 @@ def outer_resume_input(context: RunContext) -> ResumeInput | None:
         return None
     try:
         return decode_resume_input(context.resume_input)
-    except Exception:
+    except Exception as exc:
+        if context.resume_input.get("schema_version") == "arc.llm.resume_input.v1":
+            raise CompanionLLMError(
+                "companion_llm_resume_input_invalid",
+                "Malformed arc-llm resume input.",
+            ) from exc
         # A Companion supervision response is intentionally not an LLM resume
         # input. The owning chapter worker will decode it instead.
         return None

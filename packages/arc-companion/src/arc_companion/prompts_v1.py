@@ -280,6 +280,7 @@ def chapter_draft_prompt(
     blocks: Sequence[Mapping[str, Any]],
     glossary: Sequence[Mapping[str, Any]],
     target_language: str,
+    language_result: Mapping[str, Any],
     translation_required: bool,
     evidence: Sequence[Mapping[str, Any]],
 ) -> str:
@@ -297,6 +298,7 @@ resolve_evidence operation before returning the final JSON.
 """,
         {
             "target_language": target_language,
+            "language_result": dict(language_result),
             "translation_required": translation_required,
             "plan": dict(plan),
             "blocks": list(blocks),

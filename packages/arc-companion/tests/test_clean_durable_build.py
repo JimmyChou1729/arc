@@ -28,16 +28,19 @@ class FakeCompanionTasks:
         *,
         language: str = "en",
         classification: str = "known",
+        confidence: float = 0.99,
         pause_chapter_title: str | None = None,
         unsafe_review_title: str | None = None,
     ) -> None:
         self.language = language
         self.classification = classification
+        self.confidence = confidence
         self.pause_chapter_title = pause_chapter_title
         self.unsafe_review_title = unsafe_review_title
         self.counts: Counter[str] = Counter()
         self.draft_titles: Counter[str] = Counter()
         self.review_titles: Counter[str] = Counter()
+        self.draft_language_results: list[dict] = []
         self._paused = False
         self._completed = {}
         self._lock = Lock()
@@ -54,7 +57,7 @@ class FakeCompanionTasks:
             value = {
                 "language_tag": self.language,
                 "classification": self.classification,
-                "confidence": 0.99,
+                "confidence": self.confidence,
             }
         elif contract == "arc.companion.chapter-plan-prompt.v1":
             value = {
@@ -70,6 +73,9 @@ class FakeCompanionTasks:
             title = str(payload["plan"]["guide"]).removeprefix("Guide for ")
             with self._lock:
                 self.draft_titles[title] += 1
+                self.draft_language_results.append(
+                    dict(payload["language_result"])
+                )
                 should_pause = (
                     title == self.pause_chapter_title and not self._paused
                 )
@@ -272,3 +278,107 @@ def test_unsafe_review_patch_pauses_once_and_can_be_discarded(
     )
     assert completed.status is RunStatus.SUCCEEDED
     assert tasks.review_titles["First"] == 1
+
+
+def _accepted_chapter_keys(
+    service: CompanionService, run_id: str
+) -> tuple[str, ...]:
+    state = json.loads(
+        (
+            service.repository.run_directory(run_id)
+            / "groups"
+            / "accepted-chapters"
+            / "state.json"
+        ).read_text(encoding="utf-8")
+    )
+    return tuple(
+        item["semantic_key_sha256"] for item in state["units"]
+    )
+
+
+def test_chapter_identity_uses_frozen_language_result_not_execution_options(
+    tmp_path: Path,
+) -> None:
+    document = _rich_document(tmp_path)
+    request = CompanionBuildRequest(document, target_language="en")
+
+    first_tasks = FakeCompanionTasks(confidence=0.99)
+    first_service = CompanionService(tmp_path / "jobs-first")
+    first = first_service.build(
+        request,
+        execution=CompanionExecutionOptions(
+            workers=1,
+            cache_root=tmp_path / "cache-first",
+        ),
+        task_service=first_tasks,
+    )
+
+    second_tasks = FakeCompanionTasks(confidence=0.99)
+    second_service = CompanionService(tmp_path / "jobs-second")
+    second = second_service.build(
+        request,
+        execution=CompanionExecutionOptions(
+            workers=3,
+            cache_root=tmp_path / "cache-second",
+        ),
+        task_service=second_tasks,
+    )
+
+    changed_tasks = FakeCompanionTasks(confidence=0.51)
+    changed_service = CompanionService(tmp_path / "jobs-changed")
+    changed = changed_service.build(
+        request,
+        execution=CompanionExecutionOptions(workers=2),
+        task_service=changed_tasks,
+    )
+
+    assert all(
+        item.status is RunStatus.SUCCEEDED
+        for item in (first, second, changed)
+    )
+    assert _accepted_chapter_keys(
+        first_service, first.run_id
+    ) == _accepted_chapter_keys(second_service, second.run_id)
+    assert _accepted_chapter_keys(
+        first_service, first.run_id
+    ) != _accepted_chapter_keys(changed_service, changed.run_id)
+    assert first_tasks.draft_language_results
+    assert all(
+        item
+        == {
+            "language_tag": "en",
+            "classification": "known",
+            "confidence": 0.99,
+        }
+        for item in first_tasks.draft_language_results
+    )
+
+
+def test_malformed_arc_llm_resume_input_fails_strictly(
+    tmp_path: Path,
+) -> None:
+    document = _rich_document(tmp_path)
+    request = CompanionBuildRequest(document, target_language="en")
+    tasks = FakeCompanionTasks(pause_chapter_title="Second")
+    service = CompanionService(tmp_path / "jobs")
+
+    paused = service.build(
+        request,
+        execution=CompanionExecutionOptions(workers=2),
+        task_service=tasks,
+    )
+    assert paused.status is RunStatus.PAUSED
+
+    failed = service.resume(
+        paused.run_id,
+        input={
+            "schema_version": "arc.llm.resume_input.v1",
+            "resume_key": "fake-provider-ready",
+        },
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,
+    )
+
+    assert failed.status is RunStatus.FAILED
+    assert failed.error is not None
+    assert failed.error.code == "companion_llm_resume_input_invalid"
