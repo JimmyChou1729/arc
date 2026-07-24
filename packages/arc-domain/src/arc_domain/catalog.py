@@ -7,6 +7,7 @@ newest successfully published export generation.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from dataclasses import dataclass, replace
@@ -22,13 +23,18 @@ from arc_jobs import (
     JsonValue,
     RevisionConflictError,
     RunRepository,
+    RunStatus,
     StateConflictError,
     StateContract,
     canonical_json_bytes,
     validate_simple_id,
 )
 
-from .contracts import DomainBuildResult, encode_domain_build_result
+from .contracts import (
+    DomainBuildResult,
+    decode_domain_build_result,
+    encode_domain_build_result,
+)
 from .paths import DomainPaths, safe_domain_id
 
 
@@ -149,26 +155,40 @@ def publish_domain_result(
     advances the catalog's active pointer.
     """
 
+    snapshot = repository.inspect(_validated_run_id(run_id)).snapshot
+    if snapshot.status is not RunStatus.SUCCEEDED:
+        raise DomainPublicationError(
+            f"run {snapshot.run_id!r} is not succeeded and cannot be published"
+        )
+    if snapshot.result_ref is None:
+        raise DomainPublicationError(
+            f"succeeded run {snapshot.run_id!r} has no result artifact"
+        )
     if not isinstance(result, DomainBuildResult):
         raise ValueError("result must be a DomainBuildResult")
-    safe_id = safe_domain_id(result.domain_id)
-    snapshot = repository.inspect(_validated_run_id(run_id)).snapshot
+
+    source_store = ImmutableArtifactStore(
+        repository.run_directory(snapshot.run_id), repository_root=repository.root
+    )
+    authoritative_result = _read_run_result(source_store, snapshot.result_ref)
+    if result != authoritative_result:
+        raise DomainPublicationError(
+            "provided DomainBuildResult does not match the succeeded run result artifact"
+        )
+    safe_id = safe_domain_id(authoritative_result.domain_id)
 
     # ``latest`` models run creation, independently of whether publication
     # succeeds.  A build handler normally makes this call at run creation; it
     # is repeated here to make standalone repair safe.
     register_domain_run(repository, paths, domain_id=safe_id, run_id=snapshot.run_id)
 
-    source_store = ImmutableArtifactStore(
-        repository.run_directory(snapshot.run_id), repository_root=repository.root
-    )
-    exported = _exported_artifacts(result)
+    exported = _exported_artifacts(authoritative_result)
     source_bytes = {
         filename: source_store.read_bytes(ref) for filename, ref in exported.items()
     }
     # Foundation selection remains a durable/programmatic artifact.  Validate
     # it with the rest of the result, but do not expose an intermediate file.
-    source_store.verify(result.foundation_selection)
+    source_store.verify(authoritative_result.foundation_selection)
 
     generation = paths.export_generation(safe_id, snapshot.run_id)
     for filename, content in source_bytes.items():
@@ -179,7 +199,7 @@ def publish_domain_result(
         domain_id=safe_id,
         run_id=snapshot.run_id,
         created_at=snapshot.created_at,
-        result=result,
+        result=authoritative_result,
         exported=exported,
     )
     # This is intentionally the final write to a generation.
@@ -224,6 +244,20 @@ def _exported_artifacts(result: DomainBuildResult) -> dict[str, ArtifactRef]:
     if result.summary_markdown is not None:
         exported["summary.md"] = result.summary_markdown
     return exported
+
+
+def _read_run_result(
+    artifacts: ImmutableArtifactStore, result_ref: ArtifactRef
+) -> DomainBuildResult:
+    try:
+        document = json.loads(artifacts.read_bytes(result_ref).decode("utf-8"))
+        if not isinstance(document, dict):
+            raise ValueError("result artifact must contain an object")
+        return decode_domain_build_result(document)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise DomainPublicationError(
+            "succeeded run result artifact is not a valid DomainBuildResult"
+        ) from exc
 
 
 def _export_manifest(

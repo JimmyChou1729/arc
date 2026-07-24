@@ -7,20 +7,28 @@ from pathlib import Path
 import pytest
 
 from arc_jobs import (
-    ArtifactRef,
     ImmutableArtifactStore,
+    RunEngine,
     RunRepository,
     RunSpec,
+    RunStatus,
     RunView,
+    Succeeded,
 )
 from arc_domain.catalog import (
     DOMAIN_CATALOG_SCHEMA_VERSION,
     DOMAIN_EXPORT_MANIFEST_SCHEMA_VERSION,
+    DomainPublicationError,
     publish_domain_result,
     read_domain_catalog,
     register_domain_run,
 )
-from arc_domain.contracts import DomainBuildResult
+from arc_domain.contracts import (
+    DomainBuildResult,
+    DomainBuildWarning,
+    decode_domain_build_result,
+    encode_domain_build_result,
+)
 from arc_domain.paths import DomainPaths
 
 
@@ -28,22 +36,50 @@ def _repository(tmp_path: Path) -> RunRepository:
     return RunRepository(tmp_path / "cache")
 
 
-def _create_run(repository: RunRepository, run_id: str) -> None:
-    repository.create(
+class _DomainResultHandler:
+    name = "arc.domain.build.v1"
+
+    def __init__(self, domain_id: str) -> None:
+        self.domain_id = domain_id
+
+    def execute(self, context):
+        result = _result(context.artifacts, domain_id=self.domain_id)
+        result_ref = context.artifacts.publish_json(
+            "domain-build-result", encode_domain_build_result(result)
+        )
+        return Succeeded(result_ref)
+
+
+class _NoResultHandler:
+    name = "arc.domain.build.v1"
+
+    def execute(self, context):
+        return Succeeded()
+
+
+def _succeeded_run(
+    repository: RunRepository, run_id: str, *, domain_id: str
+) -> DomainBuildResult:
+    snapshot = RunEngine(repository).execute(
         RunSpec(
             run_id=run_id,
-            handler="arc.domain.build.v1",
+            handler=_DomainResultHandler.name,
             semantic_input={"request": run_id},
-        )
+        ),
+        _DomainResultHandler(domain_id),
     )
-
-
-def _result(repository: RunRepository, run_id: str, *, domain_id: str) -> DomainBuildResult:
+    assert snapshot.status is RunStatus.SUCCEEDED
+    assert snapshot.result_ref is not None
     artifacts = ImmutableArtifactStore(
         repository.run_directory(run_id), repository_root=repository.root
     )
+    return decode_domain_build_result(
+        json.loads(artifacts.read_bytes(snapshot.result_ref).decode("utf-8"))
+    )
 
-    def publish(name: str, content: bytes, media_type: str) -> ArtifactRef:
+
+def _result(artifacts: ImmutableArtifactStore, *, domain_id: str) -> DomainBuildResult:
+    def publish(name: str, content: bytes, media_type: str):
         return artifacts.publish_bytes(name, content, media_type=media_type)
 
     return DomainBuildResult(
@@ -86,8 +122,7 @@ def test_publication_materializes_only_public_exports_and_writes_manifest_last(
 ) -> None:
     repository = _repository(tmp_path)
     paths = DomainPaths(repository.root)
-    _create_run(repository, "run-1")
-    result = _result(repository, "run-1", domain_id="domain-a")
+    result = _succeeded_run(repository, "run-1", domain_id="domain-a")
 
     publication = publish_domain_result(
         repository, paths, run_id="run-1", result=result
@@ -131,16 +166,13 @@ def test_newer_active_is_not_overwritten_when_an_older_run_finishes_late(
 ) -> None:
     repository = _repository(tmp_path)
     paths = DomainPaths(repository.root)
-    for run_id in ("old-run", "new-run"):
-        _create_run(repository, run_id)
+    old = _succeeded_run(repository, "old-run", domain_id="domain-a")
+    new = _succeeded_run(repository, "new-run", domain_id="domain-a")
     _with_creation_times(
         monkeypatch,
         repository,
         {"old-run": "2026-07-24T10:00:00.000000Z", "new-run": "2026-07-24T11:00:00.000000Z"},
     )
-    old = _result(repository, "old-run", domain_id="domain-a")
-    new = _result(repository, "new-run", domain_id="domain-a")
-
     newest = publish_domain_result(repository, paths, run_id="new-run", result=new)
     older = publish_domain_result(repository, paths, run_id="old-run", result=old)
 
@@ -159,7 +191,7 @@ def test_run_id_breaks_creation_time_ties_for_catalog_pointers(
     repository = _repository(tmp_path)
     paths = DomainPaths(repository.root)
     for run_id in ("run-a", "run-b"):
-        _create_run(repository, run_id)
+        _succeeded_run(repository, run_id, domain_id="domain-a")
     _with_creation_times(
         monkeypatch,
         repository,
@@ -177,15 +209,13 @@ def test_failed_publication_keeps_active_and_same_run_can_repair(
 ) -> None:
     repository = _repository(tmp_path)
     paths = DomainPaths(repository.root)
-    for run_id in ("good-run", "repair-run"):
-        _create_run(repository, run_id)
+    good = _succeeded_run(repository, "good-run", domain_id="domain-a")
+    repair = _succeeded_run(repository, "repair-run", domain_id="domain-a")
     _with_creation_times(
         monkeypatch,
         repository,
         {"good-run": "2026-07-24T10:00:00.000000Z", "repair-run": "2026-07-24T11:00:00.000000Z"},
     )
-    good = _result(repository, "good-run", domain_id="domain-a")
-    repair = _result(repository, "repair-run", domain_id="domain-a")
     publish_domain_result(repository, paths, run_id="good-run", result=good)
 
     from arc_domain import catalog as catalog_module
@@ -214,3 +244,62 @@ def test_failed_publication_keeps_active_and_same_run_can_repair(
     assert repaired.active is True
     assert repaired.manifest_path.is_file()
     assert read_domain_catalog(paths, domain_id="domain-a").active == "repair-run"
+
+
+def test_publication_rejects_pending_runs_before_touching_the_catalog(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    paths = DomainPaths(repository.root)
+    result = _succeeded_run(repository, "succeeded-run", domain_id="domain-a")
+    repository.create(
+        RunSpec(
+            run_id="pending-run",
+            handler="arc.domain.build.v1",
+            semantic_input={"request": "pending-run"},
+        )
+    )
+
+    with pytest.raises(DomainPublicationError, match="not succeeded"):
+        publish_domain_result(repository, paths, run_id="pending-run", result=result)
+
+    assert read_domain_catalog(paths, domain_id="domain-a") is None
+
+
+def test_publication_rejects_a_result_that_differs_from_the_run_artifact(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    paths = DomainPaths(repository.root)
+    result = _succeeded_run(repository, "run-1", domain_id="domain-a")
+    mismatched = replace(
+        result,
+        warnings=(DomainBuildWarning("unexpected", "different result", "test"),),
+    )
+
+    with pytest.raises(DomainPublicationError, match="does not match"):
+        publish_domain_result(repository, paths, run_id="run-1", result=mismatched)
+
+    assert read_domain_catalog(paths, domain_id="domain-a") is None
+
+
+def test_publication_rejects_succeeded_runs_without_a_result_artifact(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    paths = DomainPaths(repository.root)
+    snapshot = RunEngine(repository).execute(
+        RunSpec(
+            run_id="empty-result-run",
+            handler=_NoResultHandler.name,
+            semantic_input={"request": "empty-result-run"},
+        ),
+        _NoResultHandler(),
+    )
+    assert snapshot.status is RunStatus.SUCCEEDED
+    result = _succeeded_run(repository, "reference-run", domain_id="domain-a")
+
+    with pytest.raises(DomainPublicationError, match="no result artifact"):
+        publish_domain_result(
+            repository, paths, run_id="empty-result-run", result=result
+        )
