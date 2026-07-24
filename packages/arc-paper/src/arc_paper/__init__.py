@@ -79,6 +79,7 @@ from .parse import (  # noqa: E402
 )
 from .service import ArcPaperService, PaperInputError  # noqa: E402
 from .rich_document import (  # noqa: E402
+    AssetImporter,
     PDF_VALIDATOR_MISSING_WARNING,
     RICH_DOCUMENT_SCHEMA,
     RichAsset,
@@ -219,6 +220,7 @@ __all__ = [
     "table_of_contents",
     "parse_outcome_to_document",
     "PDF_VALIDATOR_MISSING_WARNING",
+    "AssetImporter",
     "RICH_DOCUMENT_SCHEMA",
     "RichAsset",
     "RichBlock",

@@ -8,14 +8,18 @@ from arc_paper import (
     PDF_VALIDATOR_MISSING_WARNING,
     PDFTextLayer,
     RICH_DOCUMENT_SCHEMA,
+    RichBlock,
     RichBlockKind,
     RichDocumentParserService,
     RichDocumentValidationError,
+    RichPageMapEntry,
+    RichSection,
     SourceBundle,
     SourceFormat,
     SourceOrigin,
     SourceOriginKind,
     SourceRepository,
+    SourceLocator,
     rich_block_from_document,
     rich_block_to_document,
     rich_document_from_document,
@@ -157,6 +161,36 @@ def test_html_rich_parse_preserves_equation_table_figure_and_selector(tmp_path):
     assert document.assets[0].media_type == "image/svg+xml"
 
 
+@pytest.mark.parametrize("source_format", [SourceFormat.MARKDOWN, SourceFormat.HTML])
+def test_inline_images_are_imported_as_figure_blocks(tmp_path, source_format):
+    image = tmp_path / "inline.png"
+    image.write_bytes(b"\x89PNG inline")
+    if source_format is SourceFormat.MARKDOWN:
+        source = tmp_path / "inline.md"
+        source.write_text(
+            "Before ![inline plot](inline.png) after.",
+            encoding="utf-8",
+        )
+    else:
+        source = tmp_path / "inline.html"
+        source.write_text(
+            "<article><p>Before <img src='inline.png' alt='inline plot'> after.</p></article>",
+            encoding="utf-8",
+        )
+    repository = SourceRepository(tmp_path / "cache")
+
+    document = RichDocumentParserService(repository).parse(
+        SourceBundle(primary=repository.import_path(source))
+    ).document
+
+    figures = [
+        block for block in document.blocks if block.kind is RichBlockKind.FIGURE
+    ]
+    assert len(figures) == 1
+    assert figures[0].payload["alt_text"] == "inline plot"
+    assert figures[0].payload["asset_digest"] == document.assets[0].artifact_digest
+
+
 def test_flattened_tex_rich_parse_and_multifile_rejection(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     artifact = _store(
@@ -203,6 +237,40 @@ def test_flattened_tex_rich_parse_and_multifile_rejection(tmp_path):
     assert getattr(error.value, "code", "") == "unsupported_tex_project"
 
 
+def test_multiline_tex_figure_preserves_asset_and_caption(tmp_path):
+    image = tmp_path / "plot.png"
+    image.write_bytes(b"\x89PNG plot")
+    source = tmp_path / "paper.tex"
+    source.write_text(
+        "\n".join(
+            [
+                r"\section{Results}",
+                r"\begin{figure}",
+                r"\centering",
+                r"\includegraphics[width=.8\linewidth]{plot.png}",
+                r"\caption{Measured response}",
+                r"\label{fig:response}",
+                r"\end{figure}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    repository = SourceRepository(tmp_path / "cache")
+
+    document = RichDocumentParserService(repository).parse(
+        SourceBundle(primary=repository.import_path(source))
+    ).document
+
+    assert [block.kind for block in document.blocks] == [
+        RichBlockKind.HEADING,
+        RichBlockKind.FIGURE,
+    ]
+    figure = document.blocks[1]
+    assert figure.payload["caption"] == "Measured response"
+    assert figure.payload["target"] == "plot.png"
+    assert figure.payload["asset_digest"] == document.assets[0].artifact_digest
+
+
 def test_rich_document_and_block_codecs_are_strict_and_path_free(tmp_path):
     source = tmp_path / "paper.md"
     source.write_text("# Codec\nText.", encoding="utf-8")
@@ -233,6 +301,20 @@ def test_rich_document_and_block_codecs_are_strict_and_path_free(tmp_path):
     }
     with pytest.raises(ValueError, match="invalid fields"):
         rich_block_from_document(invalid_payload)
+    with pytest.raises(ValueError, match="arrays must be lists"):
+        rich_block_from_document(
+            {
+                **encoded_block,
+                "payload": {
+                    **encoded_block["payload"],
+                    "links": tuple(encoded_block["payload"]["links"]),
+                },
+            }
+        )
+    with pytest.raises(ValueError, match="arrays must be lists"):
+        rich_document_from_document(
+            {**encoded, "blocks": tuple(encoded["blocks"])}
+        )
     corrupt = {
         **encoded,
         "blocks": [
@@ -271,6 +353,55 @@ def test_rich_document_identity_excludes_source_path(tmp_path):
     assert [block.block_id for block in first_document.blocks] == [
         block.block_id for block in second_document.blocks
     ]
+
+
+def test_block_and_section_identity_include_full_source_identity(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    payload = b"Plain text."
+    markdown = _store(repository, payload, SourceFormat.MARKDOWN)
+    tex = _store(repository, payload, SourceFormat.TEX)
+    service = RichDocumentParserService(repository)
+
+    markdown_document = service.parse(
+        SourceBundle(primary=markdown)
+    ).document
+    tex_document = service.parse(SourceBundle(primary=tex)).document
+
+    assert markdown_document.blocks[0].kind is RichBlockKind.PARAGRAPH
+    assert tex_document.blocks[0].kind is RichBlockKind.PARAGRAPH
+    assert markdown_document.blocks[0].payload == tex_document.blocks[0].payload
+    assert markdown_document.blocks[0].block_id != tex_document.blocks[0].block_id
+    assert (
+        markdown_document.sections[0].section_id
+        != tex_document.sections[0].section_id
+    )
+
+
+def test_rich_integer_fields_reject_booleans():
+    locator = SourceLocator(SourceFormat.MARKDOWN, 1, 1, 1, 1)
+    with pytest.raises(ValueError, match="identity"):
+        RichBlock(
+            block_id="block",
+            ordinal=False,
+            kind=RichBlockKind.PARAGRAPH,
+            section_path=(),
+            locator=locator,
+            payload={"text": "x", "links": [], "inline_math": []},
+        )
+    with pytest.raises(ValueError, match="metadata"):
+        RichSection(
+            section_id="section",
+            title="Title",
+            level=True,
+            ordinal=0,
+            path=("section",),
+            block_start=0,
+            block_end=1,
+        )
+    with pytest.raises(ValueError, match="page map"):
+        RichPageMapEntry(block_id="block", page_number=True)
+    with pytest.raises(ValueError, match="positions"):
+        SourceLocator(SourceFormat.MARKDOWN, True, 1, 1, 1)
 
 
 def test_matching_pdf_builds_page_map_and_mismatch_fails(tmp_path):
@@ -335,6 +466,36 @@ def test_heading_free_source_reconciles_by_body_text(tmp_path):
     assert outcome.document.page_map[0].page_number == 1
 
 
+def test_preface_does_not_shift_heading_page_map(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"Preface without a heading.\n\n# Introduction\nText.\n\n# Method\nMore.\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf_payload = b"%PDF with preface"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            pdf_payload: PDFTextLayer(
+                ("Introduction\nText.", "Method\nMore.")
+            )
+        }
+    )
+
+    document = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,))).document
+
+    page_by_block = {
+        item.block_id: item.page_number for item in document.page_map
+    }
+    preface, introduction, _, method, _ = document.blocks
+    assert preface.block_id not in page_by_block
+    assert page_by_block[introduction.block_id] == 1
+    assert page_by_block[method.block_id] == 2
+
+
 def test_ambiguous_or_invalid_pdf_fails_deterministically(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     primary = _store(
@@ -366,6 +527,27 @@ def test_ambiguous_or_invalid_pdf_fails_deterministically(tmp_path):
         service.parse(SourceBundle(primary=primary, validators=(invalid,)))
     assert error.value.code == "pdf_validator_invalid"
     assert invalid_payload not in extractor.calls
+
+
+def test_pdf_without_text_layer_is_not_accepted_as_validated(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# Introduction\nText.\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf_payload = b"%PDF image-only"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {pdf_payload: PDFTextLayer((), "no extractable text layer")}
+    )
+
+    with pytest.raises(RichDocumentValidationError) as error:
+        RichDocumentParserService(
+            repository, pdf_text_extractor=extractor
+        ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    assert error.value.code == "pdf_validator_unverifiable"
 
 
 def test_source_repository_asset_manifest_is_strict_and_verified(tmp_path):

@@ -63,6 +63,12 @@ class SourceLocator:
             self.line_end,
             self.column_end,
         )
+        if any(
+            value is not None
+            and (not isinstance(value, int) or isinstance(value, bool))
+            for value in positions
+        ):
+            raise ValueError("source locator positions must be integers")
         if any(value is not None and value < 1 for value in positions):
             raise ValueError("source locator positions must be positive")
         if (self.line_start is None) != (self.line_end is None):
@@ -92,7 +98,12 @@ class RichBlock:
 
     def __post_init__(self) -> None:
         kind = RichBlockKind(self.kind)
-        if not self.block_id or self.ordinal < 0:
+        if (
+            not self.block_id
+            or not isinstance(self.ordinal, int)
+            or isinstance(self.ordinal, bool)
+            or self.ordinal < 0
+        ):
             raise ValueError("rich block identity is invalid")
         if any(not item for item in self.section_path):
             raise ValueError("rich block section path contains an empty ID")
@@ -118,6 +129,15 @@ class RichSection:
     def __post_init__(self) -> None:
         if (
             not self.section_id
+            or any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in (
+                    self.level,
+                    self.ordinal,
+                    self.block_start,
+                    self.block_end,
+                )
+            )
             or self.level < 1
             or self.ordinal < 0
             or self.block_start < 0
@@ -160,7 +180,12 @@ class RichPageMapEntry:
     page_number: int
 
     def __post_init__(self) -> None:
-        if not self.block_id or self.page_number < 1:
+        if (
+            not self.block_id
+            or not isinstance(self.page_number, int)
+            or isinstance(self.page_number, bool)
+            or self.page_number < 1
+        ):
             raise ValueError("rich page map entry is invalid")
 
 
@@ -312,11 +337,15 @@ def rich_block_to_document(block: RichBlock) -> dict[str, Any]:
 
 
 def rich_block_from_document(value: Mapping[str, Any]) -> RichBlock:
+    _require_json_document(value, "rich block")
     _require_fields(value, _BLOCK_FIELDS, "rich block")
     locator = _mapping(value.get("locator"), "rich block locator")
     _require_fields(locator, _LOCATOR_FIELDS, "rich block locator")
     section_path = _string_list(value.get("section_path"), "section_path")
     payload = _mapping(value.get("payload"), "rich block payload")
+    _validate_codec_payload_lists(
+        RichBlockKind(_string(value, "kind")), payload
+    )
     return RichBlock(
         block_id=_string(value, "block_id"),
         ordinal=_integer(value, "ordinal"),
@@ -349,6 +378,7 @@ def rich_document_to_document(document: RichDocument) -> dict[str, Any]:
 
 
 def rich_document_from_document(value: Mapping[str, Any]) -> RichDocument:
+    _require_json_document(value, "rich document")
     _require_fields(value, _DOCUMENT_FIELDS, "rich document")
     if value.get("schema_version") != RICH_DOCUMENT_SCHEMA:
         raise ValueError("unsupported rich document schema")
@@ -562,7 +592,10 @@ def _mapping(value: Any, description: str) -> Mapping[str, Any]:
 
 
 def _list(value: Mapping[str, Any], key: str) -> list[Any]:
-    return list(_expect_list(value.get(key), f"rich document {key}"))
+    item = value.get(key)
+    if not isinstance(item, list):
+        raise ValueError(f"rich document {key} must be a list")
+    return item
 
 
 def _expect_list(value: Any, description: str) -> list[Any] | tuple[Any, ...]:
@@ -603,10 +636,54 @@ def _optional_integer(value: Mapping[str, Any], key: str) -> int | None:
 
 
 def _string_list(value: Any, description: str) -> list[str]:
-    items = _expect_list(value, description)
+    if not isinstance(value, list):
+        raise ValueError(f"{description} must be a list")
+    items = value
     if any(not isinstance(item, str) for item in items):
         raise ValueError(f"{description} must contain strings")
     return list(items)
+
+
+def _validate_codec_payload_lists(
+    kind: RichBlockKind, payload: Mapping[str, Any]
+) -> None:
+    list_fields: tuple[str, ...] = ()
+    if kind is RichBlockKind.PARAGRAPH:
+        list_fields = ("links", "inline_math")
+    elif kind is RichBlockKind.LIST:
+        list_fields = ("items",)
+    elif kind is RichBlockKind.TABLE:
+        list_fields = ("headers", "rows")
+    for key in list_fields:
+        if not isinstance(payload.get(key), list):
+            raise ValueError(f"{kind.value} block {key} must be a list")
+    if kind is RichBlockKind.LIST:
+        for item in payload["items"]:
+            if isinstance(item, Mapping) and not isinstance(item.get("links"), list):
+                raise ValueError("list item links must be a list")
+    if kind is RichBlockKind.TABLE and any(
+        not isinstance(row, list) for row in payload["rows"]
+    ):
+        raise ValueError("table rows must be lists")
+
+
+def _require_json_document(value: Any, description: str) -> None:
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError(f"{description} object keys must be strings")
+        for item in value.values():
+            _require_json_document(item, description)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _require_json_document(item, description)
+        return
+    if isinstance(value, tuple):
+        raise ValueError(f"{description} arrays must be lists")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{description} numbers must be finite")
+    if value is not None and not isinstance(value, (str, int, float, bool)):
+        raise ValueError(f"{description} must contain JSON-compatible values")
 
 
 __all__ = [

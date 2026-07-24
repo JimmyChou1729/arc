@@ -113,6 +113,11 @@ class RichDocumentParserService:
                 "pdf_validator_invalid",
                 f"PDF validator could not be parsed ({code}): {exc}",
             ) from exc
+        if not bool(parsed_validator.metadata.get("text_layer")):
+            raise RichDocumentValidationError(
+                "pdf_validator_unverifiable",
+                "PDF validator has no extractable text layer",
+            )
         entries, reconciliation_warnings = reconcile_validator(
             legacy_primary, parsed_validator
         )
@@ -143,7 +148,9 @@ class RichDocumentParserService:
                 f"pdf_validator_{status}",
                 f"PDF validator {status} for source subjects: {subjects}",
             )
-        page_map = _build_page_map(parsed.document, entries)
+        page_map = _build_page_map(
+            parsed.document, entries, legacy_primary.sections
+        )
         document = RichDocument(
             source=parsed.document.source,
             blocks=parsed.document.blocks,
@@ -211,17 +218,36 @@ class RichDocumentParserService:
 def _build_page_map(
     document: RichDocument,
     entries: tuple[ReconciliationEntry, ...],
+    legacy_sections,
 ) -> tuple[RichPageMapEntry, ...]:
-    section_entries = [
-        entry
-        for entry in entries
-        if entry.subject_id.startswith("section:")
-        and entry.status is ReconciliationStatus.VERIFIED
-    ]
+    entries_by_subject = {entry.subject_id: entry for entry in entries}
+    unused_legacy = list(legacy_sections)
     page_by_section: dict[str, int] = {}
-    for section, entry in zip(
-        document.sections, section_entries, strict=False
-    ):
+    for section in document.sections:
+        starts_with_heading = (
+            section.block_start < len(document.blocks)
+            and document.blocks[section.block_start].kind
+            is RichBlockKind.HEADING
+        )
+        if not starts_with_heading and not (
+            len(document.sections) == 1 and section.title == "Document"
+        ):
+            continue
+        match_index = next(
+            (
+                index
+                for index, legacy in enumerate(unused_legacy)
+                if legacy.title == section.title
+                and legacy.level == section.level
+            ),
+            None,
+        )
+        if match_index is None:
+            continue
+        legacy = unused_legacy.pop(match_index)
+        entry = entries_by_subject.get(f"section:{legacy.section_id}")
+        if entry is None or entry.status is not ReconciliationStatus.VERIFIED:
+            continue
         pages = entry.provenance.get("page_candidates")
         if (
             isinstance(pages, list)

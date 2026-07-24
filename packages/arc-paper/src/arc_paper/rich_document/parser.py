@@ -647,7 +647,9 @@ def _parse_tex(
     import_asset: AssetImporter,
 ) -> list[_RawBlock]:
     active = _tex_without_comments(text)
-    if re.search(r"\\(?:input|include)\s*(?:\{|[^\s])", active):
+    if re.search(
+        r"\\(?:input|include)(?![A-Za-z@])\s*(?:\{|[^\s])", active
+    ):
         raise ParseError(
             "unsupported_tex_project",
             "rich TeX parsing accepts one pre-flattened file; input/include is unsupported",
@@ -676,6 +678,37 @@ def _parse_tex(
                     {
                         "text": _tex_plain_text(heading.group(2)),
                         "level": levels[heading.group(1)],
+                    },
+                )
+            )
+            index += 1
+            continue
+        figure_environment = re.search(r"\\begin\{figure\*?\}", line)
+        if figure_environment:
+            start = index
+            values = [line]
+            while index + 1 < len(lines) and not re.search(
+                r"\\end\{figure\*?\}", values[-1]
+            ):
+                index += 1
+                values.append(lines[index])
+            joined = "\n".join(values)
+            image = re.search(
+                r"\\includegraphics(?:\[[^\]]*\])?\{([^{}]+)\}", joined
+            )
+            target = image.group(1) if image else ""
+            asset = import_asset(target) if target else None
+            output.append(
+                _raw(
+                    artifact,
+                    RichBlockKind.FIGURE,
+                    start + 1,
+                    index + 1,
+                    {
+                        "asset_digest": asset.artifact_digest if asset else "",
+                        "alt_text": "",
+                        "caption": _tex_caption(joined),
+                        "target": target,
                     },
                 )
             )
@@ -950,13 +983,27 @@ def _finalize_document(
     section_specs: list[dict[str, Any]] = []
     paths: list[tuple[str, ...]] = []
     stack: list[tuple[int, str]] = []
-    synthetic_id = f"sec-{artifact.artifact_digest[:20]}"
+    synthetic_id = "sec-" + hashlib.sha256(
+        json_bytes(
+            {
+                "source": artifact.content_identity,
+                "role": "synthetic-document-section",
+            }
+        )
+    ).hexdigest()[:20]
     for ordinal, raw in enumerate(raw_blocks):
         if raw.kind is RichBlockKind.HEADING:
             level = int(raw.payload["level"])
             title = str(raw.payload["text"])
-            material = f"{artifact.artifact_digest}\0{ordinal}\0{level}\0{title}"
-            section_id = f"sec-{hashlib.sha256(material.encode()).hexdigest()[:20]}"
+            material = {
+                "source": artifact.content_identity,
+                "ordinal": ordinal,
+                "level": level,
+                "title": title,
+            }
+            section_id = (
+                f"sec-{hashlib.sha256(json_bytes(material)).hexdigest()[:20]}"
+            )
             while stack and stack[-1][0] >= level:
                 stack.pop()
             path = tuple(item[1] for item in stack) + (section_id,)
@@ -986,7 +1033,7 @@ def _finalize_document(
     blocks: list[RichBlock] = []
     for ordinal, (raw, section_path) in enumerate(zip(raw_blocks, paths, strict=True)):
         material = {
-            "source": artifact.artifact_digest,
+            "source": artifact.content_identity,
             "ordinal": ordinal,
             "kind": raw.kind.value,
             "locator": {
