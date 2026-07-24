@@ -31,12 +31,14 @@ class FakeCompanionTasks:
         confidence: float = 0.99,
         pause_chapter_title: str | None = None,
         unsafe_review_title: str | None = None,
+        invalid_review_title: str | None = None,
     ) -> None:
         self.language = language
         self.classification = classification
         self.confidence = confidence
         self.pause_chapter_title = pause_chapter_title
         self.unsafe_review_title = unsafe_review_title
+        self.invalid_review_title = invalid_review_title
         self.counts: Counter[str] = Counter()
         self.draft_titles: Counter[str] = Counter()
         self.review_titles: Counter[str] = Counter()
@@ -108,8 +110,8 @@ class FakeCompanionTasks:
             title = str(payload["draft"]["guide"]).removeprefix("Guide for ")
             with self._lock:
                 self.review_titles[title] += 1
-            value = (
-                {
+            if title == self.unsafe_review_title:
+                value = {
                     "guide_replacement": None,
                     "translation_patches": [
                         {"id": "unknown-block", "replacement": "unsafe"}
@@ -117,14 +119,27 @@ class FakeCompanionTasks:
                     "learning_unit_patches": [],
                     "summary": "This patch is intentionally unsafe.",
                 }
-                if title == self.unsafe_review_title
-                else {
+            elif title == self.invalid_review_title:
+                value = {
+                    "guide_replacement": None,
+                    "translation_patches": [
+                        {
+                            "id": payload["draft"]["translations"][0][
+                                "block_id"
+                            ],
+                            "replacement": "",
+                        }
+                    ],
+                    "learning_unit_patches": [],
+                    "summary": "This patch empties required translated text.",
+                }
+            else:
+                value = {
                     "guide_replacement": None,
                     "translation_patches": [],
                     "learning_unit_patches": [],
                     "summary": "Source and anchors are preserved.",
                 }
-            )
         else:
             raise AssertionError(f"unexpected contract: {contract}")
         completed = LLMCompleted(value, "fake", "fake", None, None)
@@ -278,6 +293,46 @@ def test_unsafe_review_patch_pauses_once_and_can_be_discarded(
     )
     assert completed.status is RunStatus.SUCCEEDED
     assert tasks.review_titles["First"] == 1
+
+
+def test_review_patch_that_breaks_draft_validation_pauses_and_discards(
+    tmp_path: Path,
+) -> None:
+    document = _rich_document(tmp_path)
+    request = CompanionBuildRequest(document, target_language="en")
+    tasks = FakeCompanionTasks(
+        language="fr",
+        invalid_review_title="First",
+    )
+    service = CompanionService(tmp_path / "jobs")
+
+    paused = service.build(
+        request,
+        execution=CompanionExecutionOptions(workers=2),
+        task_service=tasks,
+    )
+    assert paused.status is RunStatus.PAUSED
+    assert paused.awaiting is not None
+    assert paused.awaiting.reason is ResumeReason.SUPERVISION_REQUIRED
+    assert tasks.review_titles["First"] == 1
+
+    completed = service.resume(
+        paused.run_id,
+        input={
+            "schema_version": "arc.companion.review_supervision.v1",
+            "resume_key": paused.awaiting.resume_key,
+            "action": "discard_review",
+        },
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert tasks.review_titles["First"] == 1
+    first = service.accepted_book(completed.run_id).chapters[0]
+    assert [item.text for item in first.translations] == [
+        f"Translated {anchor.block_id}" for anchor in first.source_anchors
+    ]
 
 
 def _accepted_chapter_keys(

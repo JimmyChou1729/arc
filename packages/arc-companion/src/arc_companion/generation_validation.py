@@ -138,9 +138,14 @@ def validate_chapter_draft(
             "translation_coverage_invalid",
             "translation block IDs must exactly match source order",
         )
-    if any(not isinstance(item.get("text"), str) for item in translations):
+    if any(
+        not isinstance(item.get("text"), str)
+        or not item["text"].strip()
+        for item in translations
+    ):
         raise CompanionContentError(
-            "translation_coverage_invalid", "translation text must be a string"
+            "translation_coverage_invalid",
+            "translation text must be a non-empty string",
         )
     units = _mapping_list(result.get("learning_units"), "learning units")
     planned = {

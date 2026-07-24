@@ -546,6 +546,20 @@ class CompanionBuildHandler:
                 reviewed, _summary = apply_safe_review(
                     draft, review_outcome.value
                 )
+                # Treat applying the reviewer patch and re-validating the
+                # complete draft contract as one transaction.  A patch can
+                # preserve every immutable ID yet still make the content
+                # unusable (for example, by replacing required text with an
+                # empty string).
+                reviewed = validate_chapter_draft(
+                    reviewed,
+                    plan=plan,
+                    block_ids=chapter.block_ids,
+                    translation_required=translation_required,
+                    evidence_ids=[
+                        item["evidence_id"] for item in evidence
+                    ],
+                )
             except CompanionContentError as exc:
                 supervision = self._review_supervision(
                     context,
@@ -557,14 +571,6 @@ class CompanionBuildHandler:
                 if isinstance(supervision, Paused):
                     return supervision
                 reviewed = supervision
-            # Re-run the complete business validation after patch application.
-            reviewed = validate_chapter_draft(
-                reviewed,
-                plan=plan,
-                block_ids=chapter.block_ids,
-                translation_required=translation_required,
-                evidence_ids=[item["evidence_id"] for item in evidence],
-            )
             page_by_block = {
                 item.block_id: item.page_number
                 for item in self.request.source.page_map
