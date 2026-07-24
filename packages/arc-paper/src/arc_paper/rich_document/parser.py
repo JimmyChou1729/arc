@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 from ..parse.parser import ParseError, normalize_tex
 from ..sources import SourceArtifact, SourceFormat
@@ -206,12 +206,7 @@ def _parse_markdown(
                 if not item or bool(re.match(r"\d", item.group(1))) != ordered:
                     break
                 content = item.group(2).strip()
-                items.append(
-                    {
-                        "text": _markdown_plain_text(content),
-                        "links": _markdown_links(content),
-                    }
-                )
+                items.append(_markdown_inline_payload(content))
                 index += 1
             output.append(
                 _raw(
@@ -233,12 +228,12 @@ def _parse_markdown(
                     RichBlockKind.FIGURE,
                     index + 1,
                     index + 1,
-                    {
-                        "asset_digest": asset.artifact_digest if asset else "",
-                        "alt_text": alt_text,
-                        "caption": caption,
-                        "target": target,
-                    },
+                    _figure_payload(
+                        asset,
+                        alt_text=alt_text,
+                        caption=caption,
+                        target=target,
+                    ),
                 )
             )
             index += 1
@@ -258,11 +253,7 @@ def _parse_markdown(
                 RichBlockKind.PARAGRAPH,
                 start + 1,
                 index,
-                {
-                    "text": _markdown_plain_text(raw_text),
-                    "links": _markdown_links(raw_text),
-                    "inline_math": _inline_math(raw_text),
-                },
+                _markdown_inline_payload(raw_text),
             )
         )
         for alt_text, target, caption in _markdown_figures(raw_text):
@@ -273,12 +264,12 @@ def _parse_markdown(
                     RichBlockKind.FIGURE,
                     start + 1,
                     index,
-                    {
-                        "asset_digest": asset.artifact_digest if asset else "",
-                        "alt_text": alt_text,
-                        "caption": caption,
-                        "target": target,
-                    },
+                    _figure_payload(
+                        asset,
+                        alt_text=alt_text,
+                        caption=caption,
+                        target=target,
+                    ),
                 )
             )
     return output
@@ -378,11 +369,45 @@ def _markdown_figures(value: str) -> list[tuple[str, str, str]]:
     ]
 
 
-def _markdown_links(value: str) -> list[dict[str, str]]:
-    return [
-        {"text": match.group(1), "target": match.group(2)}
-        for match in re.finditer(r"(?<!!)\[([^\]]+)\]\(([^)\s]+)(?:\s+[^)]*)?\)", value)
-    ]
+def _markdown_inline_payload(value: str) -> dict[str, Any]:
+    token = re.compile(
+        r"(?P<link>(?<!!)\[([^\]]+)\]\(([^)\s]+)(?:\s+[^)]*)?\))"
+        r"|(?P<dollar>(?<!\\)(?<!\$)\$(?!\$)(.+?)(?<!\\)\$(?!\$))"
+        r"|(?P<paren>\\\((.+?)\\\))"
+    )
+    parts: list[dict[str, str]] = []
+    cursor = 0
+    for match in token.finditer(value):
+        _append_inline_part(
+            parts, "text", _markdown_text_segment(value[cursor : match.start()])
+        )
+        if match.lastgroup == "link":
+            _append_inline_part(
+                parts,
+                "link",
+                _markdown_plain_text(match.group(2)),
+                target=match.group(3),
+            )
+        else:
+            source = match.group(0)
+            tex = normalize_tex(source)
+            if tex:
+                _append_inline_part(
+                    parts, "math", source, tex=tex, source=source
+                )
+            else:
+                _append_inline_part(parts, "text", source)
+        cursor = match.end()
+    _append_inline_part(parts, "text", _markdown_text_segment(value[cursor:]))
+    return _inline_payload(parts)
+
+
+def _markdown_text_segment(value: str) -> str:
+    value = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", value)
+    value = re.sub(r"(?<!\\)(?:\*\*|__)(.+?)(?:\*\*|__)", r"\1", value)
+    value = re.sub(r"(?<!\\)(?:\*|_)(.+?)(?:\*|_)", r"\1", value)
+    value = re.sub(r"`([^`]+)`", r"\1", value)
+    return re.sub(r"\s+", " ", value)
 
 
 def _markdown_plain_text(value: str) -> str:
@@ -457,17 +482,7 @@ def _parse_html(
                 _RawBlock(
                     RichBlockKind.PARAGRAPH,
                     locator,
-                    {
-                        "text": node.get_text(" ", strip=True),
-                        "links": [
-                            {
-                                "text": link.get_text(" ", strip=True),
-                                "target": str(link.get("href") or ""),
-                            }
-                            for link in node.find_all("a")
-                        ],
-                        "inline_math": _html_inline_math(node),
-                    },
+                    _html_inline_payload(node),
                 )
             )
             for image in node.find_all("img"):
@@ -477,12 +492,12 @@ def _parse_html(
                     _RawBlock(
                         RichBlockKind.FIGURE,
                         locator,
-                        {
-                            "asset_digest": asset.artifact_digest if asset else "",
-                            "alt_text": str(image.get("alt") or ""),
-                            "caption": "",
-                            "target": target,
-                        },
+                        _figure_payload(
+                            asset,
+                            alt_text=str(image.get("alt") or ""),
+                            caption="",
+                            target=target,
+                        ),
                     )
                 )
         elif node.name in {"ul", "ol"}:
@@ -493,16 +508,7 @@ def _parse_html(
                     {
                         "ordered": node.name == "ol",
                         "items": [
-                            {
-                                "text": item.get_text(" ", strip=True),
-                                "links": [
-                                    {
-                                        "text": link.get_text(" ", strip=True),
-                                        "target": str(link.get("href") or ""),
-                                    }
-                                    for link in item.find_all("a")
-                                ],
-                            }
+                            _html_inline_payload(item)
                             for item in node.find_all("li", recursive=False)
                         ],
                     },
@@ -592,14 +598,16 @@ def _parse_html(
                 _RawBlock(
                     RichBlockKind.FIGURE,
                     locator,
-                    {
-                        "asset_digest": asset.artifact_digest if asset else "",
-                        "alt_text": str(image.get("alt") or ""),
-                        "caption": caption.get_text(" ", strip=True)
-                        if isinstance(caption, Tag)
-                        else "",
-                        "target": target,
-                    },
+                    _figure_payload(
+                        asset,
+                        alt_text=str(image.get("alt") or ""),
+                        caption=(
+                            caption.get_text(" ", strip=True)
+                            if isinstance(caption, Tag)
+                            else ""
+                        ),
+                        target=target,
+                    ),
                 )
             )
         elif node.name == "math" and str(node.get("display") or "").casefold() == "block":
@@ -621,13 +629,41 @@ def _html_selector(node: Tag, ordinal: int) -> str:
     return f"{node.name}:nth-block({ordinal + 1})"
 
 
-def _html_inline_math(node: Tag) -> list[dict[str, str]]:
-    return [
-        {"tex": tex, "source": math.get_text(" ", strip=True)}
-        for math in node.find_all("math")
-        if str(math.get("display") or "").casefold() != "block"
-        and (tex := _html_math_tex(math))
-    ]
+def _html_inline_payload(node: Tag) -> dict[str, Any]:
+    parts: list[dict[str, str]] = []
+
+    def visit(value: Tag | NavigableString) -> None:
+        if isinstance(value, NavigableString):
+            _append_inline_part(parts, "text", re.sub(r"\s+", " ", str(value)))
+            return
+        if value.name == "img":
+            _append_inline_part(parts, "text", str(value.get("alt") or ""))
+            return
+        if value.name == "math":
+            if str(value.get("display") or "").casefold() == "block":
+                return
+            tex = _html_math_tex(value)
+            if tex:
+                source = value.get_text(" ", strip=True) or tex
+                _append_inline_part(
+                    parts, "math", source, tex=tex, source=source
+                )
+            return
+        if value.name == "a":
+            text = value.get_text(" ", strip=True)
+            _append_inline_part(
+                parts,
+                "link",
+                text,
+                target=str(value.get("href") or ""),
+            )
+            return
+        for child in value.children:
+            if isinstance(child, (Tag, NavigableString)):
+                visit(child)
+
+    visit(node)
+    return _inline_payload(parts)
 
 
 def _html_math_tex(node: Tag) -> str:
@@ -704,12 +740,12 @@ def _parse_tex(
                     RichBlockKind.FIGURE,
                     start + 1,
                     index + 1,
-                    {
-                        "asset_digest": asset.artifact_digest if asset else "",
-                        "alt_text": "",
-                        "caption": _tex_caption(joined),
-                        "target": target,
-                    },
+                    _figure_payload(
+                        asset,
+                        alt_text="",
+                        caption=_tex_caption(joined),
+                        target=target,
+                    ),
                 )
             )
             index += 1
@@ -792,10 +828,7 @@ def _parse_tex(
                 index += 1
             joined = "\n".join(values)
             items = [
-                {
-                    "text": _tex_plain_text(value.strip()),
-                    "links": _tex_links(value),
-                }
+                _tex_inline_payload(value.strip())
                 for value in re.split(r"\\item(?:\[[^\]]*\])?", joined)
                 if value.strip()
             ]
@@ -851,12 +884,12 @@ def _parse_tex(
                     RichBlockKind.FIGURE,
                     index + 1,
                     index + 1,
-                    {
-                        "asset_digest": asset.artifact_digest if asset else "",
-                        "alt_text": "",
-                        "caption": _tex_caption(line),
-                        "target": target,
-                    },
+                    _figure_payload(
+                        asset,
+                        alt_text="",
+                        caption=_tex_caption(line),
+                        target=target,
+                    ),
                 )
             )
             index += 1
@@ -875,11 +908,7 @@ def _parse_tex(
                 RichBlockKind.PARAGRAPH,
                 start + 1,
                 index,
-                {
-                    "text": _tex_plain_text(raw_text),
-                    "links": _tex_links(raw_text),
-                    "inline_math": _inline_math(raw_text),
-                },
+                _tex_inline_payload(raw_text),
             )
         )
     return output
@@ -918,16 +947,52 @@ def _tex_plain_text(value: str) -> str:
     return " ".join(value.split())
 
 
-def _tex_links(value: str) -> list[dict[str, str]]:
-    links = [
-        {"text": match.group(2), "target": match.group(1)}
-        for match in re.finditer(r"\\href\{([^{}]+)\}\{([^{}]+)\}", value)
-    ]
-    links.extend(
-        {"text": match.group(1), "target": match.group(1)}
-        for match in re.finditer(r"\\url\{([^{}]+)\}", value)
+def _tex_inline_payload(value: str) -> dict[str, Any]:
+    token = re.compile(
+        r"(?P<href>\\href\{([^{}]+)\}\{([^{}]+)\})"
+        r"|(?P<url>\\url\{([^{}]+)\})"
+        r"|(?P<dollar>(?<!\\)(?<!\$)\$(?!\$)(.+?)(?<!\\)\$(?!\$))"
+        r"|(?P<paren>\\\((.+?)\\\))"
     )
-    return links
+    parts: list[dict[str, str]] = []
+    cursor = 0
+    for match in token.finditer(value):
+        _append_inline_part(parts, "text", _tex_text_segment(value[cursor : match.start()]))
+        if match.lastgroup == "href":
+            _append_inline_part(
+                parts,
+                "link",
+                _tex_plain_text(match.group(3)),
+                target=match.group(2),
+            )
+        elif match.lastgroup == "url":
+            _append_inline_part(
+                parts,
+                "link",
+                match.group(5),
+                target=match.group(5),
+            )
+        else:
+            source = match.group(0)
+            tex = normalize_tex(source)
+            if tex:
+                _append_inline_part(
+                    parts, "math", source, tex=tex, source=source
+                )
+            else:
+                _append_inline_part(parts, "text", source)
+        cursor = match.end()
+    _append_inline_part(parts, "text", _tex_text_segment(value[cursor:]))
+    return _inline_payload(parts)
+
+
+def _tex_text_segment(value: str) -> str:
+    leading = bool(re.match(r"\s", value))
+    trailing = bool(re.search(r"\s$", value))
+    text = _tex_plain_text(value)
+    if not text:
+        return " " if leading or trailing else ""
+    return (" " if leading else "") + text + (" " if trailing else "")
 
 
 def _tex_caption(value: str) -> str:
@@ -940,17 +1005,84 @@ def _tex_label(value: str) -> str:
     return match.group(1) if match else ""
 
 
-def _inline_math(value: str) -> list[dict[str, str]]:
-    output: list[dict[str, str]] = []
-    for pattern in (
-        re.compile(r"(?<!\\)(?<!\$)\$(?!\$)(.+?)(?<!\\)\$(?!\$)"),
-        re.compile(r"\\\((.+?)\\\)"),
-    ):
-        for match in pattern.finditer(value):
-            tex = normalize_tex(match.group(0))
-            if tex:
-                output.append({"tex": tex, "source": match.group(0)})
-    return output
+def _append_inline_part(
+    parts: list[dict[str, str]],
+    kind: str,
+    text: str,
+    **metadata: str,
+) -> None:
+    if not text:
+        return
+    item = {"kind": kind, "text": text, **metadata}
+    if kind == "text" and parts and parts[-1]["kind"] == "text":
+        parts[-1]["text"] += text
+    else:
+        parts.append(item)
+
+
+def _inline_payload(parts: list[dict[str, str]]) -> dict[str, Any]:
+    normalized: list[dict[str, str]] = []
+    for part in parts:
+        item = dict(part)
+        item["text"] = re.sub(r"\s+", " ", item["text"])
+        if not item["text"]:
+            continue
+        if normalized and normalized[-1]["text"].endswith(" ") and item["text"].startswith(" "):
+            item["text"] = item["text"][1:]
+        if item["text"]:
+            normalized.append(item)
+    if normalized:
+        normalized[0]["text"] = normalized[0]["text"].lstrip()
+        normalized[-1]["text"] = normalized[-1]["text"].rstrip()
+        normalized = [item for item in normalized if item["text"]]
+    text = "".join(item["text"] for item in normalized)
+    spans: list[dict[str, Any]] = []
+    links: list[dict[str, str]] = []
+    inline_math: list[dict[str, str]] = []
+    cursor = 0
+    for part in normalized:
+        end = cursor + len(part["text"])
+        span: dict[str, Any] = {
+            "kind": part["kind"],
+            "start": cursor,
+            "end": end,
+            "text": part["text"],
+        }
+        if part["kind"] == "link":
+            span["target"] = part["target"]
+            links.append({"text": part["text"], "target": part["target"]})
+        elif part["kind"] == "math":
+            span["tex"] = part["tex"]
+            span["source"] = part["source"]
+            inline_math.append(
+                {"tex": part["tex"], "source": part["source"]}
+            )
+        spans.append(span)
+        cursor = end
+    return {
+        "text": text,
+        "links": links,
+        "inline_math": inline_math,
+        "inline_spans": spans,
+    }
+
+
+def _figure_payload(
+    asset: RichAsset | None,
+    *,
+    alt_text: str,
+    caption: str,
+    target: str,
+) -> dict[str, Any]:
+    return {
+        "asset_digest": asset.artifact_digest if asset else "",
+        "alt_text": alt_text,
+        "caption": caption,
+        "target": target,
+        "media_type": asset.media_type if asset else "",
+        "logical_name": asset.logical_name if asset else target,
+        "size": asset.size if asset else 0,
+    }
 
 
 def _raw(

@@ -99,6 +99,16 @@ def test_markdown_rich_parse_preserves_blocks_links_math_and_assets(tmp_path):
     paragraph = document.blocks[1]
     assert paragraph.payload["links"][0]["target"] == "https://example.test/notes"
     assert paragraph.payload["inline_math"][0]["tex"] == "E=mc^2"
+    assert [item["kind"] for item in paragraph.payload["inline_spans"]] == [
+        "text",
+        "link",
+        "text",
+        "math",
+        "text",
+    ]
+    assert "".join(
+        item["text"] for item in paragraph.payload["inline_spans"]
+    ) == paragraph.payload["text"]
     assert document.blocks[3].payload["tex"] == "x^2 + y^2 = z^2"
     assert document.blocks[4].payload["rows"] == (("mass", "m"),)
     assert document.blocks[5].payload["language"] == "python"
@@ -109,6 +119,8 @@ def test_markdown_rich_parse_preserves_blocks_links_math_and_assets(tmp_path):
         repository.get_asset(asset.artifact_digest)
     ) == image.read_bytes()
     assert document.blocks[-1].payload["asset_digest"] == asset.artifact_digest
+    assert document.blocks[-1].payload["media_type"] == "image/png"
+    assert document.blocks[-1].payload["size"] == len(image.read_bytes())
     assert outcome.warnings == (PDF_VALIDATOR_MISSING_WARNING,)
     assert all(block.section_path == document.sections[0].path for block in document.blocks)
 
@@ -150,6 +162,13 @@ def test_html_rich_parse_preserves_equation_table_figure_and_selector(tmp_path):
     ]
     assert document.blocks[0].locator.selector == "#intro"
     assert document.blocks[1].payload["inline_math"][0]["tex"] == "a+b"
+    assert [item["kind"] for item in document.blocks[1].payload["inline_spans"]] == [
+        "text",
+        "link",
+        "text",
+        "math",
+        "text",
+    ]
     assert document.blocks[2].payload == {
         "tex": "F=ma",
         "display": True,
@@ -158,6 +177,7 @@ def test_html_rich_parse_preserves_equation_table_figure_and_selector(tmp_path):
     assert document.blocks[3].payload["headers"] == ("x", "y")
     assert document.blocks[3].payload["caption"] == "Inputs"
     assert document.blocks[4].payload["caption"] == "Result"
+    assert document.blocks[4].payload["media_type"] == "image/svg+xml"
     assert document.assets[0].media_type == "image/svg+xml"
 
 
@@ -324,12 +344,35 @@ def test_rich_document_and_block_codecs_are_strict_and_path_free(tmp_path):
                 "payload": {
                     **encoded["blocks"][1]["payload"],
                     "text": "changed",
+                    "inline_spans": [
+                        {
+                            "kind": "text",
+                            "start": 0,
+                            "end": 7,
+                            "text": "changed",
+                        }
+                    ],
                 },
             },
         ],
     }
     with pytest.raises(ValueError, match="digest"):
         rich_document_from_document(corrupt)
+
+    invalid_offsets = {
+        **encoded_block,
+        "payload": {
+            **encoded_block["payload"],
+            "inline_spans": [
+                {
+                    **encoded_block["payload"]["inline_spans"][0],
+                    "start": 1,
+                }
+            ],
+        },
+    }
+    with pytest.raises(ValueError, match="contiguously"):
+        rich_block_from_document(invalid_offsets)
 
 
 def test_rich_document_identity_excludes_source_path(tmp_path):
@@ -386,7 +429,14 @@ def test_rich_integer_fields_reject_booleans():
             kind=RichBlockKind.PARAGRAPH,
             section_path=(),
             locator=locator,
-            payload={"text": "x", "links": [], "inline_math": []},
+            payload={
+                "text": "x",
+                "links": [],
+                "inline_math": [],
+                "inline_spans": [
+                    {"kind": "text", "start": 0, "end": 1, "text": "x"}
+                ],
+            },
         )
     with pytest.raises(ValueError, match="metadata"):
         RichSection(
