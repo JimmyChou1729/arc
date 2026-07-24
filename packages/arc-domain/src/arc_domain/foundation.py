@@ -511,11 +511,16 @@ def foundation_selection_prompt(
             "override direct canonical-origin evidence solely because of this prior.",
         )
         if fixed_seed:
+            lines[1] = (
+                "Choose best_reference_paper and parent_foundations only from the "
+                "supplied candidates."
+            )
             lines.insert(
                 2,
-                "Fixed-seed mode is active: selected_foundation must be the supplied "
-                "seed paper. Use the other fields to describe better reading references "
-                "or earlier parents, not to replace the seed.",
+                "Fixed-seed mode is active: selected_foundation must be the separate "
+                "Seed paper, even when it is absent from the bounded candidate set. "
+                "Use the candidate fields for better reading references or earlier "
+                "parents, not to replace the seed.",
             )
     return "\n\n".join(lines)
 

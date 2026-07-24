@@ -69,6 +69,9 @@ def test_citation_band_is_configurable_and_only_changes_v2_prompt_semantics() ->
     assert "50–500" not in v1
     assert "50–500" in v2
     assert "Fixed-seed mode" in v2
+    assert "Seed paper, even when it is absent from the bounded candidate set" in v2
+    assert "best_reference_paper and parent_foundations only from the supplied candidates" in v2
+    assert "Choose selected_foundation and best_reference_paper only from the supplied candidates" not in v2
 
 
 def test_v1_high_citation_boundary_remains_inclusive() -> None:
