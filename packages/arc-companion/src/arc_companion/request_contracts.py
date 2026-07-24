@@ -124,7 +124,7 @@ def encode_build_request(request: CompanionBuildRequest) -> dict[str, Any]:
         "source": rich_document_to_document(request.source),
         "validator_digests": list(request.validator_digests),
         "target_language": request.target_language,
-        "user_intent": request.user_intent,
+        "user_intent": request.effective_intent,
         "content_contract": request.content_contract,
     }
 

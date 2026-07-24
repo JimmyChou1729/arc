@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -32,6 +33,8 @@ from arc_companion.renderer import (
     _render_tex,
     _render_tex_prose,
 )
+from arc_companion.project import CompanionProjectPaths
+from arc_companion.release import CompanionReleasePublisher
 from arc_companion.validation import (
     AcceptedBookValidationError,
     require_valid_accepted_book,
@@ -777,6 +780,33 @@ def test_pdf_preserves_multiline_prose_without_pipeline_diagnostics(
     assert "arc.companion." not in extracted
     assert "semantic_input" not in extracted
     assert "provider diagnostics" not in extracted
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in _PDF_TOOLS),
+    reason="offline PDF toolchain is unavailable",
+)
+def test_real_renderer_release_manifest_exactly_matches_files(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "release-project")
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+    release = CompanionReleasePublisher(project, renderer).publish(
+        accepted_book,
+        run_id="rendered-release",
+    )
+
+    manifest = json.loads(release.manifest.read_text(encoding="utf-8"))
+    declared = {item["path"] for item in manifest["files"]}
+    actual = {
+        path.relative_to(release.directory).as_posix()
+        for path in release.directory.rglob("*")
+        if path.is_file() and path != release.manifest
+    }
+
+    assert declared == actual
 
 
 @pytest.mark.skipif(

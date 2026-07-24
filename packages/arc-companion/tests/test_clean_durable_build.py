@@ -5,7 +5,13 @@ from collections import Counter
 from pathlib import Path
 from threading import Lock
 
-from arc_jobs import ResumeReason, RunRepository, RunStatus
+from arc_jobs import (
+    ResumeReason,
+    RunRepository,
+    RunStatus,
+    command_result_from_snapshot,
+    command_result_json,
+)
 from arc_llm import LLMCompleted, LLMPaused
 from arc_paper import (
     RichDocumentParserService,
@@ -645,6 +651,27 @@ def test_mixed_language_translates_every_block_and_replays_accepted_chapter(
         ]
 
 
+def test_unknown_language_forces_translation_even_for_matching_tag(
+    tmp_path: Path,
+) -> None:
+    document = _rich_document(tmp_path)
+    tasks = FakeCompanionTasks(
+        language="zh",
+        classification="unknown",
+        confidence=0.0,
+    )
+    service = CompanionService(tmp_path / "jobs")
+
+    completed = service.build(
+        CompanionBuildRequest(document, target_language="zh-CN"),
+        task_service=tasks,
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert service.accepted_book(completed.run_id).translation_mode == "enabled"
+    assert tasks.counts["arc.companion.translation-prompt.v1"] > 0
+
+
 def test_unsafe_review_patch_pauses_once_and_can_be_discarded(
     tmp_path: Path,
 ) -> None:
@@ -662,6 +689,29 @@ def test_unsafe_review_patch_pauses_once_and_can_be_discarded(
     assert paused.awaiting is not None
     assert paused.awaiting.reason is ResumeReason.SUPERVISION_REQUIRED
     assert tasks.review_titles["First"] == 1
+    protocol = json.loads(
+        command_result_json(command_result_from_snapshot(paused))
+    )
+    assert protocol["schema_version"] == "arc.command_result.v1"
+    request_ref = paused.awaiting.request_ref
+    assert request_ref is not None
+    resume = protocol["resume"]
+    assert resume["reason"] == "supervision_required"
+    assert resume["resume_key"] == paused.awaiting.resume_key
+    assert resume["input_required"] is True
+    assert resume["input_schema"] == "arc.companion.review_supervision.v1"
+    assert resume["request_artifact"] == request_ref.relative_path
+    assert set(resume["details"]) == {"chapter_id", "code"}
+    assert resume["details"]["chapter_id"].startswith("chapter-")
+    assert resume["details"]["code"] == "review_patch_unsafe"
+    supervision = json.loads(
+        (
+            service.repository.run_directory(paused.run_id)
+            / request_ref.relative_path
+        ).read_text(encoding="utf-8")
+    )
+    assert supervision["resume_key"] == paused.awaiting.resume_key
+    assert supervision["allowed_actions"] == ["discard_review"]
 
     completed = service.resume(
         paused.run_id,
