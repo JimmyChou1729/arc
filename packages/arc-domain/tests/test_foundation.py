@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+from jsonschema import validate
+
+from arc_domain import foundation
+
+
+def _paper(paper_id: str, *, title: str, year: int, citations: int, abstract: str = "") -> dict[str, object]:
+    return {
+        "paper_id": paper_id,
+        "title": title,
+        "year": year,
+        "citation_count": citations,
+        "abstract": abstract,
+        "authors": ["A. Author"],
+    }
+
+
+def test_candidate_threshold_is_a_priority_not_an_exclusion_rule() -> None:
+    low = _paper("arXiv:2401.00001", title="Low", year=2024, citations=4)
+    high = _paper("arXiv:2301.00001", title="High", year=2023, citations=120)
+    candidates = foundation.build_candidate_records(
+        seed_metadata=low,
+        seed_references=[high],
+        newest_citers=[],
+        refs_by_citer={},
+        metadata_by_id={low["paper_id"]: low, high["paper_id"]: high},
+        intent="",
+    )
+
+    assert {candidate["paper_id"] for candidate in candidates} == {low["paper_id"], high["paper_id"]}
+    assert "low_citation_foundation_priority" in next(
+        candidate for candidate in candidates if candidate["paper_id"] == low["paper_id"]
+    )["warnings"]
+    selected = foundation.deterministic_foundation_selection(candidates, intent="")
+    assert selected["selected_foundation"]["paper_id"] == high["paper_id"]
+
+
+def test_audit_expansion_requires_every_gate() -> None:
+    incomplete = foundation.normalize_candidate_audit(
+        {
+            "candidate_set_sufficient": False,
+            "confidence": "complete",
+            "search_queries": [{"query": "arXiv:2101.00001", "reason": "", "confidence": "complete"}],
+        }
+    )
+    assert foundation.audit_expansion_request(incomplete, "intent") is None
+
+    uncertain = foundation.normalize_candidate_audit(
+        {
+            "candidate_set_sufficient": False,
+            "confidence": "high",
+            "search_queries": [{"query": "canonical inflation foundation", "reason": "", "confidence": "complete"}],
+        }
+    )
+    assert foundation.audit_expansion_request(uncertain, "intent") is None
+
+    eligible = foundation.normalize_candidate_audit(
+        {
+            "candidate_set_sufficient": False,
+            "confidence": "complete",
+            "search_queries": [{"query": "canonical inflation foundation", "reason": "scope gap", "confidence": "complete"}],
+        }
+    )
+    assert "canonical inflation foundation" in foundation.audit_expansion_request(eligible, "intent")
+
+
+def test_expansion_adds_only_verified_ids_present_in_metadata() -> None:
+    existing = _paper("arXiv:2301.00001", title="Existing", year=2023, citations=300)
+    verified = _paper("arXiv:2101.00001", title="Verified", year=2021, citations=500)
+    unverified = _paper("arXiv:2201.00001", title="Unverified", year=2022, citations=400)
+    audit = {
+        "candidate_set_sufficient": False,
+        "confidence": "complete",
+        "search_queries": [{"query": "missing canonical scope", "reason": "gap", "confidence": "complete"}],
+    }
+    expanded, report = foundation.apply_reference_inference_result(
+        [existing],
+        audit,
+        {
+            "paper_ids": [verified["paper_id"], unverified["paper_id"]],
+            "verified_references": [
+                {
+                    "paper_id": verified["paper_id"],
+                    "evidence_urls": ["https://example.test/verified"],
+                    "reasoning": "verified",
+                }
+            ],
+            "warnings": [],
+            "focus_scope": "one_domain",
+        },
+        {verified["paper_id"]: verified, unverified["paper_id"]: unverified},
+        "scope",
+    )
+
+    assert [candidate["paper_id"] for candidate in expanded] == [existing["paper_id"], verified["paper_id"]]
+    assert expanded[-1]["llm_added"] is True
+    assert report["added_papers"] == [verified["paper_id"]]
+
+
+def test_selection_unknown_ids_repair_to_known_candidates() -> None:
+    candidate = _paper("arXiv:2301.00001", title="Known", year=2023, citations=300)
+    selection = foundation.normalize_foundation_selection(
+        {
+            "selected_foundation": {"paper_id": "arXiv:2201.00001", "title": "Unknown", "reason": "bad"},
+            "best_reference_paper": {"paper_id": "arXiv:2101.00001", "title": "Unknown", "reason": "bad"},
+        },
+        [candidate],
+    )
+
+    assert selection["selected_foundation"]["paper_id"] == candidate["paper_id"]
+    assert selection["best_reference_paper"]["paper_id"] == candidate["paper_id"]
+    validate(selection, foundation.FOUNDATION_SELECTION_SCHEMA)
+
+
+def test_selection_rejects_later_parent_foundation() -> None:
+    selected = _paper("arXiv:2301.00001", title="Selected", year=2023, citations=300)
+    earlier = _paper("arXiv:2201.00001", title="Earlier", year=2022, citations=1200)
+    later = _paper("arXiv:2401.00001", title="Later", year=2024, citations=1200)
+    selection = foundation.normalize_foundation_selection(
+        {
+            "selected_foundation": {"paper_id": selected["paper_id"], "title": "", "reason": "selected"},
+            "best_reference_paper": {"paper_id": selected["paper_id"], "title": "", "reason": "read"},
+            "parent_foundations": [
+                {"paper_id": later["paper_id"], "title": "", "reason": "later"},
+                {"paper_id": earlier["paper_id"], "title": "", "reason": "earlier"},
+            ],
+        },
+        [selected, earlier, later],
+    )
+
+    assert [choice["paper_id"] for choice in selection["parent_foundations"]] == [earlier["paper_id"]]
+    assert [choice["paper_id"] for choice in selection["rejected_candidates"]] == [later["paper_id"]]
+
+
+def test_foundation_core_has_no_io_or_private_cross_package_imports() -> None:
+    path = Path(foundation.__file__)
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+
+    assert "arc_paper" in imported
+    assert not any(name.startswith("arc_paper.") for name in imported)
+    assert not any(name in {"arc_llm", "arc_domain.paper", "arc_domain.cache"} for name in imported)
+    assert not any(name in {"os", "pathlib", "subprocess", "threading"} for name in imported)
