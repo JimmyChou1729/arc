@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
@@ -12,6 +14,7 @@ from .sources import SourceArtifact, SourceFormat, SourceOrigin, SourceOriginKin
 
 
 SOURCE_REPOSITORY_SCHEMA = "arc.paper.source_repository.v1"
+SOURCE_ASSET_SCHEMA = "arc.paper.source_asset.v1"
 DEFAULT_MEDIA_TYPES = {
     SourceFormat.HTML: "text/html",
     SourceFormat.MARKDOWN: "text/markdown",
@@ -33,6 +36,38 @@ _MANIFEST_FIELDS = {
     "artifact_digest",
     "size",
 }
+_ASSET_MANIFEST_FIELDS = {
+    "schema_version",
+    "media_type",
+    "artifact_digest",
+    "size",
+}
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+@dataclass(frozen=True)
+class RepositoryAsset:
+    """One immutable non-document resource stored by ``SourceRepository``."""
+
+    artifact_digest: str
+    size: int
+    media_type: str
+
+    def __post_init__(self) -> None:
+        digest = self.artifact_digest.casefold()
+        media_type = self.media_type.strip().casefold()
+        if _SHA256_RE.fullmatch(digest) is None:
+            raise ValueError("artifact_digest must be a SHA-256 digest")
+        if not isinstance(self.size, int) or isinstance(self.size, bool) or self.size < 0:
+            raise ValueError("asset size cannot be negative")
+        if not media_type or "/" not in media_type or ";" in media_type:
+            raise ValueError("asset media_type must be a normalized MIME type")
+        object.__setattr__(self, "artifact_digest", digest)
+        object.__setattr__(self, "media_type", media_type)
+
+    @property
+    def content_identity(self) -> tuple[str, str, int]:
+        return (self.media_type, self.artifact_digest, self.size)
 
 
 class SourceRepositoryError(RuntimeError):
@@ -133,6 +168,82 @@ class SourceRepository:
                 ).encode("utf-8"),
             )
             return self._read_verified(resolved_format, digest, origin=origin)
+
+    def import_asset_path(
+        self,
+        path: str | Path,
+        *,
+        media_type: str,
+    ) -> RepositoryAsset:
+        """Import a local relative resource referenced by a rich document."""
+
+        asset_path = Path(path)
+        try:
+            payload = asset_path.read_bytes()
+        except OSError as exc:
+            raise SourceRepositoryError(
+                "asset_read_failed", f"unable to read asset: {asset_path}"
+            ) from exc
+        return self.store_asset_bytes(payload, media_type=media_type)
+
+    def store_asset_bytes(
+        self,
+        payload: bytes,
+        *,
+        media_type: str,
+    ) -> RepositoryAsset:
+        """Store arbitrary immutable resource bytes beside document sources."""
+
+        if not isinstance(payload, bytes):
+            raise TypeError("asset payload must be bytes")
+        normalized_media_type = self._normalize_media_type(media_type)
+        digest = hashlib.sha256(payload).hexdigest()
+        object_dir = self._asset_object_dir(digest)
+        payload_path = object_dir / "asset"
+        manifest_path = object_dir / "manifest.json"
+        with self._asset_content_lock(digest):
+            if manifest_path.exists():
+                asset = self._read_asset_verified(digest)
+                if (
+                    asset.size != len(payload)
+                    or asset.media_type != normalized_media_type
+                ):
+                    raise SourceRepositoryError(
+                        "asset_metadata_conflict",
+                        "stored asset metadata conflicts with the requested asset",
+                    )
+                return asset
+            object_dir.mkdir(parents=True, exist_ok=True)
+            if not self._payload_matches(payload_path, digest, len(payload)):
+                self._atomic_write(payload_path, payload)
+            manifest = {
+                "schema_version": SOURCE_ASSET_SCHEMA,
+                "media_type": normalized_media_type,
+                "artifact_digest": digest,
+                "size": len(payload),
+            }
+            self._atomic_write(
+                manifest_path,
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+            )
+        return self._read_asset_verified(digest)
+
+    def get_asset(self, artifact_digest: str) -> RepositoryAsset:
+        return self._read_asset_verified(artifact_digest.casefold())
+
+    def read_asset_bytes(self, asset: RepositoryAsset) -> bytes:
+        verified = self._read_asset_verified(asset.artifact_digest)
+        if verified.content_identity != asset.content_identity:
+            raise SourceRepositoryError(
+                "asset_artifact_mismatch",
+                "asset metadata does not match repository content",
+            )
+        return (self._asset_object_dir(asset.artifact_digest) / "asset").read_bytes()
 
     def get(
         self,
@@ -238,6 +349,69 @@ class SourceRepository:
             / digest
         )
 
+    def _asset_object_dir(self, digest: str) -> Path:
+        return (
+            self.root
+            / "source-repository"
+            / "v1"
+            / "asset"
+            / "sha256"
+            / digest[:2]
+            / digest
+        )
+
+    def _read_asset_verified(self, digest: str) -> RepositoryAsset:
+        if _SHA256_RE.fullmatch(digest) is None:
+            raise SourceRepositoryError(
+                "invalid_artifact_digest", "artifact digest must be a SHA-256 digest"
+            )
+        object_dir = self._asset_object_dir(digest)
+        manifest_path = object_dir / "manifest.json"
+        payload_path = object_dir / "asset"
+        try:
+            value = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise SourceRepositoryError(
+                "asset_not_found", f"asset is not present: {digest}"
+            ) from exc
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise SourceRepositoryError(
+                "asset_manifest_invalid", "asset manifest is unreadable or malformed"
+            ) from exc
+        if not isinstance(value, dict) or set(value) != _ASSET_MANIFEST_FIELDS:
+            raise SourceRepositoryError(
+                "asset_manifest_invalid", "asset manifest has an invalid schema"
+            )
+        if (
+            value.get("schema_version") != SOURCE_ASSET_SCHEMA
+            or value.get("artifact_digest") != digest
+        ):
+            raise SourceRepositoryError(
+                "asset_manifest_invalid", "asset manifest identity does not match its key"
+            )
+        media_type = value.get("media_type")
+        size = value.get("size")
+        if (
+            not isinstance(media_type, str)
+            or not media_type
+            or ";" in media_type
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or size < 0
+        ):
+            raise SourceRepositoryError(
+                "asset_manifest_invalid", "asset manifest metadata is invalid"
+            )
+        if not self._payload_matches(payload_path, digest, size):
+            raise SourceRepositoryError(
+                "asset_corrupt", "asset bytes do not match the manifest"
+            )
+        return RepositoryAsset(
+            artifact_digest=digest,
+            size=size,
+            media_type=media_type,
+        )
+
     @contextmanager
     def _content_lock(
         self, source_format: SourceFormat, digest: str
@@ -248,6 +422,19 @@ class SourceRepository:
             / "v1"
             / "locks"
             / source_format.value
+            / f"{digest}.lock"
+        )
+        with exclusive_file_lock(lock_path):
+            yield
+
+    @contextmanager
+    def _asset_content_lock(self, digest: str) -> Iterator[None]:
+        lock_path = (
+            self.root
+            / "source-repository"
+            / "v1"
+            / "locks"
+            / "asset"
             / f"{digest}.lock"
         )
         with exclusive_file_lock(lock_path):
@@ -281,6 +468,8 @@ class SourceRepository:
 
 __all__ = [
     "DEFAULT_MEDIA_TYPES",
+    "RepositoryAsset",
+    "SOURCE_ASSET_SCHEMA",
     "SOURCE_REPOSITORY_SCHEMA",
     "SourceRepository",
     "SourceRepositoryError",
