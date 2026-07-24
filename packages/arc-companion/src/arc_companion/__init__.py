@@ -64,4 +64,4 @@ __all__ = [
     "publish_reader",
     "validate_reader_project",
 ]
-__version__ = "1.0.0"
+__version__ = "1.0.1"

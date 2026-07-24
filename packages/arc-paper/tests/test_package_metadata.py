@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[3]
 PACKAGE_ROOTS = {
     "arc-llm": ROOT / "packages/arc-llm",
     "arc-jobs": ROOT / "packages/arc-jobs",
+    "arc-proposer-reviewer": ROOT / "packages/arc-proposer-reviewer",
     "arc-paper": ROOT / "packages/arc-paper",
     "arc-domain": ROOT / "packages/arc-domain",
     "arc-typeset": ROOT / "packages/arc-typeset",
@@ -15,18 +16,26 @@ PACKAGE_ROOTS = {
     "arc-mcp": ROOT / "packages/arc-mcp",
 }
 EXPECTED_INTERNAL_DEPENDENCIES = {
-    "arc-llm": [],
+    "arc-llm": ["arc-jobs>=1.0.1,<1.1"],
     "arc-jobs": [],
-    "arc-paper": ["arc-llm>=1.0,<1.1"],
-    "arc-domain": ["arc-llm>=1.0,<1.1", "arc-paper>=1.0,<1.1"],
-    "arc-typeset": ["arc-llm>=1.0,<1.1"],
-    "arc-companion": ["arc-llm>=1.0,<1.1", "arc-paper>=1.0,<1.1"],
+    "arc-proposer-reviewer": [
+        "arc-jobs>=1.0.1,<1.1",
+        "arc-llm>=1.0.1,<1.1",
+    ],
+    "arc-paper": ["arc-jobs>=1.0.1,<1.1", "arc-llm>=1.0.1,<1.1"],
+    "arc-domain": ["arc-llm>=1.0.1,<1.1", "arc-paper>=1.0.1,<1.1"],
+    "arc-typeset": ["arc-llm>=1.0.1,<1.1"],
+    "arc-companion": [
+        "arc-domain>=1.0.1,<1.1",
+        "arc-llm>=1.0.1,<1.1",
+        "arc-paper>=1.0.1,<1.1",
+    ],
     "arc-mcp": [
-        "arc-domain>=1.0,<1.1",
-        "arc-jobs>=1.0,<1.1",
-        "arc-llm>=1.0,<1.1",
-        "arc-paper>=1.0,<1.1",
-        "arc-typeset>=1.0,<1.1",
+        "arc-domain>=1.0.1,<1.1",
+        "arc-jobs>=1.0.1,<1.1",
+        "arc-llm>=1.0.1,<1.1",
+        "arc-paper>=1.0.1,<1.1",
+        "arc-typeset>=1.0.1,<1.1",
     ],
 }
 EXPECTED_EXTERNAL_DEPENDENCIES = {
@@ -44,7 +53,11 @@ def test_arc_packages_have_publish_metadata():
         pyproject = _pyproject(package_name)
         project = pyproject["project"]
 
-        expected_readme = "README.md" if package_name == "arc-jobs" else "../../README.md"
+        expected_readme = (
+            "README.md"
+            if package_name in {"arc-jobs", "arc-llm", "arc-proposer-reviewer"}
+            else "../../README.md"
+        )
         assert project["readme"] == expected_readme
         assert project["license"] == "MIT"
         assert project["authors"] == [{"name": "ARC"}]
@@ -78,4 +91,4 @@ def test_arc_llm_dependency_is_version_bounded():
 
     dependencies = pyproject["project"]["dependencies"]
 
-    assert "arc-llm>=1.0,<1.1" in dependencies
+    assert "arc-llm>=1.0.1,<1.1" in dependencies
