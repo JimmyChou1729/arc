@@ -460,6 +460,80 @@ def test_source_runtime_verifier_records_current_checkout(tmp_path):
     )
 
 
+def _git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_source_verifier_can_require_a_clean_ancestor_and_freeze_head(tmp_path):
+    repo = tmp_path / "history"
+    _git(tmp_path, "init", "-b", "main", str(repo))
+    (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(
+        repo,
+        "-c",
+        "user.name=ARC Test",
+        "-c",
+        "user.email=arc-test@example.invalid",
+        "commit",
+        "-m",
+        "base",
+    )
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-b", "unrelated")
+    _git(
+        repo,
+        "-c",
+        "user.name=ARC Test",
+        "-c",
+        "user.email=arc-test@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "unrelated",
+    )
+    unrelated = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "main")
+
+    module = _load_verifier_module()
+    provenance = module._git_provenance(
+        repo,
+        required_ancestors=[base],
+        require_clean=True,
+    )
+
+    assert provenance["head"] == base
+    assert provenance["frozen_head"] == base
+    assert provenance["require_clean"] is True
+    assert provenance["required_ancestors"] == [
+        {"requested": base, "resolved": base}
+    ]
+    with pytest.raises(RuntimeError, match="is not an ancestor of HEAD"):
+        module._git_provenance(repo, required_ancestors=[unrelated])
+
+    (repo / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="not clean"):
+        module._git_provenance(repo, require_clean=True)
+
+
+def test_source_verifier_rejects_constraints_without_git(tmp_path):
+    module = _load_verifier_module()
+    non_repo = tmp_path / "not-a-repository"
+    non_repo.mkdir()
+
+    assert module._git_provenance(non_repo)["available"] is False
+    with pytest.raises(RuntimeError, match="without a Git checkout"):
+        module._git_provenance(non_repo, required_ancestors=["required-fix"])
+
+
 def test_source_verifier_reexecs_incompatible_system_python_into_runtime(monkeypatch, tmp_path):
     module = _load_verifier_module()
     runtime = tmp_path / "venv/bin/python"

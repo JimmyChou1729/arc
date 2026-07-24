@@ -6,7 +6,9 @@ network HTML, paper JSON pack, evidence pack, and optional domain summary.
 
 The domain identity is derived only from the normalized seed paper and trimmed
 intent. The durable run identity also includes the fully resolved policy and
-LLM model selection.
+LLM model selection. A v2 policy records whether that seed may be inferred
+away from (`infer_from_seed`) or is the fixed citer anchor (`fixed_seed`), and
+whether citers use legacy representative selection or a strict date window.
 
 ## Scope And Data Boundary
 
@@ -20,11 +22,44 @@ layer. Metadata and references are separate operations. A graph paper's full
 text is parsed at most once while building a pack; its table of contents and
 conclusion/outlook projection use that same parsed document.
 
+## Foundation and Citer Modes
+
+The original closed policy/request documents remain
+`arc.domain_build_policy.v1` and `arc.domain_build_request.v1`. They replay the
+legacy behavior: `infer_from_seed` foundation choice and
+`representative_plus_recent` citer selection. Existing v1 runs remain valid and
+must not be reinterpreted.
+
+Passing either mode flag creates the closed v2 policy/request documents:
+
+```text
+foundation_mode: infer_from_seed | fixed_seed
+citer_selection_mode: representative_plus_recent | strict_window
+```
+
+Use `fixed_seed` when a workflow has independently selected the canonical
+origin. Foundation audit/reference evidence remains available for context, but
+it cannot retarget the citer graph. Use `strict_window` when the request means
+“papers that cite this foundation in the last N days.” The builder classifies
+each direct citer by first-public date before merging, capacity limits, and LLM
+ranking; a valid non-arXiv date qualifies, a later revision date does not, and
+an unknown date is excluded with a structured count/warning. Foundation and
+context/reference nodes may predate the window, but selected `domain_paper`
+nodes may not. An empty eligible window produces a successful
+foundation/context graph with a warning.
+
+The foundation candidate citation band 100–1000 is a configurable soft prior,
+not a hard eligibility rule. Low counts can signal a shallow field and very
+high counts a broad parent domain; canonical-origin evidence can override both.
+The fully resolved policy records `as_of_date` and `recent_window_days`. For a
+two-year request, the latter is the exact day count to the corresponding
+calendar date two years earlier.
+
 ## Build And Resume
 
 ### Phase 1: Start a Build
 
-Step 1: Use the default policy or prepare a complete closed policy document.
+Step 1: Use the default v1 policy or prepare a complete closed policy document.
 Without `--policy`, the CLI resolves the current UTC date and the default
 limits before creating the durable run.
 
@@ -45,10 +80,32 @@ arc-domain build <seed-paper> \
 ```
 
 When supplied, `--policy '<full-policy-json-document>'` must be a complete
-closed policy JSON document. Explicit policy flags override its four selectable
-limits; the persisted request always contains the complete resolved policy.
+closed v1 policy JSON document. Explicit policy flags override its four
+selectable limits; the persisted request always contains the complete resolved
+policy.
 `--run-id` may name the durable run explicitly. Build output uses the
 `arc.command_result.v1` envelope and reports the run and domain IDs.
+
+Step 3: For a fixed canonical origin and a strict citer time window, promote to
+v2 explicitly:
+
+```bash
+arc-domain build <canonical-origin-paper> \
+  --intent "<user-intent>" \
+  --recent-window-days <window-days> \
+  --foundation-mode fixed-seed \
+  --citer-selection-mode strict-window \
+  --llm-provider auto \
+  --model-tier medium
+```
+
+CLI spelling uses hyphens; persisted policy values use underscores. A supplied
+`--policy` must always be complete for its declared v1 or v2 schema. With
+either mode flag, the CLI promotes a complete v1 policy by carrying its
+resolved limits forward; it uses a complete v2 policy directly, and a flag
+overrides only its matching mode. `--foundation-mode` and
+`--citer-selection-mode` are the only mode controls; do not use a generic
+filter/sort option.
 
 Do not use `init`, `identify-foundation`, `build-network`, `build-evidence`,
 `build-paper-json-pack`, `summarize`, or any `llm-*` alias. They are not
@@ -122,6 +179,11 @@ resumed through the run ID. Exhausted transport or timeout failures use the
 documented deterministic fallback for foundation/network work, or make the
 summary unavailable with a warning. Authentication, quota, rate-limit, and
 provider-unavailable conditions remain paused for external resolution.
+
+The owning domain workflow prints and records summary warnings to project `self-reflect.md` and `context/domain/warnings.md`; the briefing itself must not conceal them.
+
+That workflow writes `arc.workflow.domain_manifest.v2` only after a completed
+domain export and validates its referenced artifacts before any ideas workflow.
 
 ## MCP Status
 

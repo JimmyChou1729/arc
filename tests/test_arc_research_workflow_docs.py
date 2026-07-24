@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins/arc"
@@ -1005,8 +1007,7 @@ def test_max_model_tier_requires_an_explicit_user_request() -> None:
 
     assert "Never select the `max` model tier automatically" in skill
     assert "only when the user explicitly requests the `max` model tier" in skill
-    assert "Never select the `max` model tier automatically" in manual
-    assert "no workflow default or automatic task mapping may select it" in manual
+    assert "`max`" not in manual
 
 
 def test_readme_and_llm_manual_document_experimental_kimi_provider() -> None:
@@ -1018,7 +1019,7 @@ def test_readme_and_llm_manual_document_experimental_kimi_provider() -> None:
         "the network, run commands, and modify files."
     )
 
-    for text in (readme, manual):
+    for text in (readme,):
         compact = " ".join(text.split())
         assert "Kimi Code CLI `>=0.28.0`" in text
         assert "`kimi login`" in text
@@ -1032,9 +1033,24 @@ def test_readme_and_llm_manual_document_experimental_kimi_provider() -> None:
         assert warning in compact
 
     assert "usage fields remain null" in readme
-    assert "all fields in its usage object are null" in manual
     assert "does not copy, migrate, or delete Kimi sessions" in readme
-    assert "does not copy, migrate, or delete the user's Kimi" in manual
+    assert "`kimi` provider uses an ACP adapter" in manual
+    assert "provider configuration is\ninherited" in manual
+    assert "native session resume" in manual
+    assert "JSON Schema in\nthe prompt" in manual
+    assert "partial usage" in manual
+    for retired in (
+        "Kimi Code CLI `>=0.28.0`",
+        "`kimi login`",
+        "ARC_AGENT_HOST=kimi-code",
+        "ARC_KIMI_BIN",
+        "ARC_KIMI_WORK_DIR",
+        "ARC_KIMI_IDLE_TIMEOUT_SECONDS",
+        "ARC_LLM_KIMI_LOW_MODEL",
+        "kimi-code-cli is experimental",
+        "all fields in its usage object are null",
+    ):
+        assert retired not in manual
 
 
 def test_ideas_full_info_template_includes_domain_and_controller_context() -> None:
@@ -1243,6 +1259,80 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
     assert "cancellation" in skill
     assert "cancellation" in domain
     assert "cancellation" in ideas
+
+
+def test_domain_origin_resolution_keeps_the_seed_date_unbounded() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    workflow = (WF / "domain.md").read_text(encoding="utf-8")
+    manual = (SKILL / "manuals/arc-domain.md").read_text(encoding="utf-8")
+    schema = json.loads(
+        (WJ / "domain-origin-selection.schema.json").read_text(encoding="utf-8")
+    )
+    template = json.loads(
+        (WJ / "domain-origin-selection.template.json").read_text(encoding="utf-8")
+    )
+
+    assert "date-unbounded canonical origin" in " ".join(skill.split())
+    assert "modifies the **citer corpus**, not\nthe origin paper" in workflow
+    assert "direct citers of that origin in the requested time window" in workflow
+    assert "**3–10**" in workflow
+    assert "100–1000 are a soft" in workflow
+    assert "confidence is below `0.80`" in workflow
+    assert "to be a recorded candidate ID" in workflow
+    assert "--foundation-mode fixed-seed" in workflow
+    assert "--citer-selection-mode strict-window" in workflow
+    assert "a complete v1 policy is\npromoted" in workflow
+    assert "a complete v2 policy is used\ndirectly" in workflow
+    assert "arc.domain_build_policy.v1" in manual
+    assert "representative_plus_recent" in manual
+    assert "strict_window" in manual
+    assert "promotes a complete v1 policy" in manual
+    assert "uses a complete v2 policy directly" in manual
+
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["const"] == "arc.domain_origin_selection.v1"
+    assert set(schema["required"]) == {
+        "schema_version",
+        "selected_paper_id",
+        "selected_paper_title",
+        "confidence",
+        "reasoning",
+        "candidate_assessments",
+        "warnings",
+    }
+    assert schema["properties"]["candidate_assessments"]["minItems"] == 3
+    assert "ARC-resolvable identifier" in schema["properties"]["selected_paper_id"]["description"]
+    assert template["schema_version"] == "arc.domain_origin_selection.v1"
+    assert set(template) == set(schema["required"])
+    Draft202012Validator(schema).validate(template)
+
+
+def test_arc_llm_manual_uses_only_the_current_durable_cli() -> None:
+    manual = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
+
+    for command in (
+        "arc-llm generate",
+        "arc-llm resume",
+        "arc-llm status",
+        "arc-llm cancel",
+        "arc-llm doctor --provider auto",
+    ):
+        assert command in manual
+    for obsolete in (
+        "arc-llm run-text",
+        "arc-llm run-json",
+        "arc-paper doctor",
+        "arc-llm doctor host",
+        "arc-llm doctor provider",
+        "arc-llm doctor config",
+        "arc-llm proposers-reviewer-loop",
+        "arc-llm proposers-reviewer-bench",
+        "arc-llm cache-audit",
+        "arc-llm circuit",
+    ):
+        assert obsolete not in manual
+    assert "output-last-message" in manual
+    assert "authoritative terminal candidate" in manual
 
 
 def test_core_skill_docs_keep_arc_cli_only() -> None:

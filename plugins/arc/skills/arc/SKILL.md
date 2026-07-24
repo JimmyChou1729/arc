@@ -159,7 +159,13 @@ for routing, domain building, checking, or later workflows.
 
 Step 3: Resolve `<seed-paper-list>`.
 Use explicit paper identifiers when present. Otherwise infer seed papers from
-`<user-intent>` through ARC paper tools. See `manuals/arc-paper.md` for paper
+`<user-intent>` through ARC paper tools. For a domain request whose relative
+date applies to field papers (for example, “field X in the last two years”),
+do not treat that date as a seed-paper filter: first resolve a date-unbounded
+canonical origin, then use the date window for its citers as specified in
+`workflows/domain.md`. Keep the candidate evidence and origin-selection result
+separately; only each selected/explicit foundation becomes an entry in
+`seed_paper_list` for its domain build. See `manuals/arc-paper.md` for paper
 identifier inference and `manuals/arc-jobs.md` for background jobs.
 
 Step 4: Resolve `<project-dir>`.
@@ -191,7 +197,10 @@ Include `automation_level`, `workflow`, `original_request`, `user_intent`,
 `arc_run_root`, `project_dir_name`, `project_dir`, `run_id`, `created_at`,
 `skill_version`, `skill_dir`, `skill_workflow_json_dir`, `seed_paper_list`,
 `provider`, `model_tier`, `workers`, `refresh`, `recent_window_days`, and
-`as_of_date`.
+`as_of_date`. A domain origin-resolution path additionally records
+`origin_candidates`, `origin_selections`, `origin_selection_run_ids`,
+`foundation_mode`, `citer_selection_mode`, and, when required,
+`source_provenance` plus the requested refactor ancestor.
 
 Default `recent_window_days` to `365` and freeze `as_of_date` to the run's UTC
 date. When the request says "the last two years", use the exact number of days

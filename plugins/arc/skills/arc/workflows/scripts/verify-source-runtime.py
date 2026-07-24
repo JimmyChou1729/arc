@@ -53,6 +53,21 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         help="Additional file under the checkout to include by SHA256; repeatable.",
     )
+    parser.add_argument(
+        "--require-ancestor",
+        action="append",
+        default=[],
+        metavar="COMMITISH",
+        help=(
+            "Require COMMITISH to be an ancestor of the frozen checkout HEAD; "
+            "repeatable."
+        ),
+    )
+    parser.add_argument(
+        "--require-clean",
+        action="store_true",
+        help="Reject a checkout with tracked or untracked changes before freezing HEAD.",
+    )
     return parser
 
 
@@ -85,11 +100,48 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     )
 
 
-def _git_provenance(root: Path) -> dict[str, Any]:
+def _required_ancestor_provenance(root: Path, values: Sequence[str]) -> list[dict[str, str]]:
+    required: list[dict[str, str]] = []
+    for requested in values:
+        if not requested.strip():
+            raise RuntimeError("A required ancestor must be a non-empty commit-ish.")
+        resolved = _git(root, "rev-parse", "--verify", f"{requested}^{{commit}}")
+        if resolved.returncode != 0:
+            detail = resolved.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"Cannot resolve required ancestor {requested!r}: {detail or 'unknown commit'}"
+            )
+        commit = resolved.stdout.decode("ascii", errors="replace").strip()
+        ancestor = _git(root, "merge-base", "--is-ancestor", commit, "HEAD")
+        if ancestor.returncode == 1:
+            raise RuntimeError(
+                f"Required ancestor {requested!r} ({commit}) is not an ancestor of HEAD."
+            )
+        if ancestor.returncode != 0:
+            detail = ancestor.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"Cannot verify required ancestor {requested!r}: {detail or 'git merge-base failed'}"
+            )
+        required.append({"requested": requested, "resolved": commit})
+    return required
+
+
+def _git_provenance(
+    root: Path,
+    *,
+    required_ancestors: Sequence[str] = (),
+    require_clean: bool = False,
+) -> dict[str, Any]:
     head = _git(root, "rev-parse", "HEAD")
     status = _git(root, "status", "--porcelain=v1", "--untracked-files=all")
     diff = _git(root, "diff", "--binary", "HEAD", "--")
     if head.returncode != 0:
+        if required_ancestors or require_clean:
+            detail = head.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                "Cannot verify required source constraints without a Git checkout: "
+                f"{detail or 'git HEAD is unavailable'}"
+            )
         return {
             "available": False,
             "error": head.stderr.decode("utf-8", errors="replace").strip(),
@@ -98,13 +150,19 @@ def _git_provenance(root: Path) -> dict[str, Any]:
         error = (status.stderr or diff.stderr).decode("utf-8", errors="replace").strip()
         raise RuntimeError(f"Cannot capture ARC checkout working-tree state: {error}")
     status_text = status.stdout.decode("utf-8", errors="surrogateescape")
+    if require_clean and status_text:
+        raise RuntimeError("Required ARC checkout is not clean; cannot freeze source HEAD.")
+    frozen_head = head.stdout.decode("ascii", errors="replace").strip()
     return {
         "available": True,
-        "head": head.stdout.decode("ascii", errors="replace").strip(),
+        "head": frozen_head,
+        "frozen_head": frozen_head,
         "dirty": bool(status_text),
         "status_porcelain": status_text.splitlines(),
         "status_sha256": _sha256_bytes(status.stdout),
         "diff_sha256": _sha256_bytes(diff.stdout),
+        "required_ancestors": _required_ancestor_provenance(root, required_ancestors),
+        "require_clean": require_clean,
     }
 
 
@@ -169,7 +227,13 @@ def _workflow_files(root: Path, extra_files: Sequence[str]) -> list[dict[str, An
     ]
 
 
-def build_provenance(root: Path, extra_files: Sequence[str]) -> dict[str, Any]:
+def build_provenance(
+    root: Path,
+    extra_files: Sequence[str],
+    *,
+    required_ancestors: Sequence[str] = (),
+    require_clean: bool = False,
+) -> dict[str, Any]:
     root = root.expanduser().resolve(strict=True)
     os.environ[ARC_REQUIRE_REPO_ROOT] = str(root)
     bootstrap_arc_pythonpath()
@@ -177,7 +241,11 @@ def build_provenance(root: Path, extra_files: Sequence[str]) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "repo_root": str(root),
-        "git": _git_provenance(root),
+        "git": _git_provenance(
+            root,
+            required_ancestors=required_ancestors,
+            require_clean=require_clean,
+        ),
         "runtime": {
             "python_executable": str(Path(sys.executable).absolute()),
             "python_realpath": str(Path(sys.executable).resolve()),
@@ -272,7 +340,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     os.environ[ARC_REQUIRE_REPO_ROOT] = str(Path(root_value).expanduser().resolve())
     _reexec_runtime(raw_argv)
-    record = build_provenance(Path(root_value), args.extra_files)
+    record = build_provenance(
+        Path(root_value),
+        args.extra_files,
+        required_ancestors=args.require_ancestor,
+        require_clean=args.require_clean,
+    )
     payload = json.dumps(record, indent=2, sort_keys=True) + "\n"
     if args.output:
         output = args.output.expanduser()

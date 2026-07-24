@@ -5,51 +5,148 @@ more seed papers.
 
 ## Inputs
 
-Read `<project-dir>/context.json`. Use the exact values from that file for all
-ARC calls, especially `user_intent`, `seed_paper_list`, `llm_provider`,
-`model`, `model_tier`, `workers`, and the closed domain-build policy. Do not
-pass a citation provider, citation query, sort/filter, or refresh option: the
-domain builder is fixed to INSPIRE and owns those internal choices. Default
-`recent_window_days` to `365`. Without a policy document, the CLI resolves the
-current UTC `as_of_date` and all default policy values before persistence.
-For "the last two years", record the exact day count back to the corresponding
-calendar date two years earlier.
+Read `<project-dir>/context.json`. Use its exact `user_intent`, model choices,
+worker count, source provenance, origin-selection records, and closed
+domain-build policy for all ARC calls. Do not pass a citation provider,
+citation query, sort/filter, or refresh option: the domain builder is fixed to
+INSPIRE and owns those internal choices.
 
-### Phase 1: Prepare Project Artifacts
+A relative date phrase in a field request modifies the **citer corpus**, not
+the origin paper. Thus “papers in field X from the last two years” means:
 
-Step 1: Create `<project-dir>/domain/`.
+1. discover the canonical origin of field X without a date cutoff; then
+2. select only direct citers of that origin in the requested time window.
 
-Step 2: Preserve `<project-dir>/context.json` as the workflow source of truth.
+Apply a date to a seed only when the user explicitly says to find a recent seed
+or supplies a recent paper identifier. Default `recent_window_days` to `365`.
+Freeze `as_of_date` to the run's UTC date. For “the last two years”, record the
+exact day count back to the corresponding calendar date two years earlier.
+
+### Phase 1: Preflight and Resolve Domain Origins
+
+Step 1: For a source-sensitive request, freeze the intended post-fix checkout
+before collecting papers. If the request refers to a refactor/fix, resolve that
+requirement to a commit in the intended checkout and use the source verifier:
+
+```bash
+export ARC_REQUIRE_REPO_ROOT=<checkout-root>
+python3 <skill-dir>/workflows/scripts/verify-source-runtime.py \
+  --repo-root <checkout-root> \
+  --require-clean \
+  --require-ancestor <required-refactor-commitish> \
+  --output <project-dir>/source-provenance.json
+```
+
+Record the requested commit-ish, its resolved ancestor, and the verifier's
+frozen HEAD in `context.json`. Do not reuse an earlier worktree merely because
+it has a previous ARC build. If the requirement cannot be resolved or is not
+an ancestor of HEAD, print `WARNING:` and stop before a paper or LLM call.
+
+Step 2: Create `<project-dir>/domain/`.
+
+Step 3: Preserve `<project-dir>/context.json` as the workflow source of truth.
 Do not substitute a paraphrased intent string into ARC calls.
+
+Step 4: Partition `seed_paper_list` and inferred requests into semantically
+distinct fields. Preserve multiple explicit seeds. Resolve one origin per field
+only when its field has no explicit paper anchor.
+
+- For an explicit anchor, normalize it with `arc-paper`, fetch its metadata,
+  and record an `origin_selection` with `mode: explicit_seed`. It remains that
+  field's build seed; later foundation inference cannot replace it.
+- For an unresolved field, use `arc-paper search-metadata`, `get-metadata`,
+  `get-references`, `get-citers`, and `get-citer-count` to collect **3–10**
+  exact, normalized candidate IDs and metadata. Include plausible canonical
+  origins, precursors, broader parent domains, and later landmarks. Discovery
+  is date-unbounded. Do not choose a prominent recent paper merely because it
+  matches the requested citer window.
+- Record title, first-public date, citation count, abstract/evidence excerpts,
+  and a provisional role for each field's candidates under
+  `context.json.origin_candidates`. Citation counts in 100–1000 are a soft
+  prior: fewer than 100 can indicate an immature field and more than 1000 can
+  indicate an overly broad parent field. Evidence that a paper named/defined
+  the requested program can override either prior.
+
+Step 5: For every unresolved field, select one canonical origin with one
+durable, closed ARC-LLM task. Build a separate `arc.llm.request.v2` document
+at `<project-dir>/context/domain-origin-selection-<field-id>-request.json`.
+Set its JSON output schema to the exact contents of
+`<skill-dir>/workflows/json/domain-origin-selection.schema.json`, set `repair`
+to `local`, and give the prompt only that field's recorded candidate evidence.
+Require the model to prefer the canonical named-program origin over a
+precursor, broad parent, or later landmark; treat the 100–1000 citation band as
+soft evidence only. Use the template at
+`<skill-dir>/workflows/json/domain-origin-selection.template.json` as the
+field guide, not as an unfilled request.
+
+```bash
+arc-llm generate \
+  --request <project-dir>/context/domain-origin-selection-<field-id>-request.json \
+  --run-root <project-dir>/context/arc-llm \
+  --run-id <origin-selection-run-id>
+```
+
+Before using a response, normalize `selected_paper_id` locally and require it
+to equal one of that field's recorded candidate IDs. Also require every
+`candidate_assessments[].paper_id` to be a recorded candidate ID, and require
+the selected title to match its cached metadata. Reject a hallucinated or
+unverifiable ID; never fetch it as a replacement candidate. Record every
+candidate-evidence set, ARC-LLM run ID, validated selection, and warning in
+`context.json.origin_selections`.
+
+If confidence is below `0.80`, the response has malformed/missing candidate
+coverage, or no candidate is suitable, print `WARNING:` and stop the affected
+field before domain construction. Do not silently choose the most cited,
+newest, or first result.
+
+Replace only each successfully resolved field's temporary seed with its one
+normalized selected foundation. Keep all independent explicit seeds in
+`seed_paper_list`; preserve a different original anchor within that field's
+`origin_selection` record.
 
 ### Phase 2: Build Domain Caches
 
-Distinct ARC domain ids may build concurrently. Do not run duplicate builds for
-the same domain id in parallel; see `manuals/arc-domain.md`.
+Distinct ARC domain IDs may build concurrently. Do not run duplicate builds for
+the same domain ID in parallel; see `manuals/arc-domain.md`.
 
-Step 1: Resolve the domain id for each `<seed-paper>` with the exact
-`<user-intent>`. If multiple entries resolve to the same domain id, keep one
+Step 1: Resolve the domain ID for each normalized build seed with the exact
+`<user-intent>`. If multiple entries resolve to the same domain ID, keep one
 entry for Phase 2 and record the duplicate in `<project-dir>/context.json` or a
-visible workflow note.
+visible workflow note. Link each build seed to its explicit-anchor or validated
+origin-selection record.
 
-Step 2: For each distinct `<seed-paper>` in `seed_paper_list`, start one
-durable domain build. `arc-domain build` owns its own `arc-jobs` run; do not
-wrap it in `arc-jobs submit`.
+Step 2: For each distinct build seed, start one durable domain build.
+`arc-domain build` owns its own `arc-jobs` run; do not wrap it in
+`arc-jobs submit`. For a date-limited field with an explicit or selected
+canonical origin, use v2 fixed-seed/strict-window mode:
 
 ```bash
-arc-domain build <seed-paper> \
+arc-domain build <build-seed-paper> \
   --intent "<user-intent>" \
   --llm-provider <llm_provider> \
   --model <model> \
   --model-tier <model_tier> \
   --workers <workers> \
-  --recent-window-days <recent_window_days>
+  --recent-window-days <recent_window_days> \
+  --foundation-mode fixed-seed \
+  --citer-selection-mode strict-window
 ```
 
 Use exact `--model` only when the context intentionally pins one model.
-When supplied, `--policy '<full-policy-json-document>'` must be a complete
-JSON policy document. Explicit policy flags override it; the CLI persists the
-complete resolved policy. There is no `--refresh` or `--as-of-date` flag.
+The two mode flags promote the request and policy to v2. When supplied,
+`--policy '<full-policy-json-document>'` must be a complete closed policy for
+its declared v1 or v2 schema. With either mode flag, a complete v1 policy is
+promoted by carrying all resolved limits forward; a complete v2 policy is used
+directly, and explicit flags override its matching mode. The CLI persists the
+complete resolved v2 policy. `fixed-seed` prevents foundation-selection
+evidence from retargeting the citer graph. `strict-window` filters direct
+citers by their first-public date before pool caps and ranking. There is no
+`--refresh` or `--as-of-date` flag.
+
+For a non-date-limited legacy field without a fixed-origin requirement, omit
+both mode flags to retain v1's `infer_from_seed` and
+`representative_plus_recent` behavior. Do not reinterpret an existing v1 run
+as a strict-window build.
 
 If several domain IDs are distinct, their builds may run concurrently. Record
 every returned `run_id` and `domain_id`. A paused result must be continued only
@@ -58,7 +155,7 @@ pass the matching document with `--input '<resume-input-json-document>'`. Inspec
 `arc-domain status --run-id <run-id>`, cancel with `arc-domain cancel <run-id>`,
 and validate with `arc-domain validate <run-id>`.
 
-Step 3: Inspect each `arc.command_result.v1` body. Do not treat an exit code
+Step 3: Inspect every `arc.command_result.v1` body. Do not treat an exit code
 alone as success. Continue only when every build has succeeded and published an
 active export generation. If any build is paused, failed, or cancelled, print
 `WARNING:` with the run ID and stop before exporting project-local artifacts.
@@ -71,7 +168,7 @@ For domain package boundaries and `paper_json_pack.json`, see
 Step 1: Derive a safe file prefix:
 
 ```bash
-arc-paper safe-dir-name <seed-paper> --json
+arc-paper safe-dir-name <build-seed-paper>
 ```
 
 Step 2: Read the active export generation by domain ID:
@@ -193,10 +290,13 @@ domain summary should mention both papers briefly instead.
 Step 4: After all distinct domain artifacts have been copied, write the
 project-local domain handoff manifest:
 
-Before running the helper, record each successful build in
+Before running the helper, record every successful build in
 `<project-dir>/context.json` under `domain_records` as objects containing the
-requested `seed_paper` and returned `domain_id`. Do not substitute the selected
-foundation paper for the requested seed; they may differ.
+actual `seed_paper` passed to `arc-domain build` and its returned `domain_id`.
+For a resolved origin, retain its source candidate/evidence in
+`origin_selections`; do not create a second manifest package for the displaced
+candidate. A v1 build may still distinguish its requested seed from the
+builder-selected foundation.
 
 ```bash
 python3 <skill-dir>/workflows/scripts/write-domain-manifest.py \

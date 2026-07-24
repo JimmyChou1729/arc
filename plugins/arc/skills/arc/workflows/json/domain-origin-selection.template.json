@@ -1,0 +1,31 @@
+{
+  "schema_version": "arc.domain_origin_selection.v1",
+  "selected_paper_id": "arXiv:0000.00001",
+  "selected_paper_title": "<title copied from candidate evidence>",
+  "confidence": 0.0,
+  "reasoning": "<why this is the canonical named-program origin, or why evidence is insufficient>",
+  "candidate_assessments": [
+    {
+      "paper_id": "arXiv:0000.00001",
+      "title": "<title copied from candidate evidence>",
+      "role": "canonical_origin",
+      "citation_prior": "within_100_1000",
+      "assessment": "<role and evidence assessment>"
+    },
+    {
+      "paper_id": "arXiv:0000.00002",
+      "title": "<title copied from candidate evidence>",
+      "role": "precursor",
+      "citation_prior": "below_100",
+      "assessment": "<role and evidence assessment>"
+    },
+    {
+      "paper_id": "arXiv:0000.00003",
+      "title": "<title copied from candidate evidence>",
+      "role": "broader_parent",
+      "citation_prior": "above_1000",
+      "assessment": "<role and evidence assessment>"
+    }
+  ],
+  "warnings": []
+}
