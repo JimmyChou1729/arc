@@ -1,169 +1,131 @@
 # Arc Domain Package
 
-`arc-domain` builds cached research-domain artifacts from a seed paper and an
-optional user intent. Use it for foundation-paper and best-reference
-identification, domain paper selection, citation-network graphs, evidence
-packs, and compact field briefings.
+`arc-domain` builds a durable research-domain generation from one seed paper
+and an optional scientific intent. A completed generation contains the graph,
+network HTML, paper JSON pack, evidence pack, and optional domain summary.
 
-Intent affects the domain cache. A different intent string should be treated as
-a different domain selection.
+The domain identity is derived only from the normalized seed paper and trimmed
+intent. The durable run identity also includes the fully resolved policy and
+LLM model selection.
 
-## Concurrency
+## Scope And Data Boundary
 
-Concurrent domain builds are safe when each build targets a distinct ARC domain
-id. ARC writes domain artifacts under per-domain cache directories, MCP
-background jobs use per-job directories, and shared paper caches use atomic
-cache-file replacement. Do not run duplicate builds for the same domain id in
-parallel; keep one build for that domain, or run duplicate-domain rebuilds
-sequentially if `refresh=true`.
+Domain citation data is fixed to INSPIRE. There is no citation-provider
+abstraction, provider selector, query syntax, sort/filter flag, or refresh
+flag. The builder uses the fixed INSPIRE `mostrecent` and `mostcited` citer
+orderings internally, then interleaves and bounds that candidate pool locally.
 
-## Full Build CLI
+`arc-domain` uses the concrete `ArcPaperService` through its domain access
+layer. Metadata and references are separate operations. A graph paper's full
+text is parsed at most once while building a pack; its table of contents and
+conclusion/outlook projection use that same parsed document.
 
-### Phase 1: Initialize or build from a seed paper.
-Step 1: If the user gives an intent, pass it exactly after trimming outer
-whitespace.
-Step 2: Run:
+## Build And Resume
 
-```bash
-arc-domain init <seed-paper> --intent "<user-intent>" --json
-arc-domain llm-build <seed-paper> --intent "<user-intent>" \
-  --recent-window-days <days> --as-of-date <YYYY-MM-DD> --json
-```
+### Phase 1: Start a Build
 
-Use `--domain-id <id>` when resuming a named domain package, `--refresh` to
-refetch deterministic source data, and `--workers <n>` for parallel paper-data
-work. The default recent window is 365 days and `as_of_date` defaults to the
-current UTC date; managed runs freeze both values in `context.json`. A request
-for the last two years uses the exact day count back to the corresponding date
-two calendar years earlier. The context keys are `recent_window_days` and
-`as_of_date`; CLI spelling uses `--recent-window-days` and `--as-of-date`.
-`arc-domain build` is the same full build surface
-with provider/model options exposed.
+Step 1: Use the default policy or prepare a complete closed policy document.
+Without `--policy`, the CLI resolves the current UTC date and the default
+limits before creating the durable run.
 
-### Phase 2: Inspect cached artifacts.
-Step 1: Check status and read outputs.
+Step 2: Run one full build.
 
 ```bash
-arc-domain status <seed-paper> --intent "<user-intent>" --json
-arc-domain get-summary <seed-paper> --intent "<user-intent>" --json
-arc-domain get-graph <seed-paper> --intent "<user-intent>" --json
+arc-domain build <seed-paper> \
+  --intent "<user-intent>" \
+  --recent-window-days 365 \
+  --citer-pool-limit 1000 \
+  --ranked-paper-limit 50 \
+  --graph-node-limit 90 \
+  --llm-provider auto \
+  --model <optional-model> \
+  --model-tier medium \
+  --workers 8 \
+  --cache-root <optional-cache-root>
 ```
 
-Step 2: Report `network.html` when the user wants the graph visualization.
+When supplied, `--policy '<full-policy-json-document>'` must be a complete
+closed policy JSON document. Explicit policy flags override its four selectable
+limits; the persisted request always contains the complete resolved policy.
+`--run-id` may name the durable run explicitly. Build output uses the
+`arc.command_result.v1` envelope and reports the run and domain IDs.
 
-## Incremental CLI
+Do not use `init`, `identify-foundation`, `build-network`, `build-evidence`,
+`build-paper-json-pack`, `summarize`, or any `llm-*` alias. They are not
+supported command surfaces.
 
-Use incremental commands when debugging or when the user asks for an
-intermediate artifact.
+### Phase 2: Resume, Inspect, or Cancel
 
-### Phase 1: Identify the foundation and best-reference papers.
-Step 1: Run:
+Step 1: Resume only the same durable run after a pause.
 
 ```bash
-arc-domain llm-identify-foundation <seed-paper> --intent "<user-intent>" --json
+arc-domain resume <run-id>
+arc-domain cancel <run-id>
+arc-domain validate <run-id>
 ```
 
-The selection contains both `selected_foundation` and `best_reference_paper`.
-Use `selected_foundation` to construct the field from citers. Use
-`best_reference_paper` as the paper an agent should read for methodology and
-follow-up work; it may be the same as the foundation paper.
-
-### Phase 2: Build the network and evidence.
-Step 1: Run:
+If the paused envelope reports `input_required: true`, pass the matching
+`arc_llm` resume document as inline JSON:
 
 ```bash
-arc-domain llm-build-network <seed-paper> --intent "<user-intent>" --json
-arc-domain build-paper-json-pack <seed-paper> --intent "<user-intent>" --json
-arc-domain build-evidence <seed-paper> --intent "<user-intent>" --json
+arc-domain resume <run-id> --input '<resume-input-json-document>'
 ```
 
-### Phase 3: Summarize the domain.
-Step 1: Run:
+Step 2: Inspect a run or the latest run for one domain.
 
 ```bash
-arc-domain llm-summarize <seed-paper> --intent "<user-intent>" --json
+arc-domain status --run-id <run-id>
+arc-domain status --domain-id <domain-id>
 ```
 
-## Optional MCP Tools
+`status --domain-id` resolves the catalog's `latest` run. `get-summary` and
+`get-graph` resolve the catalog's successfully published `active` generation:
 
-Skip this section for normal Skill/CLI workflows. Read `manuals/arc-mcp.md`
-only when the user explicitly installed or requested the MCP companion.
+```bash
+arc-domain get-summary --domain-id <domain-id>
+arc-domain get-graph --domain-id <domain-id>
+```
 
-Domain MCP tools:
+Successful, paused, cancelled, and query commands exit zero; a failed run exits
+one and invalid CLI input exits two.
+
+## Durable Artifacts And Exports
+
+Run-local immutable artifacts are replayed by fixed logical artifact IDs. A
+completed build materializes one export generation only after its source
+artifacts verify. The export manifest is written last.
 
 ```text
-domain_status
-domain_get_summary
-domain_get_graph
-llm_domain_build
-llm_domain_get_summary
-llm_domain_get_graph
+<cache-root>/runs/
+<cache-root>/domains/<domain-id>/catalog.json
+<cache-root>/domains/<domain-id>/exports/<run-id>/
+  graph.json
+  network.html
+  paper-pack.json
+  evidence-pack.json
+  summary.json          # optional
+  summary.md            # optional
+  export-manifest.json  # written last
 ```
 
-### Phase 1: Check cache-only artifacts.
-Step 1: Call `domain_get_summary` or `domain_get_graph`.
-Step 2: If artifacts are missing and the user wants them built, continue.
+The catalog contains only `latest` and `active`. `latest` is the newest created
+run; `active` advances only after a complete export generation is published.
+A delayed older run cannot replace a newer active generation. Publication can
+be retried without rerunning a succeeded durable build.
 
-### Phase 2: Build missing artifacts.
-Step 1: Call `llm_domain_build`, `llm_domain_get_summary`, or
-`llm_domain_get_graph`.
-Step 2: Use `background=true` for slow builds or large job launches.
-Step 3: Follow the background-job procedure in
-`manuals/arc-mcp.md`.
+## Failure Semantics
 
-## Artifacts
+Seed metadata, the foundation citer pool, and final artifact publication are
+essential. Per-paper pack, reference, and noncritical metadata failures are
+collected as structured warnings. An LLM pause pauses the outer build and is
+resumed through the run ID. Exhausted transport or timeout failures use the
+documented deterministic fallback for foundation/network work, or make the
+summary unavailable with a warning. Authentication, quota, rate-limit, and
+provider-unavailable conditions remain paused for external resolution.
 
-The domain cache contains:
+## MCP Status
 
-- `foundation_pool.json`: seed, newest citers, seed references, and witness set.
-- `foundation_candidates.json`: top candidate foundation papers.
-- `foundation_selection.json`: LLM or deterministic foundation and
-  best-reference choices.
-- `citer_pool.json`: merged most-recent and most-cited foundation citers.
-- `selected_papers.json`: papers selected for domain construction.
-- `reference_overlap.json`: common references added to the network.
-- `domain_graph.json`: node/edge graph.
-- `network.html`: static visualization.
-- `evidence_pack.json`: titles, abstracts, and conclusion/outlook text.
-- `domain_summary.json`: compact field briefing.
-- `domain_summary.md`: Markdown rendering of the compact field briefing. It
-  starts with task-focus guidance, brief foundation and best-reference paper
-  mentions, methodology, mathematical opportunities when present, known solved
-  cases, and open axes for new work. Render
-  `mathematical_opportunities.well_defined_problems` under
-  `## Mathematical Opportunities`. Each entry is a bounded,
-  evidence-grounded opportunity card for downstream reasoning, not a complete
-  proposal or a novelty claim. A method marked `external_search_lead` is only
-  a lead for later literature search and validation; it is not a citation,
-  novelty, or applicability claim. The Markdown omits warnings; workflows
-  should append summary warnings to project `self-reflect.md` and `context/domain/warnings.md`, and print visible `WARNING:` messages immediately.
-
-Discover the active cache path:
-
-```bash
-arc-domain status <seed-paper> --intent "<user-intent>" --json
-```
-
-## Package Boundary
-
-The domain build includes the selected papers and recent arXiv papers in the
-configured window. Recency uses the first available public date in this order:
-`published`, `preprint_date`, `earliest_date`, `created`, then the arXiv-id
-month. A later `updated` date never makes an old paper recent. Graph, config,
-and status artifacts record the frozen window, date basis, and counts. Changing
-the window fingerprint rebuilds network, evidence, and summary artifacts while
-preserving the seed-specific package identity.
-
-Project handoff uses `arc.workflow.domain_manifest.v2`. It keeps every
-seed-specific `domain_package_id`, then groups packages into field cards. Only
-`distinct_field` at confidence `0.80` or above creates hard separation;
-uncertain, low-confidence, or failed grouping conservatively merges packages
-and emits a warning. Stable `field_id` values come from package ids and the
-intent fingerprint, not model-generated identifiers.
-
-All single-paper metadata, references, citers, full text, and sections should
-come through `arc-paper`. Do not fetch INSPIRE or ar5iv directly inside domain
-workflows.
-
-`arc-domain` writes `paper_json_pack.json` after fetching the graph papers
-concurrently through the `arc-paper` interface.
+`arc-mcp` is not migrated with this domain interface. Do not use legacy domain
+MCP tools as an alternative to the CLI above. See
+`docs/architecture/core-refactor-downstream-breakage.md` for the explicitly
+deferred adapter migration.

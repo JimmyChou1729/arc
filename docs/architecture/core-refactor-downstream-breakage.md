@@ -4,8 +4,9 @@ This inventory records consumers intentionally left for later migration after
 the `arc-jobs`, `arc-llm`, and `arc-paper` core refactors. It is not a
 compatibility backlog: removed APIs must not be reintroduced as shims.
 
-The migrated package versions are `arc-jobs`, `arc-llm`, and `arc-paper`
-1.0.1. The consumers listed below have not yet been migrated.
+The durable core includes `arc-jobs`, `arc-llm`, `arc-paper`, and the rebuilt
+`arc-domain`. Sections below distinguish migrated surfaces from consumers that
+are intentionally deferred.
 
 ## arc-paper
 
@@ -24,15 +25,17 @@ not read or migrated.
 
 ## arc-domain
 
-- `foundation.py`, `network.py`, and `summary.py` import removed `run_json`
-  and call-record helpers.
-- `test_domain_build.py` imports the removed `arc_llm.json_schema` helper.
-- `llm_safety.py` imports removed `LLMAbortScope` and
-  `failure_disposition`.
-- `service.py` imports the removed `LLMNeedsLLM`.
-- `paper.py` still expects the old `arc-paper` result envelope and calls
-  removed `llm_infer_main_references`, section, and TOC service methods. It
-  must consume typed values/errors and the new parsed-document/workflow APIs.
+`arc-domain` is rebuilt around the durable `arc.domain.build.v1` handler and
+the closed build request/result contracts. It reads no old domain cache, result,
+or durable state. The supported CLI is only `build`, `resume`, `status`,
+`get-summary`, `get-graph`, `cancel`, and `validate`; legacy incremental and
+`llm-*` commands have no compatibility shim.
+
+The build is fixed to INSPIRE and the concrete `ArcPaperService`. It does not
+provide a citation-provider abstraction, provider/query/search selector, or
+refresh surface. Durable run artifacts are published to catalog-controlled
+export generations; consumers must use those exported artifacts or the typed
+domain result rather than old cache paths.
 
 ## arc-typeset
 
@@ -46,6 +49,10 @@ is handled natively by the agent. See
 `local/core-refactor-implementation-2026-07-24/arc-typeset-removal.md`.
 
 ## arc-companion
+
+`arc-companion` is explicitly out of scope for this migration. It still relies
+on the previous service and cache topology and is not required to consume the
+new domain result, catalog, or export layout in this release.
 
 - `cli.py`, `paper_broker.py`, `pipeline.py`, and
   `translation_reference.py` depend on removed paper-access, evidence request,
@@ -64,7 +71,9 @@ is handled natively by the agent. See
 ## arc-mcp
 
 `arc-mcp` is the deliberately retained transitional MCP package and is not part
-of the new core:
+of the new core. It retains the previous domain service/cache dependencies and
+is not migrated to the durable domain CLI, result contracts, catalog, or export
+generations in this release:
 
 - `cli.py` and `jobs.py` import removed `JobManager`/`JobCancelled` and cache
   topology.

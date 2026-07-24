@@ -6,9 +6,12 @@ more seed papers.
 ## Inputs
 
 Read `<project-dir>/context.json`. Use the exact values from that file for all
-ARC calls, especially `user_intent`, `seed_paper_list`, `provider`, `model_tier`,
-`workers`, `refresh`, `recent_window_days`, and `as_of_date`. Default
-`recent_window_days` to `365` and freeze `as_of_date` to the run's UTC date.
+ARC calls, especially `user_intent`, `seed_paper_list`, `llm_provider`,
+`model`, `model_tier`, `workers`, and the closed domain-build policy. Do not
+pass a citation provider, citation query, sort/filter, or refresh option: the
+domain builder is fixed to INSPIRE and owns those internal choices. Default
+`recent_window_days` to `365`. Without a policy document, the CLI resolves the
+current UTC `as_of_date` and all default policy values before persistence.
 For "the last two years", record the exact day count back to the corresponding
 calendar date two years earlier.
 
@@ -29,53 +32,36 @@ Step 1: Resolve the domain id for each `<seed-paper>` with the exact
 entry for Phase 2 and record the duplicate in `<project-dir>/context.json` or a
 visible workflow note.
 
-Step 2: For each distinct `<seed-paper>` in `seed_paper_list`, start a
-protocol-neutral CLI job:
+Step 2: For each distinct `<seed-paper>` in `seed_paper_list`, start one
+durable domain build. `arc-domain build` owns its own `arc-jobs` run; do not
+wrap it in `arc-jobs submit`.
 
 ```bash
-arc-jobs submit --job-type domain_build --cwd <project-dir> --json -- \
-  arc-domain llm-build <seed-paper> \
+arc-domain build <seed-paper> \
   --intent "<user-intent>" \
-  --provider <provider> \
+  --llm-provider <llm_provider> \
+  --model <model> \
   --model-tier <model_tier> \
   --workers <workers> \
-  --recent-window-days <recent_window_days> \
-  --as-of-date <as_of_date> \
-  --json
+  --recent-window-days <recent_window_days>
 ```
 
-Add `--refresh` when `<refresh>` is true.
+Use exact `--model` only when the context intentionally pins one model.
+When supplied, `--policy '<full-policy-json-document>'` must be a complete
+JSON policy document. Explicit policy flags override it; the CLI persists the
+complete resolved policy. There is no `--refresh` or `--as-of-date` flag.
 
-Use exact `model=<model>` only when the context intentionally pins a
-non-`auto` provider.
+If several domain IDs are distinct, their builds may run concurrently. Record
+every returned `run_id` and `domain_id`. A paused result must be continued only
+with `arc-domain resume <run-id>`. When its resume descriptor requires input,
+pass the matching document with `--input '<resume-input-json-document>'`. Inspect progress with
+`arc-domain status --run-id <run-id>`, cancel with `arc-domain cancel <run-id>`,
+and validate with `arc-domain validate <run-id>`.
 
-If there is more than one distinct domain, submit all domain-build
-background jobs before watching any of them. This allows independent domains to
-build concurrently while preserving per-job result inspection.
-
-Step 3: For every background job, take its job ID from the submit response and
-follow the review-cursor loop in `manuals/arc-jobs.md`; do not use a default
-terminal-only watch while an LLM job is active. Watch all launched jobs to a
-terminal result. If the host cannot run jobs concurrently, fall back to
-sequential watching/running without changing the artifact contract.
-
-Domain LLM calls have no absolute runtime limit and stop after 30 minutes with
-no substantive provider output. For each long-running job, begin with
-`arc-jobs watch <job-id> --until-review --after-review-sequence 0 --json`.
-At each 30-minute `review_due`, inspect the latest excerpt and artifacts.
-Concrete results, new evidence, reusable artifacts, or meaningful narrowing
-mean continue: pass the returned `review_sequence` as the next
-`--after-review-sequence` cursor and watch again. Repetitive, erroneous, or
-off-task output means run `arc-jobs cancel <job-id> --json`. A terminal result
-returns normally and ends the loop; never cancel merely because a run is long.
-Override the idle bound only through `--idle-timeout-seconds` or an applicable
-`ARC_*_IDLE_TIMEOUT_SECONDS` environment variable. Explicit cancellation
-remains available throughout.
-
-Step 4: Inspect each returned JSON body. Do not treat command exit code alone
-as success. Continue only when every domain job result is successful. If any
-job failed, was cancelled, or returned `needs_llm`, print `WARNING:` with the
-reason and stop before exporting project-local artifacts.
+Step 3: Inspect each `arc.command_result.v1` body. Do not treat an exit code
+alone as success. Continue only when every build has succeeded and published an
+active export generation. If any build is paused, failed, or cancelled, print
+`WARNING:` with the run ID and stop before exporting project-local artifacts.
 
 For domain package boundaries and `paper_json_pack.json`, see
 `manuals/arc-domain.md`.
@@ -88,12 +74,12 @@ Step 1: Derive a safe file prefix:
 arc-paper safe-dir-name <seed-paper> --json
 ```
 
-Step 2: Read domain artifact paths from the successful build result or from:
+Step 2: Read the active export generation by domain ID:
 
 ```bash
-arc-domain status <seed-paper> --intent "<user-intent>" --json
-arc-domain get-summary <seed-paper> --intent "<user-intent>" --json
-arc-domain get-graph <seed-paper> --intent "<user-intent>" --json
+arc-domain status --domain-id <domain-id>
+arc-domain get-summary --domain-id <domain-id>
+arc-domain get-graph --domain-id <domain-id>
 ```
 
 Step 3: Copy or write project-local files:
@@ -105,13 +91,13 @@ Step 3: Copy or write project-local files:
 <project-dir>/domain/<seed-safe>_paper_json_pack.json
 ```
 
-Use the graph HTML path for the HTML file. Use the domain summary JSON for the
-JSON file. Use the `paper_json_pack` path from the build result or status for
-the paper JSON pack.
+Use the generation's `network.html`, `summary.json`, `summary.md`, and
+`paper-pack.json` files. The generation is
+`<cache-root>/domains/<domain-id>/exports/<run-id>/`; its
+`export-manifest.json` is written last and must exist before copying files.
 
-Use `domain_summary_markdown_path` from the build result or status for the
-Markdown file when available. If it is unavailable, render a concise Markdown
-summary from the domain summary JSON as described below. Do not render
+Use `summary.md` when present. If the summary is unavailable, record its
+structured warning and do not invent a replacement briefing. Do not render
 `report_remarks` after `# <domain_title>`.
 
 Render `task_focus` under the first H2 heading:

@@ -11,8 +11,13 @@ and resolves the executable from the same isolated ARC runtime.
 
 ```bash
 arc-jobs submit --job-type <type> --cwd <project-dir> --json -- \
-  arc-domain llm-build <seed-paper> --intent "<intent>" --json
+  <allowlisted-arc-cli> <command> [arguments]
 ```
+
+`arc-domain build` already owns its durable run, artifact replay, resume, and
+publication. Start it directly with `arc-domain build ...`; do not wrap it in a
+second `arc-jobs submit` job. Use `arc-domain status`, `resume`, `cancel`, and
+`validate` for its run controls.
 
 The accepted response contains `job_id`, `status=job_running`, and
 `ok=true` plus `next.cli_command`. Submit independent jobs before watching them so they can
