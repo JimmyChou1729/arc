@@ -3,10 +3,11 @@ from __future__ import annotations
 import html
 import json
 import math
+from collections.abc import Mapping
 from textwrap import shorten
 from typing import Any
 
-from .cache import DomainPaths, read_json, update_status, write_text
+from ._roles import role_order
 
 
 ROLE_COLORS = {
@@ -23,15 +24,13 @@ ROLE_LABELS = {
 }
 
 
-def render_network_html(*, paths: DomainPaths) -> dict[str, Any]:
-    graph = read_json(paths.domain_graph, {})
-    html_text = _render(graph)
-    write_text(paths.network_html, html_text)
-    update_status(paths, stage="html_done", network_html_path=str(paths.network_html))
-    return {"domain_id": paths.domain_id, "network_html_path": str(paths.network_html)}
+def render_network_html(graph: Mapping[str, Any]) -> str:
+    """Render a domain graph as a self-contained interactive HTML document."""
+
+    return _render(graph)
 
 
-def _render(graph: dict[str, Any]) -> str:
+def _render(graph: Mapping[str, Any]) -> str:
     nodes = graph.get("nodes") or []
     edges = graph.get("edges") or []
     data = {"nodes": _vis_nodes(nodes), "edges": _vis_edges(edges)}
@@ -325,11 +324,10 @@ def _ranked_row(node: dict[str, Any]) -> str:
 
 
 def _node_rank_key(node: dict[str, Any]) -> tuple[int, float, int]:
-    role_order = {"selected_foundation": 0, "parent_foundation": 1, "common_reference": 2, "domain_paper": 3}
     score_raw = node.get("domain_score")
     score = float(score_raw if score_raw is not None else (node.get("support_count") or 0))
     citations = int(node.get("citation_count") or 0)
-    return (role_order.get(node.get("role"), 9), -score, -citations)
+    return (role_order(node.get("role")), -score, -citations)
 
 
 def _vis_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:

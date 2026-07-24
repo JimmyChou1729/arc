@@ -18,6 +18,7 @@ from .contracts import (
     encode_domain_build_warning,
 )
 from .paths import domain_id_for
+from .render import render_network_html
 
 __all__ = [
     "DOMAIN_BUILD_POLICY_SCHEMA_VERSION",
@@ -36,4 +37,5 @@ __all__ = [
     "encode_domain_build_request",
     "encode_domain_build_result",
     "encode_domain_build_warning",
+    "render_network_html",
 ]

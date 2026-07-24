@@ -5,13 +5,8 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from arc_llm import run_json
-from arc_llm.call_record import ARC_LLM_CALL_RECORD_FIELD, ARC_LLM_CALL_RECORD_SCHEMA
-from arc_paper.ids import arxiv_path_id, normalize_paper_id
+from arc_paper import arxiv_path_id, normalize_paper_id
 
-from . import paper
-from .cache import DomainPaths, now_iso, read_json, update_status, write_json
-from .llm_safety import raise_if_llm_fatal
 from .text import citation_per_year, log_score, paper_key, token_overlap_score
 
 
@@ -24,7 +19,6 @@ INTENT_RANKING_SCHEMA: dict[str, Any] = {
     "properties": {
         "ranked_paper_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
         "reasoning": {"type": "string"},
-        ARC_LLM_CALL_RECORD_FIELD: ARC_LLM_CALL_RECORD_SCHEMA,
     },
 }
 CITATION_RATE_WEIGHT = 0.1
@@ -36,149 +30,28 @@ RECENT_ARXIV_WINDOW_DAYS = 365
 MAX_GRAPH_PAPER_COUNT = 90
 
 
-def _domain_llm_recovered(payload: dict[str, Any]) -> bool:
-    record = payload.get(ARC_LLM_CALL_RECORD_FIELD) if isinstance(payload, dict) else None
-    if not isinstance(record, dict):
-        return False
-    structured = record.get("structured_output")
-    return isinstance(structured, dict) and structured.get("mode") == "recovered"
-
-
-def build_network(
+def merge_citer_pool(
+    foundation_id: str,
     *,
-    seed_paper: str,
-    intent: str,
-    paths: DomainPaths,
-    provider: str = "auto",
-    model: str | None = None,
-    model_tier: str | None = None,
-    refresh: bool = False,
-    workers: int = 8,
-    max_citers: int = 1000,
-    selected_count: int = 50,
-    max_nodes: int = 60,
-    recent_window_days: int = RECENT_ARXIV_WINDOW_DAYS,
-    as_of_date: date | None = None,
-) -> dict[str, Any]:
-    update_status(paths, stage="network_started")
-    selection = read_json(paths.foundation_selection, {})
-    selected_foundation = selection.get("selected_foundation") or {}
-    foundation_id = normalize_paper_id(selected_foundation.get("paper_id") or seed_paper)
-    foundation_meta = paper.metadata(foundation_id, refresh=refresh)
-    _copy_selection_metadata(foundation_meta, selected_foundation)
+    most_recent: list[dict[str, Any]],
+    most_cited: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Interleave fixed INSPIRE rankings into one bounded deduplicated pool."""
 
-    citer_pool = _merged_citers(foundation_id, refresh=refresh, limit=max_citers)
-    write_json(
-        paths.citer_pool,
-        {
-            "schema_version": "arc.domain_citer_pool.v1",
-            "foundation_paper": foundation_id,
-            "citers": citer_pool,
-            "created_at": now_iso(),
-        },
-    )
-
-    intent_ranking = _rank_by_intent(citer_pool, intent=intent, provider=provider, model=model, model_tier=model_tier)
-    write_json(paths.intent_rankings, intent_ranking)
-
-    parent_foundation_ids = _parent_foundation_ids(selection.get("parent_foundations") or [])
-    reserved_node_count = 1 + len(parent_foundation_ids)
-    selected = _select_domain_papers(
-        citer_pool,
-        foundation_id=foundation_id,
-        intent_ranking=intent_ranking,
-        intent=intent,
-        selected_count=selected_count,
-        max_total=max(0, MAX_GRAPH_PAPER_COUNT - reserved_node_count),
-        recent_window_days=recent_window_days,
-        as_of_date=as_of_date,
-    )
-
-    selected_ids = [item["paper_id"] for item in selected]
-    refs_by_selected = paper.fetch_many(
-        selected_ids,
-        lambda paper_id: paper.references(paper_id, refresh=refresh, enrich=False),
-        workers=workers,
-    )
-    selected = _add_in_graph_citer_scores(selected, refs_by_selected=refs_by_selected)
-    selected_ids = [item["paper_id"] for item in selected]
-    common_refs = _common_references(
-        foundation_id=foundation_id,
-        selected_ids=selected_ids,
-        refs_by_selected=refs_by_selected,
-        max_extra=max(0, min(max_nodes, MAX_GRAPH_PAPER_COUNT) - reserved_node_count - len(selected)),
-        refresh=refresh,
-        workers=workers,
-    )
-    write_json(
-        paths.reference_overlap,
-        {
-            "schema_version": "arc.domain_reference_overlap.v1",
-            "selected_papers": selected_ids,
-            "common_references": common_refs,
-            "created_at": now_iso(),
-        },
-    )
-
-    parent_foundations = _enrich_parent_foundations(
-        selection.get("parent_foundations") or [],
-        refresh=refresh,
-        workers=workers,
-    )
-    selected = _add_reference_edge_scores(
-        selected,
-        foundation_id=foundation_id,
-        parent_foundations=parent_foundations,
-        common_references=common_refs,
-        refs_by_selected=refs_by_selected,
-    )
-    selected_ids = [item["paper_id"] for item in selected]
-    write_json(
-        paths.selected_papers,
-        {
-            "schema_version": "arc.domain_selected_papers.v1",
-            "foundation_paper": foundation_id,
-            "papers": selected,
-            "created_at": now_iso(),
-        },
-    )
-    graph = _build_graph(
-        foundation=foundation_meta,
-        parent_foundations=parent_foundations,
-        selected_papers=selected,
-        common_references=common_refs,
-        refs_by_selected=refs_by_selected,
-        intent=intent,
-        recent_window_days=recent_window_days,
-        as_of_date=as_of_date,
-    )
-    write_json(paths.domain_graph, graph)
-    update_status(paths, stage="network_done", node_count=len(graph["nodes"]), edge_count=len(graph["edges"]), recency=graph["recency"])
-    return {
-        "domain_id": paths.domain_id,
-        "foundation_paper": foundation_id,
-        "citer_pool_size": len(citer_pool),
-        "selected_paper_count": len(selected),
-        "node_count": len(graph["nodes"]),
-        "edge_count": len(graph["edges"]),
-        "graph_path": str(paths.domain_graph),
-        "selected_papers_path": str(paths.selected_papers),
-        "reference_overlap_path": str(paths.reference_overlap),
-        "graph": graph,
-        "recency": graph["recency"],
-    }
-
-
-def _merged_citers(foundation_id: str, *, refresh: bool, limit: int) -> list[dict[str, Any]]:
-    if limit <= 0:
-        return []
-    recent = paper.citers(foundation_id, refresh=refresh, limit=limit, sort="mostrecent")
-    cited = paper.citers(foundation_id, refresh=refresh, limit=limit, sort="mostcited")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("limit must be a positive integer")
+    foundation_id = normalize_paper_id(foundation_id)
     merged: dict[str, dict[str, Any]] = {}
     source_ids: dict[str, list[str]] = {"mostrecent": [], "mostcited": []}
-    for source, items in (("mostrecent", recent), ("mostcited", cited)):
+    for source, items in (
+        ("mostrecent", most_recent),
+        ("mostcited", most_cited),
+    ):
         seen_in_source: set[str] = set()
         for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
             paper_id = normalize_paper_id(paper_key(item))
             if not paper_id or paper_id == foundation_id:
                 continue
@@ -224,16 +97,13 @@ def _merged_citers(foundation_id: str, *, refresh: bool, limit: int) -> list[dic
     return ordered
 
 
-def _rank_by_intent(
+def intent_ranking_prompt(
     citer_pool: list[dict[str, Any]],
     *,
     intent: str,
-    provider: str,
-    model: str | None,
-    model_tier: str | None = None,
-) -> dict[str, Any]:
-    if not intent.strip():
-        return {"schema_version": "arc.domain_intent_ranking.v1", "ranked_paper_ids": [], "reasoning": "no intent supplied"}
+) -> str:
+    """Build the strict intent-ranking prompt without invoking an LLM."""
+
     shortlist = sorted(
         citer_pool,
         key=lambda item: (
@@ -252,7 +122,7 @@ def _rank_by_intent(
         }
         for item in shortlist
     ]
-    prompt = "\n\n".join(
+    return "\n\n".join(
         [
             "Rank up to 10 papers whose titles and abstracts best match the user's research intent.",
             "Return only IDs from the supplied list. Prefer scientifically specific matches over generic review papers.",
@@ -261,45 +131,76 @@ def _rank_by_intent(
             "Return JSON only.",
         ]
     )
-    try:
-        result = run_json(
-            prompt,
-            schema=INTENT_RANKING_SCHEMA,
-            provider=provider,
-            model=model,
-            model_tier=model_tier,
-            output_recovery="warn",
+
+
+def normalize_intent_ranking(
+    payload: dict[str, Any],
+    *,
+    citer_pool: list[dict[str, Any]],
+    method: str = "llm",
+) -> dict[str, Any]:
+    """Filter a strict LLM ranking to IDs present in the acquired pool."""
+
+    raw_ids = payload.get("ranked_paper_ids")
+    if not isinstance(raw_ids, list):
+        raise ValueError("ranked_paper_ids must be an array")
+    valid = {str(item.get("paper_id") or "") for item in citer_pool}
+    ranked: list[str] = []
+    for item in raw_ids:
+        if not isinstance(item, str):
+            raise ValueError("ranked_paper_ids entries must be strings")
+        paper_id = normalize_paper_id(item)
+        if paper_id in valid and paper_id not in ranked:
+            ranked.append(paper_id)
+    reasoning = payload.get("reasoning")
+    if not isinstance(reasoning, str):
+        raise ValueError("reasoning must be a string")
+    return {
+        "schema_version": "arc.domain_intent_ranking.v1",
+        "ranked_paper_ids": ranked[:10],
+        "reasoning": reasoning,
+        "method": method,
+    }
+
+
+def deterministic_intent_ranking(
+    citer_pool: list[dict[str, Any]],
+    *,
+    intent: str,
+    reason: str = "LLM intent ranking unavailable",
+) -> dict[str, Any]:
+    """Return the stable lexical fallback for intent ranking."""
+
+    if not intent.strip():
+        ranked: list[str] = []
+        reason = "No research intent supplied."
+    else:
+        shortlist = sorted(
+            citer_pool,
+            key=lambda item: (
+                token_overlap_score(
+                    f"{item.get('title', '')} {item.get('abstract', '')}",
+                    intent,
+                ),
+                int(item.get("citation_count") or 0),
+            ),
+            reverse=True,
         )
-        raw_ids = result.get("ranked_paper_ids", [])
-        id_warning = ""
-        if not isinstance(raw_ids, list):
-            id_warning = "ranked_paper_ids was not a list; ignored malformed LLM ranking ids."
-            raw_ids = []
-        ids = [normalize_paper_id(item) for item in raw_ids if item]
-        valid = {item["paper_id"] for item in citer_pool}
-        recovered = _domain_llm_recovered(result)
-        ranking = {
-            "schema_version": "arc.domain_intent_ranking.v1",
-            "ranked_paper_ids": [item for item in ids if item in valid][:10],
-            "reasoning": "\n".join(item for item in [str(result.get("reasoning") or ""), id_warning] if item),
-            "method": "llm_relaxed" if recovered or id_warning else "llm",
-        }
-        if isinstance(result.get(ARC_LLM_CALL_RECORD_FIELD), dict):
-            ranking[ARC_LLM_CALL_RECORD_FIELD] = result[ARC_LLM_CALL_RECORD_FIELD]
-        return ranking
-    except Exception as exc:
-        raise_if_llm_fatal(exc)
         ranked = [
-            item["paper_id"]
+            str(item["paper_id"])
             for item in shortlist
-            if token_overlap_score(f"{item.get('title', '')} {item.get('abstract', '')}", intent) > 0
+            if token_overlap_score(
+                f"{item.get('title', '')} {item.get('abstract', '')}",
+                intent,
+            )
+            > 0
         ][:10]
-        return {
-            "schema_version": "arc.domain_intent_ranking.v1",
-            "ranked_paper_ids": ranked,
-            "reasoning": f"deterministic lexical fallback after LLM failure: {exc}",
-            "method": "deterministic_fallback",
-        }
+    return {
+        "schema_version": "arc.domain_intent_ranking.v1",
+        "ranked_paper_ids": ranked,
+        "reasoning": reason,
+        "method": "deterministic_fallback",
+    }
 
 
 def _select_domain_papers(
@@ -527,8 +428,7 @@ def _common_references(
     selected_ids: list[str],
     refs_by_selected: dict[str, Any],
     max_extra: int,
-    refresh: bool,
-    workers: int,
+    metadata_by_id: dict[str, Any],
 ) -> list[dict[str, Any]]:
     selected_set = {normalize_paper_id(item) for item in selected_ids}
     selected_set.add(normalize_paper_id(foundation_id))
@@ -552,11 +452,6 @@ def _common_references(
         for ref_id, count in sorted(counts.items(), key=lambda item: (item[1], item[0]), reverse=True)
         if count >= 2
     ][:max_extra]
-    metadata_by_id = paper.fetch_many(
-        top_ids,
-        lambda paper_id: paper.metadata(paper_id, refresh=refresh),
-        workers=workers,
-    )
     common = []
     for ref_id in top_ids:
         meta = metadata_by_id.get(ref_id)
@@ -581,15 +476,8 @@ def _common_references(
 def _enrich_parent_foundations(
     parent_foundations: list[dict[str, Any]],
     *,
-    refresh: bool,
-    workers: int,
+    metadata_by_id: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    ids = [normalize_paper_id(paper_key(item)) for item in parent_foundations if paper_key(item)]
-    metadata_by_id = paper.fetch_many(
-        ids,
-        lambda paper_id: paper.metadata(paper_id, refresh=refresh),
-        workers=workers,
-    )
     enriched = []
     for item in parent_foundations:
         parent_id = normalize_paper_id(paper_key(item))
@@ -610,12 +498,14 @@ def _enrich_parent_foundations(
 
 def _build_graph(
     *,
+    domain_id: str,
     foundation: dict[str, Any],
     parent_foundations: list[dict[str, Any]],
     selected_papers: list[dict[str, Any]],
     common_references: list[dict[str, Any]],
     refs_by_selected: dict[str, Any],
     intent: str,
+    created_at: str,
     recent_window_days: int = RECENT_ARXIV_WINDOW_DAYS,
     as_of_date: date | None = None,
 ) -> dict[str, Any]:
@@ -651,11 +541,12 @@ def _build_graph(
     included = sum(bool(item.get("recent_arxiv")) for item in selected_papers)
     return {
         "schema_version": "arc.domain_graph.v1",
+        "domain_id": domain_id,
         "intent": intent,
         "foundation_paper": foundation_id,
         "nodes": list(nodes.values()),
         "edges": edges,
-        "created_at": now_iso(),
+        "created_at": created_at,
         "recency": {
             "window_days": recent_window_days,
             "start_date": (current - timedelta(days=recent_window_days)).isoformat(),

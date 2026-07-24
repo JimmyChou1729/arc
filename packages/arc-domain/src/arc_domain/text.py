@@ -3,10 +3,9 @@ from __future__ import annotations
 import math
 import re
 import hashlib
-from collections import Counter
 from typing import Iterable
 
-from arc_paper.ids import arxiv_path_id, doi_value, inspire_recid, normalize_paper_id
+from arc_paper import arxiv_path_id, extract_paper_ids, normalize_paper_id
 
 
 STOPWORDS = {
@@ -75,7 +74,9 @@ def stable_paper_id(identifier: object) -> str:
     if identifier is None:
         return ""
     normalized = normalize_paper_id(str(identifier))
-    if arxiv_path_id(normalized) or doi_value(normalized) or inspire_recid(normalized):
+    if arxiv_path_id(normalized):
+        return normalized
+    if extract_paper_ids(normalized) == [normalized]:
         return normalized
     return ""
 
@@ -94,10 +95,6 @@ def normalize_authors(authors: Iterable[str] | None, *, limit: int = 5) -> str:
     if len(values) <= limit:
         return ", ".join(values)
     return f"{values[0]} et al."
-
-
-def top_counts(counter: Counter[str], *, limit: int) -> list[tuple[str, int]]:
-    return sorted(counter.items(), key=lambda item: (item[1], item[0]), reverse=True)[:limit]
 
 
 def log_score(value: int | float) -> float:
