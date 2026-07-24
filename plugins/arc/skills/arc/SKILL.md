@@ -100,7 +100,7 @@ not optional.
 
 ## CLI Resolution
 
-Use `arc-paper`, `arc-domain`, `arc-llm`, `arc-typeset`, `arc-companion`, and
+Use `arc-paper`, `arc-domain`, `arc-llm`, `arc-companion`, and
 `arc-jobs` directly when the host plugin exposes them on `PATH`. For a
 standalone Skill install, or when a bare command is unavailable, invoke the
 same command through:

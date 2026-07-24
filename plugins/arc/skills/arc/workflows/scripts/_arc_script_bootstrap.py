@@ -19,7 +19,6 @@ ARC_PACKAGE_MODULES = (
     ("arc-llm", "arc_llm"),
     ("arc-paper", "arc_paper"),
     ("arc-domain", "arc_domain"),
-    ("arc-typeset", "arc_typeset"),
     ("arc-companion", "arc_companion"),
 )
 ARC_PACKAGES = tuple(package for package, _module in ARC_PACKAGE_MODULES)

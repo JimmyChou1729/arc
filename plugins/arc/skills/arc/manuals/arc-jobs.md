@@ -90,16 +90,8 @@ terminal failure instead of risking duplicate work.
 
 ## Markdown Report Export
 
-Start report conversion as a background CLI job:
-
-```bash
-arc-jobs submit --job-type md2pdf --cwd <project-dir> --json -- \
-  arc-typeset md2pdf <project-dir>/<report>.md --json
-```
-
-The report-export gate is satisfied after the job is accepted. Do not wait for
-PDF completion unless the owning workflow explicitly requires it. Record the
-job id in the current host/run log or next mutable workflow artifact. If job
-submission fails, print `WARNING:` with the exact error and continue according
-to the owning workflow; do not debug Pandoc or TeX unless the user requested
-that work.
+Convert a report to PDF with the canonical Pandoc/XeLaTeX command in
+`rules/math_typeset.md` (PDF Export section), run as an ordinary blocking
+command. On failure, print `WARNING:` with the exact error and continue
+according to the owning workflow; do not debug Pandoc or TeX unless the user
+requested that work.

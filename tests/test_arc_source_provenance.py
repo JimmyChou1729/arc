@@ -40,7 +40,6 @@ def _make_fake_repo(tmp_path: Path, label: str) -> Path:
         ("arc-llm", "arc_llm"),
         ("arc-paper", "arc_paper"),
         ("arc-domain", "arc_domain"),
-        ("arc-typeset", "arc_typeset"),
         ("arc-companion", "arc_companion"),
     ):
         module_dir = root / "packages" / package / "src" / module
@@ -449,7 +448,6 @@ def test_source_runtime_verifier_records_current_checkout(tmp_path):
         "arc_jobs",
         "arc_paper",
         "arc_domain",
-        "arc_typeset",
         "arc_companion",
     }
     for details in record["modules"].values():

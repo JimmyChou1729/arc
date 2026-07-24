@@ -29,3 +29,18 @@ note-check reports.
   `blocked_for_user`, and verbatim source text that is intentionally not being
   rendered as math.
 
+
+## PDF Export
+
+Export a user-facing Markdown report to PDF with Pandoc and XeLaTeX:
+
+```bash
+pandoc <report>.md -o <report>.pdf --pdf-engine=xelatex \
+  --resource-path=<report-dir>:. \
+  -V geometry:margin=1.5cm \
+  -V mainfont="Noto Sans CJK SC" \
+  -V CJKmainfont="Noto Sans CJK SC"
+```
+
+Requires `pandoc`, `xelatex`, and a CJK-capable font; allow up to 600 seconds.
+The resource path must include the report's directory so images resolve.

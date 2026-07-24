@@ -15,7 +15,6 @@ dependencies = [
   "arc-jobs>=1.0.1,<1.1",
   "arc-llm>=1.0.1,<1.1",
   "arc-paper>=1.0.1,<1.1",
-  "arc-typeset>=1.0.1,<1.1",
   "mcp>=1.0",
   "pydantic>=2"
 ]

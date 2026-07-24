@@ -36,7 +36,14 @@ not read or migrated.
 
 ## arc-typeset
 
-- `translate.py` imports removed `arc_llm.runner.run_json`.
+Package removed on 2026-07-24: reuse was limited to the retiring arc-mcp
+adapter and episodic CLI calls, and document-producing packages
+(arc-companion, arc-domain) build their own integrated rendering/translation
+pipelines, so the generic typesetting abstraction had no reuse potential.
+Standalone Markdown-to-PDF is preserved as the canonical Pandoc/XeLaTeX
+command in `plugins/arc/skills/arc/rules/math_typeset.md`; report translation
+is handled natively by the agent. See
+`local/core-refactor-implementation-2026-07-24/arc-typeset-removal.md`.
 
 ## arc-companion
 
