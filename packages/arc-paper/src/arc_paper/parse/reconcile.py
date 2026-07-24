@@ -1,0 +1,402 @@
+from __future__ import annotations
+
+import re
+import unicodedata
+from collections.abc import Iterable
+from typing import Any
+
+from ..sources import (
+    ReconciliationEntry,
+    ReconciliationStatus,
+    SourceArtifact,
+    SourceFormat,
+)
+from .models import MathSpan, ParsedDocument, VisualPageReviewInput
+
+
+RICH_FORMATS = {SourceFormat.HTML, SourceFormat.MARKDOWN, SourceFormat.TEX}
+
+
+def reconcile_validator(
+    primary: ParsedDocument,
+    validator: ParsedDocument,
+) -> tuple[tuple[ReconciliationEntry, ...], tuple[str, ...]]:
+    """Compare one validator independently without modifying the primary."""
+
+    if validator.source.source_format is SourceFormat.PDF:
+        return _reconcile_pdf(primary, validator)
+    if validator.source.source_format in RICH_FORMATS:
+        return _reconcile_rich(primary, validator)
+    return (
+        (
+            _entry(
+                validator.source,
+                ReconciliationStatus.UNREVIEWED,
+                "validator",
+                "validator format has no deterministic reconciler",
+            ),
+        ),
+        (f"{validator.source.source_format.value} validator was not reviewed",),
+    )
+
+
+def build_visual_page_review_inputs(
+    primary: ParsedDocument,
+    pdf_validator: ParsedDocument,
+) -> tuple[VisualPageReviewInput, ...]:
+    """Build one visual-review descriptor per PDF page, including empty pages."""
+
+    if pdf_validator.source.source_format is not SourceFormat.PDF:
+        raise ValueError("visual review input requires a parsed PDF validator")
+    return tuple(
+        VisualPageReviewInput(
+            primary=primary.source,
+            pdf_validator=pdf_validator.source,
+            page_number=page.page_number,
+            math_spans=primary.math_spans,
+        )
+        for page in pdf_validator.pages
+    )
+
+
+def _reconcile_rich(
+    primary: ParsedDocument, validator: ParsedDocument
+) -> tuple[tuple[ReconciliationEntry, ...], tuple[str, ...]]:
+    entries: list[ReconciliationEntry] = []
+    warnings: list[str] = []
+    primary_titles = [_fingerprint(item.title) for item in primary.sections]
+    validator_titles = [_fingerprint(item.title) for item in validator.sections]
+    if primary_titles == validator_titles:
+        entries.append(
+            _entry(
+                validator.source,
+                ReconciliationStatus.VERIFIED,
+                "structure",
+                "validator section order and titles agree with the primary",
+                section_count=len(primary_titles),
+            )
+        )
+    else:
+        entries.append(
+            _entry(
+                validator.source,
+                ReconciliationStatus.MISMATCH,
+                "structure",
+                "validator section structure differs from the primary",
+                primary_titles=primary_titles,
+                observed_titles=validator_titles,
+            )
+        )
+        warnings.append(
+            f"{validator.source.source_format.value} validator structure differs from primary"
+        )
+
+    unmatched = set(range(len(validator.math_spans)))
+    equal_span_counts = len(primary.math_spans) == len(validator.math_spans)
+    for ordinal, span in enumerate(primary.math_spans):
+        entry, matched = _match_rich_span(
+            span,
+            ordinal,
+            validator.math_spans,
+            unmatched,
+            validator.source,
+            equal_span_counts=equal_span_counts,
+        )
+        entries.append(entry)
+        unmatched.difference_update(matched)
+        if entry.status is not ReconciliationStatus.VERIFIED:
+            warnings.append(f"validator math conflict for {span.span_id}: {entry.status.value}")
+    for index in sorted(unmatched):
+        observed = validator.math_spans[index]
+        entries.append(
+            _entry(
+                validator.source,
+                ReconciliationStatus.MISMATCH,
+                f"validator:{observed.span_id}",
+                "validator contains mathematical content not matched to the primary",
+                observed_tex=observed.normalized_tex,
+                observed_kind=observed.kind.value,
+                observed_position=_position(observed),
+            )
+        )
+        warnings.append(f"validator contains unmatched math {observed.span_id}")
+    return tuple(entries), tuple(warnings)
+
+
+def _match_rich_span(
+    primary: MathSpan,
+    ordinal: int,
+    candidates: tuple[MathSpan, ...],
+    unmatched: set[int],
+    validator: SourceArtifact,
+    *,
+    equal_span_counts: bool,
+) -> tuple[ReconciliationEntry, set[int]]:
+    same_label = {
+        index
+        for index in unmatched
+        if primary.source_label
+        and candidates[index].source_label
+        and candidates[index].source_label == primary.source_label
+    }
+    same_tex = {
+        index
+        for index in unmatched
+        if _math_fingerprint(candidates[index].normalized_tex)
+        == _math_fingerprint(primary.normalized_tex)
+    }
+    same_kind_tex = {
+        index for index in same_tex if candidates[index].kind is primary.kind
+    }
+    selected = same_label or same_kind_tex or same_tex
+    method = "source_label" if same_label else ("kind_and_math" if same_kind_tex else "math")
+    if len(selected) > 1:
+        context_matches = {
+            index
+            for index in selected
+            if _context_fingerprint(candidates[index])
+            and _context_fingerprint(candidates[index]) == _context_fingerprint(primary)
+        }
+        if len(context_matches) == 1:
+            selected = context_matches
+            method += "_and_context"
+    if len(selected) > 1:
+        return (
+            _entry(
+                validator,
+                ReconciliationStatus.AMBIGUOUS,
+                primary.span_id,
+                "multiple validator math spans match the primary",
+                primary_tex=primary.normalized_tex,
+                candidate_span_ids=[candidates[index].span_id for index in sorted(selected)],
+                matching_method=method,
+            ),
+            set(),
+        )
+    if len(selected) == 1:
+        index = next(iter(selected))
+        observed = candidates[index]
+        if _math_fingerprint(observed.normalized_tex) == _math_fingerprint(
+            primary.normalized_tex
+        ):
+            return (
+                _entry(
+                    validator,
+                    ReconciliationStatus.VERIFIED,
+                    primary.span_id,
+                    "validator mathematical content agrees with the primary",
+                    observed_span_id=observed.span_id,
+                    observed_tex=observed.normalized_tex,
+                    observed_position=_position(observed),
+                    matching_method=method,
+                ),
+                {index},
+            )
+        return (
+            _entry(
+                validator,
+                ReconciliationStatus.MISMATCH,
+                primary.span_id,
+                "validator label matches but mathematical content differs",
+                primary_tex=primary.normalized_tex,
+                observed_span_id=observed.span_id,
+                observed_tex=observed.normalized_tex,
+                matching_method=method,
+            ),
+            {index},
+        )
+    # Stable order is evidence only when both sources expose the same span
+    # count. It may identify a disagreement, but never overwrites the primary.
+    if equal_span_counts and ordinal < len(candidates) and ordinal in unmatched:
+        observed = candidates[ordinal]
+        return (
+            _entry(
+                validator,
+                ReconciliationStatus.MISMATCH,
+                primary.span_id,
+                "validator span at the same sequence position differs",
+                primary_tex=primary.normalized_tex,
+                observed_span_id=observed.span_id,
+                observed_tex=observed.normalized_tex,
+                matching_method="sequence",
+            ),
+            {ordinal},
+        )
+    return (
+        _entry(
+            validator,
+            ReconciliationStatus.MISSING,
+            primary.span_id,
+            "validator contains no deterministic match for primary math",
+            primary_tex=primary.normalized_tex,
+            primary_position=_position(primary),
+        ),
+        set(),
+    )
+
+
+def _reconcile_pdf(
+    primary: ParsedDocument, validator: ParsedDocument
+) -> tuple[tuple[ReconciliationEntry, ...], tuple[str, ...]]:
+    if not bool(validator.metadata.get("text_layer")):
+        message = (
+            "PDF validator has no extractable text layer; deterministic validation is partial"
+        )
+        return (
+            (
+                _entry(
+                    validator.source,
+                    ReconciliationStatus.UNREVIEWED,
+                    "pdf-text-layer",
+                    message,
+                    page_count=len(validator.pages),
+                ),
+            ),
+            (message,),
+        )
+
+    entries: list[ReconciliationEntry] = []
+    warnings: list[str] = []
+    page_fingerprints = [_fingerprint(page.text) for page in validator.pages]
+    for section in primary.sections:
+        title = _fingerprint(section.title)
+        matching_pages = [
+            index
+            for index, page in enumerate(page_fingerprints, 1)
+            if title and title in page
+        ]
+        if len(matching_pages) == 1:
+            status = ReconciliationStatus.VERIFIED
+            message = "primary section title maps to one PDF page"
+        elif not matching_pages:
+            status = ReconciliationStatus.MISSING
+            message = "primary section title was not found in the PDF text layer"
+        else:
+            status = ReconciliationStatus.AMBIGUOUS
+            message = "primary section title maps to multiple PDF pages"
+        entries.append(
+            _entry(
+                validator.source,
+                status,
+                f"section:{section.section_id}",
+                message,
+                page_candidates=matching_pages,
+                title=section.title,
+            )
+        )
+        if status is not ReconciliationStatus.VERIFIED:
+            warnings.append(
+                f"PDF section evidence {status.value} for {section.section_id}"
+            )
+
+    raw_pages = [page.text for page in validator.pages]
+    for span in primary.math_spans:
+        pages_by_label = _pages_for_printed_label(raw_pages, span.source_label)
+        pages_by_math = _pages_for_math(raw_pages, span.normalized_tex)
+        matching_pages = sorted(set(pages_by_label or pages_by_math))
+        method = "printed_number" if pages_by_label else "normalized_math"
+        if len(matching_pages) == 1:
+            status = ReconciliationStatus.VERIFIED
+            message = "PDF text layer provides deterministic math evidence"
+        elif len(matching_pages) > 1:
+            status = ReconciliationStatus.AMBIGUOUS
+            message = "PDF math evidence occurs on multiple pages"
+        else:
+            status = ReconciliationStatus.UNREVIEWED
+            message = "PDF text layer does not provide deterministic evidence for this span"
+        provenance: dict[str, Any] = {
+            "page_candidates": matching_pages,
+            "matching_method": method if matching_pages else "none",
+        }
+        printed = _printed_number(span.source_label)
+        if printed:
+            provenance["printed_equation_number"] = printed
+        entries.append(
+            _entry(
+                validator.source,
+                status,
+                span.span_id,
+                message,
+                **provenance,
+            )
+        )
+        if status is not ReconciliationStatus.VERIFIED:
+            warnings.append(f"PDF math evidence {status.value} for {span.span_id}")
+    return tuple(entries), tuple(warnings)
+
+
+def _pages_for_printed_label(pages: list[str], label: str) -> list[int]:
+    printed = _printed_number(label)
+    if not printed:
+        return []
+    pattern = re.compile(rf"\(\s*{re.escape(printed)}\s*\)")
+    return [index for index, page in enumerate(pages, 1) if pattern.search(page)]
+
+
+def _printed_number(label: str) -> str:
+    match = re.search(r"(?:^|[^\d])(\d+(?:\.\d+)+|\d+)(?:$|[^\d])", label)
+    return match.group(1) if match else ""
+
+
+def _pages_for_math(pages: list[str], tex: str) -> list[int]:
+    needle = _math_text_fingerprint(tex)
+    if len(needle) < 3:
+        return []
+    return [
+        index
+        for index, page in enumerate(pages, 1)
+        if needle in _math_text_fingerprint(page)
+    ]
+
+
+def _math_text_fingerprint(value: str) -> str:
+    text = unicodedata.normalize("NFKC", value).casefold()
+    text = re.sub(r"\\(?:left|right|mathrm|mathbf|mathcal|operatorname)", "", text)
+    text = re.sub(r"\\([a-zA-Z]+)", r"\1", text)
+    return "".join(re.findall(r"[\w=+\-*/^]", text, flags=re.UNICODE))
+
+
+def _math_fingerprint(value: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value))
+
+
+def _fingerprint(value: str) -> str:
+    return " ".join(
+        re.findall(
+            r"[^\W_]+",
+            unicodedata.normalize("NFKC", value).casefold(),
+            flags=re.UNICODE,
+        )
+    )
+
+
+def _context_fingerprint(span: MathSpan) -> str:
+    return _fingerprint(f"{span.context_before} {span.context_after}")
+
+
+def _position(span: MathSpan) -> dict[str, int]:
+    return {
+        "line_start": span.source_line_start,
+        "column_start": span.source_column_start,
+        "line_end": span.source_line_end,
+        "column_end": span.source_column_end,
+    }
+
+
+def _entry(
+    validator: SourceArtifact,
+    status: ReconciliationStatus,
+    subject_id: str,
+    message: str,
+    **provenance: Any,
+) -> ReconciliationEntry:
+    return ReconciliationEntry(
+        validator=validator,
+        status=status,
+        subject_id=subject_id,
+        message=message,
+        provenance=provenance,
+    )
+
+
+__all__ = ["build_visual_page_review_inputs", "reconcile_validator"]

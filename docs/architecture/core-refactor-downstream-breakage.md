@@ -1,38 +1,38 @@
 # Core Refactor Downstream Breakage Inventory
 
-This inventory records consumers intentionally left for later strangler
-migration after `arc-jobs`, `arc-llm`, and `arc-proposer-reviewer` 1.0.1 became
-stable. It is not a compatibility backlog for the new core: the removed APIs
-must not be reintroduced as shims.
+This inventory records consumers intentionally left for later migration after
+the `arc-jobs`, `arc-llm`, and `arc-paper` core refactors. It is not a
+compatibility backlog: removed APIs must not be reintroduced as shims.
 
-The package versions were unified at 1.0.1, but the implementations listed
-below have not yet been migrated.
+The migrated package versions are `arc-jobs`, `arc-llm`, and `arc-paper`
+1.0.1. The consumers listed below have not yet been migrated.
 
 ## arc-paper
 
-- `arc_paper/batch/runner.py`, `reference_inference.py`, `service.py`, and
-  `summary/providers/{claude_cli,codex_cli,prompt}.py` import the removed
-  `arc_llm.runner` (`run_json`, `resolve_llm_config`).
-- `arc_paper/broker_jobs.py` imports removed `JobManager`, `JobPaths`, raw
-  JSON/progress/lock helpers and `arc_jobs.jobs.restored_environment`; it also
-  imports removed LLM budget and call-checkpoint APIs.
-- `arc_paper/host.py` imports the removed host-selection facade.
-- `arc_paper/reference_inference.py` and
-  `summary/providers/pipeline.py` import removed call-record fields/helpers.
-- `arc_paper/summary/model.py` imports removed model resolution.
-- `arc_paper/summary/providers/base.py` imports the removed
-  `LLMWorkerError`.
-- `arc_paper/summary/providers/{claude_cli,codex_cli,select}.py` import old
-  provider implementations/registry helpers.
-- `arc_paper/worker_cli.py` imports the removed paper-access policy.
+`arc-paper` itself is migrated. Its broker, worker wrapper, session/guard,
+runtime context, private execution context, SQLite batch runner, summary
+checkpoint/provider adapters, legacy cache control plane, duplicate parsers,
+and arXiv TeX source provider were deleted. The supported core is the
+content-addressed source repository, provider acquisition, unified parser and
+reconciler, deterministic typed full-text/equation search, optional full-page
+visual review, typed workflow handlers, and the filtered operation registry.
+
+Downstream consumers must migrate from old result envelopes and paper-specific
+worker commands to typed Python values, `arc.command_result.v1`, and
+`arc-jobs` run controls. Old cache and checkpoint state remains in place but is
+not read or migrated.
 
 ## arc-domain
 
 - `foundation.py`, `network.py`, and `summary.py` import removed `run_json`
   and call-record helpers.
+- `test_domain_build.py` imports the removed `arc_llm.json_schema` helper.
 - `llm_safety.py` imports removed `LLMAbortScope` and
   `failure_disposition`.
 - `service.py` imports the removed `LLMNeedsLLM`.
+- `paper.py` still expects the old `arc-paper` result envelope and calls
+  removed `llm_infer_main_references`, section, and TOC service methods. It
+  must consume typed values/errors and the new parsed-document/workflow APIs.
 
 ## arc-typeset
 
@@ -63,6 +63,9 @@ of the new core:
   topology.
 - `server.py` imports removed jobs CLI command generation, host/provider
   diagnostics and old LLM config.
+- `server.py` also imports removed `arc_paper.batch` and
+  `arc_paper.summary.model` modules, calls removed paper summary/parse/TOC/
+  section/full-text operations, and expects the old paper result envelopes.
 - `worker.py` imports the removed detached jobs worker.
 
 The package will be retired only in the later migration stage, together with

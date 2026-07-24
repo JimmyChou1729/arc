@@ -1,0 +1,288 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import multiprocessing
+import errno
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
+from arc_paper import _file_lock
+from arc_paper import (
+    ParseOutcome,
+    ReconciliationReport,
+    SourceBundle,
+    SourceFormat,
+    SourceOrigin,
+    SourceOriginKind,
+    SourceRepository,
+    SourceRepositoryError,
+    ValidationPolicy,
+)
+
+
+class _FakeMsvcrt:
+    LK_NBLCK = 1
+    LK_UNLCK = 2
+
+    def __init__(self, *, failures=0):
+        self.calls = []
+        self.failures = failures
+
+    def locking(self, descriptor, operation, size):
+        self.calls.append((descriptor, operation, size))
+        if operation == self.LK_NBLCK and self.failures:
+            self.failures -= 1
+            raise PermissionError(errno.EACCES, "lock is held")
+
+
+def _store_from_process(cache_root, ready, results):
+    ready.wait(timeout=10)
+    repository = SourceRepository(cache_root)
+    artifact = repository.store_bytes(
+        b"same process-safe source",
+        source_format=SourceFormat.MARKDOWN,
+        origin=SourceOrigin(
+            SourceOriginKind.REMOTE_PROVIDER,
+            provider="process-fixture",
+        ),
+    )
+    results.put(artifact.content_identity)
+
+
+@pytest.mark.parametrize(
+    ("name", "source_format", "payload", "media_type"),
+    [
+        ("paper.html", SourceFormat.HTML, b"<p>paper</p>", "text/html"),
+        ("paper.md", SourceFormat.MARKDOWN, b"# Paper\n", "text/markdown"),
+        ("paper.tex", SourceFormat.TEX, b"\\section{Paper}\n", "text/x-tex"),
+        ("paper.pdf", SourceFormat.PDF, b"%PDF-1.7\n", "application/pdf"),
+    ],
+)
+def test_imports_supported_local_sources(
+    tmp_path, name, source_format, payload, media_type
+):
+    source = tmp_path / name
+    source.write_bytes(payload)
+    repository = SourceRepository(tmp_path / "cache")
+
+    artifact = repository.import_path(source)
+
+    assert artifact.source_format is source_format
+    assert artifact.artifact_digest == hashlib.sha256(payload).hexdigest()
+    assert artifact.size == len(payload)
+    assert artifact.media_type == media_type
+    assert artifact.origin.kind is SourceOriginKind.LOCAL_IMPORT
+    assert repository.read_bytes(artifact) == payload
+
+
+def test_same_bytes_at_different_paths_have_same_content_identity(tmp_path):
+    left = tmp_path / "left.md"
+    right = tmp_path / "nested" / "right.md"
+    right.parent.mkdir()
+    left.write_text("same", encoding="utf-8")
+    right.write_text("same", encoding="utf-8")
+    repository = SourceRepository(tmp_path / "cache")
+
+    first = repository.import_path(left)
+    second = repository.import_path(right)
+
+    assert first.content_identity == second.content_identity
+    assert first.origin.locator != second.origin.locator
+
+
+def test_bundle_normalizes_validators_and_rejects_duplicates(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    origin = SourceOrigin(SourceOriginKind.REMOTE_PROVIDER, provider="fixture")
+    primary = repository.store_bytes(
+        b"# primary", source_format=SourceFormat.MARKDOWN, origin=origin
+    )
+    html = repository.store_bytes(
+        b"<p>validator</p>", source_format=SourceFormat.HTML, origin=origin
+    )
+    pdf = repository.store_bytes(
+        b"%PDF validator", source_format=SourceFormat.PDF, origin=origin
+    )
+
+    bundle = SourceBundle(primary=primary, validators=(pdf, html))
+
+    assert bundle.validators == tuple(
+        sorted((html, pdf), key=lambda item: item.content_identity)
+    )
+    with pytest.raises(ValueError, match="duplicate validator"):
+        SourceBundle(primary=primary, validators=(html, html))
+    with pytest.raises(ValueError, match="primary"):
+        SourceBundle(primary=primary, validators=(primary,))
+
+
+def test_parse_outcome_keeps_non_fatal_warnings(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = repository.store_bytes(
+        b"# paper",
+        source_format=SourceFormat.MARKDOWN,
+        origin=SourceOrigin(SourceOriginKind.LOCAL_IMPORT, locator="paper.md"),
+    )
+    report = ReconciliationReport(
+        primary=artifact,
+        policy=ValidationPolicy.VISUAL_ALL_PAGES,
+    )
+
+    outcome = ParseOutcome(
+        document={"equations": []},
+        report=report,
+        warnings=("PDF page 2 was unreviewed",),
+    )
+
+    assert outcome.document["equations"] == []
+    assert outcome.warnings == ("PDF page 2 was unreviewed",)
+
+
+def test_manifest_is_strict_and_payload_corruption_is_detected(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = repository.store_bytes(
+        b"source",
+        source_format=SourceFormat.TEX,
+        origin=SourceOrigin(SourceOriginKind.LOCAL_IMPORT),
+    )
+    object_dir = repository._object_dir(  # noqa: SLF001 - corruption fixture
+        artifact.source_format, artifact.artifact_digest
+    )
+    manifest_path = object_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["unknown"] = True
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(SourceRepositoryError) as error:
+        repository.get(artifact.source_format, artifact.artifact_digest)
+    assert error.value.code == "source_manifest_invalid"
+
+    manifest.pop("unknown")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (object_dir / "source").write_bytes(b"broken")
+    with pytest.raises(SourceRepositoryError) as error:
+        repository.read_bytes(artifact)
+    assert error.value.code == "source_corrupt"
+
+
+def test_interrupted_payload_without_manifest_is_completed(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    payload = b"# recovered"
+    digest = hashlib.sha256(payload).hexdigest()
+    object_dir = repository._object_dir(  # noqa: SLF001 - interrupted-write fixture
+        SourceFormat.MARKDOWN, digest
+    )
+    object_dir.mkdir(parents=True)
+    (object_dir / "source").write_bytes(payload)
+
+    artifact = repository.store_bytes(
+        payload,
+        source_format=SourceFormat.MARKDOWN,
+        origin=SourceOrigin(SourceOriginKind.LOCAL_IMPORT),
+    )
+
+    assert artifact.artifact_digest == digest
+    assert (object_dir / "manifest.json").is_file()
+
+
+def test_concurrent_same_key_imports_publish_one_valid_object(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    payload = b"concurrent source"
+    origin = SourceOrigin(SourceOriginKind.REMOTE_PROVIDER, provider="fixture")
+
+    def store():
+        return repository.store_bytes(
+            payload, source_format=SourceFormat.HTML, origin=origin
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        artifacts = list(pool.map(lambda _: store(), range(24)))
+
+    assert len({item.content_identity for item in artifacts}) == 1
+    assert repository.read_bytes(artifacts[0]) == payload
+
+
+def test_two_processes_publish_same_content_with_one_valid_manifest(tmp_path):
+    cache_root = tmp_path / "cache"
+    context = multiprocessing.get_context("spawn")
+    ready = context.Barrier(2)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_store_from_process,
+            args=(cache_root, ready, results),
+        )
+        for _ in range(2)
+    ]
+    try:
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=10)
+
+        assert not any(process.is_alive() for process in processes)
+        assert [process.exitcode for process in processes] == [0, 0]
+        identities = [results.get(timeout=1) for _ in processes]
+        assert identities[0] == identities[1]
+
+        source_format, media_type, digest, size = identities[0]
+        repository = SourceRepository(cache_root)
+        artifact = repository.get(SourceFormat(source_format), digest)
+        assert repository.read_bytes(artifact) == b"same process-safe source"
+        manifest_path = (
+            repository._object_dir(artifact.source_format, artifact.artifact_digest)
+            / "manifest.json"
+        )
+        assert json.loads(manifest_path.read_text(encoding="utf-8")) == {
+            "artifact_digest": artifact.artifact_digest,
+            "media_type": media_type,
+            "schema_version": "arc.paper.source_repository.v1",
+            "size": size,
+            "source_format": "markdown",
+        }
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=2)
+        results.close()
+        results.join_thread()
+
+
+def test_windows_lock_backend_loads_and_retries_contention(monkeypatch, tmp_path):
+    fake_msvcrt = _FakeMsvcrt(failures=2)
+    imported = []
+    sleeps = []
+
+    def import_module(name):
+        imported.append(name)
+        assert name == "msvcrt"
+        return fake_msvcrt
+
+    monkeypatch.setattr(_file_lock.importlib, "import_module", import_module)
+    backend = _file_lock._load_file_lock_backend("nt")
+    backend._sleep = sleeps.append
+    lock_path = tmp_path / "windows.lock"
+    with lock_path.open("a+b") as handle:
+        backend.acquire(handle)
+        backend.release(handle)
+        descriptor = handle.fileno()
+
+    assert imported == ["msvcrt"]
+    assert fake_msvcrt.calls == [
+        (descriptor, fake_msvcrt.LK_NBLCK, 1),
+        (descriptor, fake_msvcrt.LK_NBLCK, 1),
+        (descriptor, fake_msvcrt.LK_NBLCK, 1),
+        (descriptor, fake_msvcrt.LK_UNLCK, 1),
+    ]
+    assert sleeps == [0.05, 0.05]
+    assert lock_path.read_bytes() == b"\0"
+
+
+def test_unknown_local_suffix_is_typed_unsupported_source(tmp_path):
+    source = tmp_path / "paper.rst"
+    source.write_text("paper", encoding="utf-8")
+
+    with pytest.raises(SourceRepositoryError) as error:
+        SourceRepository(tmp_path / "cache").import_path(source)
+
+    assert error.value.code == "unsupported_source"

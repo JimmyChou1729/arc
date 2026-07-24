@@ -1,2392 +1,445 @@
+"""Typed deterministic facade for paper acquisition, import, and parsing.
+
+The service owns no queue, worker, checkpoint, or run state.  Durable workflow
+execution belongs to :mod:`arc_jobs`; LLM work belongs to :mod:`arc_llm`.
+"""
+
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import re
-import shutil
-import time
-import unicodedata
-from collections.abc import Callable, Iterable
-from datetime import datetime, timezone
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
 
-from arc_llm.runner import resolve_llm_config
+from arc_jobs import RunContext
 
-from .cache import (
-    CachePaths,
-    cache_path_exists,
-    cache_root,
-    content_lock,
-    now_iso,
-    iter_cache_paths,
-    parsed_source_annotations_cache_path,
-    parsed_source_cache_path,
-    parsed_source_identity_cache_path,
-    parsed_source_lock,
-    read_paper_alias,
-    read_json,
-    resolve_cache_read_path,
-    rich_document_cache_path,
-    text_query_cache_path,
-    write_json,
+from .document_search import (
+    EquationSearchResult,
+    FullTextSearchResult,
+    TableOfContentsEntry,
+    search_equations as _search_equations,
+    search_full_text as _search_full_text,
+    select_section as _select_section,
+    table_of_contents as _table_of_contents,
 )
-from .ids import arxiv_path_id
 from .ids import extract_paper_ids as _extract_paper_ids
-from .ids import normalize_paper_id
 from .ids import paper_ids_safe_dir_name as _paper_ids_safe_dir_name
-from .parse.ar5iv_html import get_section as parsed_get_section
-from .parse.equations import find_equation_context
-from .parse.document import DOCUMENT_SCHEMA_VERSION, RICH_DOCUMENT_PARSER_VERSION
-from .parse.source import PARSER_VERSION as SOURCE_PARSER_VERSION
-from .parse.source import parse_source_input
-from .parse.source import parse_source_input_with_warnings
-from .parse.source import source_input_hash
-from .parse.structure import (
-    STRUCTURE_SCHEMA_VERSION,
-    has_reconciliation_proof,
-    normalize_document_kind,
+from .parse import (
+    PDFTextExtractor,
+    PaperParserService,
+    ParsedDocument,
+    ParsedSection,
+    VisualReviewService,
 )
-from .providers import Ar5ivProvider, ArxivSourceProvider, InspireProvider
-from .providers.ar5iv import ar5iv_url
-from .providers.base import ProviderError
-from .reference_inference import ReferenceInferenceError, infer_main_references
-from .execution import current_progress_callback
-from .results import err, ok
-from .search import FullTextSearchFile, search_parsed_full_text
-from .summary.input_pack import build_input_pack
-from .summary.model import DEFAULT_SUMMARY_MODEL_TIER
-from .summary.providers.select import select_summary_provider
-from .summary.schema import load_summary_prompt, load_summary_schema
-from .summary.store import read_latest_summary, read_summary, store_summary
-
-
-_inspire = InspireProvider()
-_ar5iv = Ar5ivProvider()
-_arxiv_source = ArxivSourceProvider()
-ProgressCallback = Callable[[dict[str, Any]], None]
-PARSED_SOURCE_KEYS = (
-    "paper_id", "parser_version", "source_hash", "toc", "sections", "equations",
-    "structure", "index_entries",
+from .providers import Ar5ivProvider, ArxivPdfProvider, InspireProvider
+from .source_repository import SourceRepository
+from .sources import (
+    ParseOutcome,
+    SourceArtifact,
+    SourceBundle,
+    SourceFormat,
+    ValidationPolicy,
 )
-# Kept as a public module alias for callers that imported the old name.
-LEGACY_PARSED_SOURCE_KEYS = PARSED_SOURCE_KEYS
-RICH_PARSER_VERSION = RICH_DOCUMENT_PARSER_VERSION
-PARSED_STRUCTURE_VIEW_SCHEMA_VERSION = "arc.paper.parsed-structure-view.v1"
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
-def extract_paper_ids(text: str) -> dict[str, Any]:
-    return ok(_extract_paper_ids(text))
+class PaperInputError(ValueError):
+    """A stable invalid-request error raised before external effects."""
+
+    code = "invalid_request"
 
 
-def paper_ids_safe_dir_name(ids: str | Iterable[str]) -> dict[str, Any]:
-    raw_values = [ids] if isinstance(ids, str) else list(ids or [])
-    values = [str(item) for item in raw_values if str(item).strip()]
-    if not values:
-        return err("paper_ids_required", "At least one paper id is required.")
-    return ok(_paper_ids_safe_dir_name(values), provider="local")
+def default_cache_root() -> Path:
+    configured = os.environ.get("ARC_PAPER_CACHE")
+    if configured:
+        return Path(configured)
+    return Path.home() / ".cache" / "arc" / "arc-paper"
 
 
-def cache_arxiv_source(
-    paper_id: str,
-    *,
-    version: int,
-    refresh: bool = False,
-    license_url: str = "",
-) -> dict[str, Any]:
-    normalized = normalize_paper_id(paper_id)
-    if not arxiv_path_id(normalized):
-        return err("not_arxiv_id", f"arXiv source requires an arXiv ID: {paper_id}")
-    try:
-        with parsed_source_lock(normalized, namespace=f"arxiv-source-v{version}"):
-            manifest = _arxiv_source.cache_source(
-                normalized,
-                version=version,
-                refresh=refresh,
-                license_url=license_url,
-            )
-        return ok(manifest, provider="arxiv-source", cache="write" if refresh else "hit-or-write")
-    except ProviderError as exc:
-        return err(exc.code, exc.message)
-    except ValueError as exc:
-        return err("arxiv_source_invalid", str(exc))
-    except Exception as exc:
-        return err("arxiv_source_cache_failed", str(exc))
+class ArcPaperService:
+    """Small, injectable facade over the package-owned deterministic services."""
 
-
-def probe_arxiv_source(paper_id: str, *, version: int) -> dict[str, Any]:
-    normalized = normalize_paper_id(paper_id)
-    if not arxiv_path_id(normalized):
-        return err("not_arxiv_id", f"arXiv source requires an arXiv ID: {paper_id}")
-    try:
-        manifest = _arxiv_source.probe_source(normalized, version=version)
-        if manifest is None:
-            return err(
-                "arxiv_source_not_cached",
-                f"No cached source found for {normalized}v{version}; run source-cache explicitly.",
-            )
-        return ok(manifest, provider="local-cache", cache="hit")
-    except ValueError as exc:
-        return err("arxiv_source_invalid", str(exc))
-    except Exception as exc:
-        return err("arxiv_source_probe_failed", str(exc))
-
-
-def llm_infer_main_references(
-    text: str,
-    *,
-    provider: str = "auto",
-    model: str | None = None,
-    model_tier: str | None = None,
-    refresh: bool = False,
-) -> dict[str, Any]:
-    query_text = (text or "").strip()
-    cache_path = text_query_cache_path("main-references", query_text)
-    existing_cached = read_json(cache_path)
-    cached = existing_cached if not refresh else None
-
-    explicit_ids = _extract_paper_ids(query_text)
-    if explicit_ids:
-        meta = {"provider": "local-parser", "llm_used": False}
-        if (
-            isinstance(cached, dict)
-            and cached.get("paper_ids") == explicit_ids
-            and (cached.get("meta") or {}).get("provider") == "local-parser"
-        ):
-            return ok(
-                explicit_ids,
-                **meta,
-                cache="hit",
-                cache_path=str(cache_path),
-                cached_at=cached.get("created_at"),
-            )
-        _write_reference_query_cache(cache_path, query_text=query_text, paper_ids=explicit_ids, meta=meta)
-        return ok(explicit_ids, **meta, cache="write", cache_path=str(cache_path))
-    if isinstance(cached, dict) and isinstance(cached.get("paper_ids"), list):
-        meta = dict(cached.get("meta") or {})
-        return ok(
-            cached["paper_ids"],
-            **meta,
-            cache="hit",
-            cache_path=str(cache_path),
-            cached_at=cached.get("created_at"),
+    def __init__(
+        self,
+        *,
+        cache_root: str | Path | None = None,
+        repository: SourceRepository | None = None,
+        inspire: InspireProvider | None = None,
+        ar5iv: Ar5ivProvider | None = None,
+        arxiv_pdf: ArxivPdfProvider | None = None,
+        pdf_text_extractor: PDFTextExtractor | None = None,
+        visual_reviewer: VisualReviewService | None = None,
+    ):
+        if cache_root is None:
+            root = repository.root if repository is not None else default_cache_root()
+        else:
+            root = Path(cache_root)
+            if (
+                repository is not None
+                and root.resolve(strict=False) != repository.root.resolve(strict=False)
+            ):
+                raise PaperInputError(
+                    "cache_root must match the injected SourceRepository root"
+                )
+        self.repository = repository or SourceRepository(root)
+        self.inspire = inspire or InspireProvider(cache_root=root)
+        self.ar5iv = ar5iv or Ar5ivProvider(
+            cache_root=root, source_repository=self.repository
         )
-    initial_cached = existing_cached
-    # The public reference cache is query-addressed and provider-agnostic, so
-    # its single-flight lock must use the same identity to avoid competing
-    # providers writing the same cache path.
-    lock_key = hashlib.sha256(query_text.encode("utf-8")).hexdigest()
-    with content_lock("main-references", lock_key):
-        cached = read_json(cache_path)
-        if isinstance(cached, dict) and isinstance(cached.get("paper_ids"), list) and (
-            not refresh or cached != initial_cached
-        ):
-            meta = dict(cached.get("meta") or {})
-            return ok(
-                cached["paper_ids"],
-                **meta,
-                cache="hit",
-                cache_path=str(cache_path),
-                cached_at=cached.get("created_at"),
+        self.arxiv_pdf = arxiv_pdf or ArxivPdfProvider(
+            cache_root=root, source_repository=self.repository
+        )
+        self.parser = PaperParserService(
+            self.repository,
+            pdf_text_extractor=pdf_text_extractor,
+            visual_reviewer=visual_reviewer,
+        )
+
+    def import_source(
+        self,
+        path: str | Path,
+        *,
+        source_format: SourceFormat | str | None = None,
+    ) -> SourceArtifact:
+        return self.repository.import_path(path, source_format=source_format)
+
+    def fetch_arxiv_auto(
+        self, paper_id: str, *, refresh: bool = False
+    ) -> SourceArtifact:
+        """Fetch only the ar5iv primary; auto never downloads a PDF."""
+
+        return self.ar5iv.fetch(paper_id, refresh=refresh)
+
+    def fetch_arxiv_pdf(
+        self, paper_id: str, *, refresh: bool = False
+    ) -> SourceArtifact:
+        return self.arxiv_pdf.fetch(paper_id, refresh=refresh)
+
+    def parse_bundle(
+        self,
+        bundle: SourceBundle,
+        *,
+        policy: ValidationPolicy | str | None = None,
+        context: RunContext | None = None,
+    ) -> ParseOutcome:
+        resolved = ValidationPolicy(policy) if policy is not None else None
+        return self.parser.parse(bundle, policy=resolved, context=context)
+
+    def parse_local(
+        self,
+        primary_path: str | Path,
+        *,
+        validator_paths: Sequence[str | Path] = (),
+        primary_format: SourceFormat | str | None = None,
+        validator_formats: Sequence[SourceFormat | str | None] = (),
+        policy: ValidationPolicy | str | None = None,
+        context: RunContext | None = None,
+    ) -> ParseOutcome:
+        if validator_formats and len(validator_formats) != len(validator_paths):
+            raise PaperInputError(
+                "validator_formats must be empty or match validator_paths"
             )
-        try:
-            result = infer_main_references(
-                query_text,
-                provider=provider,
-                model=model,
-                model_tier=model_tier,
-                refresh=refresh,
-                metadata_lookup=_inspire.get_metadata,
-            )
-        except ReferenceInferenceError as exc:
-            return err(exc.code, exc.message)
-        except ProviderError as exc:
-            return err(exc.code, exc.message)
-        except Exception as exc:
-            if _abort_batch_exception(exc):
-                raise
-            return err("reference_inference_failed", str(exc))
-        meta = {
-            "provider": result.get("provider"),
-            "model": result.get("model"),
-            "llm_used": True,
-            "focus_scope": result.get("focus_scope"),
-            "warnings": result.get("warnings", []),
-            "verified_references": result.get("verified_references", []),
-            "rejected_candidates": result.get("rejected_candidates", []),
-            "raw_llm_response": result.get("raw_llm_response"),
-        }
-        _write_reference_query_cache(cache_path, query_text=query_text, paper_ids=result["paper_ids"], meta=meta)
-    return ok(
-        result["paper_ids"],
-        **meta,
-        cache="write",
-        cache_path=str(cache_path),
-    )
+        primary = self.import_source(primary_path, source_format=primary_format)
+        formats = (
+            tuple(validator_formats)
+            if validator_formats
+            else (None,) * len(validator_paths)
+        )
+        validators = tuple(
+            self.import_source(path, source_format=source_format)
+            for path, source_format in zip(validator_paths, formats, strict=True)
+        )
+        return self.parse_bundle(
+            SourceBundle(primary=primary, validators=validators),
+            policy=policy,
+            context=context,
+        )
+
+    def parse_arxiv_auto(
+        self,
+        paper_id: str,
+        *,
+        refresh: bool = False,
+    ) -> ParseOutcome:
+        primary = self.fetch_arxiv_auto(paper_id, refresh=refresh)
+        return self.parse_bundle(SourceBundle(primary=primary))
+
+    def parse_arxiv_pdf(
+        self,
+        paper_id: str,
+        *,
+        refresh: bool = False,
+    ) -> ParseOutcome:
+        primary = self.fetch_arxiv_pdf(paper_id, refresh=refresh)
+        return self.parse_bundle(SourceBundle(primary=primary))
+
+    def get_metadata(self, paper_id: str, *, refresh: bool = False) -> dict[str, Any]:
+        return self.inspire.get_metadata(_require_paper_id(paper_id), refresh=refresh)
+
+    def get_title(self, paper_id: str, *, refresh: bool = False) -> str:
+        return str(self.get_metadata(paper_id, refresh=refresh).get("title") or "")
+
+    def get_abstract(self, paper_id: str, *, refresh: bool = False) -> str:
+        return str(self.get_metadata(paper_id, refresh=refresh).get("abstract") or "")
+
+    def get_authors(self, paper_id: str, *, refresh: bool = False) -> list[str]:
+        value = self.get_metadata(paper_id, refresh=refresh).get("authors") or []
+        return [str(item) for item in value]
+
+    def get_references(
+        self,
+        paper_id: str,
+        *,
+        refresh: bool = False,
+        enrich: bool = False,
+    ) -> list[dict[str, Any]]:
+        return self.inspire.get_references(
+            _require_paper_id(paper_id), refresh=refresh, enrich=enrich
+        )
+
+    def get_citers(
+        self,
+        paper_id: str,
+        *,
+        refresh: bool = False,
+        limit: int = 1000,
+        sort: str = "mostrecent",
+    ) -> list[dict[str, Any]]:
+        return self.inspire.get_citers(
+            _require_paper_id(paper_id),
+            refresh=refresh,
+            limit=limit,
+            sort=sort,
+        )
+
+    def get_citer_count(self, paper_id: str, *, refresh: bool = False) -> int:
+        return self.inspire.get_citer_count(
+            _require_paper_id(paper_id), refresh=refresh
+        )
+
+    def search_metadata(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        return self.inspire.search_metadata(query, limit=limit)
+
+    def search_full_text(
+        self,
+        documents: ParsedDocument | Iterable[ParsedDocument],
+        query: str,
+        *,
+        limit: int = 20,
+        context_lines: int = 1,
+        case_sensitive: bool = False,
+    ) -> FullTextSearchResult:
+        return _search_full_text(
+            documents,
+            query,
+            limit=limit,
+            context_lines=context_lines,
+            case_sensitive=case_sensitive,
+        )
+
+    def search_equations(
+        self,
+        documents: ParsedDocument | Iterable[ParsedDocument],
+        query: str,
+        *,
+        limit: int = 20,
+        case_sensitive: bool = False,
+    ) -> EquationSearchResult:
+        return _search_equations(
+            documents,
+            query,
+            limit=limit,
+            case_sensitive=case_sensitive,
+        )
+
+    def table_of_contents(
+        self, document: ParsedDocument
+    ) -> tuple[TableOfContentsEntry, ...]:
+        return _table_of_contents(document)
+
+    def select_section(
+        self, document: ParsedDocument, selector: str | int
+    ) -> ParsedSection:
+        return _select_section(document, selector)
 
 
-def _write_reference_query_cache(
-    cache_path: Path,
-    *,
-    query_text: str,
-    paper_ids: list[str],
-    meta: dict[str, Any],
-) -> None:
-    write_json(
-        cache_path,
-        {
-            "schema_version": "arc.paper.main_reference_query.v1",
-            "query_text": query_text,
-            "paper_ids": paper_ids,
-            "meta": meta,
-            "created_at": now_iso(),
-        },
-    )
+def extract_paper_ids(text: str) -> list[str]:
+    return _extract_paper_ids(str(text))
 
 
-def get_title(ids: str | Iterable[str], *, refresh: bool = False):
-    return _map(ids, lambda paper_id: _metadata_field(paper_id, "title", refresh=refresh))
+def paper_ids_safe_dir_name(ids: str | Iterable[str]) -> str:
+    values = [ids] if isinstance(ids, str) else list(ids)
+    normalized = [str(item) for item in values if str(item).strip()]
+    if not normalized:
+        raise PaperInputError("at least one paper id is required")
+    return _paper_ids_safe_dir_name(normalized)
 
 
-def get_abstract(ids: str | Iterable[str], *, refresh: bool = False):
-    return _map(ids, lambda paper_id: _metadata_field(paper_id, "abstract", refresh=refresh))
+def _require_paper_id(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise PaperInputError("paper_id is required")
+    return normalized
 
 
-def get_authors(ids: str | Iterable[str], *, refresh: bool = False):
-    return _map(ids, lambda paper_id: _metadata_field(paper_id, "authors", refresh=refresh))
+def get_metadata(paper_id: str, *, refresh: bool = False) -> dict[str, Any]:
+    return ArcPaperService().get_metadata(paper_id, refresh=refresh)
 
 
-def get_metadata(ids: str | Iterable[str], *, refresh: bool = False):
-    return _map(ids, lambda paper_id: _call(lambda: _inspire.get_metadata(paper_id, refresh=refresh), "inspire"))
+def get_title(paper_id: str, *, refresh: bool = False) -> str:
+    return ArcPaperService().get_title(paper_id, refresh=refresh)
 
 
-def search_inspire(query: str, *, limit: int = 20) -> dict[str, Any]:
-    return _call(lambda: _inspire.search_metadata(query, limit=limit), "inspire")
+def get_abstract(paper_id: str, *, refresh: bool = False) -> str:
+    return ArcPaperService().get_abstract(paper_id, refresh=refresh)
 
 
-def get_references(ids: str | Iterable[str], *, refresh: bool = False, enrich: bool = False):
-    return _map(
-        ids,
-        lambda paper_id: _call(
-            lambda: _inspire.get_references(paper_id, refresh=refresh, enrich=enrich),
-            "inspire",
-        ),
+def get_authors(paper_id: str, *, refresh: bool = False) -> list[str]:
+    return ArcPaperService().get_authors(paper_id, refresh=refresh)
+
+
+def get_references(
+    paper_id: str, *, refresh: bool = False, enrich: bool = False
+) -> list[dict[str, Any]]:
+    return ArcPaperService().get_references(
+        paper_id, refresh=refresh, enrich=enrich
     )
 
 
 def get_citers(
-    ids: str | Iterable[str],
+    paper_id: str,
     *,
     refresh: bool = False,
     limit: int = 1000,
     sort: str = "mostrecent",
-):
-    return _map(
-        ids,
-        lambda paper_id: _call(
-            lambda: _inspire.get_citers(paper_id, refresh=refresh, limit=limit, sort=sort),
-            "inspire",
-        ),
+) -> list[dict[str, Any]]:
+    return ArcPaperService().get_citers(
+        paper_id, refresh=refresh, limit=limit, sort=sort
     )
 
 
-def get_citer_count(ids: str | Iterable[str], *, refresh: bool = False):
-    return _map(ids, lambda paper_id: _call(lambda: _inspire.get_citer_count(paper_id, refresh=refresh), "inspire"))
+def get_citer_count(paper_id: str, *, refresh: bool = False) -> int:
+    return ArcPaperService().get_citer_count(paper_id, refresh=refresh)
 
 
-def get_toc(ids: str | Iterable[str], *, refresh: bool = False):
-    return _map(ids, lambda paper_id: _call(lambda: _parsed(paper_id, refresh=refresh)["toc"], "ar5iv"))
-
-
-def get_section(ids: str | Iterable[str], section: str, *, refresh: bool = False):
-    return _map(ids, lambda paper_id: _section_one(paper_id, section, refresh=refresh))
-
-
-def get_equation_context(ids: str | Iterable[str], query: str, *, refresh: bool = False):
-    return _map(ids, lambda paper_id: _equation_one(paper_id, query, refresh=refresh))
+def search_metadata(query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    return ArcPaperService().search_metadata(query, limit=limit)
 
 
 def search_full_text(
-    ids: str | Iterable[str] | None,
-    *,
+    documents: ParsedDocument | Iterable[ParsedDocument],
     query: str,
-    refresh: bool = False,
+    *,
     limit: int = 20,
-    context: int = 1,
+    context_lines: int = 1,
     case_sensitive: bool = False,
-) -> dict[str, Any]:
-    try:
-        files, missing_papers = _full_text_search_files(ids, refresh=refresh)
-        hits, meta = search_parsed_full_text(
-            files,
-            query,
-            limit=limit,
-            context=context,
-            case_sensitive=case_sensitive,
-        )
-        hits = _enrich_search_hits_with_cached_metadata(hits)
-    except ValueError as exc:
-        return err("search_query_required", str(exc))
-    except ProviderError as exc:
-        return err(exc.code, exc.message)
-    except Exception as exc:
-        return err("paper_search_error", str(exc))
-    return ok(
-        hits,
-        provider="local-cache",
-        query=(query or "").strip(),
-        missing_papers=missing_papers,
-        **meta,
+) -> FullTextSearchResult:
+    return _search_full_text(
+        documents,
+        query,
+        limit=limit,
+        context_lines=context_lines,
+        case_sensitive=case_sensitive,
     )
 
 
-def parse_source(
-    source_path: str | Path | None = None,
-    *,
-    source: str = "auto",
-    source_id: str | None = None,
-    paper_id: str | None = None,
-    html_path: str | Path | None = None,
-    tex_path: str | Path | None = None,
-    markdown_path: str | Path | None = None,
-    pdf_path: str | Path | None = None,
-    refresh: bool = False,
-    include_document: bool = False,
-    recache: bool = False,
-    document_kind: str = "auto",
-) -> dict[str, Any]:
-    try:
-        document_kind = normalize_document_kind(document_kind)
-        if refresh and recache:
-            raise ValueError("--refresh and --recache are mutually exclusive")
-        warnings: list[dict[str, Any]] = []
-        resolved_id = _parse_source_id(source_id=source_id, paper_id=paper_id)
-        if source == "ar5iv" or paper_id:
-            if source not in {"auto", "ar5iv"}:
-                raise ValueError("--paper-id only supports source=auto or source=ar5iv")
-            cache_id = _parsed_source_lookup_id(str(resolved_id or ""))
-            if not cache_id:
-                raise ValueError("ar5iv parsing requires paper_id")
-            with parsed_source_lock(cache_id, namespace=f"light-v{SOURCE_PARSER_VERSION}"):
-                path = parsed_source_cache_path(cache_id)
-                cached = read_json(path) if not refresh and not recache else None
-                if _is_current_light_cache(cached, cache_id, document_kind=document_kind):
-                    _ensure_parsed_identity_cache(cached)
-                    if not include_document:
-                        return ok(
-                            _parsed_source_view(cached, include_document=False),
-                            provider="local-cache",
-                            cache="hit",
-                            cache_path=str(path),
-                        )
-                    document = _read_rich_document(cached)
-                    if document is not None:
-                        return ok(
-                            _parsed_source_with_document(cached, document),
-                            provider="local-cache",
-                            cache="hit",
-                            cache_path=str(path),
-                            rich_cache_path=str(_rich_cache_path(cached)),
-                        )
-                parsed = _parse_ar5iv_source(
-                    resolved_id,
-                    refresh=refresh,
-                    include_document=include_document,
-                    document_kind=document_kind,
-                )
-                if (
-                    _is_current_light_cache(cached, cache_id, document_kind=document_kind)
-                    and not recache
-                    and cached.get("source_hash") == parsed.get("source_hash")
-                ):
-                    path = parsed_source_cache_path(cache_id)
-                    rich_path = _write_rich_cache(parsed) if include_document else None
-                else:
-                    path, rich_path = _write_parsed_caches(parsed, include_document=include_document)
-        else:
-            _validate_local_source(
-                source,
-                source_path=source_path,
-                html_path=html_path,
-                tex_path=tex_path,
-                markdown_path=markdown_path,
-                pdf_path=pdf_path,
-            )
-            current_hash = source_input_hash(
-                source_path=source_path,
-                html_path=html_path,
-                tex_path=tex_path,
-                markdown_path=markdown_path,
-                pdf_path=pdf_path,
-            )
-            lock_id = str(resolved_id or current_hash)
-            with parsed_source_lock(lock_id, namespace=f"light-v{SOURCE_PARSER_VERSION}"):
-                path = parsed_source_cache_path(resolved_id) if resolved_id else None
-                cached = read_json(path) if path is not None and not refresh and not recache else None
-                if (
-                    _is_current_light_cache(
-                        cached,
-                        resolved_id,
-                        document_kind=document_kind,
-                        paired_pdf=_is_paired_pdf_input(
-                            source_path=source_path,
-                            html_path=html_path,
-                            tex_path=tex_path,
-                            markdown_path=markdown_path,
-                            pdf_path=pdf_path,
-                        ),
-                    )
-                    and cached.get("source_hash") == current_hash
-                ):
-                    _ensure_parsed_identity_cache(cached)
-                    if not include_document:
-                        return ok(
-                            _parsed_source_view(cached, include_document=False),
-                            provider="local-cache",
-                            cache="hit",
-                            cache_path=str(path),
-                        )
-                    document = _read_rich_document(cached)
-                    if document is not None:
-                        return ok(
-                            _parsed_source_with_document(cached, document),
-                            provider="local-cache",
-                            cache="hit",
-                            cache_path=str(path),
-                            rich_cache_path=str(_rich_cache_path(cached)),
-                        )
-                parsed, warnings = _parse_local_source(
-                    source=source,
-                    source_path=source_path,
-                    source_id=resolved_id,
-                    html_path=html_path,
-                    tex_path=tex_path,
-                    markdown_path=markdown_path,
-                    pdf_path=pdf_path,
-                    include_document=include_document,
-                    document_kind=document_kind,
-                )
-                path, rich_path = _write_parsed_caches(parsed, include_document=include_document)
-        return ok(
-            _parsed_source_view(parsed, include_document=include_document),
-            provider="local-cache",
-            cache="write",
-            cache_path=str(path),
-            rich_cache_path=str(rich_path) if rich_path is not None else None,
-            warnings=warnings or None,
-        )
-    except FileNotFoundError as exc:
-        return err("parse_source_not_found", str(exc))
-    except ValueError as exc:
-        return err("parse_source_invalid", str(exc))
-    except ProviderError as exc:
-        return err(exc.code, exc.message)
-    except Exception as exc:
-        return err("parse_source_failed", str(exc))
-
-
-def get_parsed_source(
-    source_id: str,
-    *,
-    include_document: bool = False,
-    strict_cache_only: bool = False,
-    author_evidence_only: bool = False,
-) -> dict[str, Any]:
-    if author_evidence_only:
-        if not strict_cache_only or include_document:
-            return err(
-                "parsed_source_author_evidence_flags_invalid",
-                (
-                    "author_evidence_only requires strict_cache_only=True "
-                    "and include_document=False."
-                ),
-            )
-        return _cached_source_author_evidence(source_id)
-    lookup_id = _parsed_source_lookup_id(source_id)
-    parsed = _read_parsed_source(source_id)
-    if parsed is None:
-        return err("parsed_source_not_found", f"No parsed source found for {source_id}")
-    rich_path: Path | None = None
-    if include_document:
-        document = _read_rich_document(
-            parsed, migrate_legacy=not strict_cache_only,
-        )
-        if document is not None:
-            parsed = _parsed_source_with_document(parsed, document)
-            rich_path = _rich_cache_path(parsed)
-        elif strict_cache_only:
-            return err(
-                "parsed_source_document_not_cached",
-                (
-                    f"No current complete parsed document is cached for {source_id}; "
-                    "strict cache-only reads never fetch, rebuild, or upgrade."
-                ),
-            )
-        elif arxiv_path_id(lookup_id):
-            try:
-                parsed = _parsed(lookup_id, refresh=False, require_document=True)
-                rich_path = _rich_cache_path(parsed)
-            except (ProviderError, ValueError, OSError) as exc:
-                return err("parsed_source_upgrade_failed", str(exc))
-        else:
-            with parsed_source_lock(lookup_id, namespace=f"rich-v{RICH_PARSER_VERSION}"):
-                document = _read_rich_document(parsed)
-                if document is None:
-                    document = _rebuild_local_rich_document_from_stale_cache(parsed)
-            if document is None:
-                return err(
-                    "parsed_source_document_not_found",
-                    f"No complete parsed document found for {source_id}; recache the local source first.",
-                )
-            parsed = _parsed_source_with_document(parsed, document)
-            rich_path = _rich_cache_path(parsed)
-    return ok(
-        _parsed_source_view(parsed, include_document=include_document),
-        provider="local-cache",
-        cache="hit",
-        cache_path=str(parsed_source_cache_path(lookup_id)),
-        rich_cache_path=str(rich_path) if rich_path is not None else None,
-    )
-
-
-def _cached_source_author_evidence(source_id: str) -> dict[str, Any]:
-    """Return minimal stable author evidence from current local caches only.
-
-    This path never fetches, reparses, migrates, or writes cache data.  It is
-    exposed only through strict author-evidence mode on ``get_parsed_source``
-    so unrelated document prose cannot be treated as identity evidence.
-    """
-
-    lookup_id = _parsed_source_lookup_id(source_id)
-    parsed = _read_parsed_source(source_id)
-    if parsed is None:
-        return err(
-            "cached_source_author_evidence_not_found",
-            f"No parsed source cache found for {source_id}.",
-        )
-    structure = parsed.get("structure")
-    requested_kind = (
-        str(structure.get("requested_document_kind") or "auto")
-        if isinstance(structure, dict)
-        else "auto"
-    )
-    if not _is_current_light_cache(
-        parsed, lookup_id, document_kind=requested_kind,
-    ):
-        return err(
-            "cached_source_author_evidence_light_invalid",
-            f"The parsed source cache for {source_id} is stale or malformed.",
-        )
-    rich_path = _rich_cache_path(parsed)
-    rich_envelope = read_json(rich_path)
-    document = _read_rich_document(parsed, migrate_legacy=False)
-    if document is None or not isinstance(rich_envelope, dict):
-        return err(
-            "cached_source_author_evidence_rich_invalid",
-            (
-                f"No current complete rich document is cached for {source_id}; "
-                "strict cache-only reads never fetch, rebuild, upgrade, or write."
-            ),
-        )
-    front = document.get("front_matter")
-    front = front if isinstance(front, dict) else {}
-    raw_records = front.get("author_records")
-    if not isinstance(raw_records, list) or not raw_records:
-        return err(
-            "cached_source_author_evidence_identity_missing",
-            f"The cached source for {source_id} has no stable author records.",
-        )
-    authors: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for record in raw_records:
-        if not isinstance(record, dict):
-            return err(
-                "cached_source_author_evidence_identity_invalid",
-                f"The cached source for {source_id} has malformed author records.",
-            )
-        source_author_id = str(
-            record.get("source_id") or record.get("element_id") or record.get("id") or ""
-        ).strip()
-        source_name = unicodedata.normalize(
-            "NFC",
-            str(
-                record.get("source_name")
-                or record.get("name")
-                or record.get("text")
-                or ""
-            ).strip(),
-        )
-        if not source_author_id or not source_name or source_author_id in seen:
-            return err(
-                "cached_source_author_evidence_identity_invalid",
-                f"The cached source for {source_id} has ambiguous author identities.",
-            )
-        seen.add(source_author_id)
-        authors.append({
-            "source_author_id": source_author_id,
-            "source_name": source_name,
-            "field_sha256": hashlib.sha256(source_name.encode("utf-8")).hexdigest(),
-        })
-    document_sha256 = hashlib.sha256(
-        json.dumps(
-            document, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        ).encode("utf-8")
-    ).hexdigest()
-    return ok(
-        {
-            "schema_version": "arc.paper.cached-source-author-evidence.v1",
-            "reference_identity": lookup_id,
-            "source_hash": str(parsed["source_hash"]),
-            "document_sha256": document_sha256,
-            "authors": authors,
-        },
-        provider="local-cache",
-        cache="hit",
-        cache_path=str(parsed_source_cache_path(lookup_id)),
-        rich_cache_path=str(rich_path),
-    )
-
-
-def get_parsed_source_identity(
-    source_id: str, *, include_document: bool = False,
-) -> dict[str, Any]:
-    """Return cache-only identity/metadata without loading parsed body fields."""
-    if include_document:
-        return err(
-            "parsed_source_identity_document_forbidden",
-            "The parsed-source identity view never includes document content.",
-        )
-    lookup_id = _parsed_source_lookup_id(source_id)
-    identity = read_json(parsed_source_identity_cache_path(lookup_id))
-    if not isinstance(identity, dict):
-        return err(
-            "parsed_source_identity_not_found",
-            f"No body-free parsed-source identity found for {source_id}; recache the local source.",
-        )
-    return ok(
-        {key: identity.get(key) for key in (
-            "paper_id", "parser_version", "source_hash", "document_hash", "metadata",
-        )},
-        provider="local-cache",
-        cache="hit",
-        cache_path=str(parsed_source_identity_cache_path(lookup_id)),
-    )
-
-
-def get_parsed_source_structure(source_id: str) -> dict[str, Any]:
-    """Return a closed body-free structure view from the identity sidecar only."""
-
-    requested_id = normalize_paper_id(source_id)
-    lookup_id = _parsed_source_lookup_id(source_id)
-    path = parsed_source_identity_cache_path(lookup_id)
-    identity = read_json(path)
-    if not isinstance(identity, dict) or not isinstance(
-        identity.get("structure_view"), dict
-    ):
-        return err(
-            "parsed_source_structure_not_found",
-            (
-                f"No current body-free parsed structure is cached for {source_id}; "
-                "recache the local source."
-            ),
-        )
-    stored = dict(identity["structure_view"])
-    if (
-        identity.get("paper_id") != lookup_id
-        or not _valid_parsed_structure_view(stored, identity=identity)
-    ):
-        return err(
-            "parsed_source_structure_invalid",
-            f"The cached body-free parsed structure for {source_id} is stale or malformed.",
-        )
-    candidate = dict(stored)
-    candidate["requested_source_id"] = requested_id
-    return ok(
-        candidate,
-        provider="local-cache",
-        cache="hit",
-        cache_path=str(path),
-    )
-
-
-def get_parsed_source_compact_toc(source_id: str) -> dict[str, Any]:
-    """Return the body-free TOC sidecar required by intent-guidance preflight."""
-    lookup_id = _parsed_source_lookup_id(source_id)
-    identity = read_json(parsed_source_identity_cache_path(lookup_id))
-    if not isinstance(identity, dict) or not isinstance(identity.get("toc"), list):
-        return err(
-            "parsed_source_identity_not_found",
-            f"No body-free parsed-source TOC found for {source_id}; recache the local source.",
-        )
-    return ok(identity["toc"], provider="local-cache", cache="hit")
-
-
-def get_parsed_source_toc(source_id: str) -> dict[str, Any]:
-    sidecar = get_parsed_source_compact_toc(source_id)
-    if sidecar.get("ok") is True:
-        return sidecar
-    parsed = _read_parsed_source(source_id)
-    if parsed is None:
-        return err("parsed_source_not_found", f"No parsed source found for {source_id}")
-    return ok(parsed.get("toc") or [], provider="local-cache", cache="hit")
-
-
-def get_parsed_source_section(source_id: str, section: str) -> dict[str, Any]:
-    parsed = _read_parsed_source(source_id)
-    if parsed is None:
-        return err("parsed_source_not_found", f"No parsed source found for {source_id}")
-    result = parsed_get_section(parsed, section)
-    if result.get("ok"):
-        result["meta"] = {"provider": "local-cache", "cache": "hit"}
-    return result
-
-
-def get_parsed_source_equations(source_id: str) -> dict[str, Any]:
-    parsed = _read_parsed_source(source_id)
-    if parsed is None:
-        return err("parsed_source_not_found", f"No parsed source found for {source_id}")
-    annotations = _current_equation_annotations(source_id, parsed)
-    equations = [_with_equation_annotations(equation, annotations) for equation in parsed.get("equations") or []]
-    return ok(equations, provider="local-cache", cache="hit")
-
-
-def get_parsed_source_equation(source_id: str, equation_id: str) -> dict[str, Any]:
-    parsed = _read_parsed_source(source_id)
-    if parsed is None:
-        return err("parsed_source_not_found", f"No parsed source found for {source_id}")
-    annotations = _current_equation_annotations(source_id, parsed)
-    for equation in parsed.get("equations") or []:
-        if str(equation.get("id") or "") == equation_id:
-            return ok(_with_equation_annotations(equation, annotations), provider="local-cache", cache="hit")
-    return err("parsed_source_equation_not_found", f"No equation {equation_id} found in {source_id}")
-
-
-def mark_parsed_equation(
-    source_id: str,
-    equation_id: str,
-    *,
-    status: str = "problematic",
-    reason: str = "",
-) -> dict[str, Any]:
-    source_id = str(source_id or "").strip()
-    equation_id = str(equation_id or "").strip()
-    status = str(status or "problematic").strip()
-    reason = str(reason or "").strip()
-    if not source_id:
-        return err("parsed_source_id_required", "A parsed source id is required.")
-    if not equation_id:
-        return err("parsed_source_equation_id_required", "A parsed equation id is required.")
-    if status not in {"problematic", "needs_recache", "resolved"}:
-        return err("parsed_source_annotation_invalid", f"Unsupported parsed equation status {status!r}.")
-    if not reason:
-        return err("parsed_source_annotation_reason_required", "A reason is required when marking a parsed equation.")
-
-    parsed = _read_parsed_source(source_id)
-    if parsed is None:
-        return err("parsed_source_not_found", f"No parsed source found for {source_id}")
-    equation = _find_parsed_equation(parsed, equation_id)
-    if equation is None:
-        return err("parsed_source_equation_not_found", f"No equation {equation_id} found in {source_id}")
-
-    annotation_source_id = _parsed_source_lookup_id(source_id)
-    path = parsed_source_annotations_cache_path(annotation_source_id)
-    sidecar = _read_parsed_source_annotations(annotation_source_id)
-    annotations = [
-        annotation
-        for annotation in sidecar.get("annotations", [])
-        if not (
-            isinstance(annotation, dict)
-            and annotation.get("target_kind") == "equation"
-            and str(annotation.get("target_id") or "") == equation_id
-        )
-    ]
-    existing = _annotation_for_target(sidecar.get("annotations", []), equation_id)
-    now = now_iso()
-    annotation = {
-        "source_id": annotation_source_id,
-        "target_kind": "equation",
-        "target_id": equation_id,
-        "status": status,
-        "reason": reason,
-        "source_hash": str(parsed.get("source_hash") or ""),
-        "parser_version": int(parsed.get("parser_version") or 0),
-        "equation_fingerprint": _equation_fingerprint(equation),
-        "created_at": str(existing.get("created_at") or now) if existing else now,
-        "updated_at": now,
-    }
-    annotations.append(annotation)
-    write_json(
-        path,
-        {
-            "schema_version": "arc.parsed_source.annotations.v1",
-            "source_id": annotation_source_id,
-            "annotations": annotations,
-        },
-    )
-    return ok(annotation, provider="local-cache", cache="write", cache_path=str(path))
-
-
-def search_parsed_source(
-    source_id: str,
-    *,
+def search_equations(
+    documents: ParsedDocument | Iterable[ParsedDocument],
     query: str,
+    *,
     limit: int = 20,
     case_sensitive: bool = False,
-) -> dict[str, Any]:
-    parsed = _read_parsed_source(source_id)
-    if parsed is None:
-        return err("parsed_source_not_found", f"No parsed source found for {source_id}")
-    if not (query or "").strip():
-        return err("parsed_source_search_query_required", "A non-empty parsed source search query is required.")
-    hits = _search_parsed_source_records(parsed, query, limit=max(1, min(int(limit), 200)), case_sensitive=case_sensitive)
-    annotations = _current_equation_annotations(source_id, parsed)
-    hits = [_with_equation_annotations(hit, annotations) if hit.get("kind") == "equation" else hit for hit in hits]
-    return ok(hits, provider="local-cache", cache="hit", query=query, limit=limit, case_sensitive=case_sensitive)
-
-
-def _read_parsed_source(source_id: str) -> dict[str, Any] | None:
-    parsed = read_json(parsed_source_cache_path(_parsed_source_lookup_id(source_id)))
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _read_parsed_source_annotations(source_id: str) -> dict[str, Any]:
-    data = read_json(parsed_source_annotations_cache_path(source_id))
-    if not isinstance(data, dict):
-        return {"schema_version": "arc.parsed_source.annotations.v1", "source_id": source_id, "annotations": []}
-    annotations = data.get("annotations")
-    if not isinstance(annotations, list):
-        annotations = []
-    return {
-        "schema_version": str(data.get("schema_version") or "arc.parsed_source.annotations.v1"),
-        "source_id": str(data.get("source_id") or source_id),
-        "annotations": [annotation for annotation in annotations if isinstance(annotation, dict)],
-    }
-
-
-def _find_parsed_equation(parsed: dict[str, Any], equation_id: str) -> dict[str, Any] | None:
-    for equation in parsed.get("equations") or []:
-        if isinstance(equation, dict) and str(equation.get("id") or "") == equation_id:
-            return equation
-    return None
-
-
-def _annotation_for_target(annotations: list[Any], equation_id: str) -> dict[str, Any]:
-    for annotation in annotations:
-        if (
-            isinstance(annotation, dict)
-            and annotation.get("target_kind") == "equation"
-            and str(annotation.get("target_id") or "") == equation_id
-        ):
-            return annotation
-    return {}
-
-
-def _current_equation_annotations(source_id: str, parsed: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    source_hash = str(parsed.get("source_hash") or "")
-    sidecar = _read_parsed_source_annotations(_parsed_source_lookup_id(source_id))
-    current: dict[str, list[dict[str, Any]]] = {}
-    for annotation in sidecar.get("annotations", []):
-        if annotation.get("target_kind") != "equation":
-            continue
-        if str(annotation.get("source_hash") or "") != source_hash:
-            continue
-        target_id = str(annotation.get("target_id") or "")
-        if not target_id:
-            continue
-        equation = _find_parsed_equation(parsed, target_id)
-        if equation is None:
-            continue
-        if int(annotation.get("parser_version") or 0) != int(parsed.get("parser_version") or 0):
-            continue
-        if str(annotation.get("equation_fingerprint") or "") != _equation_fingerprint(equation):
-            continue
-        current.setdefault(target_id, []).append(dict(annotation))
-    return current
-
-
-def _equation_fingerprint(equation: dict[str, Any]) -> str:
-    material = "\n".join(
-        str(equation.get(key) or "")
-        for key in (
-            "id",
-            "equation",
-            "before",
-            "after",
-            "section_id",
-            "section_title",
-            "tex_label",
-            "printed_equation_number",
-        )
+) -> EquationSearchResult:
+    return _search_equations(
+        documents,
+        query,
+        limit=limit,
+        case_sensitive=case_sensitive,
     )
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-def _with_equation_annotations(equation: dict[str, Any], annotations: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
-    out = dict(equation)
-    target_annotations = annotations.get(str(equation.get("id") or ""))
-    if target_annotations:
-        out["annotations"] = target_annotations
-    return out
+def table_of_contents(
+    document: ParsedDocument,
+) -> tuple[TableOfContentsEntry, ...]:
+    return _table_of_contents(document)
 
 
-def _search_parsed_source_records(
-    parsed: dict[str, Any],
-    query: str,
+def select_section(
+    document: ParsedDocument, selector: str | int
+) -> ParsedSection:
+    return _select_section(document, selector)
+
+
+def import_source(
+    path: str | Path,
     *,
-    limit: int,
-    case_sensitive: bool,
-) -> list[dict[str, Any]]:
-    hits: list[dict[str, Any]] = []
-    for section in parsed.get("sections") or []:
-        haystack = " ".join(str(section.get(field) or "") for field in ("section_id", "title", "text"))
-        if _text_contains(haystack, query, case_sensitive=case_sensitive):
-            hits.append({"kind": "section", **section})
-        if len(hits) >= limit:
-            return hits[:limit]
-    for equation in parsed.get("equations") or []:
-        haystack = " ".join(
-            str(equation.get(field) or "")
-            for field in (
-                "id",
-                "equation",
-                "before",
-                "after",
-                "section_title",
-                "tex_label",
-                "printed_equation_number",
-                "printed_equation_numbers",
-            )
-        )
-        if _text_contains(haystack, query, case_sensitive=case_sensitive):
-            hits.append({"kind": "equation", **equation})
-        if len(hits) >= limit:
-            break
-    return hits[:limit]
+    cache_root: str | Path | None = None,
+    source_format: SourceFormat | str | None = None,
+) -> SourceArtifact:
+    return ArcPaperService(cache_root=cache_root).import_source(
+        path, source_format=source_format
+    )
 
 
-def _text_contains(text: str, query: str, *, case_sensitive: bool) -> bool:
-    if case_sensitive:
-        return query in text
-    return query.lower() in text.lower()
-
-
-def _enrich_search_hits_with_cached_metadata(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    metadata_by_paper: dict[str, dict[str, str]] = {}
-    enriched: list[dict[str, Any]] = []
-    for hit in hits:
-        paper_id = str(hit.get("paper_id") or "")
-        if paper_id not in metadata_by_paper:
-            metadata_by_paper[paper_id] = _cached_search_hit_metadata(paper_id)
-        enriched_hit = dict(hit)
-        enriched_hit.update(metadata_by_paper[paper_id])
-        enriched.append(enriched_hit)
-    return enriched
-
-
-def _cached_search_hit_metadata(paper_id: str) -> dict[str, str]:
-    cached = read_json(CachePaths.for_paper(paper_id).inspire_metadata)
-    metadata = cached.get("metadata", cached) if isinstance(cached, dict) else {}
-    if not isinstance(metadata, dict):
-        metadata = {}
-    authors = _metadata_authors(metadata.get("authors"))
-    return {
-        "title": _metadata_title(metadata),
-        "authors": _format_author_list(authors),
-    }
-
-
-def _metadata_title(metadata: dict[str, Any]) -> str:
-    if title := str(metadata.get("title") or "").strip():
-        return title
-    titles = metadata.get("titles")
-    if isinstance(titles, list):
-        for item in titles:
-            if isinstance(item, dict) and (title := str(item.get("title") or "").strip()):
-                return title
-            if isinstance(item, str) and item.strip():
-                return item.strip()
-    return ""
-
-
-def _metadata_authors(raw_authors: Any) -> list[str]:
-    authors: list[str] = []
-    if not isinstance(raw_authors, list):
-        return authors
-    for author in raw_authors:
-        if isinstance(author, str):
-            name = author
-        elif isinstance(author, dict):
-            name = str(author.get("full_name") or author.get("name") or author.get("display_name") or "")
-        else:
-            name = ""
-        if name.strip():
-            authors.append(name.strip())
-    return authors
-
-
-def _format_author_list(authors: list[str]) -> str:
-    if not authors:
-        return ""
-    if len(authors) > 5:
-        return f"{authors[0]} et al."
-    return ", ".join(authors)
-
-
-def get_llm_summary(
-    ids: str | Iterable[str],
+def fetch_arxiv_auto(
+    paper_id: str,
     *,
-    provider: str = "auto",
-    model: str | None = None,
-    model_tier: str | None = None,
+    cache_root: str | Path | None = None,
     refresh: bool = False,
-    progress_callback: ProgressCallback | None = None,
-):
-    progress_callback = progress_callback or current_progress_callback()
-    return _map(
-        ids,
-        lambda paper_id: _get_or_generate_summary_one(
-            paper_id,
-            provider=provider,
-            model=model,
-            model_tier=model_tier,
-            refresh=refresh,
-            progress_callback=progress_callback,
-        ),
+) -> SourceArtifact:
+    return ArcPaperService(cache_root=cache_root).fetch_arxiv_auto(
+        paper_id, refresh=refresh
     )
 
 
-def get_cached_llm_summary(ids: str | Iterable[str]):
-    return _map(ids, _cached_summary_one)
-
-
-def generate_llm_summary(
-    ids: str | Iterable[str],
+def fetch_arxiv_pdf(
+    paper_id: str,
     *,
-    provider: str = "auto",
-    model: str | None = None,
-    model_tier: str | None = None,
+    cache_root: str | Path | None = None,
     refresh: bool = False,
-    progress_callback: ProgressCallback | None = None,
-):
-    progress_callback = progress_callback or current_progress_callback()
-    return _map(
-        ids,
-        lambda paper_id: _generate_summary_one(
-            paper_id,
-            provider=provider,
-            model=model,
-            model_tier=model_tier,
-            refresh=refresh,
-            progress_callback=progress_callback,
-        ),
+) -> SourceArtifact:
+    return ArcPaperService(cache_root=cache_root).fetch_arxiv_pdf(
+        paper_id, refresh=refresh
     )
 
 
-def store_llm_summary(paper_id: str, summary: dict[str, Any]) -> dict[str, Any]:
-    try:
-        path = store_summary(paper_id, summary)
-    except Exception as exc:
-        return err("summary_store_failed", str(exc))
-    return ok({"summary_path": str(path), "summary": summary}, provider="local-cache", cache="write")
-
-
-def doctor_cache(paper_id: str | None = None) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        "cache_root": str(cache_root()),
-        "env": {
-            "ARC_PAPER_CACHE": os.environ.get("ARC_PAPER_CACHE"),
-            "ARC_HOME": os.environ.get("ARC_HOME"),
-            "XDG_CACHE_HOME": os.environ.get("XDG_CACHE_HOME"),
-            "HOME": os.environ.get("HOME"),
-        },
-    }
-    if paper_id:
-        normalized = normalize_paper_id(paper_id)
-        paths = CachePaths.for_paper(normalized)
-        latest_summary_path = paths.paper_dir / "summaries" / "paper-summary-v1" / "latest.json"
-        latest = read_latest_summary(normalized)
-        data["paper"] = {
-            "paper_id": normalized,
-            "paper_dir": str(paths.paper_dir),
-            "paper_dir_exists": cache_path_exists(paths.paper_dir),
-            "latest_summary_path": str(latest_summary_path),
-            "latest_summary_exists": cache_path_exists(latest_summary_path),
-            "latest_summary_title": latest.get("title") if isinstance(latest, dict) else None,
-            "latest_summary_source_hash": (
-                (latest.get("provenance") or {}).get("source_hash") if isinstance(latest, dict) else None
-            ),
-        }
-    return ok(data)
-
-
-def list_cached_papers(
+def parse_local(
+    primary_path: str | Path,
     *,
-    ids: Iterable[str] | None = None,
-    since: str | None = None,
-    older_than: str | None = None,
-) -> dict[str, Any]:
-    try:
-        items = _select_cached_papers(ids=ids, since=since, older_than=older_than)
-    except ValueError as exc:
-        return err("cache_filter_invalid", str(exc))
-    return ok(
-        {"items": items, "count": len(items)},
-        provider="local-cache",
-        cache_root=str(cache_root()),
-        since=since,
-        older_than=older_than,
+    validator_paths: Sequence[str | Path] = (),
+    cache_root: str | Path | None = None,
+    primary_format: SourceFormat | str | None = None,
+    validator_formats: Sequence[SourceFormat | str | None] = (),
+    policy: ValidationPolicy | str | None = None,
+) -> ParseOutcome:
+    return ArcPaperService(cache_root=cache_root).parse_local(
+        primary_path,
+        validator_paths=validator_paths,
+        primary_format=primary_format,
+        validator_formats=validator_formats,
+        policy=policy,
     )
 
 
-def remove_cached_papers(
-    *,
-    ids: Iterable[str] | None = None,
-    since: str | None = None,
-    older_than: str | None = None,
-    all_items: bool = False,
-    dry_run: bool = True,
-) -> dict[str, Any]:
-    if not all_items and not ids and not since and not older_than:
-        return err("cache_remove_selector_required", "Use --id, --since, --older-than, or --all before removing cache entries.")
-    selected = list_cached_papers(ids=ids, since=since, older_than=older_than)
-    if not selected.get("ok"):
-        return selected
-    items = list((selected.get("data") or {}).get("items") or [])
-    removed_paths: list[str] = []
-    skipped_paths: list[dict[str, str]] = []
-    if not dry_run:
-        from .worker_session import WorkerCacheSession
-
-        worker_session = WorkerCacheSession.from_environment()
-        for path in _unique_selected_paths(items):
-            if worker_session is not None:
-                raw_path = Path(path).resolve(strict=False)
-                for root in (worker_session.overlay_root, worker_session.base_root):
-                    try:
-                        relative = raw_path.relative_to(root)
-                    except ValueError:
-                        continue
-                    worker_session.tombstone(relative, source={"operation": "cache remove"})
-                    removed_paths.append(str(worker_session.overlay_path(relative)))
-                    break
-                else:
-                    skipped_paths.append({"path": path, "reason": "outside worker cache roots"})
-                continue
-            safe_path = _safe_cache_path(Path(path))
-            if safe_path is None:
-                skipped_paths.append({"path": str(path), "reason": "outside cache root"})
-                continue
-            if not safe_path.exists():
-                continue
-            try:
-                if safe_path.is_dir():
-                    shutil.rmtree(safe_path)
-                else:
-                    safe_path.unlink()
-                removed_paths.append(str(safe_path))
-            except OSError as exc:
-                skipped_paths.append({"path": str(safe_path), "reason": str(exc)})
-    return ok(
-        {
-            "items": items,
-            "count": len(items),
-            "dry_run": dry_run,
-            "removed_count": len(removed_paths),
-            "removed_paths": removed_paths,
-            "skipped_paths": skipped_paths,
-        },
-        provider="local-cache",
-        cache_root=str(cache_root()),
-        since=since,
-        older_than=older_than,
-    )
-
-
-def _select_cached_papers(
-    *,
-    ids: Iterable[str] | None,
-    since: str | None,
-    older_than: str | None,
-) -> list[dict[str, Any]]:
-    items = _cached_paper_items()
-    id_filter = _cache_id_filter(ids)
-    if id_filter:
-        items = [item for item in items if _cache_item_matches_id(item, id_filter)]
-    now = time.time()
-    if since:
-        threshold = now - _parse_duration_seconds(since)
-        items = [item for item in items if float(item.get("modified_time") or 0.0) >= threshold]
-    if older_than:
-        threshold = now - _parse_duration_seconds(older_than)
-        items = [item for item in items if float(item.get("modified_time") or 0.0) <= threshold]
-    return sorted(items, key=lambda item: (str(item.get("paper_id") or ""), str(item.get("modified_at") or "")))
-
-
-def _cached_paper_items() -> list[dict[str, Any]]:
-    grouped: dict[str, dict[str, Any]] = {}
-    for paper_dir in iter_cache_paths("papers"):
-        if paper_dir.is_dir():
-            _add_cache_path(grouped, unquote(paper_dir.name), "paper_dir", paper_dir)
-    for source_path in iter_cache_paths("sources", "*.json"):
-        paper_id = _paper_id_from_json(source_path, default=source_path.stem)
-        _add_cache_path(grouped, paper_id, "source", source_path)
-    for annotation_path in iter_cache_paths("source-annotations", "*.json"):
-        paper_id = _source_id_from_annotation_json(annotation_path, default=annotation_path.stem)
-        _add_cache_path(grouped, paper_id, "source_annotation", annotation_path)
-    for alias_path in iter_cache_paths("paper-aliases", "*.json"):
-        paper_id = _paper_id_from_json(alias_path, default=unquote(alias_path.stem))
-        _add_cache_path(grouped, paper_id, "paper_alias", alias_path)
-    return [_finalize_cache_item(item) for item in grouped.values()]
-
-
-def _add_cache_path(grouped: dict[str, dict[str, Any]], paper_id: str, kind: str, path: Path) -> None:
-    if not paper_id or not path.exists():
-        return
-    item = grouped.setdefault(
-        paper_id,
-        {
-            "paper_id": paper_id,
-            "kinds": [],
-            "paths": [],
-            "bytes": 0,
-            "modified_time": 0.0,
-        },
-    )
-    if kind not in item["kinds"]:
-        item["kinds"].append(kind)
-    modified_time = _path_modified_time(path)
-    item["modified_time"] = max(float(item["modified_time"]), modified_time)
-    item["bytes"] = int(item["bytes"]) + _path_size(path)
-    item["paths"].append(
-        {
-            "kind": kind,
-            "path": str(path),
-            "bytes": _path_size(path),
-            "modified_at": _iso_from_timestamp(modified_time),
-        }
-    )
-
-
-def _finalize_cache_item(item: dict[str, Any]) -> dict[str, Any]:
-    out = dict(item)
-    out["kinds"] = sorted(out.get("kinds") or [])
-    out["paths"] = sorted(out.get("paths") or [], key=lambda path: (path.get("kind", ""), path.get("path", "")))
-    out["modified_at"] = _iso_from_timestamp(float(out.get("modified_time") or 0.0))
-    return out
-
-
-def _paper_id_from_json(path: Path, *, default: str) -> str:
-    data = read_json(path)
-    if isinstance(data, dict):
-        for key in ("paper_id", "source_id", "canonical_id"):
-            value = str(data.get(key) or "").strip()
-            if value:
-                return value
-    return default
-
-
-def _source_id_from_annotation_json(path: Path, *, default: str) -> str:
-    data = read_json(path)
-    if isinstance(data, dict):
-        value = str(data.get("source_id") or "").strip()
-        if value:
-            return value
-    return default
-
-
-def _cache_id_filter(ids: Iterable[str] | None) -> set[str]:
-    out: set[str] = set()
-    for paper_id in ids or []:
-        raw = str(paper_id or "").strip()
-        normalized = normalize_paper_id(raw)
-        if raw:
-            out.add(raw)
-        if normalized:
-            out.add(normalized)
-    return out
-
-
-def _cache_item_matches_id(item: dict[str, Any], id_filter: set[str]) -> bool:
-    paper_id = str(item.get("paper_id") or "")
-    return paper_id in id_filter or normalize_paper_id(paper_id) in id_filter
-
-
-def _parse_duration_seconds(value: str) -> float:
-    text = str(value or "").strip().lower().replace("_", " ").replace("-", " ")
-    if text.startswith("past "):
-        text = text[5:].strip()
-    units = {
-        "s": 1,
-        "sec": 1,
-        "second": 1,
-        "seconds": 1,
-        "m": 60,
-        "min": 60,
-        "minute": 60,
-        "minutes": 60,
-        "h": 3600,
-        "hr": 3600,
-        "hour": 3600,
-        "hours": 3600,
-        "d": 86400,
-        "day": 86400,
-        "days": 86400,
-        "w": 7 * 86400,
-        "week": 7 * 86400,
-        "weeks": 7 * 86400,
-    }
-    if text in units:
-        return float(units[text])
-    match = re.match(r"^(\d+(?:\.\d+)?)\s*([a-z]+)$", text)
-    if not match:
-        raise ValueError(f"Invalid duration {value!r}; use values like 1h, 1d, or past hour.")
-    amount = float(match.group(1))
-    unit = match.group(2)
-    if unit not in units:
-        raise ValueError(f"Invalid duration unit {unit!r}; use h, d, or week.")
-    return amount * units[unit]
-
-
-def _path_modified_time(path: Path) -> float:
-    if path.is_dir():
-        latest = path.stat().st_mtime
-        for child in path.rglob("*"):
-            try:
-                latest = max(latest, child.stat().st_mtime)
-            except OSError:
-                continue
-        return latest
-    return path.stat().st_mtime
-
-
-def _path_size(path: Path) -> int:
-    if path.is_dir():
-        total = 0
-        for child in path.rglob("*"):
-            if child.is_file():
-                try:
-                    total += child.stat().st_size
-                except OSError:
-                    continue
-        return total
-    try:
-        return path.stat().st_size
-    except OSError:
-        return 0
-
-
-def _iso_from_timestamp(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
-
-
-def _unique_selected_paths(items: list[dict[str, Any]]) -> list[str]:
-    paths: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        for path_info in item.get("paths") or []:
-            path = str(path_info.get("path") or "")
-            if path and path not in seen:
-                seen.add(path)
-                paths.append(path)
-    return paths
-
-
-def _safe_cache_path(path: Path) -> Path | None:
-    root = cache_root().resolve()
-    try:
-        resolved = path.resolve()
-        resolved.relative_to(root)
-    except (OSError, ValueError):
-        return None
-    return resolved
-
-
-def _metadata_field(paper_id: str, field: str, *, refresh: bool) -> dict[str, Any]:
-    return _call(lambda: _inspire.get_metadata(paper_id, refresh=refresh).get(field), "inspire")
-
-
-def _cached_summary_one(paper_id: str) -> dict[str, Any]:
-    cached = read_latest_summary(paper_id)
-    if cached:
-        return ok(cached, provider="local-cache", cache="hit")
-    return err("summary_not_available", f"No cached LLM summary is available for {paper_id}")
-
-
-def _section_one(paper_id: str, section: str, *, refresh: bool) -> dict[str, Any]:
-    try:
-        parsed = _parsed(paper_id, refresh=refresh)
-        result = parsed_get_section(parsed, section)
-        if result["ok"]:
-            result["meta"] = {"provider": "ar5iv"}
-        return result
-    except ProviderError as exc:
-        return err(exc.code, exc.message)
-    except Exception as exc:
-        return err("paper_query_error", str(exc))
-
-
-def _equation_one(paper_id: str, query: str, *, refresh: bool) -> dict[str, Any]:
-    try:
-        parsed = _parsed(paper_id, refresh=refresh)
-        return ok(find_equation_context(parsed.get("equations") or [], query), provider="ar5iv")
-    except ProviderError as exc:
-        return err(exc.code, exc.message)
-    except Exception as exc:
-        return err("paper_query_error", str(exc))
-
-
-def _parse_source_id(*, source_id: str | None, paper_id: str | None) -> str | None:
-    if source_id and paper_id:
-        raise ValueError("Use either --id or --paper-id, not both.")
-    if paper_id:
-        return normalize_paper_id(paper_id)
-    return source_id
-
-
-def _parse_local_source(
-    *,
-    source: str,
-    source_path: str | Path | None,
-    source_id: str | None,
-    html_path: str | Path | None,
-    tex_path: str | Path | None,
-    markdown_path: str | Path | None,
-    pdf_path: str | Path | None,
-    include_document: bool,
-    document_kind: str,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    _validate_local_source(
-        source,
-        source_path=source_path,
-        html_path=html_path,
-        tex_path=tex_path,
-        markdown_path=markdown_path,
-        pdf_path=pdf_path,
-    )
-    return parse_source_input_with_warnings(
-        source_path=source_path,
-        source_id=source_id,
-        html_path=html_path,
-        tex_path=tex_path,
-        markdown_path=markdown_path,
-        pdf_path=pdf_path,
-        include_document=include_document,
-        document_kind=document_kind,
-    )
-
-
-def _validate_local_source(
-    source: str,
-    *,
-    source_path: str | Path | None,
-    html_path: str | Path | None,
-    tex_path: str | Path | None,
-    markdown_path: str | Path | None,
-    pdf_path: str | Path | None,
-) -> None:
-    if source not in {"auto", "html", "tex", "markdown", "pdf", "tex-pdf", "markdown-pdf"}:
-        raise ValueError(f"Unsupported parse source: {source}")
-    if source == "auto":
-        return
-    source_suffix = Path(source_path).suffix.lower() if source_path else ""
-    has_html = bool(html_path) or source_suffix in {".html", ".htm"}
-    has_tex = bool(tex_path) or source_suffix == ".tex"
-    has_markdown = bool(markdown_path) or source_suffix in {".md", ".markdown"}
-    has_pdf = bool(pdf_path) or source_suffix == ".pdf"
-    if source == "html":
-        if not has_html or has_tex or has_markdown or has_pdf:
-            raise ValueError("source=html requires HTML input only")
-    elif source == "tex":
-        if not has_tex or has_html or has_markdown or has_pdf:
-            raise ValueError("source=tex requires TeX input only; use source=tex-pdf with --pdf")
-    elif source == "markdown":
-        if not has_markdown or has_html or has_tex or has_pdf:
-            raise ValueError("source=markdown requires Markdown input only; use source=markdown-pdf with --pdf")
-    elif source == "pdf":
-        if not has_pdf or has_html or has_tex or has_markdown:
-            raise ValueError("source=pdf requires PDF input only")
-    elif source == "tex-pdf":
-        if not has_tex or not pdf_path or has_html or has_markdown or source_suffix == ".pdf":
-            raise ValueError("source=tex-pdf requires TeX input plus --pdf")
-    elif source == "markdown-pdf":
-        if not has_markdown or not pdf_path or has_html or has_tex or source_suffix == ".pdf":
-            raise ValueError("source=markdown-pdf requires Markdown input plus --pdf")
-
-
-def _is_paired_pdf_input(
-    *,
-    source_path: str | Path | None,
-    html_path: str | Path | None,
-    tex_path: str | Path | None,
-    markdown_path: str | Path | None,
-    pdf_path: str | Path | None,
-) -> bool:
-    if not pdf_path:
-        return False
-    suffix = Path(source_path).suffix.lower() if source_path else ""
-    return bool(html_path or tex_path or markdown_path or suffix in {".html", ".htm", ".tex", ".md", ".markdown"})
-
-
-def _parse_ar5iv_source(
-    paper_id: str | None,
-    *,
-    refresh: bool,
-    include_document: bool = False,
-    document_kind: str = "auto",
-) -> dict[str, Any]:
-    if not paper_id:
-        raise ValueError("ar5iv parsing requires paper_id")
-    full_text_id = _full_text_paper_id(paper_id, refresh=refresh)
-    html = _ar5iv.get_html(full_text_id, refresh=refresh)
-    assets: list[dict[str, Any]] = []
-    if include_document:
-        cache_assets = getattr(_ar5iv, "cache_assets", None)
-        if callable(cache_assets):
-            assets = cache_assets(full_text_id, html, refresh=refresh)
-    normalized = normalize_paper_id(full_text_id)
-    return parse_source_input(
-        html_text=html,
-        source_id=normalized,
-        include_document=include_document,
-        source_url=ar5iv_url(normalized),
-        assets=assets,
-        document_kind=document_kind,
-    )
-
-
-def _parsed(paper_id: str, *, refresh: bool, require_document: bool = False) -> dict[str, Any]:
-    full_text_id = _full_text_paper_id(paper_id, refresh=refresh)
-    normalized = normalize_paper_id(full_text_id)
-    with parsed_source_lock(normalized, namespace=f"light-v{SOURCE_PARSER_VERSION}"):
-        path = parsed_source_cache_path(normalized)
-        cached = read_json(path) if not refresh else None
-        if _is_current_light_cache(cached, normalized):
-            _ensure_parsed_identity_cache(cached)
-            if not require_document:
-                return cached
-            document = _read_rich_document(cached)
-            if document is not None:
-                return _parsed_source_with_document(cached, document)
-        parsed = _parse_ar5iv_source(
-            normalized,
-            refresh=refresh,
-            include_document=require_document,
-        )
-        _write_parsed_caches(parsed, include_document=require_document)
-        return parsed
-
-
-def _is_current_light_cache(
-    cached: Any,
-    paper_id: str | None,
-    *,
-    document_kind: str = "auto",
-    paired_pdf: bool = False,
-) -> bool:
-    structure = cached.get("structure") if isinstance(cached, dict) else None
-    return bool(
-        isinstance(cached, dict)
-        and cached.get("paper_id") == paper_id
-        and cached.get("parser_version") == SOURCE_PARSER_VERSION
-        and cached.get("source_hash")
-        and isinstance(structure, dict)
-        and structure.get("requested_document_kind") == document_kind
-        and isinstance(cached.get("index_entries"), dict)
-        and (not paired_pdf or has_reconciliation_proof(structure))
-    )
-
-
-def _rich_cache_path(parsed: dict[str, Any]) -> Path:
-    return rich_document_cache_path(
-        str(parsed.get("paper_id") or ""),
-        str(parsed.get("source_hash") or ""),
-        RICH_PARSER_VERSION,
-    )
-
-
-def _read_rich_document(
-    parsed: dict[str, Any], *, migrate_legacy: bool = True,
-) -> dict[str, Any] | None:
-    cached = read_json(_rich_cache_path(parsed))
-    if isinstance(cached, dict):
-        document = cached.get("document")
-        if (
-            cached.get("paper_id") == parsed.get("paper_id")
-            and cached.get("source_hash") == parsed.get("source_hash")
-            and cached.get("rich_parser_version") == RICH_PARSER_VERSION
-            and isinstance(document, dict)
-            and document.get("schema_version") == DOCUMENT_SCHEMA_VERSION
-            and document.get("parser_version") == RICH_PARSER_VERSION
-        ):
-            return document
-    legacy_document = parsed.get("document")
-    if (
-        migrate_legacy
-        and
-        isinstance(legacy_document, dict)
-        and legacy_document.get("schema_version") == DOCUMENT_SCHEMA_VERSION
-        and legacy_document.get("parser_version") == RICH_PARSER_VERSION
-    ):
-        write_json(
-            _rich_cache_path(parsed),
-            {
-                "paper_id": parsed.get("paper_id"),
-                "source_hash": parsed.get("source_hash"),
-                "rich_parser_version": RICH_PARSER_VERSION,
-                "document": legacy_document,
-            },
-        )
-        return legacy_document
-    return None
-
-
-def _rebuild_local_rich_document_from_stale_cache(parsed: dict[str, Any]) -> dict[str, Any] | None:
-    """Rebuild a version-stale local Markdown document from cached provenance."""
-
-    current_path = _rich_cache_path(parsed)
-    source_hash = str(parsed.get("source_hash") or "")
-    candidates = sorted(
-        current_path.parent.parent.glob(f"v*/{source_hash}.json"),
-        key=_rich_cache_version,
-        reverse=True,
-    )
-    for candidate in candidates:
-        if candidate == current_path:
-            continue
-        stale = read_json(candidate)
-        if not isinstance(stale, dict):
-            continue
-        if stale.get("paper_id") != parsed.get("paper_id") or stale.get("source_hash") != source_hash:
-            continue
-        document = stale.get("document")
-        source = document.get("source") if isinstance(document, dict) else None
-        if not isinstance(source, dict) or source.get("format") != "markdown":
-            continue
-        markdown_path = Path(str(source.get("path") or ""))
-        raw_pdf_path = str(source.get("pdf_path") or "")
-        pdf_path = Path(raw_pdf_path) if raw_pdf_path else None
-        if not markdown_path.is_file() or (pdf_path is not None and not pdf_path.is_file()):
-            continue
-        if source_input_hash(markdown_path=markdown_path, pdf_path=pdf_path) != source_hash:
-            continue
-        rebuilt = parse_source_input(
-            markdown_path=markdown_path,
-            pdf_path=pdf_path,
-            source_id=str(parsed.get("paper_id") or ""),
-            include_document=True,
-        )
-        if rebuilt.get("source_hash") != source_hash or not isinstance(rebuilt.get("document"), dict):
-            continue
-        _write_rich_cache(rebuilt)
-        return rebuilt["document"]
-    return None
-
-
-def _rich_cache_version(path: Path) -> int:
-    match = re.fullmatch(r"v(\d+)", path.parent.name)
-    return int(match.group(1)) if match else -1
-
-
-def _write_parsed_caches(
-    parsed: dict[str, Any],
-    *,
-    include_document: bool,
-) -> tuple[Path, Path | None]:
-    paper_id = str(parsed["paper_id"])
-    light = {key: parsed.get(key) for key in PARSED_SOURCE_KEYS}
-    light_path = parsed_source_cache_path(paper_id)
-    write_json(light_path, light)
-    _write_parsed_identity_cache(parsed)
-    rich_path: Path | None = None
-    document = parsed.get("document")
-    if include_document and isinstance(document, dict):
-        rich_path = _write_rich_cache(parsed)
-    return light_path, rich_path
-
-
-def _ensure_parsed_identity_cache(parsed: dict[str, Any]) -> Path:
-    path = parsed_source_identity_cache_path(str(parsed.get("paper_id") or ""))
-    if read_json(path) is None:
-        _write_parsed_identity_cache(parsed)
-    return path
-
-
-def _write_parsed_identity_cache(parsed: dict[str, Any]) -> Path:
-    paper_id = str(parsed.get("paper_id") or "")
-    cached_metadata = read_json(CachePaths.for_paper(paper_id).inspire_metadata)
-    cached_metadata = cached_metadata if isinstance(cached_metadata, dict) else {}
-    metadata = cached_metadata.get("metadata", cached_metadata)
-    metadata = dict(metadata) if isinstance(metadata, dict) else {}
-    if isinstance(parsed.get("metadata"), dict):
-        metadata.update(parsed["metadata"])
-    toc = []
-    for item in parsed.get("toc") or []:
-        if not isinstance(item, dict):
-            continue
-        compact = {
-            key: item.get(key)
-            for key in ("id", "section_id", "title", "level")
-            if item.get(key) is not None
-        }
-        if compact:
-            toc.append(compact)
-    source_hash = str(parsed.get("source_hash") or "")
-    path = parsed_source_identity_cache_path(paper_id)
-    payload = {
-        "schema_version": "arc.parsed-source.identity.v1",
-        "paper_id": paper_id,
-        "parser_version": parsed.get("parser_version"),
-        "source_hash": source_hash,
-        "document_hash": source_hash,
-        "metadata": metadata,
-        "toc": toc,
-    }
-    structure_view = _build_parsed_structure_view(parsed)
-    if structure_view is not None:
-        payload["structure_view"] = structure_view
-    write_json(path, payload)
-    return path
-
-
-def _build_parsed_structure_view(parsed: dict[str, Any]) -> dict[str, Any] | None:
-    """Build the cache-time sidecar view; never called by the read operation."""
-
-    structure = parsed.get("structure")
-    raw_sections = parsed.get("sections")
-    if (
-        parsed.get("parser_version") != SOURCE_PARSER_VERSION
-        or not isinstance(structure, dict)
-        or structure.get("schema_version") != STRUCTURE_SCHEMA_VERSION
-        or not isinstance(raw_sections, list)
-        or not isinstance(structure.get("chapters"), list)
-        or not isinstance(structure.get("coverage"), dict)
-    ):
-        return None
-
-    parsed_sections: dict[str, dict[str, Any]] = {}
-    for item in raw_sections:
-        if not isinstance(item, dict):
-            return None
-        section_id = str(item.get("section_id") or "")
-        if not section_id or section_id in parsed_sections:
-            return None
-        parsed_sections[section_id] = item
-
-    structure_section_ids = [
-        str(section_id)
-        for chapter in structure["chapters"]
-        if isinstance(chapter, dict)
-        for section_id in chapter.get("section_ids") or []
-    ]
-    if (
-        not structure_section_ids
-        or len(structure_section_ids) != len(set(structure_section_ids))
-        or any(section_id not in parsed_sections for section_id in structure_section_ids)
-    ):
-        return None
-
-    sections: list[dict[str, Any]] = []
-    for ordinal, section_id in enumerate(structure_section_ids):
-        item = parsed_sections[section_id]
-        result = parsed_get_section(parsed, section_id)
-        data = result.get("data") if isinstance(result, dict) else None
-        if (
-            result.get("ok") is not True
-            or not isinstance(data, dict)
-            or str(data.get("section_id") or "") != section_id
-        ):
-            return None
-        sections.append({
-            "section_id": section_id,
-            "title": _normalized_structure_title(item.get("title")),
-            "level": int(item.get("level") or 1),
-            "ordinal": ordinal,
-            "section_payload_sha256": _canonical_json_sha256(data),
-        })
-
-    chapters: list[dict[str, Any]] = []
-    for item in structure["chapters"]:
-        if not isinstance(item, dict):
-            return None
-        title = _normalized_structure_title(item.get("title"))
-        chapters.append({
-            "chapter_id": str(item.get("chapter_id") or ""),
-            "title": title,
-            "level": int(item.get("level") or 1),
-            "leading_decimal_ordinal": _leading_decimal_ordinal(title),
-            "section_ids": [str(value) for value in item.get("section_ids") or []],
-        })
-
-    source_hash = str(parsed.get("source_hash") or "")
-    paper_id = str(parsed.get("paper_id") or "")
-    view = {
-        "schema_version": PARSED_STRUCTURE_VIEW_SCHEMA_VERSION,
-        "requested_source_id": paper_id,
-        "canonical_source_id": paper_id,
-        "parser_version": parsed.get("parser_version"),
-        "source_hash": source_hash,
-        "document_hash": source_hash,
-        "structure_schema_version": structure.get("schema_version"),
-        "requested_document_kind": structure.get("requested_document_kind"),
-        "document_kind": structure.get("document_kind"),
-        "structure_source": structure.get("structure_source"),
-        "chapters": chapters,
-        "sections": sections,
-        "coverage": {
-            key: structure["coverage"].get(key)
-            for key in (
-                "status", "expected_count", "covered_count", "duplicates",
-                "missing", "unexpected", "monotonic_order",
-            )
-        },
-    }
-    return view if _valid_parsed_structure_view(
-        view,
-        identity={
-            "schema_version": "arc.parsed-source.identity.v1",
-            "paper_id": paper_id,
-            "parser_version": parsed.get("parser_version"),
-            "source_hash": source_hash,
-            "document_hash": source_hash,
-        },
-    ) else None
-
-
-def _valid_parsed_structure_view(
-    value: Any, *, identity: dict[str, Any],
-) -> bool:
-    top_keys = {
-        "schema_version", "requested_source_id", "canonical_source_id",
-        "parser_version", "source_hash", "document_hash",
-        "structure_schema_version", "requested_document_kind", "document_kind",
-        "structure_source", "chapters", "sections", "coverage",
-    }
-    chapter_keys = {
-        "chapter_id", "title", "level", "leading_decimal_ordinal", "section_ids",
-    }
-    section_keys = {
-        "section_id", "title", "level", "ordinal", "section_payload_sha256",
-    }
-    coverage_keys = {
-        "status", "expected_count", "covered_count", "duplicates", "missing",
-        "unexpected", "monotonic_order",
-    }
-    if not isinstance(value, dict) or set(value) != top_keys:
-        return False
-    if (
-        value.get("schema_version") != PARSED_STRUCTURE_VIEW_SCHEMA_VERSION
-        or identity.get("schema_version") != "arc.parsed-source.identity.v1"
-        or value.get("parser_version") != SOURCE_PARSER_VERSION
-        or value.get("structure_schema_version") != STRUCTURE_SCHEMA_VERSION
-        or value.get("requested_source_id") != identity.get("paper_id")
-        or value.get("canonical_source_id") != identity.get("paper_id")
-        or value.get("parser_version") != identity.get("parser_version")
-        or value.get("source_hash") != identity.get("source_hash")
-        or value.get("document_hash") != identity.get("document_hash")
-        or not isinstance(value.get("requested_source_id"), str)
-        or not value["requested_source_id"]
-        or not isinstance(value.get("canonical_source_id"), str)
-        or not value["canonical_source_id"]
-        or not _SHA256_RE.fullmatch(str(value.get("source_hash") or ""))
-        or not _SHA256_RE.fullmatch(str(value.get("document_hash") or ""))
-        or value.get("requested_document_kind") not in {"auto", "article", "book"}
-        or value.get("document_kind") not in {"article", "book"}
-        or not isinstance(value.get("structure_source"), str)
-        or not value["structure_source"]
-        or not isinstance(value.get("chapters"), list)
-        or not value["chapters"]
-        or not isinstance(value.get("sections"), list)
-        or not value["sections"]
-        or not isinstance(value.get("coverage"), dict)
-    ):
-        return False
-
-    section_ids: list[str] = []
-    for index, section in enumerate(value["sections"]):
-        if (
-            not isinstance(section, dict)
-            or set(section) != section_keys
-            or not isinstance(section.get("section_id"), str)
-            or not section["section_id"]
-            or not isinstance(section.get("title"), str)
-            or section["title"] != _normalized_structure_title(section["title"])
-            or not _positive_int(section.get("level"))
-            or section.get("ordinal") != index
-            or not _SHA256_RE.fullmatch(
-                str(section.get("section_payload_sha256") or "")
-            )
-        ):
-            return False
-        section_ids.append(section["section_id"])
-    if len(section_ids) != len(set(section_ids)):
-        return False
-
-    chapter_ids: list[str] = []
-    covered: list[str] = []
-    for chapter in value["chapters"]:
-        ordinal = chapter.get("leading_decimal_ordinal") if isinstance(
-            chapter, dict
-        ) else None
-        if (
-            not isinstance(chapter, dict)
-            or set(chapter) != chapter_keys
-            or not isinstance(chapter.get("chapter_id"), str)
-            or not chapter["chapter_id"]
-            or not isinstance(chapter.get("title"), str)
-            or chapter["title"] != _normalized_structure_title(chapter["title"])
-            or not _positive_int(chapter.get("level"))
-            or (
-                ordinal is not None
-                and (not _positive_int(ordinal) or ordinal != _leading_decimal_ordinal(
-                    chapter["title"]
-                ))
-            )
-            or (
-                ordinal is None
-                and _leading_decimal_ordinal(chapter["title"]) is not None
-            )
-            or not isinstance(chapter.get("section_ids"), list)
-            or not chapter["section_ids"]
-            or not all(
-                isinstance(section_id, str) and section_id
-                for section_id in chapter["section_ids"]
-            )
-        ):
-            return False
-        chapter_ids.append(chapter["chapter_id"])
-        covered.extend(chapter["section_ids"])
-    if len(chapter_ids) != len(set(chapter_ids)):
-        return False
-
-    expected_coverage = {
-        "status": "complete",
-        "expected_count": len(section_ids),
-        "covered_count": len(covered),
-        "duplicates": sorted({
-            section_id for section_id in covered if covered.count(section_id) > 1
-        }),
-        "missing": [section_id for section_id in section_ids if section_id not in covered],
-        "unexpected": [section_id for section_id in covered if section_id not in section_ids],
-        "monotonic_order": [
-            section_id for section_id in covered if section_id in section_ids
-        ] == section_ids,
-    }
-    if (
-        expected_coverage["duplicates"]
-        or expected_coverage["missing"]
-        or expected_coverage["unexpected"]
-        or not expected_coverage["monotonic_order"]
-    ):
-        expected_coverage["status"] = "invalid"
-    return (
-        set(value["coverage"]) == coverage_keys
-        and value["coverage"] == expected_coverage
-    )
-
-
-def _canonical_json_sha256(value: Any) -> str:
-    payload = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _normalized_structure_title(value: Any) -> str:
-    return " ".join(unicodedata.normalize("NFC", str(value or "")).split())
-
-
-def _leading_decimal_ordinal(title: str) -> int | None:
-    match = re.match(r"^([1-9][0-9]*)(.*)$", title, flags=re.ASCII)
-    if match is None:
-        return None
-    remainder = match.group(2)
-    if not remainder:
-        return int(match.group(1))
-    if remainder[0].isspace():
-        return int(match.group(1))
-    if unicodedata.category(remainder[0]).startswith("P") and not (
-        remainder[0] in ".,/⁄"
-        and len(remainder) > 1
-        and remainder[1].isdigit()
-    ):
-        return int(match.group(1))
-    return None
-
-
-def _positive_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
-
-
-def _write_rich_cache(parsed: dict[str, Any]) -> Path:
-    path = _rich_cache_path(parsed)
-    write_json(
-        path,
-        {
-            "paper_id": parsed.get("paper_id"),
-            "source_hash": parsed.get("source_hash"),
-            "rich_parser_version": RICH_PARSER_VERSION,
-            "document": parsed["document"],
-        },
-    )
-    return path
-
-
-def _parsed_source_with_document(parsed: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
-    return {**_parsed_source_view(parsed, include_document=False), "document": document}
-
-
-def _parsed_source_view(parsed: dict[str, Any], *, include_document: bool) -> dict[str, Any]:
-    if include_document:
-        document = parsed.get("document")
-        if isinstance(document, dict):
-            return _parsed_source_with_document(parsed, document)
-    return {key: parsed.get(key) for key in PARSED_SOURCE_KEYS}
-
-
-def _parsed_source_lookup_id(source_id: str) -> str:
-    current = normalize_paper_id(source_id)
-    seen: set[str] = set()
-    while current and current not in seen:
-        seen.add(current)
-        alias = normalize_paper_id(read_paper_alias(current))
-        if not alias:
-            return current
-        current = alias
-    return current or normalize_paper_id(source_id)
-
-
-def _full_text_search_files(
-    ids: str | Iterable[str] | None,
-    *,
-    refresh: bool,
-) -> tuple[list[FullTextSearchFile], list[str]]:
-    if ids is None:
-        return _all_cached_full_text_files(), []
-    raw_ids = [ids] if isinstance(ids, str) else list(ids or [])
-    files_by_path: dict[Path, FullTextSearchFile] = {}
-    missing: list[str] = []
-    for raw in raw_ids:
-        normalized_raw = normalize_paper_id(str(raw))
-        local_path = parsed_source_cache_path(normalized_raw)
-        resolved_local_path = resolve_cache_read_path(local_path)
-        if not refresh and not arxiv_path_id(normalized_raw) and resolved_local_path is not None:
-            files_by_path[resolved_local_path] = FullTextSearchFile(normalized_raw, resolved_local_path)
-            continue
-        full_text_id = _full_text_paper_id(str(raw), refresh=refresh)
-        path = parsed_source_cache_path(full_text_id)
-        _parsed(full_text_id, refresh=refresh)
-        resolved_path = resolve_cache_read_path(path)
-        if resolved_path is not None:
-            files_by_path[resolved_path] = FullTextSearchFile(full_text_id, resolved_path)
-        else:
-            missing.append(full_text_id)
-    return list(files_by_path.values()), missing
-
-
-def _all_cached_full_text_files() -> list[FullTextSearchFile]:
-    files = []
-    for path in iter_cache_paths("sources", "*.json"):
-        parsed = read_json(path)
-        if isinstance(parsed, dict) and parsed.get("paper_id"):
-            files.append(FullTextSearchFile(str(parsed["paper_id"]), path))
-    return files
-
-
-def _full_text_paper_id(paper_id: str, *, refresh: bool) -> str:
-    normalized = normalize_paper_id(paper_id)
-    if arxiv_path_id(normalized):
-        return normalized
-    metadata = _inspire.get_metadata(normalized, refresh=refresh)
-    if arxiv_id := metadata.get("arxiv_id"):
-        return normalize_paper_id(f"arXiv:{arxiv_id}")
-    return normalized
-
-
-def _summary_status(paper_id: str, *, refresh: bool) -> dict[str, Any]:
-    task = _build_summary_task(paper_id, refresh=refresh)
-    summary_paper_id = str(task["input_pack"]["paper_id"])
-    source_hash = task["input_pack"]["source_hash"]
-    if not refresh and (cached := read_summary(summary_paper_id, source_hash=source_hash)):
-        return ok(cached, provider="local-cache", cache="hit")
-    return _needs_llm(summary_paper_id, task)
-
-
-def _summary_status_for_generation(
-    paper_id: str,
-    *,
-    refresh: bool,
-    provider: str,
-    model: str | None,
-) -> dict[str, Any]:
-    task = _build_summary_task(paper_id, refresh=refresh)
-    summary_paper_id = str(task["input_pack"]["paper_id"])
-    source_hash = task["input_pack"]["source_hash"]
-    if not refresh and (
-        cached := read_summary(summary_paper_id, source_hash=source_hash, provider=provider, model=model)
-    ):
-        return ok(cached, provider="local-cache", cache="hit")
-    return _needs_llm(summary_paper_id, task)
-
-
-def _get_or_generate_summary_one(
-    paper_id: str,
-    *,
-    provider: str,
-    model: str | None,
-    model_tier: str | None,
-    refresh: bool,
-    progress_callback: ProgressCallback | None,
-) -> dict[str, Any]:
-    config = None
-    if provider != "auto" or model or model_tier:
-        try:
-            config = resolve_llm_config(provider=provider, model=model, model_tier=model_tier)
-        except Exception as exc:
-            if _abort_batch_exception(exc):
-                raise
-            return err("summary_generation_failed", str(exc))
-        status = _summary_status_for_generation_or_error(
-            paper_id,
-            refresh=refresh,
-            provider=config.provider,
-            model=config.model,
-        )
-    else:
-        status = _summary_status_or_error(paper_id, refresh=refresh)
-    if status["ok"]:
-        return status
-    if status.get("status") != "needs_llm":
-        return status
-    return _generate_from_status(
-        paper_id,
-        status,
-        config=config,
-        provider=provider,
-        model=model,
-        model_tier=model_tier,
-        progress_callback=progress_callback,
-    )
-
-
-def _generate_summary_one(
-    paper_id: str,
-    *,
-    provider: str,
-    model: str | None,
-    model_tier: str | None,
-    refresh: bool,
-    progress_callback: ProgressCallback | None,
-) -> dict[str, Any]:
-    model_tier = _summary_model_tier(model=model, model_tier=model_tier)
-    try:
-        config = resolve_llm_config(provider=provider, model=model, model_tier=model_tier)
-    except Exception as exc:
-        if _abort_batch_exception(exc):
-            raise
-        return err("summary_generation_failed", str(exc))
-    status = _summary_status_for_generation_or_error(
-        paper_id,
-        refresh=refresh,
-        provider=config.provider,
-        model=config.model,
-    )
-    if status["ok"]:
-        return status
-    if status.get("status") != "needs_llm":
-        return status
-    return _generate_from_status(
-        paper_id,
-        status,
-        config=config,
-        model_tier=model_tier,
-        progress_callback=progress_callback,
-    )
-
-
-def _summary_status_or_error(paper_id: str, *, refresh: bool) -> dict[str, Any]:
-    try:
-        return _summary_status(paper_id, refresh=refresh)
-    except ProviderError as exc:
-        return err(exc.code, exc.message)
-    except Exception as exc:
-        return err("paper_query_error", str(exc))
-
-
-def _summary_status_for_generation_or_error(
-    paper_id: str,
-    *,
-    refresh: bool,
-    provider: str,
-    model: str | None,
-) -> dict[str, Any]:
-    try:
-        return _summary_status_for_generation(paper_id, refresh=refresh, provider=provider, model=model)
-    except ProviderError as exc:
-        return err(exc.code, exc.message)
-    except Exception as exc:
-        return err("paper_query_error", str(exc))
-
-
-def _generate_from_status(
-    paper_id: str,
-    status: dict[str, Any],
-    *,
-    progress_callback: ProgressCallback | None,
-    config: Any | None = None,
-    provider: str = "auto",
-    model: str | None = None,
-    model_tier: str | None = None,
-) -> dict[str, Any]:
-    try:
-        model_tier = _summary_model_tier(model=model, model_tier=model_tier)
-        if config is None:
-            config = resolve_llm_config(provider=provider, model=model, model_tier=model_tier)
-        selected = select_summary_provider(config.provider)
-        if selected.name == "manual":
-            return status
-        summary_paper_id = str(status.get("paper_id") or paper_id)
-        task = status["llm_task"]
-        input_pack = task.get("input_pack") or {}
-        source_hash = str(input_pack.get("source_hash") or "")
-        refresh = bool(task.get("refresh"))
-        initial_cached = read_summary(
-            summary_paper_id,
-            source_hash=source_hash,
-            provider=config.provider,
-            model=config.model,
-        )
-        lock_key = json.dumps(
-            {
-                "paper_id": summary_paper_id,
-                "source_hash": source_hash,
-                "prompt_version": task.get("prompt_version"),
-                "provider": config.provider,
-                "model": config.model,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        with content_lock("paper-summaries", lock_key):
-            cached = read_summary(
-                summary_paper_id,
-                source_hash=source_hash,
-                provider=config.provider,
-                model=config.model,
-            )
-            if cached is not None and (not refresh or cached != initial_cached):
-                cached_path = CachePaths.for_paper(summary_paper_id).summary_path(
-                    str(task.get("prompt_version") or "paper-summary-v1"),
-                    source_hash,
-                    provider=config.provider,
-                    model=config.model,
-                )
-                return ok(cached, provider="local-cache", cache="hit", summary_path=str(cached_path))
-            summary = selected.generate_summary(
-                task,
-                model=config.model,
-                model_tier=model_tier,
-                progress_callback=progress_callback,
-            )
-            path = store_summary(summary_paper_id, summary)
-    except Exception as exc:
-        if _abort_batch_exception(exc):
-            raise
-        return err("summary_generation_failed", str(exc))
-    return ok(summary, provider=selected.name, cache="write", summary_path=str(path))
-
-
-def _summary_model_tier(*, model: str | None, model_tier: str | None) -> str | None:
-    if model_tier:
-        return model_tier
-    if model:
-        return None
-    return DEFAULT_SUMMARY_MODEL_TIER
-
-
-def _build_summary_task(paper_id: str, *, refresh: bool) -> dict[str, Any]:
-    metadata = _inspire.get_metadata(paper_id, refresh=refresh)
-    summary_paper_id = _summary_paper_id(paper_id, metadata)
-    parsed = _parsed(summary_paper_id, refresh=refresh)
-    input_pack = build_input_pack(
-        summary_paper_id,
-        metadata=metadata,
-        parsed=parsed,
-    )
-    return {
-        "task_type": "paper_summary",
-        "pipeline": "section_then_paper",
-        "refresh": refresh,
-        "prompt_version": "paper-summary-v1",
-        "system_prompt": load_summary_prompt(),
-        "user_prompt": "Generate a paper summary JSON for the supplied input pack.",
-        "input_pack": input_pack,
-        "output_schema": load_summary_schema(),
-    }
-
-
-def _needs_llm(paper_id: str, task: dict[str, Any]) -> dict[str, Any]:
-    normalized = normalize_paper_id(paper_id)
-    return {
-        "ok": False,
-        "status": "needs_llm",
-        "paper_id": normalized,
-        "llm_task": task,
-        "next": {
-            "store_command": f"arc-paper store-llm-summary {normalized} --summary-json -"
-        },
-    }
-
-
-def _summary_paper_id(requested_id: str, metadata: dict[str, Any]) -> str:
-    if metadata_id := normalize_paper_id(str(metadata.get("paper_id") or "")):
-        return metadata_id
-    if arxiv_id := arxiv_path_id(str(metadata.get("arxiv_id") or "")):
-        return normalize_paper_id(f"arXiv:{arxiv_id}")
-    return normalize_paper_id(requested_id)
-
-
-def _map(ids: str | Iterable[str] | None, func: Callable[[str], dict[str, Any]]):
-    if ids is None:
-        return err("paper_ids_required", "At least one paper id is required.")
-    if isinstance(ids, str):
-        return func(normalize_paper_id(ids))
-    out: dict[str, dict[str, Any]] = {}
-    for raw in ids:
-        paper_id = normalize_paper_id(str(raw))
-        if paper_id not in out:
-            out[paper_id] = func(paper_id)
-    return out
-
-
-def _abort_batch_exception(exc: BaseException) -> bool:
-    pending: list[BaseException] = [exc]
-    seen: set[int] = set()
-    while pending:
-        current = pending.pop(0)
-        if id(current) in seen:
-            continue
-        seen.add(id(current))
-        if bool(getattr(current, "abort_batch", False)):
-            return True
-        scope = getattr(current, "abort_scope", None)
-        scope_text = str(getattr(scope, "value", scope) or "").lower()
-        if scope_text in {"batch", "provider"}:
-            return True
-        if current.__cause__ is not None:
-            pending.append(current.__cause__)
-        if current.__context__ is not None and current.__context__ is not current.__cause__:
-            pending.append(current.__context__)
-    return False
-
-
-def _call(func: Callable[[], Any], provider: str) -> dict[str, Any]:
-    try:
-        return ok(func(), provider=provider)
-    except ProviderError as exc:
-        return err(exc.code, exc.message)
-    except Exception as exc:
-        return err("paper_query_error", str(exc))
+__all__ = [
+    "ArcPaperService",
+    "PaperInputError",
+    "default_cache_root",
+    "extract_paper_ids",
+    "fetch_arxiv_auto",
+    "fetch_arxiv_pdf",
+    "get_abstract",
+    "get_authors",
+    "get_citer_count",
+    "get_citers",
+    "get_metadata",
+    "get_references",
+    "get_title",
+    "import_source",
+    "paper_ids_safe_dir_name",
+    "parse_local",
+    "select_section",
+    "search_equations",
+    "search_full_text",
+    "search_metadata",
+    "table_of_contents",
+]

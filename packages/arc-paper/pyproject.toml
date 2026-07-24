@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "arc-paper"
 version = "1.0.1"
-description = "Cache-first ar5iv and INSPIRE paper query tools for ARC."
+description = "Content-addressed paper acquisition, parsing, validation, and workflows for ARC."
 readme = "../../README.md"
 license = "MIT"
 authors = [{ name = "ARC" }]
@@ -36,7 +36,6 @@ pdf = ["pypdf>=5.0"]
 
 [project.scripts]
 arc-paper = "arc_paper.cli:main"
-arc-paper-worker = "arc_paper.worker_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/arc_paper"]

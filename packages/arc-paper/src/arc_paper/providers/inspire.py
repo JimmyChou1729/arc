@@ -1,28 +1,24 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
-from ..cache import (
-    CachePaths,
-    ONE_MONTH_SECONDS,
-    migrate_paper_cache_dir,
-    read_json,
-    read_paper_alias,
-    write_json,
-    write_paper_alias,
-)
 from ..ids import arxiv_path_id, doi_value, inspire_recid, normalize_paper_id
-from ..worker_session import worker_fetch_once
 from .base import ProviderError
+from .remote_cache import RemoteRequestCache
 
 
 BASE_URL = "https://inspirehep.net/api"
+INSPIRE_HOST = "inspirehep.net"
 MAX_PAGE_SIZE = 1000
+MAX_JSON_BYTES = 50 * 1024 * 1024
 MATHML_RE = re.compile(r"<math\b[^>]*>.*?</math>", re.IGNORECASE | re.DOTALL)
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 WHITESPACE_RE = re.compile(r"\s+")
@@ -42,9 +38,17 @@ SUMMARY_FIELDS = ",".join(
 
 
 class InspireProvider:
-    def __init__(self, *, client: httpx.Client | None = None, timeout: float = 60.0):
+    def __init__(
+        self,
+        *,
+        client: httpx.Client | None = None,
+        timeout: float = 60.0,
+        cache_root: str | Path | None = None,
+        request_cache: RemoteRequestCache | None = None,
+    ):
         self.client = client or httpx.Client(timeout=timeout, follow_redirects=True)
         self.timeout = timeout
+        self.cache = request_cache or RemoteRequestCache(cache_root)
 
     def get_metadata(self, paper_id: str, *, refresh: bool = False) -> dict[str, Any]:
         raw = self.get_raw_record(paper_id, refresh=refresh)
@@ -55,48 +59,41 @@ class InspireProvider:
         if not normalized_query:
             raise ProviderError("inspire_search_query_required", "INSPIRE search requires a query")
         size = _clamp_limit(limit)
-        response = self.client.get(
-            f"{BASE_URL}/literature",
-            params={
-                "q": normalized_query,
-                "size": str(size),
-                "sort": "mostcited",
-                "fields": SUMMARY_FIELDS,
-                "format": "json",
-            },
-            timeout=self.timeout,
+        params = {
+            "q": normalized_query,
+            "size": str(size),
+            "sort": "mostcited",
+            "fields": SUMMARY_FIELDS,
+            "format": "json",
+        }
+        data = self.cache.fetch_json(
+            "inspire-search",
+            json.dumps(
+                {"query": normalized_query, "size": size},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            fetch=lambda: self._request_json(
+                f"{BASE_URL}/literature",
+                params=params,
+                error_code="inspire_search_failed",
+            ),
         )
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise ProviderError("inspire_search_failed", str(exc)) from exc
         return [
             _normalize_record(hit)
-            for hit in response.json().get("hits", {}).get("hits", [])[:size]
+            for hit in data.get("hits", {}).get("hits", [])[:size]
         ]
 
     def get_references(self, paper_id: str, *, refresh: bool = False, enrich: bool = False) -> list[dict[str, Any]]:
-        paths = _cache_paths_for_cached_paper(paper_id)
-        references: list[dict[str, Any]]
-        if not refresh and (cached := read_json(paths.inspire_references)) and _references_cache_is_current(cached):
-            cached, changed = _clean_cached_paper_items(cached)
-            if changed:
-                write_json(paths.inspire_references, cached)
-            if not enrich or _references_cache_is_enriched(cached):
-                return cached
-            references = cached
-        else:
-            raw = self.get_raw_record(paper_id, refresh=refresh)
-            references = [
-                normalized
-                for item in raw.get("metadata", {}).get("references", [])
-                if (normalized := _normalize_reference(item))
-            ]
-            paths = _cache_paths_for_cached_paper(paper_id)
+        raw = self.get_raw_record(paper_id, refresh=refresh)
+        references = [
+            normalized
+            for item in raw.get("metadata", {}).get("references", [])
+            if (normalized := _normalize_reference(item))
+        ]
 
         if enrich:
             references = self.enrich_reference_metadata(references, refresh=refresh)
-        write_json(paths.inspire_references, references)
         return references
 
     def enrich_reference_metadata(
@@ -132,62 +129,66 @@ class InspireProvider:
     ) -> list[dict[str, Any]]:
         limit = _clamp_limit(limit)
         sort = _normalize_sort(sort)
-        cache_path = _citers_cache_path(paper_id, sort, limit)
-        if not refresh and (cached := read_json(cache_path, ttl_seconds=ONE_MONTH_SECONDS)):
-            if isinstance(cached, list):
-                cached, changed = _clean_cached_paper_items(cached)
-                if changed:
-                    write_json(cache_path, cached)
-                return cached[:limit]
-
         metadata = self.get_metadata(paper_id, refresh=refresh)
         recid = metadata.get("inspire_recid")
         if not recid:
             return []
 
+        params = {
+            "q": f"refersto:recid:{recid}",
+            "size": str(limit),
+            "sort": sort,
+            "fields": SUMMARY_FIELDS,
+            "format": "json",
+        }
+
         def fetch() -> list[dict[str, Any]]:
-            response = self.client.get(
+            data = self._request_json(
                 f"{BASE_URL}/literature",
-                params={
-                    "q": f"refersto:recid:{recid}",
-                    "size": str(limit),
-                    "sort": sort,
-                    "fields": SUMMARY_FIELDS,
-                    "format": "json",
-                },
-                timeout=self.timeout,
+                params=params,
+                error_code="inspire_citers_fetch_failed",
             )
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                raise ProviderError(
-                    "inspire_citers_fetch_failed", str(exc), status_code=exc.response.status_code
-                ) from exc
-            data = response.json()
             return [_normalize_record(hit) for hit in data.get("hits", {}).get("hits", [])]
 
-        citers = worker_fetch_once(
-            paper_id,
-            fetch,
-            operation=f"inspire-citers-{sort}-{limit}",
-            replay_success=not refresh,
+        value = self.cache.fetch_json(
+            "inspire-citers",
+            json.dumps(
+                {"recid": str(recid), "sort": sort, "limit": limit},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            fetch=fetch,
+            refresh=refresh,
         )
-        cache_path = _citers_cache_path(paper_id, sort, limit)
-        write_json(cache_path, citers)
-        return citers
+        if not isinstance(value, list):
+            raise ProviderError(
+                "inspire_response_invalid", "INSPIRE citer response cache is not a list"
+            )
+        return value[:limit]
 
     def get_citer_count(self, paper_id: str, *, refresh: bool = False) -> int:
         return int(self.get_metadata(paper_id, refresh=refresh).get("citation_count") or 0)
 
     def get_raw_record(self, paper_id: str, *, refresh: bool = False) -> dict[str, Any]:
         normalized_id = normalize_paper_id(paper_id)
-        if not refresh and (cached := _cached_raw_record(normalized_id)):
-            return cached
-
-        fetch = lambda: self._fetch_raw_record(normalized_id, requested_id=paper_id)
-        return worker_fetch_once(
-            normalized_id, fetch, operation="inspire-metadata", replay_success=not refresh
+        if not normalized_id:
+            raise ProviderError(
+                "unsupported_paper_id",
+                f"INSPIRE requires an arXiv ID, DOI, or INSPIRE recid: {paper_id}",
+            )
+        value = self.cache.fetch_json(
+            "inspire-record",
+            normalized_id,
+            fetch=lambda: self._fetch_raw_record(
+                normalized_id, requested_id=paper_id
+            ),
+            refresh=refresh,
         )
+        if not isinstance(value, dict):
+            raise ProviderError(
+                "inspire_response_invalid", "INSPIRE record is not a JSON object"
+            )
+        return value
 
     def _fetch_raw_record(self, normalized_id: str, *, requested_id: str) -> dict[str, Any]:
 
@@ -199,46 +200,97 @@ class InspireProvider:
         elif aid:
             url = f"{BASE_URL}/arxiv/{aid}"
         elif doi:
-            raw = self._get_raw_record_by_doi(doi, requested_id=normalized_id)
-            _cache_raw_record(raw, requested_id=normalized_id)
-            return raw
+            return self._get_raw_record_by_doi(doi, requested_id=normalized_id)
         else:
             raise ProviderError(
                 "unsupported_paper_id",
                 f"INSPIRE requires an arXiv ID, DOI, or INSPIRE recid: {requested_id}",
             )
 
-        response = self.client.get(url, timeout=self.timeout)
-        if response.status_code == 404:
-            raise ProviderError("inspire_not_found", f"INSPIRE record not found for {requested_id}")
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
+        raw = self._request_json(
+            url,
+            error_code="inspire_fetch_failed",
+            not_found_message=f"INSPIRE record not found for {requested_id}",
+        )
+        if not isinstance(raw, dict):
             raise ProviderError(
-                "inspire_fetch_failed", str(exc), status_code=exc.response.status_code
-            ) from exc
-
-        raw = response.json()
-        _cache_raw_record(raw, requested_id=normalized_id)
+                "inspire_response_invalid", "INSPIRE record is not a JSON object"
+            )
         return raw
 
     def _get_raw_record_by_doi(self, doi: str, *, requested_id: str) -> dict[str, Any]:
-        response = self.client.get(
+        data = self._request_json(
             f"{BASE_URL}/literature",
             params={"q": f"doi:{doi}", "size": "1", "format": "json"},
-            timeout=self.timeout,
+            error_code="inspire_fetch_failed",
         )
+        hits = data.get("hits", {}).get("hits", [])
+        if not hits:
+            raise ProviderError("inspire_not_found", f"INSPIRE record not found for {requested_id}")
+        return hits[0]
+
+    def _request_json(
+        self,
+        url: str,
+        *,
+        params: dict[str, str] | None = None,
+        error_code: str,
+        not_found_message: str = "",
+    ) -> Any:
+        _require_inspire_url(url)
+        response = self.client.get(url, params=params, timeout=self.timeout)
+        if response.status_code == 404 and not_found_message:
+            raise ProviderError("inspire_not_found", not_found_message)
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ProviderError(
-                "inspire_fetch_failed", str(exc), status_code=exc.response.status_code
+                error_code, str(exc), status_code=exc.response.status_code
+            ) from exc
+        _require_inspire_url(str(response.url))
+        content_length = response.headers.get("content-length")
+        try:
+            if content_length is not None and int(content_length) > MAX_JSON_BYTES:
+                raise ProviderError(
+                    "inspire_response_too_large",
+                    f"INSPIRE response exceeds {MAX_JSON_BYTES} bytes",
+                )
+        except ValueError as exc:
+            raise ProviderError(
+                "remote_content_length_invalid",
+                "INSPIRE response has an invalid Content-Length",
+            ) from exc
+        if len(response.content) > MAX_JSON_BYTES:
+            raise ProviderError(
+                "inspire_response_too_large",
+                f"INSPIRE response exceeds {MAX_JSON_BYTES} bytes",
+            )
+        media_type = (
+            response.headers.get("content-type", "")
+            .split(";", 1)[0]
+            .strip()
+            .casefold()
+        )
+        if media_type not in {"application/json", "application/vnd.api+json"}:
+            raise ProviderError(
+                "inspire_media_type_invalid",
+                f"INSPIRE returned unsupported media type: {media_type or '<missing>'}",
+            )
+        try:
+            return response.json()
+        except (ValueError, UnicodeError) as exc:
+            raise ProviderError(
+                "inspire_response_invalid", "INSPIRE returned invalid JSON"
             ) from exc
 
-        hits = response.json().get("hits", {}).get("hits", [])
-        if not hits:
-            raise ProviderError("inspire_not_found", f"INSPIRE record not found for {requested_id}")
-        return hits[0]
+
+def _require_inspire_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != INSPIRE_HOST:
+        raise ProviderError(
+            "remote_url_invalid",
+            f"INSPIRE requests must use HTTPS on {INSPIRE_HOST}",
+        )
 
 
 def _normalize_record(payload: dict[str, Any]) -> dict[str, Any]:
@@ -275,14 +327,6 @@ def _normalize_sort(sort: str) -> str:
     if normalized not in {"mostrecent", "mostcited"}:
         raise ProviderError("unsupported_citer_sort", f"Unsupported INSPIRE citer sort: {sort}")
     return normalized
-
-
-def _citers_cache_path(paper_id: str, sort: str, limit: int):
-    paths = _cache_paths_for_cached_paper(paper_id)
-    if sort == "mostrecent" and limit == MAX_PAGE_SIZE:
-        return paths.inspire_citers
-    suffix = sort if limit == MAX_PAGE_SIZE else f"{sort}_{limit}"
-    return paths.inspire_citers.with_name(f"citers_{suffix}.json")
 
 
 def _normalize_reference(item: dict[str, Any]) -> dict[str, Any]:
@@ -324,63 +368,6 @@ def _normalize_reference(item: dict[str, Any]) -> dict[str, Any]:
     if raw.get("citation_count") is not None:
         out["citation_count"] = int(raw.get("citation_count") or 0)
     return out
-
-
-def _cache_raw_record(raw: dict[str, Any], *, requested_id: str) -> None:
-    metadata = _normalize_record(raw)
-    canonical_id = _canonical_cache_id(metadata, requested_id=requested_id)
-    keys = _cache_keys(metadata, requested_id=requested_id)
-    for key in keys:
-        if key != canonical_id:
-            migrate_paper_cache_dir(key, canonical_id)
-    write_json(CachePaths.for_paper(canonical_id).inspire_metadata, raw)
-    for key in keys:
-        write_paper_alias(key, canonical_id)
-
-
-def _cached_raw_record(normalized_id: str) -> dict[str, Any] | None:
-    if alias_id := read_paper_alias(normalized_id):
-        if cached := read_json(CachePaths.for_paper(alias_id).inspire_metadata):
-            return cached
-    paths = CachePaths.for_paper(normalized_id)
-    if cached := read_json(paths.inspire_metadata):
-        _cache_raw_record(cached, requested_id=normalized_id)
-        return cached
-    return None
-
-
-def _cache_paths_for_cached_paper(paper_id: str) -> CachePaths:
-    normalized_id = normalize_paper_id(paper_id)
-    if alias_id := read_paper_alias(normalized_id):
-        return CachePaths.for_paper(alias_id)
-    paths = CachePaths.for_paper(normalized_id)
-    if cached := read_json(paths.inspire_metadata):
-        _cache_raw_record(cached, requested_id=normalized_id)
-        if alias_id := read_paper_alias(normalized_id):
-            return CachePaths.for_paper(alias_id)
-    return paths
-
-
-def _canonical_cache_id(metadata: dict[str, Any], *, requested_id: str) -> str:
-    if arxiv_id := metadata.get("arxiv_id"):
-        return normalize_paper_id(f"arXiv:{arxiv_id}")
-    return normalize_paper_id(requested_id)
-
-
-def _cache_keys(metadata: dict[str, Any], *, requested_id: str) -> list[str]:
-    requested = normalize_paper_id(requested_id)
-    keys = []
-    if paper_id := metadata.get("paper_id"):
-        keys.append(normalize_paper_id(str(paper_id)))
-    if recid := metadata.get("inspire_recid"):
-        keys.append(normalize_paper_id(f"inspire:{recid}"))
-    if arxiv_id := metadata.get("arxiv_id"):
-        keys.append(normalize_paper_id(f"arXiv:{arxiv_id}"))
-    if doi := metadata.get("doi"):
-        keys.append(normalize_paper_id(f"doi:{doi}"))
-    keys = [key for key in keys if key and key != requested]
-    keys.append(requested)
-    return list(dict.fromkeys(keys))
 
 
 def _reference_lookup_id(reference: dict[str, Any]) -> str:
