@@ -213,7 +213,7 @@ def test_release_is_immutable_reused_and_current_updates_last(
 
 
 def test_release_identity_covers_delivery_contract_and_rejects_extra_files(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
     project = CompanionProjectPaths.open(tmp_path / "project")
     publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
@@ -224,6 +224,15 @@ def test_release_identity_covers_delivery_contract_and_rejects_extra_files(
     assert manifest["release_id"] == release_id_for(book)
     assert manifest["identity"]["delivery_recipe"] == DELIVERY_RECIPE
     assert manifest["identity"]["manifest_schema"] == RELEASE_MANIFEST_SCHEMA
+    original_release_id = release_id_for(book)
+    monkeypatch.setattr(
+        release_module,
+        "WEB_RENDER_RECIPE",
+        "arc.companion.web-render.test-next",
+    )
+    assert book.content_digest == _book().content_digest
+    assert release_id_for(book) != original_release_id
+    monkeypatch.undo()
 
     extra = release.directory / "reader" / "unexpected.txt"
     extra.write_text("not declared by the immutable manifest", encoding="utf-8")
