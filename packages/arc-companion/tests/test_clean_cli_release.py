@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import json
+import shutil
 from pathlib import Path
 
 import arc_companion.project as project_module
@@ -41,6 +43,11 @@ class _FakeRenderer:
 
     def validate_web(self, book, path: Path) -> None:
         assert book.content_digest in path.read_text(encoding="utf-8")
+
+
+class _FailingRenderer:
+    def render_all(self, book, *, web_dir: Path, pdf_path: Path):
+        raise RuntimeError("renderer failed")
 
 
 def _book() -> AcceptedBook:
@@ -220,6 +227,62 @@ def test_release_is_immutable_reused_and_current_updates_last(
     )
 
 
+@pytest.mark.parametrize("race_errno", [errno.EEXIST, errno.ENOTEMPTY])
+def test_release_publish_reuses_concurrent_winner_and_cleans_staging(
+    tmp_path: Path, monkeypatch, race_errno: int
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    book = _book()
+
+    def concurrent_winner(staging: Path, target: Path) -> None:
+        shutil.copytree(staging, target)
+        raise OSError(race_errno, "cooperating publisher won")
+
+    monkeypatch.setattr(release_module.os, "rename", concurrent_winner)
+
+    release = publisher.publish(book, run_id="run-race-loser")
+
+    assert release.reused
+    assert release.directory == project.releases_root / release_id_for(book)
+    assert not tuple(project.releases_root.glob(f".{release.release_id}.*"))
+    current = project.current_release()
+    assert current is not None
+    assert current["release_id"] == release.release_id
+    assert current["run_id"] == "run-race-loser"
+
+
+def test_release_publish_reraises_unrelated_rename_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+
+    def fail_rename(_staging: Path, _target: Path) -> None:
+        raise OSError(errno.EACCES, "rename denied")
+
+    monkeypatch.setattr(release_module.os, "rename", fail_rename)
+
+    with pytest.raises(OSError, match="rename denied"):
+        publisher.publish(_book(), run_id="run-error")
+
+    assert not project.current.exists()
+    assert not tuple(project.releases_root.iterdir())
+
+
+def test_release_renderer_failure_does_not_publish_current(
+    tmp_path: Path,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FailingRenderer())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="renderer failed"):
+        publisher.publish(_book(), run_id="run-render-error")
+
+    assert not project.current.exists()
+    assert not tuple(project.releases_root.iterdir())
+
+
 def test_release_identity_covers_delivery_contract_and_rejects_extra_files(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -246,3 +309,69 @@ def test_release_identity_covers_delivery_contract_and_rejects_extra_files(
     extra.write_text("not declared by the immutable manifest", encoding="utf-8")
     with pytest.raises(CompanionReleaseError, match="file set"):
         publisher.publish(book, run_id="run-two")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["build", "unused-source", "--project-dir", "unused-project", "--workers", "0"],
+        [
+            "build",
+            "unused-source",
+            "--project-dir",
+            "unused-project",
+            "--workers",
+            "25",
+        ],
+        ["resume", "--project-dir", "unused-project", "--workers", "0"],
+        ["resume", "--project-dir", "unused-project", "--workers", "25"],
+    ],
+)
+def test_cli_rejects_build_and_resume_worker_bounds(
+    argv: list[str], capsys
+) -> None:
+    assert main(argv) == 1
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["schema_version"] == "arc.command_result.v1"
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "invalid_request"
+    assert result["error"]["message"] == "--workers must be between 1 and 24"
+
+
+def test_cli_rejects_missing_pdf_before_source_or_project_import(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("# Source\n\nText.", encoding="utf-8")
+    project = tmp_path / "project"
+    missing_pdf = tmp_path / "missing.pdf"
+
+    def unexpected_import(*_args, **_kwargs):
+        raise AssertionError("source import must not run")
+
+    monkeypatch.setattr(
+        "arc_companion.cli.ArcPaperService.import_source",
+        unexpected_import,
+    )
+
+    assert main(
+        [
+            "build",
+            str(source),
+            "--project-dir",
+            str(project),
+            "--pdf",
+            str(missing_pdf),
+            "--json",
+        ]
+    ) == 1
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["schema_version"] == "arc.command_result.v1"
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "invalid_request"
+    assert result["error"]["message"] == (
+        "--pdf must be an existing path or 'fetch'"
+    )
+    assert not project.exists()

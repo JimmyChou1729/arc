@@ -147,10 +147,19 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
 
 
 def _build(args: argparse.Namespace) -> CommandResult:
-    if not 1 <= args.workers <= 24:
-        raise _UsageError("--workers must be between 1 and 24")
-    if args.model and args.provider == "auto":
+    _validate_workers(args.workers)
+    if not args.provider.strip():
+        raise _UsageError("--provider must be non-empty")
+    if args.model is not None and not args.model.strip():
+        raise _UsageError("--model must be non-empty")
+    if args.model is not None and args.provider == "auto":
         raise _UsageError("--model requires an explicit --provider")
+    if (
+        args.pdf is not None
+        and args.pdf != "fetch"
+        and not Path(args.pdf).is_file()
+    ):
+        raise _UsageError("--pdf must be an existing path or 'fetch'")
     # Legacy refusal happens before source/cache writes.
     paths = CompanionProjectPaths.open(args.project_dir)
     paper = ArcPaperService(cache_root=paths.paper_cache_root)
@@ -190,6 +199,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
 
 
 def _resume(args: argparse.Namespace) -> CommandResult:
+    _validate_workers(args.workers)
     paths = CompanionProjectPaths.load(args.project_dir)
     run_id = _current_run(paths)
     value = _json_input(args.input) if args.input is not None else None
@@ -202,6 +212,13 @@ def _resume(args: argparse.Namespace) -> CommandResult:
         ),
     )
     return _snapshot_result(paths, snapshot)
+
+
+def _validate_workers(workers: int) -> None:
+    if isinstance(workers, bool) or not isinstance(workers, int):
+        raise _UsageError("--workers must be an integer")
+    if not 1 <= workers <= 24:
+        raise _UsageError("--workers must be between 1 and 24")
 
 
 def _status(args: argparse.Namespace) -> CommandResult:

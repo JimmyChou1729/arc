@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -73,6 +74,7 @@ class CompanionReleasePublisher:
                 dir=self.project.releases_root,
             )
         )
+        reused = False
         try:
             pdf = staging / "companion.pdf"
             web_dir = staging / "reader"
@@ -89,9 +91,15 @@ class CompanionReleasePublisher:
             _fsync_tree(staging)
             try:
                 os.rename(staging, target)
-            except FileExistsError:
+            except OSError as exc:
+                if (
+                    exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}
+                    or not target.is_dir()
+                ):
+                    raise
                 # A cooperating publisher won the exact immutable release.
                 shutil.rmtree(staging)
+                reused = True
             else:
                 _fsync_directory(self.project.releases_root)
             release = self._verify_existing(
@@ -108,7 +116,7 @@ class CompanionReleasePublisher:
                 release.pdf,
                 release.web_index,
                 release.manifest,
-                False,
+                reused,
             )
         except BaseException:
             if staging.exists():
