@@ -16,12 +16,14 @@ from .prompts_v1 import (
     CHAPTER_REVIEW_PROMPT_VERSION,
     GLOSSARY_PROMPT_VERSION,
     LANGUAGE_PROMPT_VERSION,
+    TRANSLATION_PROMPT_VERSION,
 )
 
 
 COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v1"
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v1"
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v2"
 COMPANION_CONTENT_CONTRACT = "arc.companion.source_anchored_textbook.v1"
+DEFAULT_TRANSLATION_INPUT_BUDGET_BYTES = 32_000
 NEUTRAL_TEXTBOOK_INTENT = (
     "Explain the source faithfully as a neutral textbook companion for an "
     "engaged reader, adding selective help only where it improves understanding."
@@ -68,16 +70,27 @@ class CompanionGenerationRecipe:
     language_prompt: str = LANGUAGE_PROMPT_VERSION
     chapter_plan_prompt: str = CHAPTER_PLAN_PROMPT_VERSION
     glossary_prompt: str = GLOSSARY_PROMPT_VERSION
+    translation_prompt: str = TRANSLATION_PROMPT_VERSION
+    translation_input_budget_bytes: int = DEFAULT_TRANSLATION_INPUT_BUDGET_BYTES
     chapter_draft_prompt: str = CHAPTER_DRAFT_PROMPT_VERSION
     chapter_review_prompt: str = CHAPTER_REVIEW_PROMPT_VERSION
 
     def __post_init__(self) -> None:
         if not isinstance(self.model, ModelSelection):
             raise ValueError("model must be a ModelSelection")
+        if (
+            isinstance(self.translation_input_budget_bytes, bool)
+            or not isinstance(self.translation_input_budget_bytes, int)
+            or not 4_096 <= self.translation_input_budget_bytes <= 1_000_000
+        ):
+            raise ValueError(
+                "translation_input_budget_bytes must be between 4096 and 1000000"
+            )
         expected = {
             "language_prompt": LANGUAGE_PROMPT_VERSION,
             "chapter_plan_prompt": CHAPTER_PLAN_PROMPT_VERSION,
             "glossary_prompt": GLOSSARY_PROMPT_VERSION,
+            "translation_prompt": TRANSLATION_PROMPT_VERSION,
             "chapter_draft_prompt": CHAPTER_DRAFT_PROMPT_VERSION,
             "chapter_review_prompt": CHAPTER_REVIEW_PROMPT_VERSION,
         }
@@ -161,6 +174,8 @@ def encode_generation_recipe(
         "language_prompt": recipe.language_prompt,
         "chapter_plan_prompt": recipe.chapter_plan_prompt,
         "glossary_prompt": recipe.glossary_prompt,
+        "translation_prompt": recipe.translation_prompt,
+        "translation_input_budget_bytes": recipe.translation_input_budget_bytes,
         "chapter_draft_prompt": recipe.chapter_draft_prompt,
         "chapter_review_prompt": recipe.chapter_review_prompt,
     }
@@ -177,6 +192,8 @@ def decode_generation_recipe(
             "language_prompt",
             "chapter_plan_prompt",
             "glossary_prompt",
+            "translation_prompt",
+            "translation_input_budget_bytes",
             "chapter_draft_prompt",
             "chapter_review_prompt",
         },
@@ -200,6 +217,10 @@ def decode_generation_recipe(
         language_prompt=_string(value, "language_prompt"),
         chapter_plan_prompt=_string(value, "chapter_plan_prompt"),
         glossary_prompt=_string(value, "glossary_prompt"),
+        translation_prompt=_string(value, "translation_prompt"),
+        translation_input_budget_bytes=_integer(
+            value, "translation_input_budget_bytes"
+        ),
         chapter_draft_prompt=_string(value, "chapter_draft_prompt"),
         chapter_review_prompt=_string(value, "chapter_review_prompt"),
     )
@@ -241,10 +262,18 @@ def _string(value: Mapping[str, Any], key: str) -> str:
     return item
 
 
+def _integer(value: Mapping[str, Any], key: str) -> int:
+    item = value.get(key)
+    if isinstance(item, bool) or not isinstance(item, int):
+        raise ValueError(f"{key} must be an integer")
+    return item
+
+
 __all__ = [
     "COMPANION_BUILD_REQUEST_SCHEMA",
     "COMPANION_CONTENT_CONTRACT",
     "COMPANION_GENERATION_RECIPE_SCHEMA",
+    "DEFAULT_TRANSLATION_INPUT_BUDGET_BYTES",
     "NEUTRAL_TEXTBOOK_INTENT",
     "CompanionBuildRequest",
     "CompanionExecutionOptions",

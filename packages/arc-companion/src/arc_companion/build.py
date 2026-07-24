@@ -68,13 +68,16 @@ from .prompts_v1 import (
     EVIDENCE_RESPONSE_SCHEMA,
     GLOSSARY_SCHEMA,
     LANGUAGE_SCHEMA,
+    TRANSLATION_SCHEMA,
     chapter_draft_prompt,
     chapter_plan_prompt,
     chapter_review_prompt,
     glossary_prompt,
     language_prompt,
+    translation_prompt,
 )
 from .request_contracts import (
+    DEFAULT_TRANSLATION_INPUT_BUDGET_BYTES,
     CompanionBuildRequest,
     CompanionExecutionOptions,
     CompanionGenerationRecipe,
@@ -96,6 +99,11 @@ _GLOSSARY_ARTIFACT = "planning/glossary"
 _BOOK_ARTIFACT = "book/accepted"
 _RESULT_ARTIFACT = "result"
 _SUPERVISION_SCHEMA = "arc.companion.review_supervision.v1"
+# Maximum UTF-8 size of a complete translation prompt. Rich blocks are
+# indivisible: a single block larger than this budget fails with a clear
+# content error. Changing this policy requires a new translation prompt
+# contract so existing run lineages keep exact replay semantics.
+TRANSLATION_WINDOW_INPUT_BUDGET_BYTES = DEFAULT_TRANSLATION_INPUT_BUDGET_BYTES
 
 
 class CompanionBuildHandler:
@@ -437,6 +445,10 @@ class CompanionBuildHandler:
                     "intent": self.request.effective_intent,
                     "glossary_digest": glossary_digest,
                     "content_contract": self.request.content_contract,
+                    "translation_prompt_contract": self.recipe.translation_prompt,
+                    "translation_input_budget_bytes": (
+                        self.recipe.translation_input_budget_bytes
+                    ),
                     "draft_prompt_contract": self.recipe.chapter_draft_prompt,
                     "review_prompt_contract": self.recipe.chapter_review_prompt,
                 },
@@ -456,15 +468,41 @@ class CompanionBuildHandler:
                 block_prompt_document(blocks[item])
                 for item in chapter.block_ids
             ]
+            planned_source_documents = _planned_source_documents(
+                plan, source_documents
+            )
+            translations_outcome = self._chapter_translations(
+                context,
+                resume_input,
+                chapter=chapter,
+                source_documents=source_documents,
+                glossary=glossary,
+                language_result=language_result,
+                translation_required=translation_required,
+            )
+            if isinstance(translations_outcome, Paused):
+                return translations_outcome
+            if isinstance(translations_outcome, RunError):
+                return UnitResult(
+                    unit.unit_id,
+                    "failed",
+                    error=translations_outcome,
+                )
+            translations = translations_outcome
+            draft_semantic_input = {
+                **dict(unit.semantic_input),
+                "translations_digest": hashlib.sha256(
+                    canonical_json_bytes(translations)
+                ).hexdigest(),
+            }
             draft_request = LLMRequest(
-                _task_id("draft", unit.semantic_input),
+                _task_id("draft", draft_semantic_input),
                 chapter_draft_prompt(
                     plan=plan,
-                    blocks=source_documents,
+                    blocks=planned_source_documents,
                     glossary=glossary,
                     target_language=self.request.target_language,
                     language_result=language_result,
-                    translation_required=translation_required,
                     # Interaction responses are continued by arc-llm and are
                     # deliberately not spliced into the stable task prompt.
                     evidence=[],
@@ -504,8 +542,10 @@ class CompanionBuildHandler:
                 )
             ensure_not_cancelled(outcome, f"chapter draft {chapter.chapter_id}")
             assert isinstance(outcome, LLMCompleted)
+            draft_value = _mapping(outcome.value, "chapter draft")
+            draft_value["translations"] = translations
             draft = validate_chapter_draft(
-                outcome.value,
+                draft_value,
                 plan=plan,
                 block_ids=chapter.block_ids,
                 translation_required=translation_required,
@@ -513,11 +553,19 @@ class CompanionBuildHandler:
             )
 
             review_request = LLMRequest(
-                _task_id("review", unit.semantic_input),
+                _task_id(
+                    "review",
+                    {
+                        **dict(unit.semantic_input),
+                        "draft_digest": hashlib.sha256(
+                            canonical_json_bytes(draft)
+                        ).hexdigest(),
+                    },
+                ),
                 chapter_review_prompt(
                     plan=plan,
                     draft=draft,
-                    blocks=source_documents,
+                    blocks=planned_source_documents,
                     glossary=glossary,
                 ),
                 JsonOutput(CHAPTER_REVIEW_SCHEMA, repair="local"),
@@ -635,6 +683,106 @@ class CompanionBuildHandler:
         }
         return tuple(by_result[item.chapter_id] for item in chapters)
 
+    def _chapter_translations(
+        self,
+        context: RunContext,
+        resume_input: ResumeInput | None,
+        *,
+        chapter: SourceChapter,
+        source_documents: Sequence[Mapping[str, Any]],
+        glossary: Sequence[Mapping[str, Any]],
+        language_result: Mapping[str, Any],
+        translation_required: bool,
+    ) -> list[dict[str, Any]] | Paused | RunError:
+        if not translation_required:
+            return []
+        try:
+            windows = _translation_windows(
+                chapter_id=chapter.chapter_id,
+                blocks=source_documents,
+                glossary=glossary,
+                target_language=self.request.target_language,
+                language_result=language_result,
+                budget_bytes=self.recipe.translation_input_budget_bytes,
+            )
+        except CompanionContentError as exc:
+            return RunError(exc.code, str(exc))
+        translations: list[dict[str, Any]] = []
+        for ordinal, window in enumerate(windows):
+            artifact_id = (
+                f"chapters/{chapter.chapter_id}/"
+                f"translation-windows/{ordinal:04d}"
+            )
+            expected_ids = [str(item["block_id"]) for item in window]
+            existing = context.artifacts.find(artifact_id)
+            if existing is not None:
+                document = _read_json(
+                    context, existing, "translation window"
+                )
+                try:
+                    translations.extend(
+                        _validate_translation_window(document, window)
+                    )
+                except CompanionContentError as exc:
+                    return RunError(exc.code, str(exc))
+                continue
+            semantic_input = {
+                "chapter_id": chapter.chapter_id,
+                "window_ordinal": ordinal,
+                "block_ids": expected_ids,
+                "target_language": self.request.target_language,
+                "language_result": dict(language_result),
+                "glossary_digest": hashlib.sha256(
+                    canonical_json_bytes(list(glossary))
+                ).hexdigest(),
+                "content_contract": self.request.content_contract,
+                "prompt_contract": self.recipe.translation_prompt,
+                "input_budget_bytes": (
+                    self.recipe.translation_input_budget_bytes
+                ),
+            }
+            request = LLMRequest(
+                _task_id("translation", semantic_input),
+                translation_prompt(
+                    chapter_id=chapter.chapter_id,
+                    window_ordinal=ordinal,
+                    blocks=window,
+                    glossary=glossary,
+                    target_language=self.request.target_language,
+                    language_result=language_result,
+                ),
+                JsonOutput(TRANSLATION_SCHEMA, repair="local"),
+                self.recipe.model,
+            )
+            outcome = execute_task(
+                self.task_service,
+                context,
+                request,
+                resume_input=resume_input,
+                options=self.execution.llm,
+            )
+            if isinstance(outcome, LLMPaused):
+                return Paused(awaiting_from_pause(outcome))
+            if isinstance(outcome, LLMFailed):
+                return run_error_from_failure(outcome)
+            ensure_not_cancelled(
+                outcome,
+                f"translation window {chapter.chapter_id}/{ordinal}",
+            )
+            assert isinstance(outcome, LLMCompleted)
+            outcome_document = _mapping(
+                outcome.value, "translation window"
+            )
+            try:
+                value = _validate_translation_window(
+                    outcome_document, window
+                )
+            except CompanionContentError as exc:
+                return RunError(exc.code, str(exc))
+            context.artifacts.publish_json(artifact_id, outcome_document)
+            translations.extend(value)
+        return translations
+
     def _chapter_evidence(
         self,
         context: RunContext,
@@ -715,6 +863,211 @@ class CompanionBuildHandler:
 def _task_id(prefix: str, semantic: Mapping[str, Any]) -> str:
     digest = hashlib.sha256(canonical_json_bytes(dict(semantic))).hexdigest()
     return f"{prefix}-{digest[:24]}"
+
+
+def _translation_windows(
+    *,
+    chapter_id: str,
+    blocks: Sequence[Mapping[str, Any]],
+    glossary: Sequence[Mapping[str, Any]],
+    target_language: str,
+    language_result: Mapping[str, Any],
+    budget_bytes: int,
+) -> tuple[tuple[Mapping[str, Any], ...], ...]:
+    """Pack indivisible RichBlocks under the complete prompt byte budget."""
+
+    windows: list[tuple[Mapping[str, Any], ...]] = []
+    current: list[Mapping[str, Any]] = []
+    for block in blocks:
+        candidate = [*current, block]
+        if _translation_prompt_size(
+            chapter_id=chapter_id,
+            window_ordinal=len(windows),
+            blocks=candidate,
+            glossary=glossary,
+            target_language=target_language,
+            language_result=language_result,
+        ) <= budget_bytes:
+            current = candidate
+            continue
+        if current:
+            windows.append(tuple(current))
+            current = [block]
+        else:
+            current = [block]
+        if _translation_prompt_size(
+            chapter_id=chapter_id,
+            window_ordinal=len(windows),
+            blocks=current,
+            glossary=glossary,
+            target_language=target_language,
+            language_result=language_result,
+        ) > budget_bytes:
+            block_id = str(block.get("block_id", "<unknown>"))
+            raise CompanionContentError(
+                "translation_block_exceeds_input_budget",
+                (
+                    f"source block {block_id} exceeds the "
+                    f"{budget_bytes}-byte translation input budget"
+                ),
+            )
+    if current:
+        windows.append(tuple(current))
+    return tuple(windows)
+
+
+def _planned_source_documents(
+    plan: Mapping[str, Any],
+    blocks: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Keep only source blocks explicitly anchored by selective chapter work."""
+
+    anchored: set[str] = set()
+    for field in ("learning_units", "evidence_requests"):
+        for item in _mapping_list(plan.get(field), field.replace("_", " ")):
+            block_ids = item.get("anchor_block_ids")
+            if not isinstance(block_ids, list):
+                raise CompanionContentError(
+                    "chapter_plan_invalid",
+                    f"{field} anchor_block_ids must be an array",
+                )
+            anchored.update(str(block_id) for block_id in block_ids)
+    return [block for block in blocks if block.get("block_id") in anchored]
+
+
+def _translation_prompt_size(
+    *,
+    chapter_id: str,
+    window_ordinal: int,
+    blocks: Sequence[Mapping[str, Any]],
+    glossary: Sequence[Mapping[str, Any]],
+    target_language: str,
+    language_result: Mapping[str, Any],
+) -> int:
+    return len(
+        translation_prompt(
+            chapter_id=chapter_id,
+            window_ordinal=window_ordinal,
+            blocks=blocks,
+            glossary=glossary,
+            target_language=target_language,
+            language_result=language_result,
+        ).encode("utf-8")
+    )
+
+
+def _validate_translation_window(
+    value: Any,
+    source_blocks: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    document = _mapping(value, "translation window")
+    if set(document) != {"translations"}:
+        raise CompanionContentError(
+            "translation_coverage_invalid",
+            "translation window has invalid fields",
+        )
+    translations = _mapping_list(
+        document["translations"], "translation window"
+    )
+    expected_block_ids = [str(item["block_id"]) for item in source_blocks]
+    if [item.get("block_id") for item in translations] != expected_block_ids:
+        raise CompanionContentError(
+            "translation_coverage_invalid",
+            "translation window block IDs must exactly match source order",
+        )
+    if any(
+        not isinstance(item.get("text"), str)
+        or not item["text"].strip()
+        or set(item) != {"block_id", "text", "source_identity"}
+        for item in translations
+    ):
+        raise CompanionContentError(
+            "translation_coverage_invalid",
+            "translation window text must be a non-empty string",
+        )
+    for translated, source in zip(translations, source_blocks, strict=True):
+        identity = _source_identity(source)
+        if translated.get("source_identity") != identity:
+            raise CompanionContentError(
+                "translation_source_identity_invalid",
+                (
+                    "translation window changed formula, code, link, "
+                    f"or asset identity for {source['block_id']}"
+                ),
+            )
+        text = str(translated["text"])
+        if identity["code_text"] is not None and text != identity["code_text"]:
+            raise CompanionContentError(
+                "translation_source_identity_invalid",
+                f"translation changed code text for {source['block_id']}",
+            )
+        if any(
+            token not in text
+            for token in [
+                *identity["equations"],
+                *identity["link_targets"],
+            ]
+        ):
+            raise CompanionContentError(
+                "translation_source_identity_invalid",
+                (
+                    "translation text omitted a formula or link target for "
+                    f"{source['block_id']}"
+                ),
+            )
+    return [
+        {"block_id": item["block_id"], "text": item["text"]}
+        for item in translations
+    ]
+
+
+def _source_identity(block: Mapping[str, Any]) -> dict[str, Any]:
+    kind = block.get("kind")
+    payload = _mapping(block.get("payload"), "source block payload")
+    equations: list[str] = []
+    link_targets: list[str] = []
+    if kind == "equation":
+        equations.append(str(payload["tex"]))
+    elif kind == "paragraph":
+        equations.extend(
+            str(item["tex"])
+            for item in _mapping_list(
+                payload.get("inline_math"), "inline math"
+            )
+        )
+        link_targets.extend(
+            str(item["target"])
+            for item in _mapping_list(payload.get("links"), "links")
+        )
+    elif kind == "list":
+        for raw_item in _mapping_list(payload.get("items"), "list items"):
+            equations.extend(
+                str(item["tex"])
+                for item in _mapping_list(
+                    raw_item.get("inline_math"), "inline math"
+                )
+            )
+            link_targets.extend(
+                str(item["target"])
+                for item in _mapping_list(
+                    raw_item.get("links"), "links"
+                )
+            )
+    return {
+        "equations": equations,
+        "code_text": str(payload["text"]) if kind == "code" else None,
+        "link_targets": link_targets,
+        "asset_digest": (
+            str(payload["asset_digest"])
+            if kind == "figure" and payload.get("asset_digest")
+            else None
+        ),
+        "asset_target": (
+            str(payload["target"])
+            if kind == "figure" and payload.get("target")
+            else None
+        ),
+    }
 
 
 def _document_title(request: CompanionBuildRequest) -> str:
@@ -840,5 +1193,6 @@ def _mapping_list(value: Any, description: str) -> list[dict[str, Any]]:
 
 __all__ = [
     "COMPANION_BUILD_HANDLER",
+    "TRANSLATION_WINDOW_INPUT_BUDGET_BYTES",
     "CompanionBuildHandler",
 ]
