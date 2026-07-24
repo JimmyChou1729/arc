@@ -55,7 +55,7 @@ class CompanionRenderer:
         source_urls = {
             block_id: f"assets/{relative}"
             for block_id, relative in self._write_source_assets(
-                book, assets / "source"
+                book, assets / "source", pdf_compatible=False
             ).items()
         }
         html = _render_html(book, source_urls=source_urls)
@@ -72,7 +72,9 @@ class CompanionRenderer:
             prefix=".arc-companion-render-", dir=target.parent
         ) as temporary:
             workspace = Path(temporary)
-            source_paths = self._write_source_assets(book, workspace / "source")
+            source_paths = self._write_source_assets(
+                book, workspace / "source", pdf_compatible=True
+            )
             tex = _render_tex(book, source_paths=source_paths)
             tex_path = workspace / "companion.tex"
             tex_path.write_text(tex, encoding="utf-8")
@@ -131,8 +133,10 @@ class CompanionRenderer:
         with tempfile.TemporaryDirectory(prefix="arc-companion-pdf-check-") as raw:
             workspace = Path(raw)
             info = _run([str(tools["pdfinfo"]), str(pdf_path)])
-            if not re.search(r"^Pages:\s+[1-9][0-9]*\s*$", info, re.MULTILINE):
+            page_match = re.search(r"^Pages:\s+([1-9][0-9]*)\s*$", info, re.MULTILINE)
+            if page_match is None:
                 raise CompanionRenderError("PDF does not report a positive page count")
+            page_count = int(page_match.group(1))
             text_path = workspace / "content.txt"
             _run([str(tools["pdftotext"]), str(pdf_path), str(text_path)])
             text = text_path.read_text(encoding="utf-8", errors="replace")
@@ -162,11 +166,6 @@ class CompanionRenderer:
             _run(
                 [
                     str(tools["pdftoppm"]),
-                    "-f",
-                    "1",
-                    "-l",
-                    "1",
-                    "-singlefile",
                     "-png",
                     "-r",
                     "120",
@@ -174,12 +173,18 @@ class CompanionRenderer:
                     str(raster_prefix),
                 ]
             )
-            raster = workspace / "page.png"
-            if not raster.is_file() or raster.stat().st_size == 0:
+            rasters = sorted(workspace.glob("page-*.png"))
+            if len(rasters) != page_count or any(
+                item.stat().st_size == 0 for item in rasters
+            ):
                 raise CompanionRenderError("PDF raster validation failed")
 
     def _write_source_assets(
-        self, book: AcceptedBook, output_dir: Path
+        self,
+        book: AcceptedBook,
+        output_dir: Path,
+        *,
+        pdf_compatible: bool,
     ) -> dict[str, str]:
         resolved: dict[str, str] = {}
         for chapter in book.chapters:
@@ -189,8 +194,6 @@ class CompanionRenderer:
                 digest = str(anchor.payload.get("asset_digest") or "")
                 target = str(anchor.payload.get("target") or "")
                 if not digest:
-                    if target:
-                        resolved[anchor.block_id] = target
                     continue
                 if self._asset_loader is None:
                     raise CompanionRenderError(
@@ -206,10 +209,24 @@ class CompanionRenderer:
                     raise CompanionRenderError(
                         f"source asset digest mismatch: {digest}"
                     )
-                suffix = _safe_asset_suffix(target)
+                expected_size = anchor.payload.get("size")
+                if expected_size != len(data):
+                    raise CompanionRenderError(
+                        f"source asset size mismatch: {digest}"
+                    )
+                media_type = str(anchor.payload.get("media_type") or "")
+                suffix = _asset_suffix(media_type)
                 relative = f"{digest}{suffix}"
                 output_dir.mkdir(parents=True, exist_ok=True)
-                _write_if_changed(output_dir / relative, data)
+                original = output_dir / relative
+                _write_if_changed(original, data)
+                if pdf_compatible:
+                    rendered = _prepare_pdf_asset(
+                        original,
+                        media_type=media_type,
+                        digest=digest,
+                    )
+                    relative = rendered.name
                 resolved[anchor.block_id] = f"source/{relative}"
         return resolved
 
@@ -296,17 +313,11 @@ def _render_html_source(
         level = max(3, min(6, int(payload["level"]) + 2))
         return f"<h{level}>{escape_html(str(payload['text']))}</h{level}>"
     if anchor.kind == "paragraph":
-        links = _html_links(payload["links"])
-        math = "".join(
-            f'<span class="math math-inline" data-tex="{escape_html(str(item["tex"]))}">'
-            f'{escape_html(str(item["source"]))}</span>'
-            for item in payload["inline_math"]
-        )
-        return f"<p>{_html_text(str(payload['text']))}</p>{math}{links}"
+        return f"<p>{_render_html_inline(payload['inline_spans'])}</p>"
     if anchor.kind == "list":
         tag = "ol" if payload["ordered"] else "ul"
         items = "".join(
-            f"<li>{_html_text(str(item['text']))}{_html_links(item['links'])}</li>"
+            f"<li>{_render_html_inline(item['inline_spans'])}</li>"
             for item in payload["items"]
         )
         return f"<{tag}>{items}</{tag}>"
@@ -335,9 +346,21 @@ def _render_html_source(
             else ""
         )
         return f"<table>{caption}<thead><tr>{headers}</tr></thead><tbody>{rows}</tbody></table>"
-    source = source_urls.get(anchor.block_id, str(payload["target"]))
+    source = source_urls.get(anchor.block_id)
     caption = escape_html(str(payload["caption"]))
     alt = escape_html(str(payload["alt_text"]))
+    if source is None:
+        target = str(payload["target"])
+        link = (
+            f' <a href="{escape_html(target)}">Original figure URL</a>'
+            if target
+            else ""
+        )
+        description = alt or "Figure asset was not frozen with the source."
+        return (
+            '<figure class="figure-unfrozen">'
+            f"<p>{description}{link}</p><figcaption>{caption}</figcaption></figure>"
+        )
     return (
         f'<figure><img src="{escape_html(source)}" alt="{alt}">'
         f"<figcaption>{caption}</figcaption></figure>"
@@ -368,14 +391,24 @@ def _render_html_glossary(book: AcceptedBook) -> str:
     return f'<section class="glossary" id="glossary"><h2>Glossary</h2><dl>{rows}</dl></section>'
 
 
-def _html_links(links: Sequence[Mapping[str, Any]]) -> str:
-    if not links:
-        return ""
-    values = " ".join(
-        f'<a href="{escape_html(str(item["target"]))}">{escape_html(str(item["text"]))}</a>'
-        for item in links
-    )
-    return f'<p class="source-links">{values}</p>'
+def _render_html_inline(spans: Sequence[Mapping[str, Any]]) -> str:
+    values: list[str] = []
+    for item in spans:
+        kind = str(item["kind"])
+        if kind == "link":
+            values.append(
+                f'<a href="{escape_html(str(item["target"]))}">'
+                f'{escape_html(str(item["text"]))}</a>'
+            )
+        elif kind == "math":
+            values.append(
+                f'<span class="math math-inline" '
+                f'data-tex="{escape_html(str(item["tex"]))}">'
+                f'{escape_html(str(item["source"]))}</span>'
+            )
+        else:
+            values.append(_html_text(str(item["text"])))
+    return "".join(values)
 
 
 def _html_citations(citations: Sequence[str]) -> str:
@@ -404,6 +437,7 @@ def _render_tex(book: AcceptedBook, *, source_paths: Mapping[str, str]) -> str:
 \usepackage[table]{{xcolor}}
 \usepackage{{graphicx}}
 \usepackage{{longtable,booktabs,array}}
+\usepackage[breakable]{{tcolorbox}}
 \usepackage[colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black]{{hyperref}}
 \usepackage{{enumitem}}
 \setmainfont{{Noto Sans}}
@@ -445,16 +479,18 @@ def _render_tex_chapter(
         )
         values.append(
             rf"\par\noindent\hypertarget{{anchor-{_tex_id(anchor.block_id)}}}{{}}{page}"
-            rf"\colorbox{{SourceBg}}{{\begin{{minipage}}{{\dimexpr\linewidth-2\fboxsep\relax}}"
+            rf"\begin{{tcolorbox}}[breakable,colback=SourceBg,colframe=SourceBg,"
+            rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
             rf"\textbf{{Source}}\par {_render_tex_source(anchor, source_paths=source_paths)}"
-            rf"\end{{minipage}}}}\par"
+            rf"\end{{tcolorbox}}"
         )
         translation = translations.get(anchor.block_id)
         if translation is not None:
             values.append(
-                rf"\par\noindent\colorbox{{TranslationBg}}{{\begin{{minipage}}{{\dimexpr\linewidth-2\fboxsep\relax}}"
+                rf"\begin{{tcolorbox}}[breakable,colback=TranslationBg,colframe=TranslationBg,"
+                rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
                 rf"\textbf{{Translation}}\par {_tex_escape(translation.text)}"
-                rf"\end{{minipage}}}}\par"
+                rf"\end{{tcolorbox}}"
             )
         for unit in units.get(anchor.block_id, ()):
             citations = (
@@ -463,9 +499,10 @@ def _render_tex_chapter(
                 else ""
             )
             values.append(
-                rf"\par\noindent\colorbox{{LearningBg}}{{\begin{{minipage}}{{\dimexpr\linewidth-2\fboxsep\relax}}"
+                rf"\begin{{tcolorbox}}[breakable,colback=LearningBg,colframe=LearningBg,"
+                rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
                 rf"\textbf{{{_tex_escape(unit.title)}}}\par "
-                rf"{_tex_escape(unit.content)}{citations}\end{{minipage}}}}\par"
+                rf"{_tex_escape(unit.content)}{citations}\end{{tcolorbox}}"
             )
         values.append(r"\medskip")
     return "\n".join(values)
@@ -478,23 +515,16 @@ def _render_tex_source(
     if anchor.kind == "heading":
         return rf"\textbf{{{_tex_escape(payload['text'])}}}"
     if anchor.kind == "paragraph":
-        links = _tex_links(payload["links"])
-        math = " ".join(
-            rf"\({_sanitize_math(item['tex'])}\)"
-            for item in payload["inline_math"]
-        )
-        return " ".join(
-            item for item in (_tex_escape(payload["text"]), math, links) if item
-        )
+        return _render_tex_inline(payload["inline_spans"])
     if anchor.kind == "list":
         environment = "enumerate" if payload["ordered"] else "itemize"
         items = "\n".join(
-            rf"\item {_tex_escape(item['text'])} {_tex_links(item['links'])}"
+            rf"\item {_render_tex_inline(item['inline_spans'])}"
             for item in payload["items"]
         )
         return rf"\begin{{{environment}}}[leftmargin=*]{items}\end{{{environment}}}"
     if anchor.kind == "code":
-        return rf"{{\ttfamily\small {_tex_escape(payload['text'])}}}"
+        return _render_tex_code(str(payload["text"]))
     if anchor.kind == "equation":
         label = (
             rf"\tag{{{_tex_escape(payload['label'])}}}" if payload["label"] else ""
@@ -524,7 +554,16 @@ def _render_tex_source(
     if source and not urlparse(source).scheme:
         image = rf"\includegraphics[width=0.82\linewidth]{{\detokenize{{{source}}}}}"
     else:
-        image = rf"\fbox{{\parbox{{0.8\linewidth}}{{{_tex_escape(payload['alt_text'])}}}}}"
+        target = str(payload["target"])
+        link = (
+            rf"\par\url{{{_tex_url(target)}}}"
+            if target
+            else ""
+        )
+        image = (
+            rf"\textit{{Figure asset was not frozen with the source.}} "
+            rf"{_tex_escape(payload['alt_text'])}{link}"
+        )
     return rf"\begin{{center}}{image}\par{{\footnotesize {caption}}}\end{{center}}"
 
 
@@ -552,10 +591,28 @@ def _render_tex_glossary(book: AcceptedBook) -> str:
     )
 
 
-def _tex_links(links: Sequence[Mapping[str, Any]]) -> str:
-    return " ".join(
-        rf"\href{{{_tex_url(str(item['target']))}}}{{{_tex_escape(item['text'])}}}"
-        for item in links
+def _render_tex_inline(spans: Sequence[Mapping[str, Any]]) -> str:
+    values: list[str] = []
+    for item in spans:
+        kind = str(item["kind"])
+        if kind == "link":
+            values.append(
+                rf"\href{{{_tex_url(str(item['target']))}}}"
+                rf"{{{_tex_escape(item['text'])}}}"
+            )
+        elif kind == "math":
+            values.append(rf"\({_sanitize_math(item['tex'])}\)")
+        else:
+            values.append(_tex_escape(item["text"]))
+    return "".join(values)
+
+
+def _render_tex_code(value: str) -> str:
+    lines = value.splitlines() or [""]
+    return (
+        r"{\ttfamily\small\raggedright "
+        + r"\par ".join(_tex_escape(line) or r"\strut" for line in lines)
+        + "}"
     )
 
 
@@ -628,11 +685,61 @@ def _write_if_changed(path: Path, data: bytes) -> None:
     os.replace(temporary, path)
 
 
-def _safe_asset_suffix(target: str) -> str:
-    suffix = Path(urlparse(target).path).suffix.casefold()
-    if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"}:
-        return suffix
+def _asset_suffix(media_type: str) -> str:
+    suffixes = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/svg+xml": ".svg",
+        "application/pdf": ".pdf",
+    }
+    if media_type in suffixes:
+        return suffixes[media_type]
     return ".bin"
+
+
+def _prepare_pdf_asset(
+    source: Path,
+    *,
+    media_type: str,
+    digest: str,
+) -> Path:
+    if media_type in {"image/png", "image/jpeg", "application/pdf"}:
+        return source
+    target = source.with_name(f"{digest}.png")
+    if media_type == "image/svg+xml":
+        converter = shutil.which("rsvg-convert")
+        if converter is None:
+            raise CompanionRenderError(
+                "rsvg-convert is required to render SVG source figures in PDF"
+            )
+        _run([converter, "--format=png", "--output", str(target), str(source)])
+    elif media_type in {"image/gif", "image/webp"}:
+        converter = shutil.which("magick") or shutil.which("convert")
+        if converter is None:
+            raise CompanionRenderError(
+                "ImageMagick is required to render GIF/WebP source figures in PDF"
+            )
+        _run(
+            [
+                converter,
+                f"{source}[0]",
+                "-strip",
+                "-define",
+                "png:exclude-chunk=time,date",
+                str(target),
+            ]
+        )
+    else:
+        raise CompanionRenderError(
+            f"unsupported source figure media type for PDF: {media_type or 'unknown'}"
+        )
+    if not target.is_file() or target.stat().st_size == 0:
+        raise CompanionRenderError(
+            f"source figure conversion produced no output: {media_type}"
+        )
+    return target
 
 
 def _tex_escape(value: Any) -> str:

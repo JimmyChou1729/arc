@@ -48,10 +48,40 @@ _PNG = (
     + _png_chunk(b"IEND", b"")
 )
 _PNG_DIGEST = hashlib.sha256(_PNG).hexdigest()
+_SVG = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" '
+    b'viewBox="0 0 24 16"><rect width="24" height="16" fill="#367aa4"/></svg>'
+)
+_SVG_DIGEST = hashlib.sha256(_SVG).hexdigest()
+_PDF_TOOLS = (
+    "latexmk",
+    "xelatex",
+    "pdfinfo",
+    "pdftotext",
+    "pdffonts",
+    "pdftoppm",
+)
+
+
+def _plain_inline(text: str) -> dict[str, object]:
+    return {
+        "text": text,
+        "links": (),
+        "inline_math": (),
+        "inline_spans": (
+            {"kind": "text", "start": 0, "end": len(text), "text": text},
+        ),
+    }
 
 
 @pytest.fixture
 def accepted_book() -> AcceptedBook:
+    intro_text = r"A state follows source note with $\sum_i p_i=1$ normalized distribution."
+    link_start = intro_text.index("source note")
+    link_end = link_start + len("source note")
+    math_source = r"$\sum_i p_i=1$"
+    math_start = intro_text.index(math_source)
+    math_end = math_start + len(math_source)
     anchors = (
         SourceAnchor(
             block_id="b-intro",
@@ -68,11 +98,48 @@ def accepted_book() -> AcceptedBook:
                 "source_id": "",
             },
             payload={
-                "text": "A state follows the normalized distribution.",
+                "text": intro_text,
                 "links": (
                     {"text": "source note", "target": "https://example.test/note"},
                 ),
-                "inline_math": ({"tex": r"\sum_i p_i=1", "source": "sum p_i = 1"},),
+                "inline_math": (
+                    {"tex": r"\sum_i p_i=1", "source": math_source},
+                ),
+                "inline_spans": (
+                    {
+                        "kind": "text",
+                        "start": 0,
+                        "end": link_start,
+                        "text": intro_text[:link_start],
+                    },
+                    {
+                        "kind": "link",
+                        "start": link_start,
+                        "end": link_end,
+                        "text": "source note",
+                        "target": "https://example.test/note",
+                    },
+                    {
+                        "kind": "text",
+                        "start": link_end,
+                        "end": math_start,
+                        "text": intro_text[link_end:math_start],
+                    },
+                    {
+                        "kind": "math",
+                        "start": math_start,
+                        "end": math_end,
+                        "text": math_source,
+                        "tex": r"\sum_i p_i=1",
+                        "source": math_source,
+                    },
+                    {
+                        "kind": "text",
+                        "start": math_end,
+                        "end": len(intro_text),
+                        "text": intro_text[math_end:],
+                    },
+                ),
             },
             page_number=2,
         ),
@@ -107,8 +174,8 @@ def accepted_book() -> AcceptedBook:
             payload={
                 "ordered": False,
                 "items": (
-                    {"text": "Normalize probabilities", "links": ()},
-                    {"text": "Evaluate entropy", "links": ()},
+                    _plain_inline("Normalize probabilities"),
+                    _plain_inline("Evaluate entropy"),
                 ),
             },
             page_number=3,
@@ -124,6 +191,9 @@ def accepted_book() -> AcceptedBook:
                 "alt_text": "A one-pixel state-space diagram.",
                 "caption": "State-space diagram",
                 "target": "state-space.png",
+                "media_type": "image/png",
+                "logical_name": "state-space.png",
+                "size": len(_PNG),
             },
             page_number=4,
         ),
@@ -334,6 +404,13 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
     assert "Two-state example" in html
     assert "State-space diagram" in html
     assert "https://example.test/note" in html
+    assert html.index("A state follows") < html.index(
+        'href="https://example.test/note"'
+    ) < html.index('data-tex="\\sum_i p_i=1"') < html.index(
+        "normalized distribution"
+    )
+    assert html.count(">source note</a>") == 1
+    assert "source-links" not in html
     assert "paper:1234.56789" in html
     assert "entropia" in html
     assert "window.katex.render" in javascript
@@ -350,7 +427,7 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
 
 
 @pytest.mark.skipif(
-    any(shutil.which(item) is None for item in ("latexmk", "xelatex", "pdfinfo", "pdftotext", "pdffonts", "pdftoppm")),
+    any(shutil.which(item) is None for item in _PDF_TOOLS),
     reason="offline PDF toolchain is unavailable",
 )
 def test_pdf_is_searchable_complete_and_anchor_interleaved(
@@ -381,3 +458,146 @@ def test_pdf_is_searchable_complete_and_anchor_interleaved(
     assert hashlib.sha256(second.read_bytes()).digest() == hashlib.sha256(
         output.read_bytes()
     ).digest()
+
+
+def test_unfrozen_remote_figure_is_rendered_as_attributed_link(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    figure = chapter.source_anchors[-1]
+    remote = replace(
+        figure,
+        payload={
+            "asset_digest": "",
+            "alt_text": "Remote phase portrait",
+            "caption": "Externally hosted figure",
+            "target": "https://example.test/phase.svg",
+            "media_type": "",
+            "logical_name": "https://example.test/phase.svg",
+            "size": 0,
+        },
+    )
+    book = replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                source_anchors=chapter.source_anchors[:-1] + (remote,),
+            ),
+        ),
+    )
+
+    index = CompanionRenderer().render_web(book, tmp_path / "reader")
+    html = index.read_text(encoding="utf-8")
+
+    figure_start = html.index('data-source-anchor="b-figure"')
+    assert "<img" not in html[figure_start:]
+    assert "Remote phase portrait" in html[figure_start:]
+    assert 'href="https://example.test/phase.svg"' in html[figure_start:]
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in _PDF_TOOLS + ("rsvg-convert",)),
+    reason="offline PDF/SVG toolchain is unavailable",
+)
+def test_pdf_converts_typed_svg_asset(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    figure = chapter.source_anchors[-1]
+    svg_figure = replace(
+        figure,
+        payload={
+            "asset_digest": _SVG_DIGEST,
+            "alt_text": "A blue rectangle.",
+            "caption": "Typed SVG figure",
+            "target": "shape.svg",
+            "media_type": "image/svg+xml",
+            "logical_name": "shape.svg",
+            "size": len(_SVG),
+        },
+    )
+    book = replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                source_anchors=chapter.source_anchors[:-1] + (svg_figure,),
+            ),
+        ),
+    )
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _SVG if digest == _SVG_DIGEST else None
+    )
+
+    output = renderer.render_pdf(book, tmp_path / "svg.pdf")
+    extracted = subprocess.run(
+        ["pdftotext", str(output), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "Typed SVG figure" in extracted
+
+    index = renderer.render_web(book, tmp_path / "reader")
+    assert (tmp_path / "reader" / "assets" / "source" / f"{_SVG_DIGEST}.svg").read_bytes() == _SVG
+    assert f"assets/source/{_SVG_DIGEST}.svg" in index.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in _PDF_TOOLS),
+    reason="offline PDF toolchain is unavailable",
+)
+def test_pdf_cards_break_across_pages_for_long_paragraph_and_code(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    long_text = "BEGIN LONG " + " ".join(
+        f"anchored sentence {index}." for index in range(900)
+    ) + " END LONG"
+    paragraph = replace(
+        accepted_book.chapters[0].source_anchors[0],
+        ordinal=0,
+        payload=_plain_inline(long_text),
+    )
+    code_text = "\n".join(
+        ["BEGIN CODE"] + [f"value_{index} = {index}" for index in range(350)] + ["END CODE"]
+    )
+    code = SourceAnchor(
+        block_id="b-code",
+        ordinal=1,
+        kind="code",
+        section_path=("intro",),
+        locator={},
+        payload={"text": code_text, "language": "python"},
+    )
+    chapter = replace(
+        accepted_book.chapters[0],
+        source_anchors=(paragraph, code),
+        translations=(
+            TranslatedBlock(block_id=paragraph.block_id, text="Translated paragraph."),
+            TranslatedBlock(block_id=code.block_id, text="Translated code."),
+        ),
+        learning_units=(),
+    )
+    book = replace(accepted_book, chapters=(chapter,), glossary=())
+
+    output = CompanionRenderer().render_pdf(book, tmp_path / "multipage.pdf")
+    info = subprocess.run(
+        ["pdfinfo", str(output)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    extracted = subprocess.run(
+        ["pdftotext", str(output), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    pages = int(next(line.split(":", 1)[1] for line in info.splitlines() if line.startswith("Pages:")))
+    assert pages >= 3
+    assert "BEGIN LONG" in extracted
+    assert "END LONG" in extracted
+    assert "BEGIN CODE" in extracted
+    assert "END CODE" in extracted

@@ -65,6 +65,14 @@ def _book() -> AcceptedBook:
                             "text": "Source",
                             "links": (),
                             "inline_math": (),
+                            "inline_spans": (
+                                {
+                                    "kind": "text",
+                                    "start": 0,
+                                    "end": 6,
+                                    "text": "Source",
+                                },
+                            ),
                         },
                     ),
                 ),
