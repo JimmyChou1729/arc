@@ -4,16 +4,24 @@ from copy import deepcopy
 
 import pytest
 
+from arc_jobs import ArtifactDigest, ArtifactRef
 from arc_llm import ModelSelection
 from arc_domain.contracts import (
     DOMAIN_BUILD_POLICY_SCHEMA_VERSION,
     DOMAIN_BUILD_REQUEST_SCHEMA_VERSION,
+    DOMAIN_BUILD_RESULT_SCHEMA_VERSION,
     DomainBuildPolicy,
     DomainBuildRequest,
+    DomainBuildResult,
+    DomainBuildWarning,
     decode_domain_build_policy,
     decode_domain_build_request,
+    decode_domain_build_result,
+    decode_domain_build_warning,
     encode_domain_build_policy,
     encode_domain_build_request,
+    encode_domain_build_result,
+    encode_domain_build_warning,
 )
 
 
@@ -67,6 +75,7 @@ def test_policy_rejects_invalid_values(kwargs, match) -> None:
     "mutate",
     [
         lambda document: document.update(extra=True),
+        lambda document: document.__setitem__(1, "not-a-json-field"),
         lambda document: document.pop("as_of_date"),
         lambda document: document.__setitem__("schema_version", "arc.domain_build_policy.v0"),
         lambda document: document.__setitem__("recent_window_days", True),
@@ -119,6 +128,26 @@ def test_request_decode_normalizes_semantic_strings() -> None:
 
 
 @pytest.mark.parametrize(
+    ("seed_paper", "normalized"),
+    [
+        ("https://arxiv.org/abs/hep-th/0601001v2", "arXiv:hep-th/0601001"),
+        ("https://doi.org/10.1007/JHEP01(2010)117.", "doi:10.1007/jhep01(2010)117"),
+        ("recid:154280", "inspire:154280"),
+    ],
+)
+def test_request_accepts_only_supported_normalized_seed_kinds(
+    seed_paper, normalized
+) -> None:
+    request = DomainBuildRequest(
+        seed_paper,
+        "",
+        DomainBuildPolicy("2026-07-24"),
+    )
+
+    assert request.seed_paper == normalized
+
+
+@pytest.mark.parametrize(
     "mutate",
     [
         lambda document: document.update(extra=True),
@@ -151,6 +180,26 @@ def test_request_decode_is_closed_and_validated(mutate) -> None:
     "kwargs",
     [
         {"seed_paper": "", "intent": "", "policy": DomainBuildPolicy("2026-07-24")},
+        {
+            "seed_paper": "a paper title",
+            "intent": "",
+            "policy": DomainBuildPolicy("2026-07-24"),
+        },
+        {
+            "seed_paper": "arXiv:not-an-id",
+            "intent": "",
+            "policy": DomainBuildPolicy("2026-07-24"),
+        },
+        {
+            "seed_paper": "doi:not-a-doi",
+            "intent": "",
+            "policy": DomainBuildPolicy("2026-07-24"),
+        },
+        {
+            "seed_paper": "inspire:not-a-recid",
+            "intent": "",
+            "policy": DomainBuildPolicy("2026-07-24"),
+        },
         {"seed_paper": 1, "intent": "", "policy": DomainBuildPolicy("2026-07-24")},
         {"seed_paper": "2401.00001", "intent": None, "policy": DomainBuildPolicy("2026-07-24")},
         {"seed_paper": "2401.00001", "intent": "", "policy": {}},
@@ -165,3 +214,188 @@ def test_request_decode_is_closed_and_validated(mutate) -> None:
 def test_request_constructor_rejects_wrong_types(kwargs) -> None:
     with pytest.raises(ValueError):
         DomainBuildRequest(**kwargs)
+
+
+def _ref(artifact_id: str, *, size_bytes: int = 12) -> ArtifactRef:
+    return ArtifactRef(
+        artifact_id=artifact_id,
+        digest=ArtifactDigest("sha256", "a" * 64, size_bytes),
+        media_type="application/json",
+        relative_path=f"objects/{artifact_id}.json",
+    )
+
+
+def _result() -> DomainBuildResult:
+    return DomainBuildResult(
+        domain_id="arXiv_2401.00001_deadbeef",
+        foundation_selection=_ref("foundation-selection"),
+        graph=_ref("graph"),
+        network_html=ArtifactRef(
+            artifact_id="network-html",
+            digest=ArtifactDigest("sha256", "b" * 64, 42),
+            media_type="text/html",
+            relative_path="objects/network.html",
+        ),
+        paper_json_pack=_ref("paper-json-pack"),
+        evidence_pack=_ref("evidence-pack"),
+        summary=_ref("summary"),
+        summary_markdown=None,
+        warnings=(
+            DomainBuildWarning(
+                code="paper_unavailable",
+                message="One selected paper could not be parsed.",
+                stage="paper-pack",
+                paper_id="arXiv:2402.00001",
+            ),
+            DomainBuildWarning(
+                code="summary_unavailable",
+                message="Summary generation timed out.",
+                stage="summary",
+            ),
+        ),
+    )
+
+
+def test_warning_closed_round_trip() -> None:
+    warning = DomainBuildWarning(
+        code="paper_unavailable",
+        message="Paper parse failed.",
+        stage="paper-pack",
+        paper_id="arXiv:2402.00001",
+    )
+
+    document = encode_domain_build_warning(warning)
+    assert document == {
+        "code": "paper_unavailable",
+        "message": "Paper parse failed.",
+        "stage": "paper-pack",
+        "paper_id": "arXiv:2402.00001",
+    }
+    assert decode_domain_build_warning(document) == warning
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"code": "", "message": "message", "stage": "stage"},
+        {"code": "code", "message": " ", "stage": "stage"},
+        {"code": "code", "message": "message", "stage": ""},
+        {"code": "code", "message": "message", "stage": "stage", "paper_id": ""},
+        {"code": "code", "message": "message", "stage": "stage", "paper_id": 42},
+    ],
+)
+def test_warning_rejects_empty_or_wrong_values(kwargs) -> None:
+    with pytest.raises(ValueError):
+        DomainBuildWarning(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda document: document.update(extra=True),
+        lambda document: document.pop("message"),
+        lambda document: document.__setitem__("paper_id", False),
+        lambda document: document.__setitem__("code", " "),
+    ],
+)
+def test_warning_decode_is_closed(mutate) -> None:
+    document = encode_domain_build_warning(
+        DomainBuildWarning("code", "message", "stage")
+    )
+    mutate(document)
+
+    with pytest.raises(ValueError):
+        decode_domain_build_warning(document)
+
+
+def test_result_closed_round_trip_with_nullable_summary_refs() -> None:
+    result = _result()
+
+    document = encode_domain_build_result(result)
+    assert set(document) == {
+        "schema_version",
+        "domain_id",
+        "foundation_selection",
+        "graph",
+        "network_html",
+        "paper_json_pack",
+        "evidence_pack",
+        "summary",
+        "summary_markdown",
+        "warnings",
+    }
+    assert document["schema_version"] == DOMAIN_BUILD_RESULT_SCHEMA_VERSION
+    assert document["summary_markdown"] is None
+    assert document["summary"]["artifact_id"] == "summary"
+    assert document["warnings"] == [
+        encode_domain_build_warning(item) for item in result.warnings
+    ]
+    assert decode_domain_build_result(document) == result
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda document: document.update(extra=True),
+        lambda document: document.pop("graph"),
+        lambda document: document.__setitem__(
+            "schema_version", "arc.domain_build_result.v0"
+        ),
+        lambda document: document.__setitem__("domain_id", ""),
+        lambda document: document.__setitem__("warnings", {}),
+        lambda document: document["warnings"][0].update(extra=True),
+        lambda document: document.__setitem__("summary", False),
+        lambda document: document["graph"].pop("relative_path"),
+        lambda document: document["graph"]["digest"].update(extra=True),
+        lambda document: document["graph"]["digest"].__setitem__(
+            "algorithm", "md5"
+        ),
+        lambda document: document["graph"]["digest"].__setitem__(
+            "value", "not-a-digest"
+        ),
+        lambda document: document["graph"]["digest"].__setitem__(
+            "size_bytes", True
+        ),
+    ],
+)
+def test_result_decode_rejects_unknown_and_malformed_artifact_refs(mutate) -> None:
+    document = deepcopy(encode_domain_build_result(_result()))
+    mutate(document)
+
+    with pytest.raises(ValueError):
+        decode_domain_build_result(document)
+
+
+def test_result_constructor_freezes_warnings_and_validates_artifact_refs() -> None:
+    warning = DomainBuildWarning("code", "message", "stage")
+    result = _result()
+    copied = DomainBuildResult(
+        domain_id=result.domain_id,
+        foundation_selection=result.foundation_selection,
+        graph=result.graph,
+        network_html=result.network_html,
+        paper_json_pack=result.paper_json_pack,
+        evidence_pack=result.evidence_pack,
+        summary=None,
+        summary_markdown=None,
+        warnings=[warning],
+    )
+    assert copied.warnings == (warning,)
+
+    invalid_ref = ArtifactRef(
+        "graph",
+        ArtifactDigest("sha256", "a" * 64, True),
+        "application/json",
+        "objects/graph.json",
+    )
+    with pytest.raises(ValueError, match="valid ArtifactRef"):
+        DomainBuildResult(
+            domain_id="domain",
+            foundation_selection=result.foundation_selection,
+            graph=invalid_ref,
+            network_html=result.network_html,
+            paper_json_pack=result.paper_json_pack,
+            evidence_pack=result.evidence_pack,
+            summary=None,
+            summary_markdown=None,
+        )

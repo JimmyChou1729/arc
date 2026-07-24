@@ -76,6 +76,11 @@ from .parse import (  # noqa: E402
     visual_page_review_schema,
 )
 from .service import ArcPaperService, PaperInputError  # noqa: E402
+from .ids import (  # noqa: E402
+    arxiv_path_id,
+    extract_paper_ids,
+    normalize_paper_id,
+)
 from .workflows import (  # noqa: E402
     MARKDOWN_PDF_VISUAL_HANDLER,
     PARSE_OUTCOME_SCHEMA,
@@ -100,10 +105,12 @@ from .workflows import (  # noqa: E402
 
 __all__ = [
     "ArcPaperService",
+    "arxiv_path_id",
     "DEFAULT_EXCLUDED_EFFECTS",
     "DocumentSearchError",
     "EquationMatch",
     "EquationSearchResult",
+    "extract_paper_ids",
     "FullTextMatch",
     "FullTextSearchResult",
     "JsonCodec",
@@ -166,6 +173,7 @@ __all__ = [
     "PARSE_OUTCOME_SCHEMA",
     "MarkdownPDFVisualParseHandler",
     "MarkdownPDFVisualParseRunner",
+    "normalize_paper_id",
     "ReferenceInferenceCompleted",
     "ReferenceInferenceHandler",
     "ReferenceInferenceResult",
