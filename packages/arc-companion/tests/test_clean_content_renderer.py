@@ -26,7 +26,12 @@ from arc_companion.contracts import (
     SourceAnchor,
     TranslatedBlock,
 )
-from arc_companion.renderer import CompanionRenderer
+from arc_companion.renderer import (
+    PDF_RENDER_RECIPE,
+    CompanionRenderer,
+    _render_tex,
+    _render_tex_prose,
+)
 from arc_companion.validation import (
     AcceptedBookValidationError,
     require_valid_accepted_book,
@@ -396,6 +401,73 @@ def test_accepted_book_codec_is_canonical_strict_and_immutable(
         CompanionContentCodec.from_document(document)
 
 
+def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
+    accepted_book: AcceptedBook,
+) -> None:
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v4"
+    assert (
+        _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
+        == r"first line\newline{} second line\par third paragraph"
+    )
+
+    chapter = replace(
+        accepted_book.chapters[0],
+        guide="Guide line one\nGuide line two\n\nGuide paragraph two",
+        translations=(
+            replace(
+                accepted_book.chapters[0].translations[0],
+                text=(
+                    "Translation line one\nTranslation line two"
+                    "\n\nTranslation paragraph two"
+                ),
+            ),
+            *accepted_book.chapters[0].translations[1:],
+        ),
+        learning_units=(
+            replace(
+                accepted_book.chapters[0].learning_units[0],
+                content=(
+                    "Learning line one\nLearning line two"
+                    "\n\nLearning paragraph two"
+                ),
+            ),
+            *accepted_book.chapters[0].learning_units[1:],
+        ),
+    )
+    book = replace(
+        accepted_book,
+        chapters=(chapter,),
+        glossary=(
+            replace(
+                accepted_book.glossary[0],
+                definition=(
+                    "Definition line one\nDefinition line two"
+                    "\n\nDefinition paragraph two"
+                ),
+            ),
+        ),
+    )
+
+    tex = _render_tex(book, source_paths={})
+
+    assert (
+        r"Guide line one\newline{} Guide line two\par Guide paragraph two"
+        in tex
+    )
+    assert (
+        r"Translation line one\newline{} Translation line two"
+        r"\par Translation paragraph two"
+    ) in tex
+    assert (
+        r"Learning line one\newline{} Learning line two"
+        r"\par Learning paragraph two"
+    ) in tex
+    assert (
+        r"Definition line one\newline{} Definition line two"
+        r"\par Definition paragraph two"
+    ) in tex
+
+
 def test_renderer_public_import_does_not_load_llm_runtime() -> None:
     package_src = Path(__file__).resolve().parents[1] / "src"
     environment = dict(os.environ)
@@ -634,6 +706,77 @@ def test_pdf_is_searchable_complete_and_anchor_interleaved(
     assert hashlib.sha256(second.read_bytes()).digest() == hashlib.sha256(
         output.read_bytes()
     ).digest()
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in _PDF_TOOLS),
+    reason="offline PDF toolchain is unavailable",
+)
+def test_pdf_preserves_multiline_prose_without_pipeline_diagnostics(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = replace(
+        accepted_book.chapters[0],
+        guide=(
+            "GUIDE-LINE-ONE\nGUIDE-LINE-TWO"
+            "\n\nGUIDE-PARAGRAPH-TWO"
+        ),
+        translations=(
+            replace(
+                accepted_book.chapters[0].translations[0],
+                text=(
+                    "TRANSLATION-LINE-ONE\nTRANSLATION-LINE-TWO"
+                    "\n\nTRANSLATION-PARAGRAPH-TWO"
+                ),
+            ),
+            *accepted_book.chapters[0].translations[1:],
+        ),
+        learning_units=(
+            replace(
+                accepted_book.chapters[0].learning_units[0],
+                content=(
+                    "LEARNING-LINE-ONE\nLEARNING-LINE-TWO"
+                    "\n\nLEARNING-PARAGRAPH-TWO"
+                ),
+            ),
+            *accepted_book.chapters[0].learning_units[1:],
+        ),
+    )
+    book = replace(
+        accepted_book,
+        chapters=(chapter,),
+        glossary=(
+            replace(
+                accepted_book.glossary[0],
+                definition=(
+                    "DEFINITION-LINE-ONE\nDEFINITION-LINE-TWO"
+                    "\n\nDEFINITION-PARAGRAPH-TWO"
+                ),
+            ),
+        ),
+    )
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+
+    output = renderer.render_pdf(book, tmp_path / "multiline-prose.pdf")
+    extracted = subprocess.run(
+        ["pdftotext", str(output), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    for prefix in ("GUIDE", "TRANSLATION", "LEARNING", "DEFINITION"):
+        first = f"{prefix}-LINE-ONE"
+        second = f"{prefix}-LINE-TWO"
+        paragraph = f"{prefix}-PARAGRAPH-TWO"
+        assert extracted.index(first) < extracted.index(second) < extracted.index(
+            paragraph
+        )
+    assert "arc.companion." not in extracted
+    assert "semantic_input" not in extracted
+    assert "provider diagnostics" not in extracted
 
 
 @pytest.mark.skipif(

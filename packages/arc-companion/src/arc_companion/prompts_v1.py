@@ -12,7 +12,7 @@ CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v1"
 GLOSSARY_PROMPT_VERSION = "arc.companion.glossary-prompt.v2"
 TRANSLATION_PROMPT_VERSION = "arc.companion.translation-prompt.v1"
 CHAPTER_DRAFT_PROMPT_VERSION = "arc.companion.chapter-draft-prompt.v3"
-CHAPTER_REVIEW_PROMPT_VERSION = "arc.companion.chapter-review-prompt.v1"
+CHAPTER_REVIEW_PROMPT_VERSION = "arc.companion.chapter-review-prompt.v2"
 
 
 def _closed(properties: Mapping[str, Any], required: Sequence[str]) -> dict[str, Any]:
@@ -376,9 +376,12 @@ def chapter_review_prompt(
         """
 Review this source-anchored chapter once. Return only text replacement patches
 for the guide, translations, or learning-unit content. Patch IDs must already
-exist in the draft. You cannot change source text, block IDs, source anchors,
-learning-unit kinds or titles, citations, or glossary entries. Use null/empty
-patch lists when no change is needed.
+exist in the draft. The supplied source_blocks are the only original source
+blocks selected by the textbook plan. Translation patches may target only
+their block IDs; translations for every other source block are frozen. You
+cannot change source text, block IDs, source anchors, learning-unit kinds or
+titles, citations, or glossary entries. Use null/empty patch lists when no
+change is needed.
 """,
         {
             "plan": dict(plan),

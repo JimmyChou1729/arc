@@ -698,7 +698,12 @@ class CompanionBuildHandler:
             assert isinstance(review_outcome, LLMCompleted)
             try:
                 reviewed, _summary = apply_safe_review(
-                    draft, review_outcome.value
+                    draft,
+                    review_outcome.value,
+                    allowed_translation_block_ids={
+                        str(item["block_id"])
+                        for item in planned_source_documents
+                    },
                 )
                 # Treat applying the reviewer patch and re-validating the
                 # complete draft contract as one transaction.  A patch can

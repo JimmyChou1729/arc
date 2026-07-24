@@ -21,6 +21,10 @@ from arc_companion.request_contracts import (
     CompanionGenerationRecipe,
 )
 from arc_companion.contracts import CompanionContentCodec
+from arc_companion.prompts_v1 import (
+    CHAPTER_DRAFT_PROMPT_VERSION,
+    CHAPTER_REVIEW_PROMPT_VERSION,
+)
 from arc_companion.service import CompanionService, companion_run_id
 
 
@@ -33,6 +37,7 @@ class FakeCompanionTasks:
         confidence: float = 0.99,
         pause_chapter_title: str | None = None,
         unsafe_review_title: str | None = None,
+        unanchored_review_title: str | None = None,
         invalid_review_title: str | None = None,
         identity_break_review_title: str | None = None,
         pause_translation_window: int | None = None,
@@ -45,6 +50,7 @@ class FakeCompanionTasks:
         self.confidence = confidence
         self.pause_chapter_title = pause_chapter_title
         self.unsafe_review_title = unsafe_review_title
+        self.unanchored_review_title = unanchored_review_title
         self.invalid_review_title = invalid_review_title
         self.identity_break_review_title = identity_break_review_title
         self.pause_translation_window = pause_translation_window
@@ -88,6 +94,16 @@ class FakeCompanionTasks:
             title = str(payload["title"])
             evidence_requests = self.evidence_requests_by_title.get(title, [])
             anchor_id = payload["blocks"][0]["block_id"]
+            if title == self.identity_break_review_title:
+                anchor_id = next(
+                    item["block_id"]
+                    for item in payload["blocks"]
+                    if item["payload"].get("inline_math")
+                )
+            review_validation_test = title in {
+                self.invalid_review_title,
+                self.identity_break_review_title,
+            }
             value = {
                 "chapter_id": payload["chapter_id"],
                 "guide": f"Guide for {payload['title']}",
@@ -95,13 +111,17 @@ class FakeCompanionTasks:
                     [
                         {
                             "unit_id": "evidence-note",
-                            "kind": "further_reading",
+                            "kind": (
+                                "further_reading"
+                                if evidence_requests
+                                else "intuition"
+                            ),
                             "title": "Evidence note",
                             "anchor_block_ids": [anchor_id],
                             "purpose": "Connect the source to frozen evidence.",
                         }
                     ]
-                    if evidence_requests
+                    if evidence_requests or review_validation_test
                     else []
                 ),
                 "glossary_candidates": (
@@ -178,7 +198,7 @@ class FakeCompanionTasks:
                 value["translations"][0]["source_identity"]["equations"] = [
                     "changed"
                 ]
-        elif contract == "arc.companion.chapter-draft-prompt.v3":
+        elif contract == CHAPTER_DRAFT_PROMPT_VERSION:
             title = str(payload["plan"]["guide"]).removeprefix("Guide for ")
             prompt_size = len(request.prompt.encode("utf-8"))
             with self._lock:
@@ -225,7 +245,7 @@ class FakeCompanionTasks:
                     for item in payload["plan"]["learning_units"]
                 ],
             }
-        elif contract == "arc.companion.chapter-review-prompt.v1":
+        elif contract == CHAPTER_REVIEW_PROMPT_VERSION:
             title = str(payload["draft"]["guide"]).removeprefix("Guide for ")
             with self._lock:
                 self.review_titles[title] += 1
@@ -238,14 +258,33 @@ class FakeCompanionTasks:
                     "learning_unit_patches": [],
                     "summary": "This patch is intentionally unsafe.",
                 }
-            elif title == self.invalid_review_title:
+            elif title == self.unanchored_review_title:
+                planned_ids = {
+                    item["block_id"] for item in payload["source_blocks"]
+                }
+                unanchored = next(
+                    item
+                    for item in payload["draft"]["translations"]
+                    if item["block_id"] not in planned_ids
+                )
                 value = {
                     "guide_replacement": None,
                     "translation_patches": [
                         {
-                            "id": payload["draft"]["translations"][0][
-                                "block_id"
-                            ],
+                            "id": unanchored["block_id"],
+                            "replacement": unanchored["text"] + " reviewed",
+                        }
+                    ],
+                    "learning_unit_patches": [],
+                    "summary": "This patch targets unplanned source text.",
+                }
+            elif title == self.invalid_review_title:
+                allowed_id = payload["source_blocks"][0]["block_id"]
+                value = {
+                    "guide_replacement": None,
+                    "translation_patches": [
+                        {
+                            "id": allowed_id,
                             "replacement": "",
                         }
                     ],
@@ -638,6 +677,45 @@ def test_unsafe_review_patch_pauses_once_and_can_be_discarded(
     assert tasks.review_titles["First"] == 1
 
 
+def test_unplanned_translation_patch_pauses_and_discard_does_not_rerun_reviewer(
+    tmp_path: Path,
+) -> None:
+    document = _rich_document(tmp_path)
+    request = CompanionBuildRequest(document, target_language="en")
+    tasks = FakeCompanionTasks(
+        language="fr",
+        unanchored_review_title="First",
+    )
+    service = CompanionService(tmp_path / "jobs")
+
+    paused = service.build(
+        request,
+        execution=CompanionExecutionOptions(workers=2),
+        task_service=tasks,
+    )
+
+    assert paused.status is RunStatus.PAUSED
+    assert paused.awaiting is not None
+    assert paused.awaiting.reason is ResumeReason.SUPERVISION_REQUIRED
+    assert tasks.review_titles["First"] == 1
+
+    completed = service.resume(
+        paused.run_id,
+        input={
+            "schema_version": "arc.companion.review_supervision.v1",
+            "resume_key": paused.awaiting.resume_key,
+            "action": "discard_review",
+        },
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert tasks.review_titles["First"] == 1
+    first = service.accepted_book(completed.run_id).chapters[0]
+    assert all(not item.text.endswith(" reviewed") for item in first.translations)
+
+
 def test_review_patch_that_breaks_draft_validation_pauses_and_discards(
     tmp_path: Path,
 ) -> None:
@@ -905,8 +983,8 @@ def test_long_chapter_translation_windows_are_bounded_and_replay_completed_windo
         expected_ids[: len(tasks.translation_block_ids[0])]
     )
     assert set(completed_window_ids) == set(expected_ids)
-    assert tasks.counts["arc.companion.chapter-draft-prompt.v3"] == 1
-    assert tasks.counts["arc.companion.chapter-review-prompt.v1"] == 1
+    assert tasks.counts[CHAPTER_DRAFT_PROMPT_VERSION] == 1
+    assert tasks.counts[CHAPTER_REVIEW_PROMPT_VERSION] == 1
 
 
 def test_same_language_creates_no_translation_tasks(tmp_path: Path) -> None:
@@ -954,7 +1032,7 @@ def test_oversized_translation_block_fails_before_translation_call(
     assert failed.error is not None
     assert failed.error.code == "translation_block_exceeds_input_budget"
     assert tasks.counts["arc.companion.translation-prompt.v1"] == 0
-    assert tasks.counts["arc.companion.chapter-draft-prompt.v2"] == 0
+    assert tasks.counts[CHAPTER_DRAFT_PROMPT_VERSION] == 0
 
 
 def test_translation_source_identity_is_checked_before_draft(
@@ -975,4 +1053,4 @@ def test_translation_source_identity_is_checked_before_draft(
     assert failed.status is RunStatus.FAILED
     assert failed.error is not None
     assert failed.error.code == "translation_source_identity_invalid"
-    assert tasks.counts["arc.companion.chapter-draft-prompt.v2"] == 0
+    assert tasks.counts[CHAPTER_DRAFT_PROMPT_VERSION] == 0

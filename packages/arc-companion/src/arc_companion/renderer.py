@@ -21,7 +21,7 @@ from .validation import require_valid_accepted_book
 
 
 WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v3"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v3"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v4"
 _SOURCE_DATE_EPOCH = "946684800"
 _AssetLoader = Callable[[str], bytes | None]
 
@@ -587,7 +587,7 @@ def _render_tex_chapter(
     units = _units_by_first_anchor(chapter.learning_units)
     values = [
         rf"\section{{{_tex_escape(chapter.title)}}}",
-        rf"\textbf{{Chapter guide.}} {_tex_escape(chapter.guide)}",
+        rf"\textbf{{Chapter guide.}} {_render_tex_prose(chapter.guide)}",
     ]
     for anchor in chapter.source_anchors:
         page = (
@@ -620,7 +620,7 @@ def _render_tex_chapter(
             values.append(
                 rf"\begin{{tcolorbox}}[breakable,colback=TranslationBg,colframe=TranslationBg,"
                 rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
-                rf"\textbf{{Translation}}\par {_tex_escape(translation.text)}"
+                rf"\textbf{{Translation}}\par {_render_tex_prose(translation.text)}"
                 rf"\end{{tcolorbox}}"
             )
         for unit in units.get(anchor.block_id, ()):
@@ -633,7 +633,7 @@ def _render_tex_chapter(
                 rf"\begin{{tcolorbox}}[breakable,colback=LearningBg,colframe=LearningBg,"
                 rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
                 rf"\textbf{{{_tex_escape(unit.title)}}}\par "
-                rf"{_tex_escape(unit.content)}{citations}\end{{tcolorbox}}"
+                rf"{_render_tex_prose(unit.content)}{citations}\end{{tcolorbox}}"
             )
         values.append(r"\medskip")
     return "\n".join(values)
@@ -716,7 +716,7 @@ def _render_tex_glossary(book: AcceptedBook) -> str:
         return ""
     rows = "\n".join(
         rf"\textbf{{{_tex_escape(item.term)}}} & "
-        rf"{_tex_escape(item.translated_term)} & {_tex_escape(item.definition)}"
+        rf"{_tex_escape(item.translated_term)} & {_render_tex_prose(item.definition)}"
         + (
             rf"\par{{\footnotesize\itshape Evidence: "
             rf"{_tex_escape('; '.join(item.citations))}}}"
@@ -769,6 +769,21 @@ def _render_tex_code(value: str) -> str:
         r"{\ttfamily\small\raggedright "
         + r"\par ".join(_tex_escape(line) or r"\strut" for line in lines)
         + "}"
+    )
+
+
+def _render_tex_prose(value: Any) -> str:
+    """Render plain prose while preserving authored line and paragraph breaks."""
+
+    normalized = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = [
+        paragraph
+        for paragraph in re.split(r"\n[ \t]*\n+", normalized)
+        if paragraph.strip()
+    ]
+    return r"\par ".join(
+        r"\newline{} ".join(_tex_escape(line) for line in paragraph.split("\n"))
+        for paragraph in paragraphs
     )
 
 

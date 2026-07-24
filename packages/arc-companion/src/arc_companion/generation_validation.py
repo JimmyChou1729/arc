@@ -203,6 +203,8 @@ def validate_chapter_draft(
 def apply_safe_review(
     draft: Mapping[str, Any],
     review: Any,
+    *,
+    allowed_translation_block_ids: set[str],
 ) -> tuple[dict[str, Any], str]:
     """Apply text-only patches or raise before any source identity can change."""
 
@@ -224,6 +226,7 @@ def apply_safe_review(
         result.get("translation_patches"),
         id_field="block_id",
         text_field="text",
+        allowed_ids=allowed_translation_block_ids,
     )
     _apply_text_patches(
         units,
@@ -253,6 +256,7 @@ def _apply_text_patches(
     *,
     id_field: str,
     text_field: str,
+    allowed_ids: set[str] | None = None,
 ) -> None:
     patch_values = _mapping_list(patches, "review patches")
     _unique(patch_values, "id", "review patch")
@@ -260,7 +264,11 @@ def _apply_text_patches(
     for patch in patch_values:
         patch_id = patch.get("id")
         replacement = patch.get("replacement")
-        if patch_id not in by_id or not isinstance(replacement, str):
+        if (
+            patch_id not in by_id
+            or (allowed_ids is not None and patch_id not in allowed_ids)
+            or not isinstance(replacement, str)
+        ):
             raise CompanionContentError(
                 "review_patch_unsafe",
                 "review patch targets an unknown ID or invalid replacement",
