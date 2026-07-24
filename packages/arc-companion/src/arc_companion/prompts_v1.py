@@ -9,9 +9,9 @@ from typing import Any
 
 LANGUAGE_PROMPT_VERSION = "arc.companion.language-prompt.v1"
 CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v1"
-GLOSSARY_PROMPT_VERSION = "arc.companion.glossary-prompt.v1"
+GLOSSARY_PROMPT_VERSION = "arc.companion.glossary-prompt.v2"
 TRANSLATION_PROMPT_VERSION = "arc.companion.translation-prompt.v1"
-CHAPTER_DRAFT_PROMPT_VERSION = "arc.companion.chapter-draft-prompt.v2"
+CHAPTER_DRAFT_PROMPT_VERSION = "arc.companion.chapter-draft-prompt.v3"
 CHAPTER_REVIEW_PROMPT_VERSION = "arc.companion.chapter-review-prompt.v1"
 
 
@@ -113,8 +113,19 @@ _GLOSSARY_ENTRY = _closed(
         "definition": _NONEMPTY,
         "preferred_translation": {"type": ["string", "null"]},
         "anchor_block_ids": _BLOCK_IDS,
+        "citations": {
+            "type": "array",
+            "items": _NONEMPTY,
+            "uniqueItems": True,
+        },
     },
-    ("term", "definition", "preferred_translation", "anchor_block_ids"),
+    (
+        "term",
+        "definition",
+        "preferred_translation",
+        "anchor_block_ids",
+        "citations",
+    ),
 )
 
 GLOSSARY_SCHEMA = _closed(
@@ -226,27 +237,6 @@ CHAPTER_REVIEW_SCHEMA = _closed(
     ),
 )
 
-EVIDENCE_ARGUMENTS_SCHEMA = _closed(
-    {
-        "request_id": _NONEMPTY,
-        "kind": {"enum": ["paper", "web", "user"]},
-        "query": _NONEMPTY,
-        "purpose": _NONEMPTY,
-    },
-    ("request_id", "kind", "query", "purpose"),
-)
-
-EVIDENCE_RESPONSE_SCHEMA = _closed(
-    {
-        "evidence_id": _NONEMPTY,
-        "title": _NONEMPTY,
-        "content": _NONEMPTY,
-        "source": _NONEMPTY,
-    },
-    ("evidence_id", "title", "content", "source"),
-)
-
-
 def language_prompt(samples: Sequence[str]) -> str:
     return _prompt(
         LANGUAGE_PROMPT_VERSION,
@@ -292,6 +282,7 @@ def glossary_prompt(
     *,
     candidates: Sequence[Mapping[str, Any]],
     target_language: str,
+    evidence: Sequence[Mapping[str, Any]],
 ) -> str:
     return _prompt(
         GLOSSARY_PROMPT_VERSION,
@@ -300,8 +291,14 @@ Create one concise book-wide glossary. Merge duplicate terms
 case-insensitively, preserve all valid source anchors, and choose one preferred
 translation per term when translation is useful. Definitions and preferred
 translations must be consistent throughout the book.
+Use citations only when frozen evidence supports a definition, and cite it by
+evidence_id. An empty citations list is valid.
 """,
-        {"target_language": target_language, "candidates": list(candidates)},
+        {
+            "target_language": target_language,
+            "candidates": list(candidates),
+            "frozen_evidence": list(evidence),
+        },
     )
 
 
@@ -353,8 +350,8 @@ Produce the chapter guide and only the planned learning units. A complete
 translation layer has already been frozen separately and will be joined
 locally; do not translate, rewrite, or return translations. Learning-unit IDs
 and anchors must exactly match the plan. Use the book glossary consistently.
-Cite frozen evidence by evidence_id; if required evidence is absent, request
-it using the resolve_evidence operation before returning the final JSON.
+Cite supplied frozen evidence by evidence_id. All planned evidence has already
+been resolved by the workflow; do not invent evidence identifiers.
 """,
         {
             "target_language": target_language,
@@ -413,8 +410,6 @@ __all__ = [
     "CHAPTER_PLAN_SCHEMA",
     "CHAPTER_REVIEW_PROMPT_VERSION",
     "CHAPTER_REVIEW_SCHEMA",
-    "EVIDENCE_ARGUMENTS_SCHEMA",
-    "EVIDENCE_RESPONSE_SCHEMA",
     "GLOSSARY_PROMPT_VERSION",
     "GLOSSARY_SCHEMA",
     "LANGUAGE_PROMPT_VERSION",

@@ -81,11 +81,13 @@ def validate_glossary(
     value: Any,
     *,
     document_block_ids: Sequence[str],
+    evidence_ids: Sequence[str] = (),
 ) -> tuple[dict[str, Any], ...]:
     result = _mapping(value, "glossary")
     entries = _mapping_list(result.get("entries"), "glossary entries")
     terms: set[str] = set()
     allowed = set(document_block_ids)
+    allowed_evidence = set(evidence_ids)
     for entry in entries:
         term = entry.get("term")
         definition = entry.get("definition")
@@ -109,6 +111,15 @@ def validate_glossary(
                 "glossary_invalid", "preferred_translation must be string or null"
             )
         _validate_anchors(entry.get("anchor_block_ids"), allowed)
+        citations = entry.get("citations")
+        if not isinstance(citations, list) or any(
+            not isinstance(citation, str) or citation not in allowed_evidence
+            for citation in citations
+        ):
+            raise CompanionContentError(
+                "glossary_citation_invalid",
+                "glossary citation does not name frozen evidence",
+            )
     return tuple(entries)
 
 

@@ -114,6 +114,28 @@ class PlannedLearningUnit:
 
 
 @dataclass(frozen=True)
+class EvidenceRequest:
+    request_id: str
+    kind: str
+    query: str
+    purpose: str
+    anchor_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not self.request_id
+            or self.kind not in {"paper", "web", "user"}
+            or not self.query
+            or not self.purpose
+            or not self.anchor_ids
+        ):
+            raise ValueError("evidence request is incomplete")
+        if any(not item for item in self.anchor_ids):
+            raise ValueError("evidence request contains an empty anchor")
+        object.__setattr__(self, "anchor_ids", tuple(self.anchor_ids))
+
+
+@dataclass(frozen=True)
 class ChapterPlan:
     chapter_id: str
     title: str
@@ -121,7 +143,7 @@ class ChapterPlan:
     guide: str
     learning_units: tuple[PlannedLearningUnit, ...] = ()
     glossary_candidates: tuple[str, ...] = ()
-    evidence_requests: tuple[str, ...] = ()
+    evidence_requests: tuple[EvidenceRequest, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.chapter_id or not self.title or not self.block_ids:
@@ -204,6 +226,19 @@ class AcceptedChapter:
 
 
 @dataclass(frozen=True)
+class EvidenceSource:
+    """Renderable bibliography metadata; generation-only content is excluded."""
+
+    evidence_id: str
+    title: str
+    source: str
+
+    def __post_init__(self) -> None:
+        if not self.evidence_id or not self.title or not self.source:
+            raise ValueError("evidence source is incomplete")
+
+
+@dataclass(frozen=True)
 class AcceptedBook:
     document_digest: str
     title: str
@@ -212,6 +247,7 @@ class AcceptedBook:
     translation_mode: str
     chapters: tuple[AcceptedChapter, ...]
     glossary: tuple[GlossaryEntry, ...] = ()
+    bibliography: tuple[EvidenceSource, ...] = ()
     schema_version: str = ACCEPTED_BOOK_SCHEMA
 
     def __post_init__(self) -> None:
@@ -232,6 +268,7 @@ class AcceptedBook:
         object.__setattr__(self, "document_digest", digest)
         object.__setattr__(self, "chapters", tuple(self.chapters))
         object.__setattr__(self, "glossary", tuple(self.glossary))
+        object.__setattr__(self, "bibliography", tuple(self.bibliography))
 
     @property
     def content_digest(self) -> str:
@@ -320,6 +357,14 @@ def _book_to_document(book: AcceptedBook) -> dict[str, Any]:
         "translation_mode": book.translation_mode,
         "chapters": [_chapter_to_document(item) for item in book.chapters],
         "glossary": [_glossary_to_document(item) for item in book.glossary],
+        "bibliography": [
+            {
+                "evidence_id": item.evidence_id,
+                "title": item.title,
+                "source": item.source,
+            }
+            for item in book.bibliography
+        ],
     }
 
 
@@ -340,7 +385,16 @@ def _plan_to_document(plan: ChapterPlan) -> dict[str, Any]:
             for item in plan.learning_units
         ],
         "glossary_candidates": list(plan.glossary_candidates),
-        "evidence_requests": list(plan.evidence_requests),
+        "evidence_requests": [
+            {
+                "request_id": item.request_id,
+                "kind": item.kind,
+                "query": item.query,
+                "purpose": item.purpose,
+                "anchor_ids": list(item.anchor_ids),
+            }
+            for item in plan.evidence_requests
+        ],
     }
 
 
@@ -377,6 +431,23 @@ def _plan_from_document(value: Mapping[str, Any]) -> ChapterPlan:
                 purpose=_string(item["purpose"], "planned learning unit purpose"),
             )
         )
+    evidence_requests = []
+    for raw in _sequence(value["evidence_requests"], "evidence requests"):
+        item = _mapping(raw, "evidence request")
+        _fields(
+            item,
+            {"request_id", "kind", "query", "purpose", "anchor_ids"},
+            "evidence request",
+        )
+        evidence_requests.append(
+            EvidenceRequest(
+                request_id=_string(item["request_id"], "evidence request request_id"),
+                kind=_string(item["kind"], "evidence request kind"),
+                query=_string(item["query"], "evidence request query"),
+                purpose=_string(item["purpose"], "evidence request purpose"),
+                anchor_ids=_strings(item["anchor_ids"], "evidence request anchors"),
+            )
+        )
     return ChapterPlan(
         chapter_id=_string(value["chapter_id"], "chapter plan chapter_id"),
         title=_string(value["title"], "chapter plan title"),
@@ -386,9 +457,7 @@ def _plan_from_document(value: Mapping[str, Any]) -> ChapterPlan:
         glossary_candidates=_strings(
             value["glossary_candidates"], "chapter plan glossary_candidates"
         ),
-        evidence_requests=_strings(
-            value["evidence_requests"], "chapter plan evidence_requests"
-        ),
+        evidence_requests=tuple(evidence_requests),
     )
 
 
@@ -452,6 +521,7 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
             "translation_mode",
             "chapters",
             "glossary",
+            "bibliography",
         },
         "accepted book",
     )
@@ -573,6 +643,21 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
                 citations=_strings(item["citations"], "glossary entry citations"),
             )
         )
+    bibliography = []
+    for raw in _sequence(value["bibliography"], "accepted book bibliography"):
+        item = _mapping(raw, "evidence source")
+        _fields(
+            item,
+            {"evidence_id", "title", "source"},
+            "evidence source",
+        )
+        bibliography.append(
+            EvidenceSource(
+                evidence_id=_string(item["evidence_id"], "evidence source evidence_id"),
+                title=_string(item["title"], "evidence source title"),
+                source=_string(item["source"], "evidence source source"),
+            )
+        )
     return AcceptedBook(
         schema_version=_string(value["schema_version"], "accepted book schema_version"),
         document_digest=_string(
@@ -590,6 +675,7 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
         ),
         chapters=tuple(chapters),
         glossary=tuple(glossary),
+        bibliography=tuple(bibliography),
     )
 
 
@@ -693,6 +779,8 @@ __all__ = [
     "ChapterPlan",
     "CompanionContentCodec",
     "ContentCodecError",
+    "EvidenceRequest",
+    "EvidenceSource",
     "GlossaryEntry",
     "LearningUnit",
     "PlannedLearningUnit",

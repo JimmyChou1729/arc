@@ -110,6 +110,18 @@ class CompanionRenderer:
         positions = [text.find(f'data-source-anchor="{escape_html(item)}"') for item in expected]
         if any(item < 0 for item in positions) or positions != sorted(positions):
             raise CompanionRenderError("Web reader source-anchor order is invalid")
+        for evidence in book.bibliography:
+            if any(
+                escape_html(value) not in text
+                for value in (
+                    evidence.evidence_id,
+                    evidence.title,
+                    evidence.source,
+                )
+            ):
+                raise CompanionRenderError(
+                    "Web reader bibliography is incomplete"
+                )
         for relative in (
             "assets/reader.css",
             "assets/reader.js",
@@ -142,6 +154,18 @@ class CompanionRenderer:
             text = text_path.read_text(encoding="utf-8", errors="replace")
             if not text.strip() or book.title not in text:
                 raise CompanionRenderError("PDF searchable text is incomplete")
+            for evidence in book.bibliography:
+                if any(
+                    value not in text
+                    for value in (
+                        evidence.evidence_id,
+                        evidence.title,
+                        evidence.source,
+                    )
+                ):
+                    raise CompanionRenderError(
+                        "PDF searchable bibliography is incomplete"
+                    )
             fonts = _run([str(tools["pdffonts"]), str(pdf_path)])
             rows = [row for row in fonts.splitlines()[2:] if row.strip()]
             if not rows or any(
@@ -237,6 +261,7 @@ def _render_html(book: AcceptedBook, *, source_urls: Mapping[str, str]) -> str:
         for chapter in book.chapters
     )
     glossary = _render_html_glossary(book)
+    bibliography = _render_html_bibliography(book)
     language = escape_html(book.target_language)
     return f"""<!doctype html>
 <html lang="{language}">
@@ -255,7 +280,7 @@ def _render_html(book: AcceptedBook, *, source_urls: Mapping[str, str]) -> str:
     <p class="eyebrow">Source-anchored textbook companion</p>
     <h1>{escape_html(book.title)}</h1>
   </header>
-  <main>{chapters}{glossary}</main>
+  <main>{chapters}{glossary}{bibliography}</main>
 </body>
 </html>
 """
@@ -391,6 +416,22 @@ def _render_html_glossary(book: AcceptedBook) -> str:
     return f'<section class="glossary" id="glossary"><h2>Glossary</h2><dl>{rows}</dl></section>'
 
 
+def _render_html_bibliography(book: AcceptedBook) -> str:
+    if not book.bibliography:
+        return ""
+    rows = "".join(
+        f'<li id="reference-{escape_html(item.evidence_id)}">'
+        f"<strong>{escape_html(item.title)}</strong> — "
+        f"{escape_html(item.source)} "
+        f'<code>{escape_html(item.evidence_id)}</code></li>'
+        for item in book.bibliography
+    )
+    return (
+        '<section class="bibliography" id="references">'
+        f"<h2>References</h2><ol>{rows}</ol></section>"
+    )
+
+
 def _render_html_inline(spans: Sequence[Mapping[str, Any]]) -> str:
     values: list[str] = []
     for item in spans:
@@ -429,6 +470,7 @@ def _render_tex(book: AcceptedBook, *, source_paths: Mapping[str, str]) -> str:
         for chapter in book.chapters
     )
     glossary = _render_tex_glossary(book)
+    bibliography = _render_tex_bibliography(book)
     return rf"""\documentclass[10pt]{{article}}
 \usepackage[margin=21mm]{{geometry}}
 \usepackage{{fontspec}}
@@ -458,6 +500,7 @@ def _render_tex(book: AcceptedBook, *, source_paths: Mapping[str, str]) -> str:
 \end{{center}}
 {chapters}
 {glossary}
+{bibliography}
 \end{{document}}
 """
 
@@ -589,6 +632,18 @@ def _render_tex_glossary(book: AcceptedBook) -> str:
         + rows
         + r"\bottomrule\end{longtable}"
     )
+
+
+def _render_tex_bibliography(book: AcceptedBook) -> str:
+    if not book.bibliography:
+        return ""
+    rows = "\n".join(
+        rf"\item \textbf{{{_tex_escape(item.title)}}} --- "
+        rf"{_tex_escape(item.source)} "
+        rf"[{_tex_escape(item.evidence_id)}]"
+        for item in book.bibliography
+    )
+    return r"\section{References}\begin{enumerate}" + rows + r"\end{enumerate}"
 
 
 def _render_tex_inline(spans: Sequence[Mapping[str, Any]]) -> str:

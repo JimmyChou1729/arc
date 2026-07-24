@@ -20,6 +20,7 @@ from arc_companion.request_contracts import (
     CompanionExecutionOptions,
     CompanionGenerationRecipe,
 )
+from arc_companion.contracts import CompanionContentCodec
 from arc_companion.service import CompanionService, companion_run_id
 
 
@@ -36,6 +37,7 @@ class FakeCompanionTasks:
         pause_translation_window: int | None = None,
         max_translation_prompt_bytes: int | None = None,
         invalid_translation_identity_window: int | None = None,
+        evidence_requests_by_title: dict[str, list[dict]] | None = None,
     ) -> None:
         self.language = language
         self.classification = classification
@@ -48,6 +50,7 @@ class FakeCompanionTasks:
         self.invalid_translation_identity_window = (
             invalid_translation_identity_window
         )
+        self.evidence_requests_by_title = evidence_requests_by_title or {}
         self.counts: Counter[str] = Counter()
         self.invocations: Counter[str] = Counter()
         self.draft_titles: Counter[str] = Counter()
@@ -57,6 +60,8 @@ class FakeCompanionTasks:
         self.translation_block_ids: list[tuple[str, ...]] = []
         self.translation_prompt_sizes: list[int] = []
         self.draft_prompt_sizes: list[int] = []
+        self.glossary_evidence: list[dict] = []
+        self.draft_evidence: list[list[dict]] = []
         self._paused = False
         self._completed = {}
         self._lock = Lock()
@@ -78,15 +83,56 @@ class FakeCompanionTasks:
                 "confidence": self.confidence,
             }
         elif contract == "arc.companion.chapter-plan-prompt.v1":
+            title = str(payload["title"])
+            evidence_requests = self.evidence_requests_by_title.get(title, [])
+            anchor_id = payload["blocks"][0]["block_id"]
             value = {
                 "chapter_id": payload["chapter_id"],
                 "guide": f"Guide for {payload['title']}",
-                "learning_units": [],
-                "glossary_candidates": [],
-                "evidence_requests": [],
+                "learning_units": (
+                    [
+                        {
+                            "unit_id": "evidence-note",
+                            "kind": "further_reading",
+                            "title": "Evidence note",
+                            "anchor_block_ids": [anchor_id],
+                            "purpose": "Connect the source to frozen evidence.",
+                        }
+                    ]
+                    if evidence_requests
+                    else []
+                ),
+                "glossary_candidates": (
+                    [
+                        {
+                            "term": "evidence term",
+                            "definition": "A term supported by evidence.",
+                            "anchor_block_ids": [anchor_id],
+                        }
+                    ]
+                    if evidence_requests
+                    else []
+                ),
+                "evidence_requests": evidence_requests,
             }
-        elif contract == "arc.companion.glossary-prompt.v1":
-            value = {"entries": []}
+        elif contract == "arc.companion.glossary-prompt.v2":
+            self.glossary_evidence = list(payload["frozen_evidence"])
+            value = {
+                "entries": [
+                    {
+                        "term": item["term"],
+                        "definition": item["definition"],
+                        "preferred_translation": None,
+                        "anchor_block_ids": item["anchor_block_ids"],
+                        "citations": (
+                            [payload["frozen_evidence"][0]["evidence_id"]]
+                            if payload["frozen_evidence"]
+                            else []
+                        ),
+                    }
+                    for item in payload["candidates"]
+                ]
+            }
         elif contract == "arc.companion.translation-prompt.v1":
             ordinal = int(payload["window_ordinal"])
             prompt_size = len(request.prompt.encode("utf-8"))
@@ -130,7 +176,7 @@ class FakeCompanionTasks:
                 value["translations"][0]["source_identity"]["equations"] = [
                     "changed"
                 ]
-        elif contract == "arc.companion.chapter-draft-prompt.v2":
+        elif contract == "arc.companion.chapter-draft-prompt.v3":
             title = str(payload["plan"]["guide"]).removeprefix("Guide for ")
             prompt_size = len(request.prompt.encode("utf-8"))
             with self._lock:
@@ -139,6 +185,7 @@ class FakeCompanionTasks:
                     dict(payload["language_result"])
                 )
                 self.draft_prompt_sizes.append(prompt_size)
+                self.draft_evidence.append(list(payload["frozen_evidence"]))
                 should_pause = (
                     title == self.pause_chapter_title and not self._paused
                 )
@@ -161,7 +208,20 @@ class FakeCompanionTasks:
             value = {
                 "chapter_id": payload["plan"]["chapter_id"],
                 "guide": payload["plan"]["guide"],
-                "learning_units": [],
+                "learning_units": [
+                    {
+                        "unit_id": item["unit_id"],
+                        "kind": item["kind"],
+                        "title": item["title"],
+                        "anchor_block_ids": item["anchor_block_ids"],
+                        "content": item["purpose"],
+                        "citations": [
+                            evidence["evidence_id"]
+                            for evidence in payload["frozen_evidence"]
+                        ],
+                    }
+                    for item in payload["plan"]["learning_units"]
+                ],
             }
         elif contract == "arc.companion.chapter-review-prompt.v1":
             title = str(payload["draft"]["guide"]).removeprefix("Guide for ")
@@ -322,6 +382,170 @@ def test_durable_build_detects_language_once_and_skips_same_base_translation(
     assert replay.status is RunStatus.SUCCEEDED
     assert not replay_tasks.counts
     assert companion_run_id(request, service_request_recipe()) == snapshot.run_id
+
+
+def _planned_evidence_requests(document) -> dict[str, list[dict]]:
+    first_anchor = document.blocks[0].block_id
+    return {
+        "First": [
+            {
+                "request_id": "paper-request",
+                "kind": "paper",
+                "query": "arXiv:1234.56789",
+                "purpose": "Check the paper context.",
+                "anchor_block_ids": [first_anchor],
+            },
+            {
+                "request_id": "web-request",
+                "kind": "web",
+                "query": "https://example.test/context",
+                "purpose": "Check the explanatory context.",
+                "anchor_block_ids": [first_anchor],
+            },
+        ]
+    }
+
+
+def test_planned_evidence_pauses_once_and_freezes_exact_multi_request_response(
+    tmp_path: Path,
+) -> None:
+    document = _rich_document(tmp_path)
+    tasks = FakeCompanionTasks(
+        evidence_requests_by_title=_planned_evidence_requests(document)
+    )
+    service = CompanionService(tmp_path / "jobs")
+
+    paused = service.build(
+        CompanionBuildRequest(document, target_language="en"),
+        task_service=tasks,
+    )
+
+    assert paused.status is RunStatus.PAUSED
+    assert paused.awaiting is not None
+    assert paused.awaiting.reason is ResumeReason.INTERACTION_REQUIRED
+    assert (
+        paused.awaiting.response_contract
+        == "arc.companion.evidence_response.v1"
+    )
+    assert tasks.counts["arc.companion.glossary-prompt.v2"] == 0
+    request_ref = paused.awaiting.request_ref
+    assert request_ref is not None
+    request_document = json.loads(
+        (
+            service.repository.run_directory(paused.run_id)
+            / request_ref.relative_path
+        ).read_text(encoding="utf-8")
+    )
+    assert [
+        set(item)
+        for item in request_document["requests"]
+    ] == [
+        {"request_id", "kind", "query", "purpose", "anchors"},
+        {"request_id", "kind", "query", "purpose", "anchors"},
+    ]
+    assert request_document["response_schema"]["additionalProperties"] is False
+    assert (
+        request_document["response_schema"]["properties"]["responses"]["items"][
+            "additionalProperties"
+        ]
+        is False
+    )
+
+    resume_input = {
+        "schema_version": "arc.companion.evidence_response.v1",
+        "resume_key": paused.awaiting.resume_key,
+        "responses": [
+            {
+                "request_id": "web-request",
+                "evidence_id": "web-context",
+                "title": "Web context",
+                "content": "Frozen web evidence.",
+                "source": "https://example.test/context",
+            },
+            {
+                "request_id": "paper-request",
+                "evidence_id": "paper-1234",
+                "title": "Reference paper",
+                "content": "Frozen paper evidence.",
+                "source": "arXiv:1234.56789",
+            },
+        ],
+    }
+    completed = service.resume(
+        paused.run_id,
+        input=resume_input,
+        task_service=tasks,
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert [item["request_id"] for item in tasks.glossary_evidence] == [
+        "paper-request",
+        "web-request",
+    ]
+    assert any(
+        [item["request_id"] for item in evidence]
+        == ["paper-request", "web-request"]
+        for evidence in tasks.draft_evidence
+    )
+    book = service.accepted_book(completed.run_id)
+    assert [item.evidence_id for item in book.bibliography] == [
+        "paper-1234",
+        "web-context",
+    ]
+    assert book.glossary[0].citations == ("paper-1234",)
+    assert book.chapters[0].learning_units[0].citations == (
+        "paper-1234",
+        "web-context",
+    )
+    encoded = CompanionContentCodec.to_document(book)
+    assert all("content" not in item for item in encoded["bibliography"])
+
+    calls_before_replay = sum(tasks.invocations.values())
+    replayed = service.resume(
+        paused.run_id,
+        input=resume_input,
+        task_service=tasks,
+    )
+    assert replayed.status is RunStatus.SUCCEEDED
+    assert sum(tasks.invocations.values()) == calls_before_replay
+
+
+def test_planned_evidence_response_requires_exact_request_coverage(
+    tmp_path: Path,
+) -> None:
+    document = _rich_document(tmp_path)
+    tasks = FakeCompanionTasks(
+        evidence_requests_by_title=_planned_evidence_requests(document)
+    )
+    service = CompanionService(tmp_path / "jobs")
+    paused = service.build(
+        CompanionBuildRequest(document, target_language="en"),
+        task_service=tasks,
+    )
+    assert paused.awaiting is not None
+
+    failed = service.resume(
+        paused.run_id,
+        input={
+            "schema_version": "arc.companion.evidence_response.v1",
+            "resume_key": paused.awaiting.resume_key,
+            "responses": [
+                {
+                    "request_id": "paper-request",
+                    "evidence_id": "paper-1234",
+                    "title": "Reference paper",
+                    "content": "Frozen paper evidence.",
+                    "source": "arXiv:1234.56789",
+                }
+            ],
+        },
+        task_service=tasks,
+    )
+
+    assert failed.status is RunStatus.FAILED
+    assert failed.error is not None
+    assert failed.error.code == "evidence_response_invalid"
+    assert tasks.counts["arc.companion.glossary-prompt.v2"] == 0
 
 
 def service_request_recipe():
@@ -624,7 +848,7 @@ def test_long_chapter_translation_windows_are_bounded_and_replay_completed_windo
         expected_ids[: len(tasks.translation_block_ids[0])]
     )
     assert set(completed_window_ids) == set(expected_ids)
-    assert tasks.counts["arc.companion.chapter-draft-prompt.v2"] == 1
+    assert tasks.counts["arc.companion.chapter-draft-prompt.v3"] == 1
     assert tasks.counts["arc.companion.chapter-review-prompt.v1"] == 1
 
 

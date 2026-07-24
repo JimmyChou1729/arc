@@ -44,6 +44,17 @@ def validate_accepted_book(
     chapter_ids: set[str] = set()
     anchor_ids: set[str] = set()
     ordinals: list[int] = []
+    bibliography_ids: set[str] = set()
+    for evidence_index, evidence in enumerate(book.bibliography):
+        path = f"bibliography[{evidence_index}]"
+        if evidence.evidence_id in bibliography_ids:
+            _issue(
+                issues,
+                "duplicate_evidence_id",
+                f"{path}.evidence_id",
+                "bibliography evidence IDs must be unique",
+            )
+        bibliography_ids.add(evidence.evidence_id)
 
     for chapter_index, chapter in enumerate(book.chapters):
         chapter_path = f"chapters[{chapter_index}]"
@@ -130,7 +141,12 @@ def validate_accepted_book(
                     f"{path}.citations",
                     "further-reading units require frozen evidence citations",
                 )
-            _validate_citations(unit.citations, path=f"{path}.citations", issues=issues)
+            _validate_citations(
+                unit.citations,
+                allowed=bibliography_ids,
+                path=f"{path}.citations",
+                issues=issues,
+            )
 
     if ordinals != sorted(ordinals):
         _issue(
@@ -183,7 +199,12 @@ def validate_accepted_book(
                 f"{path}.anchor_ids",
                 f"glossary entry refers to unknown anchors: {sorted(unknown)}",
             )
-        _validate_citations(entry.citations, path=f"{path}.citations", issues=issues)
+        _validate_citations(
+            entry.citations,
+            allowed=bibliography_ids,
+            path=f"{path}.citations",
+            issues=issues,
+        )
     return tuple(issues)
 
 
@@ -474,7 +495,11 @@ def _validate_inline_spans(
 
 
 def _validate_citations(
-    citations: Sequence[str], *, path: str, issues: list[ValidationIssue]
+    citations: Sequence[str],
+    *,
+    allowed: set[str],
+    path: str,
+    issues: list[ValidationIssue],
 ) -> None:
     for index, citation in enumerate(citations):
         if not citation.strip():
@@ -483,6 +508,13 @@ def _validate_citations(
                 "empty_citation",
                 f"{path}[{index}]",
                 "citation identifiers must be non-empty",
+            )
+        elif citation not in allowed:
+            _issue(
+                issues,
+                "unknown_evidence_citation",
+                f"{path}[{index}]",
+                "citation must resolve to a bibliography evidence ID",
             )
 
 

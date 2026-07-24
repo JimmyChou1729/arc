@@ -18,6 +18,8 @@ from arc_companion.contracts import (
     ChapterPlan,
     CompanionContentCodec,
     ContentCodecError,
+    EvidenceRequest,
+    EvidenceSource,
     GlossaryEntry,
     LearningUnit,
     PlannedLearningUnit,
@@ -250,6 +252,18 @@ def accepted_book() -> AcceptedBook:
                 citations=("glossary:entropy-reference",),
             ),
         ),
+        bibliography=(
+            EvidenceSource(
+                evidence_id="paper:1234.56789",
+                title="A reference paper",
+                source="https://example.test/paper",
+            ),
+            EvidenceSource(
+                evidence_id="glossary:entropy-reference",
+                title="Entropy reference",
+                source="https://example.test/entropy",
+            ),
+        ),
     )
 
 
@@ -323,7 +337,15 @@ def test_renderer_public_import_does_not_load_llm_runtime() -> None:
             ),
         ),
         glossary_candidates=("entropy",),
-        evidence_requests=("paper:1234.56789",),
+        evidence_requests=(
+            EvidenceRequest(
+                request_id="paper-request",
+                kind="paper",
+                query="1234.56789",
+                purpose="Support further reading.",
+                anchor_ids=("b-intro",),
+            ),
+        ),
     )
     assert CompanionContentCodec.loads_chapter_plan(
         CompanionContentCodec.dumps_chapter_plan(plan)
@@ -413,6 +435,10 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
     assert "source-links" not in html
     assert "paper:1234.56789" in html
     assert "entropia" in html
+    assert "<h2>References</h2>" in html
+    assert "A reference paper" in html
+    assert "https://example.test/paper" in html
+    assert "glossary:entropy-reference" in html
     assert "window.katex.render" in javascript
     assert "innerHTML" not in javascript
     assert (reader / "assets" / "katex" / "LICENSE").is_file()
@@ -453,6 +479,9 @@ def test_pdf_is_searchable_complete_and_anchor_interleaved(
     assert "paper:1234.56789" in extracted
     assert "glossary:entropy-reference" in extracted
     assert "entropia" in extracted
+    assert "References" in extracted
+    assert "A reference paper" in extracted
+    assert "https://example.test/paper" in extracted
     assert not list(tmp_path.glob(".arc-companion-render-*"))
     second = renderer.render_pdf(accepted_book, tmp_path / "companion-copy.pdf")
     assert hashlib.sha256(second.read_bytes()).digest() == hashlib.sha256(

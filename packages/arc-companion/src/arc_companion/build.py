@@ -23,22 +23,20 @@ from arc_jobs import (
     canonical_json_bytes,
 )
 from arc_llm import (
-    InteractiveJsonOutput,
     JsonOutput,
     LLMCompleted,
     LLMFailed,
     LLMPaused,
     LLMRequest,
     LLMTaskService,
-    OperationContract,
     ResumeInput,
-    resume_input_matches,
 )
 
 from .contracts import (
     AcceptedBook,
     AcceptedChapter,
     CompanionContentCodec,
+    EvidenceSource,
     GlossaryEntry,
     LearningUnit,
     SourceAnchor,
@@ -64,8 +62,6 @@ from .prompts_v1 import (
     CHAPTER_DRAFT_SCHEMA,
     CHAPTER_PLAN_SCHEMA,
     CHAPTER_REVIEW_SCHEMA,
-    EVIDENCE_ARGUMENTS_SCHEMA,
-    EVIDENCE_RESPONSE_SCHEMA,
     GLOSSARY_SCHEMA,
     LANGUAGE_SCHEMA,
     TRANSLATION_SCHEMA,
@@ -96,9 +92,12 @@ from .validation import require_valid_accepted_book
 COMPANION_BUILD_HANDLER = "arc.companion.build.v1"
 _LANGUAGE_ARTIFACT = "planning/language"
 _GLOSSARY_ARTIFACT = "planning/glossary"
+_EVIDENCE_ARTIFACT = "planning/evidence"
+_EVIDENCE_REQUEST_ARTIFACT = "planning/evidence-request"
 _BOOK_ARTIFACT = "book/accepted"
 _RESULT_ARTIFACT = "result"
 _SUPERVISION_SCHEMA = "arc.companion.review_supervision.v1"
+_EVIDENCE_INTERACTION_SCHEMA = "arc.companion.evidence_response.v1"
 # Maximum UTF-8 size of a complete translation prompt. Rich blocks are
 # indivisible: a single block larger than this budget fails with a clear
 # content error. Changing this policy requires a new translation prompt
@@ -161,8 +160,13 @@ class CompanionBuildHandler:
                 return plans_outcome
             plans = plans_outcome
 
+            evidence_outcome = self._evidence(context, plans)
+            if isinstance(evidence_outcome, Paused):
+                return evidence_outcome
+            evidence = evidence_outcome
+
             glossary_outcome = self._glossary(
-                context, resume_input, plans
+                context, resume_input, plans, evidence
             )
             if isinstance(glossary_outcome, (Paused, Failed)):
                 return glossary_outcome
@@ -174,6 +178,7 @@ class CompanionBuildHandler:
                 chapters,
                 plans,
                 glossary,
+                evidence,
                 blocks,
                 language_result=language,
                 translation_required=translation_required,
@@ -193,6 +198,7 @@ class CompanionBuildHandler:
                     ),
                     chapters=chapters_outcome,
                     glossary=_glossary_contracts(glossary),
+                    bibliography=_bibliography_contracts(evidence),
                 )
                 require_valid_accepted_book(
                     book,
@@ -356,11 +362,105 @@ class CompanionBuildHandler:
         }
         return tuple(by_result[item.chapter_id] for item in chapters)
 
+    def _evidence(
+        self,
+        context: RunContext,
+        plans: Sequence[Mapping[str, Any]],
+    ) -> tuple[dict[str, Any], ...] | Paused:
+        requests = [
+            dict(item)
+            for plan in plans
+            for item in _mapping_list(
+                plan.get("evidence_requests"), "evidence requests"
+            )
+        ]
+        request_ids = [str(item["request_id"]) for item in requests]
+        if len(set(request_ids)) != len(request_ids):
+            raise CompanionContentError(
+                "evidence_request_invalid",
+                "evidence request IDs must be unique across the book",
+            )
+        existing = context.artifacts.find(_EVIDENCE_ARTIFACT)
+        if existing is not None:
+            document = _read_json(context, existing, "frozen evidence")
+            return tuple(
+                _validate_evidence_responses(
+                    document.get("items"), requests=requests
+                )
+            )
+        if not requests:
+            context.artifacts.publish_json(
+                _EVIDENCE_ARTIFACT,
+                {
+                    "schema_version": _EVIDENCE_INTERACTION_SCHEMA,
+                    "items": [],
+                },
+            )
+            return ()
+
+        digest = hashlib.sha256(canonical_json_bytes(requests)).hexdigest()
+        resume_key = f"evidence-{digest[:24]}"
+        value = context.resume_input
+        if value is not None and value.get("resume_key") == resume_key:
+            if set(value) != {"schema_version", "resume_key", "responses"}:
+                raise CompanionContentError(
+                    "evidence_response_invalid",
+                    "evidence response has invalid fields",
+                )
+            if value.get("schema_version") != _EVIDENCE_INTERACTION_SCHEMA:
+                raise CompanionContentError(
+                    "evidence_response_invalid",
+                    "evidence response schema is unsupported",
+                )
+            items = _validate_evidence_responses(
+                value.get("responses"), requests=requests
+            )
+            context.artifacts.publish_json(
+                _EVIDENCE_ARTIFACT,
+                {
+                    "schema_version": _EVIDENCE_INTERACTION_SCHEMA,
+                    "items": items,
+                },
+            )
+            return tuple(items)
+
+        request_ref = context.artifacts.find(_EVIDENCE_REQUEST_ARTIFACT)
+        if request_ref is None:
+            request_ref = context.artifacts.publish_json(
+                _EVIDENCE_REQUEST_ARTIFACT,
+                {
+                    "schema_version": "arc.companion.evidence_request.v1",
+                    "resume_key": resume_key,
+                    "response_schema": _evidence_response_schema(request_ids),
+                    "requests": [
+                        {
+                            "request_id": item["request_id"],
+                            "kind": item["kind"],
+                            "query": item["query"],
+                            "purpose": item["purpose"],
+                            "anchors": list(item["anchor_block_ids"]),
+                        }
+                        for item in requests
+                    ],
+                },
+            )
+        return Paused(
+            Awaiting(
+                ResumeReason.INTERACTION_REQUIRED,
+                resume_key,
+                True,
+                request_ref,
+                _EVIDENCE_INTERACTION_SCHEMA,
+                {"request_count": len(requests)},
+            )
+        )
+
     def _glossary(
         self,
         context: RunContext,
         resume_input: ResumeInput | None,
         plans: Sequence[Mapping[str, Any]],
+        evidence: Sequence[Mapping[str, Any]],
     ) -> tuple[dict[str, Any], ...] | Paused | Failed:
         existing = context.artifacts.find(_GLOSSARY_ARTIFACT)
         if existing is not None:
@@ -379,6 +479,7 @@ class CompanionBuildHandler:
                 {
                     "document_digest": self.request.source.document_digest,
                     "candidates": candidates,
+                    "evidence_digest": _evidence_digest(evidence),
                     "target_language": self.request.target_language,
                     "prompt_contract": self.recipe.glossary_prompt,
                 },
@@ -386,6 +487,7 @@ class CompanionBuildHandler:
             glossary_prompt(
                 candidates=candidates,
                 target_language=self.request.target_language,
+                evidence=evidence,
             ),
             JsonOutput(GLOSSARY_SCHEMA, repair="local"),
             self.recipe.model,
@@ -403,6 +505,7 @@ class CompanionBuildHandler:
                 document_block_ids=[
                     item.block_id for item in self.request.source.blocks
                 ],
+                evidence_ids=[str(item["evidence_id"]) for item in evidence],
             )
             context.artifacts.publish_json(
                 _GLOSSARY_ARTIFACT, {"entries": list(entries)}
@@ -422,6 +525,7 @@ class CompanionBuildHandler:
         chapters: tuple[SourceChapter, ...],
         plans: Sequence[Mapping[str, Any]],
         glossary: Sequence[Mapping[str, Any]],
+        evidence: Sequence[Mapping[str, Any]],
         blocks: Mapping[str, Any],
         *,
         language_result: Mapping[str, Any],
@@ -432,6 +536,19 @@ class CompanionBuildHandler:
         ).hexdigest()
         by_plan = {
             str(item["chapter_id"]): item for item in plans
+        }
+        evidence_by_request = {
+            str(item["request_id"]): item for item in evidence
+        }
+        evidence_by_chapter = {
+            chapter.chapter_id: tuple(
+                evidence_by_request[str(request["request_id"])]
+                for request in _mapping_list(
+                    by_plan[chapter.chapter_id].get("evidence_requests"),
+                    "evidence requests",
+                )
+            )
+            for chapter in chapters
         }
         units = tuple(
             WorkUnit(
@@ -444,6 +561,9 @@ class CompanionBuildHandler:
                     "translation_required": translation_required,
                     "intent": self.request.effective_intent,
                     "glossary_digest": glossary_digest,
+                    "evidence_digest": _evidence_digest(
+                        evidence_by_chapter[chapter.chapter_id]
+                    ),
                     "content_contract": self.request.content_contract,
                     "translation_prompt_contract": self.recipe.translation_prompt,
                     "translation_input_budget_bytes": (
@@ -464,6 +584,7 @@ class CompanionBuildHandler:
             if existing is not None:
                 return _read_json(context, existing, "accepted chapter")
             plan = by_plan[chapter.chapter_id]
+            chapter_evidence = evidence_by_chapter[chapter.chapter_id]
             source_documents = [
                 block_prompt_document(blocks[item])
                 for item in chapter.block_ids
@@ -503,27 +624,10 @@ class CompanionBuildHandler:
                     glossary=glossary,
                     target_language=self.request.target_language,
                     language_result=language_result,
-                    # Interaction responses are continued by arc-llm and are
-                    # deliberately not spliced into the stable task prompt.
-                    evidence=[],
+                    evidence=chapter_evidence,
                 ),
-                InteractiveJsonOutput(
-                    result_schema=CHAPTER_DRAFT_SCHEMA,
-                    operations={
-                        "resolve_evidence": OperationContract(
-                            EVIDENCE_ARGUMENTS_SCHEMA,
-                            EVIDENCE_RESPONSE_SCHEMA,
-                        )
-                    },
-                    max_interaction_turns=1,
-                ),
+                JsonOutput(CHAPTER_DRAFT_SCHEMA, repair="local"),
                 self.recipe.model,
-            )
-            evidence = self._chapter_evidence(
-                context,
-                chapter.chapter_id,
-                draft_request,
-                resume_input,
             )
             outcome = execute_task(
                 self.task_service,
@@ -549,7 +653,9 @@ class CompanionBuildHandler:
                 plan=plan,
                 block_ids=chapter.block_ids,
                 translation_required=translation_required,
-                evidence_ids=[item["evidence_id"] for item in evidence],
+                evidence_ids=[
+                    str(item["evidence_id"]) for item in chapter_evidence
+                ],
             )
 
             review_request = LLMRequest(
@@ -605,7 +711,7 @@ class CompanionBuildHandler:
                     block_ids=chapter.block_ids,
                     translation_required=translation_required,
                     evidence_ids=[
-                        item["evidence_id"] for item in evidence
+                        str(item["evidence_id"]) for item in chapter_evidence
                     ],
                 )
             except CompanionContentError as exc:
@@ -782,27 +888,6 @@ class CompanionBuildHandler:
             context.artifacts.publish_json(artifact_id, outcome_document)
             translations.extend(value)
         return translations
-
-    def _chapter_evidence(
-        self,
-        context: RunContext,
-        chapter_id: str,
-        draft_request: LLMRequest,
-        resume_input: ResumeInput | None,
-    ) -> list[dict[str, Any]]:
-        artifact_id = f"chapters/{chapter_id}/evidence"
-        existing = context.artifacts.find(artifact_id)
-        if existing is not None:
-            document = _read_json(context, existing, "chapter evidence")
-            return _mapping_list(document.get("items"), "chapter evidence")
-        if (
-            resume_input is None
-            or not resume_input_matches(draft_request, resume_input)
-        ):
-            return []
-        items = _resume_evidence(resume_input)
-        context.artifacts.publish_json(artifact_id, {"items": items})
-        return items
 
     def _review_supervision(
         self,
@@ -1095,9 +1180,124 @@ def _glossary_contracts(
                 ),
                 definition=str(item["definition"]),
                 anchor_ids=tuple(item["anchor_block_ids"]),
+                citations=tuple(str(value) for value in item["citations"]),
             )
         )
     return tuple(values)
+
+
+def _bibliography_contracts(
+    evidence: Sequence[Mapping[str, Any]],
+) -> tuple[EvidenceSource, ...]:
+    return tuple(
+        EvidenceSource(
+            evidence_id=str(item["evidence_id"]),
+            title=str(item["title"]),
+            source=str(item["source"]),
+        )
+        for item in evidence
+    )
+
+
+def _evidence_digest(evidence: Sequence[Mapping[str, Any]]) -> str:
+    return hashlib.sha256(canonical_json_bytes(list(evidence))).hexdigest()
+
+
+def _validate_evidence_responses(
+    value: Any,
+    *,
+    requests: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    responses = _mapping_list(value, "evidence responses")
+    expected_ids = [str(item["request_id"]) for item in requests]
+    by_request: dict[str, dict[str, Any]] = {}
+    evidence_ids: set[str] = set()
+    expected_fields = {
+        "request_id",
+        "evidence_id",
+        "title",
+        "content",
+        "source",
+    }
+    for response in responses:
+        if set(response) != expected_fields:
+            raise CompanionContentError(
+                "evidence_response_invalid",
+                "each evidence response must contain exactly request_id, "
+                "evidence_id, title, content, and source",
+            )
+        if any(
+            not isinstance(response[field], str)
+            or not str(response[field]).strip()
+            for field in expected_fields
+        ):
+            raise CompanionContentError(
+                "evidence_response_invalid",
+                "evidence response fields must be non-empty strings",
+            )
+        request_id = str(response["request_id"])
+        evidence_id = str(response["evidence_id"])
+        if request_id in by_request:
+            raise CompanionContentError(
+                "evidence_response_invalid",
+                f"duplicate evidence response for request {request_id}",
+            )
+        if evidence_id in evidence_ids:
+            raise CompanionContentError(
+                "evidence_response_invalid",
+                f"duplicate evidence ID {evidence_id}",
+            )
+        by_request[request_id] = {
+            field: str(response[field]).strip() for field in expected_fields
+        }
+        evidence_ids.add(evidence_id)
+    if set(by_request) != set(expected_ids) or len(by_request) != len(expected_ids):
+        raise CompanionContentError(
+            "evidence_response_invalid",
+            "evidence responses must exactly cover every planned request ID",
+        )
+    return [by_request[request_id] for request_id in expected_ids]
+
+
+def _evidence_response_schema(request_ids: Sequence[str]) -> dict[str, Any]:
+    nonempty = {"type": "string", "minLength": 1}
+    return {
+        "type": "object",
+        "properties": {
+            "schema_version": {
+                "const": _EVIDENCE_INTERACTION_SCHEMA,
+            },
+            "resume_key": nonempty,
+            "responses": {
+                "type": "array",
+                "minItems": len(request_ids),
+                "maxItems": len(request_ids),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "request_id": {
+                            "type": "string",
+                            "enum": list(request_ids),
+                        },
+                        "evidence_id": nonempty,
+                        "title": nonempty,
+                        "content": nonempty,
+                        "source": nonempty,
+                    },
+                    "required": [
+                        "request_id",
+                        "evidence_id",
+                        "title",
+                        "content",
+                        "source",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["schema_version", "resume_key", "responses"],
+        "additionalProperties": False,
+    }
 
 
 def _accepted_chapter_document(chapter: AcceptedChapter) -> dict[str, Any]:
@@ -1110,6 +1310,7 @@ def _accepted_chapter_document(chapter: AcceptedChapter) -> dict[str, Any]:
             "enabled" if chapter.translations else "skipped"
         ),
         chapters=(chapter,),
+        bibliography=(),
     )
     return CompanionContentCodec.to_document(placeholder)["chapters"][0]
 
@@ -1126,26 +1327,9 @@ def _accepted_chapter_from_document(value: Mapping[str, Any]) -> AcceptedChapter
         ),
         "chapters": [dict(value)],
         "glossary": [],
+        "bibliography": [],
     }
     return CompanionContentCodec.from_document(document).chapters[0]
-
-
-def _resume_evidence(
-    resume_input: ResumeInput | None,
-) -> list[dict[str, Any]]:
-    if resume_input is None:
-        return []
-    output: list[dict[str, Any]] = []
-    for response in resume_input.responses:
-        if not isinstance(response.result, Mapping):
-            continue
-        value = dict(response.result)
-        if set(value) == {"evidence_id", "title", "content", "source"} and all(
-            isinstance(value[key], str) and value[key]
-            for key in value
-        ):
-            output.append(value)
-    return output
 
 
 def _ref_document(ref: Any) -> dict[str, JsonValue]:
