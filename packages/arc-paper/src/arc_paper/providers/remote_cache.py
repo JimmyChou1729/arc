@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from .._cache_root import resolve_cache_root
+from .._durable_io import atomic_write_bytes, payload_matches
 from .._file_lock import exclusive_file_lock
 from ..source_repository import SourceRepository, SourceRepositoryError
 from ..sources import SourceArtifact, SourceFormat, SourceOrigin
@@ -42,13 +42,7 @@ class RemoteCacheError(RuntimeError):
 
 
 def default_cache_root() -> Path:
-    if value := os.environ.get("ARC_PAPER_CACHE"):
-        return Path(value).expanduser()
-    if value := os.environ.get("ARC_HOME"):
-        return Path(value).expanduser() / "cache" / "arc-paper"
-    if value := os.environ.get("XDG_CACHE_HOME"):
-        return Path(value).expanduser() / "arc" / "arc-paper"
-    return Path.home() / ".cache" / "arc" / "arc-paper"
+    return resolve_cache_root()
 
 
 class RemoteRequestCache:
@@ -65,7 +59,7 @@ class RemoteRequestCache:
         *,
         source_repository: SourceRepository | None = None,
     ):
-        self.root = Path(root) if root is not None else default_cache_root()
+        self.root = resolve_cache_root(root, repository=source_repository)
         self.source_repository = source_repository or SourceRepository(self.root)
 
     def get_source(
@@ -321,29 +315,7 @@ class RemoteRequestCache:
 
     @staticmethod
     def _atomic_write(path: Path, payload: bytes) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                temporary = handle.name
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-            temporary = None
-            _fsync_dir(path.parent)
-        finally:
-            if temporary is not None:
-                try:
-                    Path(temporary).unlink()
-                except FileNotFoundError:
-                    pass
+        atomic_write_bytes(path, payload)
 
 
 def _request_digest(namespace: str, request_key: str) -> str:
@@ -389,27 +361,7 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _payload_matches(path: Path, digest: str, size: int) -> bool:
-    try:
-        if (
-            len(digest) != 64
-            or any(char not in "0123456789abcdef" for char in digest)
-            or not path.is_file()
-            or path.stat().st_size != size
-        ):
-            return False
-        return hashlib.sha256(path.read_bytes()).hexdigest() == digest
-    except OSError:
-        return False
-
-
-def _fsync_dir(path: Path) -> None:
-    if os.name == "nt":
-        return
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    return payload_matches(path, digest, size)
 
 
 __all__ = [

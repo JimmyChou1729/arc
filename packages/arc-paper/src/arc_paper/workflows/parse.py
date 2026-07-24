@@ -27,12 +27,15 @@ from ..parse import (
     VisualReviewService,
     parsed_document_to_document,
 )
+from ..parse.reconcile import reconcile_validator
+from ..parse.service import _dedupe, _unreviewed_visual_entries
 from ..source_repository import SourceRepository, SourceRepositoryError
 from ..sources import (
     ParseOutcome,
     ReconciliationEntry,
+    ReconciliationReport,
+    ReconciliationStatus,
     SourceArtifact,
-    SourceBundle,
     SourceFormat,
     ValidationPolicy,
 )
@@ -65,7 +68,8 @@ class MarkdownPDFVisualParseHandler:
         self.primary = primary
         self.pdf_validator = pdf_validator
         self.model = model
-        reviewer = VisualReviewService(
+        self.sources = sources
+        self.reviewer = VisualReviewService(
             renderer or PdftoppmFullPageRenderer(),
             llm=llm,
             model=model,
@@ -73,7 +77,6 @@ class MarkdownPDFVisualParseHandler:
         self.service = PaperParserService(
             sources,
             pdf_text_extractor=pdf_text_extractor or PdftotextExtractor(),
-            visual_reviewer=reviewer,
         )
 
     def semantic_input(self) -> dict[str, JsonValue]:
@@ -98,20 +101,92 @@ class MarkdownPDFVisualParseHandler:
                 )
             )
         try:
-            outcome = self.service.parse(
-                SourceBundle(
-                    primary=self.primary,
-                    validators=(self.pdf_validator,),
-                ),
-                policy=ValidationPolicy.VISUAL_ALL_PAGES,
-                context=context,
-            )
+            primary = self.service.parse_source(self.primary)
         except (ParseError, SourceRepositoryError) as exc:
             return Failed(
                 RunError(
                     getattr(exc, "code", "primary_parse_failed"),
                     str(exc),
                 )
+            )
+        warnings = list(primary.warnings)
+        try:
+            parsed_pdf = self.service.parse_source(self.pdf_validator)
+        except (ParseError, SourceRepositoryError) as exc:
+            code = getattr(exc, "code", "validator_parse_failed")
+            message = f"validator could not be parsed ({code}): {exc}"
+            outcome = ParseOutcome(
+                document=primary,
+                report=ReconciliationReport(
+                    primary=self.primary,
+                    policy=ValidationPolicy.VISUAL_ALL_PAGES,
+                    entries=(
+                        ReconciliationEntry(
+                            validator=self.pdf_validator,
+                            status=ReconciliationStatus.UNREVIEWED,
+                            subject_id="validator",
+                            message=message,
+                            provenance={"error_code": code},
+                        ),
+                    ),
+                ),
+                warnings=tuple(_dedupe(warnings + [message])),
+            )
+        else:
+            deterministic, deterministic_warnings = reconcile_validator(
+                primary, parsed_pdf
+            )
+            primary_span_ids = {span.span_id for span in primary.math_spans}
+            entries = [
+                ReconciliationEntry(
+                    validator=entry.validator,
+                    status=entry.status,
+                    subject_id=f"deterministic:{entry.subject_id}",
+                    message=entry.message,
+                    provenance={
+                        **dict(entry.provenance),
+                        "evidence_method": "deterministic_pdf",
+                        "primary_span_id": entry.subject_id,
+                    },
+                )
+                if entry.subject_id in primary_span_ids
+                else entry
+                for entry in deterministic
+            ]
+            warnings.extend(parsed_pdf.warnings)
+            warnings.extend(deterministic_warnings)
+            try:
+                markdown_bytes = self.sources.read_bytes(self.primary)
+            except SourceRepositoryError as exc:
+                return Failed(RunError(exc.code, str(exc)))
+            try:
+                visual = self.reviewer.review(
+                    context,
+                    primary,
+                    parsed_pdf,
+                    markdown_bytes=markdown_bytes,
+                    pdf_bytes=self.sources.read_bytes(self.pdf_validator),
+                )
+            except Exception as exc:
+                message = (
+                    "PDF visual review was unavailable "
+                    f"(visual_review_service_error): {exc}"
+                )
+                entries.extend(
+                    _unreviewed_visual_entries(primary, parsed_pdf, message)
+                )
+                warnings.append(message)
+            else:
+                entries.extend(visual.entries)
+                warnings.extend(visual.warnings)
+            outcome = ParseOutcome(
+                document=primary,
+                report=ReconciliationReport(
+                    primary=self.primary,
+                    policy=ValidationPolicy.VISUAL_ALL_PAGES,
+                    entries=tuple(entries),
+                ),
+                warnings=tuple(_dedupe(warnings)),
             )
         return Succeeded(
             context.artifacts.publish_json(

@@ -13,8 +13,8 @@ from arc_jobs import (
     CommandStatus,
     CommandWarning,
     command_result_json,
+    run_control_main,
 )
-from arc_jobs.cli import main as arc_jobs_main
 
 from .registry import dispatch_operation, registry_document, to_json_value
 
@@ -202,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] in {"status", "cancel", "validate"}:
         # arc-jobs is the sole implementation of generic durable-run controls.
-        return arc_jobs_main(arguments)
+        return run_control_main(arguments)
     try:
         args = _parser().parse_args(arguments)
         if args.root_help or args.command is None:

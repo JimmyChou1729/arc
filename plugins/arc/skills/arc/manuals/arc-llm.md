@@ -312,12 +312,14 @@ The idea workflow runner writes only the generated batch config before launch:
 <project-dir>/ideas/<run-id>/ideas_batch_config.json
 ```
 
-All concurrent proposer-reviewer artifacts are owned by `arc-llm` under the
-batch run root. The workflow runner does not copy selected rounds or write a
-project-level latest report while loops are running. Completed runner results
-include `round_score_table`, a Markdown and structured per-loop table of
-reviewer total scores by round, built from loop artifacts available at
-completion time.
+All concurrent proposer-reviewer orchestration and artifacts are owned by
+`arc-proposer-reviewer` under the batch run root. `arc-llm` owns only the
+individual model tasks, provider sessions, output validation, and durable task
+recovery used by those rounds. The workflow runner does not copy selected
+rounds or write a project-level latest report while loops are running.
+Completed runner results include `round_score_table`, a Markdown and structured
+per-loop table of reviewer total scores by round, built from loop artifacts
+available at completion time.
 
 Proposers-reviewer configs default to stateful delta sessions. First worker
 turns send the static task context and worker instructions; later turns send

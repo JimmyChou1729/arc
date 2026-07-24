@@ -6,13 +6,11 @@ execution belongs to :mod:`arc_jobs`; LLM work belongs to :mod:`arc_llm`.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from arc_jobs import RunContext
-
+from ._cache_root import resolve_cache_root
 from .document_search import (
     EquationSearchResult,
     FullTextSearchResult,
@@ -29,7 +27,6 @@ from .parse import (
     PaperParserService,
     ParsedDocument,
     ParsedSection,
-    VisualReviewService,
 )
 from .providers import Ar5ivProvider, ArxivPdfProvider, InspireProvider
 from .source_repository import SourceRepository
@@ -49,10 +46,7 @@ class PaperInputError(ValueError):
 
 
 def default_cache_root() -> Path:
-    configured = os.environ.get("ARC_PAPER_CACHE")
-    if configured:
-        return Path(configured)
-    return Path.home() / ".cache" / "arc" / "arc-paper"
+    return resolve_cache_root()
 
 
 class ArcPaperService:
@@ -67,19 +61,13 @@ class ArcPaperService:
         ar5iv: Ar5ivProvider | None = None,
         arxiv_pdf: ArxivPdfProvider | None = None,
         pdf_text_extractor: PDFTextExtractor | None = None,
-        visual_reviewer: VisualReviewService | None = None,
     ):
-        if cache_root is None:
-            root = repository.root if repository is not None else default_cache_root()
-        else:
-            root = Path(cache_root)
-            if (
-                repository is not None
-                and root.resolve(strict=False) != repository.root.resolve(strict=False)
-            ):
-                raise PaperInputError(
-                    "cache_root must match the injected SourceRepository root"
-                )
+        try:
+            root = resolve_cache_root(cache_root, repository=repository)
+        except ValueError as exc:
+            raise PaperInputError(
+                "cache_root must match the injected SourceRepository root"
+            ) from exc
         self.repository = repository or SourceRepository(root)
         self.inspire = inspire or InspireProvider(cache_root=root)
         self.ar5iv = ar5iv or Ar5ivProvider(
@@ -91,7 +79,6 @@ class ArcPaperService:
         self.parser = PaperParserService(
             self.repository,
             pdf_text_extractor=pdf_text_extractor,
-            visual_reviewer=visual_reviewer,
         )
 
     def import_source(
@@ -119,10 +106,9 @@ class ArcPaperService:
         bundle: SourceBundle,
         *,
         policy: ValidationPolicy | str | None = None,
-        context: RunContext | None = None,
     ) -> ParseOutcome:
         resolved = ValidationPolicy(policy) if policy is not None else None
-        return self.parser.parse(bundle, policy=resolved, context=context)
+        return self.parser.parse(bundle, policy=resolved)
 
     def parse_local(
         self,
@@ -132,7 +118,6 @@ class ArcPaperService:
         primary_format: SourceFormat | str | None = None,
         validator_formats: Sequence[SourceFormat | str | None] = (),
         policy: ValidationPolicy | str | None = None,
-        context: RunContext | None = None,
     ) -> ParseOutcome:
         if validator_formats and len(validator_formats) != len(validator_paths):
             raise PaperInputError(
@@ -151,7 +136,6 @@ class ArcPaperService:
         return self.parse_bundle(
             SourceBundle(primary=primary, validators=validators),
             policy=policy,
-            context=context,
         )
 
     def parse_arxiv_auto(

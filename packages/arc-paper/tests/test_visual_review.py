@@ -218,27 +218,23 @@ def test_markdown_pdf_default_reviews_every_full_page_and_replays_without_calls(
     adapter = ManifestAwareAdapter()
     registry = ProviderRegistry()
     registry.register("codex", lambda: adapter)
-    reviewer = VisualReviewService(
-        renderer,
-        llm=LLMTaskService(registry=registry),
-        model=ModelSelection("codex"),
-    )
-    service = PaperParserService(
+    jobs = RunRepository(tmp_path / "jobs")
+    runner = MarkdownPDFVisualParseRunner(
+        jobs,
         sources,
+        renderer=renderer,
         pdf_text_extractor=FakePDFTextExtractor(("page one", "page two")),
-        visual_reviewer=reviewer,
-    )
-    context = _context(tmp_path)
-
-    first = service.parse(
-        SourceBundle(primary=markdown, validators=(pdf,)), context=context
-    )
-    second = service.parse(
-        SourceBundle(primary=markdown, validators=(pdf,)), context=context
+        llm=LLMTaskService(registry=registry),
     )
 
-    assert first.report.policy is ValidationPolicy.VISUAL_ALL_PAGES
-    assert second.report.policy is ValidationPolicy.VISUAL_ALL_PAGES
+    first = runner.execute(
+        "visual-default", markdown, pdf, model=ModelSelection("codex")
+    )
+    second = runner.execute(
+        "visual-default", markdown, pdf, model=ModelSelection("codex")
+    )
+
+    assert first.status is second.status is RunStatus.SUCCEEDED
     assert adapter.start_calls == 2
     assert len(adapter.requests) == 2
     assert all(
@@ -252,30 +248,44 @@ def test_markdown_pdf_default_reviews_every_full_page_and_replays_without_calls(
         .startswith(b"\x89PNG\r\n\x1a\n")
         for request in adapter.requests
     )
+    assert first.result_ref is not None
+    result = json.loads(
+        ImmutableArtifactStore(
+            jobs.run_directory("visual-default"),
+            repository_root=jobs.root,
+        )
+        .read_bytes(first.result_ref)
+        .decode("utf-8")
+    )
+    assert result["report"]["policy"] == ValidationPolicy.VISUAL_ALL_PAGES.value
     page_entries = [
         entry
-        for entry in first.report.entries
-        if entry.subject_id.startswith("visual-page:")
-        and ":unexpected:" not in entry.subject_id
+        for entry in result["report"]["entries"]
+        if entry["subject_id"].startswith("visual-page:")
+        and ":unexpected:" not in entry["subject_id"]
     ]
-    assert [entry.provenance["page_number"] for entry in page_entries] == [1, 2]
+    assert [entry["provenance"]["page_number"] for entry in page_entries] == [1, 2]
     visual_span_entries = [
         entry
-        for entry in first.report.entries
-        if entry.provenance.get("review_method") == "visual_all_pages"
+        for entry in result["report"]["entries"]
+        if entry["provenance"].get("review_method") == "visual_all_pages"
     ]
     assert len(visual_span_entries) == 1
-    assert visual_span_entries[0].status is ReconciliationStatus.VERIFIED
-    span_id = first.document.math_spans[0].span_id
-    assert [entry.subject_id for entry in first.report.entries].count(span_id) == 1
+    assert visual_span_entries[0]["status"] == ReconciliationStatus.VERIFIED.value
+    span_id = result["document"]["math_spans"][0]["span_id"]
+    assert [
+        entry["subject_id"] for entry in result["report"]["entries"]
+    ].count(span_id) == 1
     deterministic = next(
         entry
-        for entry in first.report.entries
-        if entry.subject_id == f"deterministic:{span_id}"
+        for entry in result["report"]["entries"]
+        if entry["subject_id"] == f"deterministic:{span_id}"
     )
-    assert deterministic.provenance["primary_span_id"] == span_id
+    assert deterministic["provenance"]["primary_span_id"] == span_id
     manifests = tuple(
-        (context.run_directory / "artifacts" / "manifests").rglob("*.json")
+        (jobs.run_directory("visual-default") / "artifacts" / "manifests").rglob(
+            "*.json"
+        )
     )
     assert not any("crop" in path.as_posix() for path in manifests)
 
@@ -293,8 +303,8 @@ def test_visual_aggregation_marks_mismatch_duplicate_missing_and_unexpected(
     parser = PaperParserService(
         sources, pdf_text_extractor=FakePDFTextExtractor(("one", "two"))
     )
-    primary = parser._parse_one(markdown)
-    parsed_pdf = parser._parse_one(pdf)
+    primary = parser.parse_source(markdown)
+    parsed_pdf = parser.parse_source(pdf)
     a, b, c = [item.span_id for item in primary.math_spans]
     first = {
         "schema_version": "arc.paper.visual_page_review.v1",
@@ -369,8 +379,8 @@ def test_paused_page_is_unreviewed_and_later_pages_continue(tmp_path: Path) -> N
     parser = PaperParserService(
         sources, pdf_text_extractor=FakePDFTextExtractor(("one", "two"))
     )
-    primary = parser._parse_one(markdown)
-    parsed_pdf = parser._parse_one(pdf)
+    primary = parser.parse_source(markdown)
+    parsed_pdf = parser.parse_source(pdf)
     llm = ScriptedLLM(
         [
             LLMPaused(
@@ -422,8 +432,8 @@ def test_unreviewed_page_terminal_survives_crash_before_parse_commit_without_cal
     parser = PaperParserService(
         sources, pdf_text_extractor=FakePDFTextExtractor(("one",))
     )
-    primary = parser._parse_one(markdown)
-    parsed_pdf = parser._parse_one(pdf)
+    primary = parser.parse_source(markdown)
+    parsed_pdf = parser.parse_source(pdf)
     jobs = RunRepository(tmp_path / "jobs")
     snapshot = jobs.create(RunSpec("visual-restart", "test.visual", {"case": "restart"}))
     first_context = RunContext(
@@ -470,8 +480,8 @@ def test_provider_failure_and_invalid_output_page_terminals_replay(
     parser = PaperParserService(
         sources, pdf_text_extractor=FakePDFTextExtractor(("one",))
     )
-    primary = parser._parse_one(markdown)
-    parsed_pdf = parser._parse_one(pdf)
+    primary = parser.parse_source(markdown)
+    parsed_pdf = parser.parse_source(pdf)
     cases = (
         LLMFailed(
             ProviderFailure(
@@ -525,8 +535,8 @@ def test_corrupt_existing_page_terminal_is_unreviewed_without_rerun(
     parser = PaperParserService(
         sources, pdf_text_extractor=FakePDFTextExtractor(("one",))
     )
-    primary = parser._parse_one(markdown)
-    parsed_pdf = parser._parse_one(pdf)
+    primary = parser.parse_source(markdown)
+    parsed_pdf = parser.parse_source(pdf)
     jobs = RunRepository(tmp_path / "jobs")
     snapshot = jobs.create(
         RunSpec("visual-corrupt-terminal", "test.visual", {"case": failure})
@@ -602,30 +612,23 @@ def test_corrupt_existing_page_terminal_is_unreviewed_without_rerun(
     )
 
 
-def test_visual_review_service_exception_does_not_fail_primary_parse(
+def test_deterministic_parser_never_invokes_visual_reviewer(
     tmp_path: Path,
 ) -> None:
-    class BrokenVisualReviewer:
-        def review(self, *args, **kwargs):
-            del args, kwargs
-            raise RuntimeError("review boundary failed")
-
     sources = SourceRepository(tmp_path / "sources")
     markdown = _store(sources, b"# Notes\n$x$.\n", SourceFormat.MARKDOWN)
     pdf = _store(sources, b"%PDF review boundary", SourceFormat.PDF)
     parser = PaperParserService(
         sources,
         pdf_text_extractor=FakePDFTextExtractor(("one",)),
-        visual_reviewer=BrokenVisualReviewer(),
     )
 
     outcome = parser.parse(
         SourceBundle(primary=markdown, validators=(pdf,)),
-        context=_context(tmp_path),
     )
 
     assert outcome.document.source == markdown
-    assert any("visual_review_service_error" in warning for warning in outcome.warnings)
+    assert any("durable Markdown+PDF visual workflow" in warning for warning in outcome.warnings)
     visual_entries = [
         entry
         for entry in outcome.report.entries
@@ -642,11 +645,6 @@ def test_visual_review_service_exception_does_not_fail_primary_parse(
 def test_primary_source_read_failure_is_not_downgraded_to_visual_warning(
     tmp_path: Path, monkeypatch
 ) -> None:
-    class NeverReviewer:
-        def review(self, *args, **kwargs):
-            del args, kwargs
-            raise AssertionError("reviewer must not run after primary corruption")
-
     sources = SourceRepository(tmp_path / "sources")
     markdown = _store(sources, b"# Notes\n$x$.\n", SourceFormat.MARKDOWN)
     pdf = _store(sources, b"%PDF primary corruption", SourceFormat.PDF)
@@ -664,17 +662,19 @@ def test_primary_source_read_failure_is_not_downgraded_to_visual_warning(
         return original_read(artifact)
 
     monkeypatch.setattr(sources, "read_bytes", fail_second_primary_read)
-    parser = PaperParserService(
+    runner = MarkdownPDFVisualParseRunner(
+        RunRepository(tmp_path / "jobs"),
         sources,
+        renderer=FakeRenderer(1),
         pdf_text_extractor=FakePDFTextExtractor(("one",)),
-        visual_reviewer=NeverReviewer(),
+        llm=NeverLLM(),
     )
+    outcome = runner.execute("primary-corrupt", markdown, pdf)
 
-    with pytest.raises(SourceRepositoryError, match="authoritative primary"):
-        parser.parse(
-            SourceBundle(primary=markdown, validators=(pdf,)),
-            context=_context(tmp_path),
-        )
+    assert outcome.status is RunStatus.FAILED
+    assert outcome.error is not None
+    assert outcome.error.code == "source_corrupt"
+    assert primary_reads == 2
 
 
 def test_public_runner_reaches_default_markdown_pdf_full_page_review(
@@ -741,8 +741,8 @@ def test_renderer_failure_with_zero_text_pages_marks_spans_unreviewed(
     parser = PaperParserService(
         sources, pdf_text_extractor=FakePDFTextExtractor(())
     )
-    primary = parser._parse_one(markdown)
-    parsed_pdf = parser._parse_one(pdf)
+    primary = parser.parse_source(markdown)
+    parsed_pdf = parser.parse_source(pdf)
 
     outcome = VisualReviewService(FailingRenderer()).review(
         _context(tmp_path),
@@ -769,21 +769,17 @@ def test_explicit_deterministic_and_tex_pdf_defaults_do_not_call_visual_service(
     tex = _store(sources, br"\section{Notes}" b"\n$x$\n", SourceFormat.TEX)
     pdf = _store(sources, b"%PDF deterministic", SourceFormat.PDF)
     renderer = FakeRenderer(1)
-    reviewer = VisualReviewService(renderer, llm=ScriptedLLM([]))
     parser = PaperParserService(
         sources,
         pdf_text_extractor=FakePDFTextExtractor(("Notes x",)),
-        visual_reviewer=reviewer,
     )
 
     markdown_outcome = parser.parse(
         SourceBundle(primary=markdown, validators=(pdf,)),
         policy=ValidationPolicy.DETERMINISTIC_ONLY,
-        context=_context(tmp_path),
     )
     tex_outcome = parser.parse(
         SourceBundle(primary=tex, validators=(pdf,)),
-        context=_context(tmp_path),
     )
 
     assert markdown_outcome.report.policy is ValidationPolicy.DETERMINISTIC_ONLY

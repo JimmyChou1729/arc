@@ -7,7 +7,7 @@ import httpx
 from ..ids import arxiv_path_id
 from ..source_repository import SourceRepository
 from ..sources import SourceArtifact, SourceFormat, SourceOrigin, SourceOriginKind
-from .ar5iv import _require_https_host, _response_media_type, _validate_response_size
+from ._http import require_https_host, response_media_type, validate_response_size
 from .base import ProviderError
 from .remote_cache import RemoteRequestCache
 
@@ -68,7 +68,7 @@ class ArxivPdfProvider:
         )
 
     def _fetch_pdf_bytes(self, url: str, paper_id: str) -> bytes:
-        _require_https_host(url, ARXIV_HOST)
+        require_https_host(url, ARXIV_HOST)
         response = self.client.get(url, timeout=self.timeout)
         if response.status_code == 404:
             raise ProviderError(
@@ -82,9 +82,9 @@ class ArxivPdfProvider:
                 str(exc),
                 status_code=exc.response.status_code,
             ) from exc
-        _require_https_host(str(response.url), ARXIV_HOST)
-        _validate_response_size(response, MAX_PDF_BYTES, "arxiv_pdf_too_large")
-        media_type = _response_media_type(response)
+        require_https_host(str(response.url), ARXIV_HOST)
+        validate_response_size(response, MAX_PDF_BYTES, "arxiv_pdf_too_large")
+        media_type = response_media_type(response)
         if media_type != ARXIV_PDF_MEDIA_TYPE:
             raise ProviderError(
                 "arxiv_pdf_media_type_invalid",

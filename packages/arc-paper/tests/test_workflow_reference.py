@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from arc_jobs import RunContext, RunRepository, RunSpec
+from arc_jobs import Failed, RunContext, RunRepository, RunSpec
 from arc_llm import LLMCompleted, ModelSelection, ProviderUsage
 
 from arc_paper.workflows.reference import (
     ReferenceInferenceCompleted,
+    ReferenceInferenceHandler,
     ReferenceInferenceRunner,
     ReferenceInferenceService,
 )
@@ -113,3 +114,26 @@ def test_explicit_reference_identifier_bypasses_llm(tmp_path: Path) -> None:
     assert outcome.result.paper_ids == ("arXiv:0911.3380",)
     assert outcome.result.provenance is None
     assert fake.requests == []
+
+
+def test_reference_resume_decode_uses_reference_error_code(tmp_path: Path) -> None:
+    repository = RunRepository(tmp_path)
+    handler = ReferenceInferenceHandler(
+        "Find a foundational reference.",
+        metadata_lookup=lambda paper_id: {"paper_id": paper_id},
+        service=ReferenceInferenceService(FakeReferenceLLM()),
+    )
+    snapshot = repository.create(
+        RunSpec("reference-resume", handler.name, handler.semantic_input())
+    )
+    context = RunContext(
+        repository,
+        snapshot,
+        resume_input={"not": "an arc.llm resume input"},
+        execution_slice=None,
+    )
+
+    outcome = handler.execute(context)
+
+    assert isinstance(outcome, Failed)
+    assert outcome.error.code == "reference_resume_input_invalid"

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, TypeAlias
 
 from arc_jobs import (
-    Awaiting,
     CancelledError,
     Failed,
     JsonValue,
@@ -35,13 +34,15 @@ from arc_llm import (
 )
 
 from ..ids import arxiv_path_id, doi_value, extract_paper_ids, inspire_recid, normalize_paper_id
-from .summary import (
+from ._llm import (
     LLMCallProvenance,
     PaperWorkflowError,
-    _execute_routed,
-    _model_document,
-    _outer_resume_input,
-    _provenance,
+    awaiting_from_pause,
+    execute_routed,
+    model_document,
+    outer_resume_input,
+    provenance,
+    run_error_from_failure,
 )
 
 REFERENCE_HANDLER = "arc.paper.reference_inference.v2"
@@ -178,7 +179,7 @@ class ReferenceInferenceService:
             "prompt_contract": REFERENCE_PROMPT_CONTRACT,
             "output_contract": REFERENCE_OUTPUT_CONTRACT,
             "request_digest": request_digest,
-            "model_requirement": _model_document(model),
+            "model_requirement": model_document(model),
         }
         task_id = (
             "reference-"
@@ -191,7 +192,7 @@ class ReferenceInferenceService:
             model,
             capabilities=CapabilityPolicy(internet=True),
         )
-        outcome = _execute_routed(
+        outcome = execute_routed(
             self.task_service,
             context,
             request,
@@ -209,7 +210,7 @@ class ReferenceInferenceService:
                 warnings=tuple(verified["warnings"]),
                 verified_references=tuple(verified["verified_references"]),
                 rejected_candidates=tuple(verified["rejected_candidates"]),
-                provenance=_provenance(task_id, outcome),
+                provenance=provenance(task_id, outcome),
             )
         )
 
@@ -237,7 +238,7 @@ class ReferenceInferenceHandler:
             "schema_version": "arc.paper.reference_inference_request.v2",
             "text": self.text,
             "request_digest": hashlib.sha256(self.text.encode("utf-8")).hexdigest(),
-            "model_requirement": _model_document(self.model),
+            "model_requirement": model_document(self.model),
             "prompt_contract": REFERENCE_PROMPT_CONTRACT,
             "output_contract": REFERENCE_OUTPUT_CONTRACT,
         }
@@ -256,7 +257,9 @@ class ReferenceInferenceHandler:
                 self.text,
                 metadata_lookup=self.metadata_lookup,
                 model=self.model,
-                resume_input=_outer_resume_input(context),
+                resume_input=outer_resume_input(
+                    context, error_code="reference_resume_input_invalid"
+                ),
             )
         except PaperWorkflowError as exc:
             return Failed(RunError(exc.code, str(exc)))
@@ -267,24 +270,9 @@ class ReferenceInferenceHandler:
                 )
             )
         if isinstance(outcome, LLMPaused):
-            return Paused(
-                Awaiting(
-                    outcome.reason,
-                    outcome.resume_key,
-                    outcome.input_required,
-                    outcome.request_ref,
-                    outcome.response_contract,
-                    outcome.details,
-                )
-            )
+            return Paused(awaiting_from_pause(outcome))
         if isinstance(outcome, LLMFailed):
-            return Failed(
-                RunError(
-                    outcome.error.code.value,
-                    str(outcome.error),
-                    outcome.error.details,
-                )
-            )
+            return Failed(run_error_from_failure(outcome))
         if isinstance(outcome, LLMCancelled):
             raise CancelledError("reference-inference LLM task cancelled")
         raise RuntimeError("unknown reference-inference outcome")

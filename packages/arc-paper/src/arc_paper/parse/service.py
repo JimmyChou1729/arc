@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from arc_jobs import RunContext
-
 from ..source_repository import SourceRepository, SourceRepositoryError
 from ..sources import (
     ParseOutcome,
@@ -15,7 +13,6 @@ from ..sources import (
 from .models import ParsedDocument
 from .parser import PDFTextExtractor, ParseError, parse_artifact_bytes
 from .reconcile import reconcile_validator
-from .visual import VisualReviewService
 
 
 class PaperParserService:
@@ -26,21 +23,18 @@ class PaperParserService:
         repository: SourceRepository,
         *,
         pdf_text_extractor: PDFTextExtractor | None = None,
-        visual_reviewer: VisualReviewService | None = None,
     ):
         self.repository = repository
         self.pdf_text_extractor = pdf_text_extractor
-        self.visual_reviewer = visual_reviewer
 
     def parse(
         self,
         bundle: SourceBundle,
         *,
         policy: ValidationPolicy | None = None,
-        context: RunContext | None = None,
     ) -> ParseOutcome:
         resolved_policy = _resolve_policy(bundle, policy)
-        primary = self._parse_one(bundle.primary)
+        primary = self.parse_source(bundle.primary)
         entries: list[ReconciliationEntry] = []
         warnings = list(primary.warnings)
         for validator in bundle.validators:
@@ -55,7 +49,7 @@ class PaperParserService:
                 )
                 continue
             try:
-                parsed_validator = self._parse_one(validator)
+                parsed_validator = self.parse_source(validator)
             except (ParseError, SourceRepositoryError) as exc:
                 code = getattr(exc, "code", "validator_parse_failed")
                 message = f"validator could not be parsed ({code}): {exc}"
@@ -103,41 +97,14 @@ class PaperParserService:
                 and bundle.primary.source_format is SourceFormat.MARKDOWN
                 and validator.source_format is SourceFormat.PDF
             ):
-                if self.visual_reviewer is None or context is None:
-                    message = (
-                        "PDF visual review was requested but no in-run visual reviewer "
-                        "and RunContext were supplied"
-                    )
-                    entries.extend(
-                        _unreviewed_visual_entries(
-                            primary, parsed_validator, message
-                        )
-                    )
-                    warnings.append(message)
-                    continue
-                markdown_bytes = self.repository.read_bytes(bundle.primary)
-                try:
-                    visual = self.visual_reviewer.review(
-                        context,
-                        primary,
-                        parsed_validator,
-                        markdown_bytes=markdown_bytes,
-                        pdf_bytes=self.repository.read_bytes(validator),
-                    )
-                except Exception as exc:
-                    message = (
-                        "PDF visual review was unavailable "
-                        f"(visual_review_service_error): {exc}"
-                    )
-                    entries.extend(
-                        _unreviewed_visual_entries(
-                            primary, parsed_validator, message
-                        )
-                    )
-                    warnings.append(message)
-                    continue
-                entries.extend(visual.entries)
-                warnings.extend(visual.warnings)
+                message = (
+                    "PDF visual review requires the durable Markdown+PDF visual "
+                    "workflow and was not run by the deterministic parser"
+                )
+                entries.extend(
+                    _unreviewed_visual_entries(primary, parsed_validator, message)
+                )
+                warnings.append(message)
         return ParseOutcome(
             document=primary,
             report=ReconciliationReport(
@@ -148,7 +115,7 @@ class PaperParserService:
             warnings=tuple(_dedupe(warnings)),
         )
 
-    def _parse_one(self, artifact) -> ParsedDocument:
+    def parse_source(self, artifact) -> ParsedDocument:
         payload = self.repository.read_bytes(artifact)
         return parse_artifact_bytes(
             artifact,

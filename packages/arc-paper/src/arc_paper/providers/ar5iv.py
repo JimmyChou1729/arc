@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import urlparse
 
 import httpx
 
 from ..ids import arxiv_path_id
 from ..source_repository import SourceRepository
 from ..sources import SourceArtifact, SourceFormat, SourceOrigin, SourceOriginKind
+from ._http import require_https_host, response_media_type, validate_response_size
 from .base import ProviderError
 from .remote_cache import RemoteRequestCache
 
@@ -62,7 +62,7 @@ class Ar5ivProvider:
         )
 
     def _fetch_html_bytes(self, url: str, paper_id: str) -> bytes:
-        _require_https_host(url, AR5IV_HOST)
+        require_https_host(url, AR5IV_HOST)
         response = self.client.get(url, timeout=self.timeout)
         if response.status_code == 404:
             raise ProviderError(
@@ -76,43 +76,13 @@ class Ar5ivProvider:
                 str(exc),
                 status_code=exc.response.status_code,
             ) from exc
-        _require_https_host(str(response.url), AR5IV_HOST)
-        _validate_response_size(response, MAX_HTML_BYTES, "ar5iv_html_too_large")
-        media_type = _response_media_type(response)
+        require_https_host(str(response.url), AR5IV_HOST)
+        validate_response_size(response, MAX_HTML_BYTES, "ar5iv_html_too_large")
+        media_type = response_media_type(response)
         if media_type != AR5IV_MEDIA_TYPE:
             raise ProviderError(
                 "ar5iv_media_type_invalid",
                 f"ar5iv returned unsupported media type: {media_type or '<missing>'}",
             )
         return bytes(response.content)
-
-
-def _require_https_host(url: str, host: str) -> None:
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname != host:
-        raise ProviderError(
-            "remote_url_invalid", f"remote source must use HTTPS on {host}"
-        )
-
-
-def _response_media_type(response: httpx.Response) -> str:
-    return response.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
-
-
-def _validate_response_size(
-    response: httpx.Response, maximum: int, code: str
-) -> None:
-    content_length = response.headers.get("content-length")
-    try:
-        if content_length is not None and int(content_length) > maximum:
-            raise ProviderError(code, f"remote response exceeds {maximum} bytes")
-    except ValueError as exc:
-        raise ProviderError(
-            "remote_content_length_invalid",
-            "remote response has an invalid Content-Length",
-        ) from exc
-    if len(response.content) > maximum:
-        raise ProviderError(code, f"remote response exceeds {maximum} bytes")
-
-
 __all__ = ["AR5IV_MEDIA_TYPE", "Ar5ivProvider", "MAX_HTML_BYTES", "ar5iv_url"]

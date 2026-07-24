@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from ._durable_io import atomic_write_bytes, payload_matches
 from ._file_lock import exclusive_file_lock
 from .sources import SourceArtifact, SourceFormat, SourceOrigin, SourceOriginKind
 
@@ -133,7 +132,6 @@ class SourceRepository:
                     separators=(",", ":"),
                 ).encode("utf-8"),
             )
-            self._fsync_dir(object_dir)
             return self._read_verified(resolved_format, digest, origin=origin)
 
     def get(
@@ -257,53 +255,11 @@ class SourceRepository:
 
     @staticmethod
     def _payload_matches(path: Path, digest: str, size: int) -> bool:
-        try:
-            if not path.is_file() or path.stat().st_size != size:
-                return False
-            hasher = hashlib.sha256()
-            with path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    hasher.update(chunk)
-            return hasher.hexdigest() == digest
-        except OSError:
-            return False
+        return payload_matches(path, digest, size)
 
     @staticmethod
     def _atomic_write(path: Path, payload: bytes) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                temporary = handle.name
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-            temporary = None
-            SourceRepository._fsync_dir(path.parent)
-        finally:
-            if temporary is not None:
-                try:
-                    Path(temporary).unlink()
-                except FileNotFoundError:
-                    pass
-
-    @staticmethod
-    def _fsync_dir(path: Path) -> None:
-        if os.name == "nt":
-            # Windows does not expose a portable directory fsync operation.
-            return
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        atomic_write_bytes(path, payload)
 
     @staticmethod
     def _normalize_media_type(media_type: str) -> str:

@@ -5,11 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol, TypeAlias
+from typing import Any, Mapping, TypeAlias
 
 from arc_jobs import (
     ArtifactSourceRef,
-    Awaiting,
     CancelledError,
     Failed,
     FailureMode,
@@ -38,13 +37,21 @@ from arc_llm import (
     LLMTaskOutcome,
     LLMTaskService,
     ModelSelection,
-    ProviderUsage,
     ResumeInput,
-    decode_resume_input,
-    resume_input_matches,
 )
 
 from ..parse import ParsedDocument, parsed_document_from_document
+from ._llm import (
+    LLMCallProvenance,
+    PaperWorkflowError,
+    TaskService,
+    awaiting_from_pause,
+    execute_routed as _execute_routed,
+    model_document as _model_document,
+    outer_resume_input,
+    provenance as _provenance,
+    run_error_from_failure,
+)
 
 SUMMARY_BATCH_HANDLER = "arc.paper.summary_batch.v1"
 SUMMARY_RESULT_SCHEMA = "arc.paper.summary.v2"
@@ -99,25 +106,6 @@ _SYNTHESIS_SCHEMA: dict[str, Any] = {
 }
 
 
-class _TaskService(Protocol):
-    def execute_or_resume(
-        self,
-        context: RunContext,
-        request: LLMRequest,
-        *,
-        input: ResumeInput | None = None,
-        options: Any = ...,
-    ) -> LLMTaskOutcome: ...
-
-
-class PaperWorkflowError(RuntimeError):
-    """A stable domain error suitable for a group unit result."""
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-
-
 @dataclass(frozen=True)
 class SummarySection:
     section_id: str
@@ -131,22 +119,6 @@ class SummarySection:
             "title": self.title,
             "summary": self.summary,
             "warnings": list(self.warnings),
-        }
-
-
-@dataclass(frozen=True)
-class LLMCallProvenance:
-    task_id: str
-    provider: str | None
-    model: str | None
-    usage: Mapping[str, JsonValue] | None
-
-    def to_document(self) -> dict[str, JsonValue]:
-        return {
-            "task_id": self.task_id,
-            "provider": self.provider,
-            "model": self.model,
-            "usage": None if self.usage is None else dict(self.usage),
         }
 
 
@@ -206,7 +178,7 @@ class SummaryBatchItem:
 class PaperSummaryService:
     """Summarize any strict ParsedDocument artifact inside one parent run."""
 
-    def __init__(self, task_service: _TaskService | None = None) -> None:
+    def __init__(self, task_service: TaskService | None = None) -> None:
         self.task_service = task_service or LLMTaskService()
 
     def summarize(
@@ -366,7 +338,9 @@ class SummaryBatchHandler:
                 )
             )
         try:
-            resume_input = _outer_resume_input(context)
+            resume_input = outer_resume_input(
+                context, error_code="summary_resume_input_invalid"
+            )
         except PaperWorkflowError as exc:
             return Failed(RunError(exc.code, str(exc)))
         units = tuple(
@@ -395,25 +369,12 @@ class SummaryBatchHandler:
                     f"summaries/{unit.unit_id}", outcome.result.to_document()
                 )
             if isinstance(outcome, LLMPaused):
-                return Paused(
-                    Awaiting(
-                        outcome.reason,
-                        outcome.resume_key,
-                        outcome.input_required,
-                        outcome.request_ref,
-                        outcome.response_contract,
-                        outcome.details,
-                    )
-                )
+                return Paused(awaiting_from_pause(outcome))
             if isinstance(outcome, LLMFailed):
                 return UnitResult(
                     unit.unit_id,
                     "failed",
-                    error=RunError(
-                        outcome.error.code.value,
-                        str(outcome.error),
-                        outcome.error.details,
-                    ),
+                    error=run_error_from_failure(outcome),
                 )
             if isinstance(outcome, LLMCancelled):
                 raise CancelledError("summary LLM task cancelled")
@@ -593,48 +554,6 @@ def _synthesis_request(
     )
 
 
-def _execute_routed(
-    service: _TaskService,
-    context: RunContext,
-    request: LLMRequest,
-    *,
-    resume_input: ResumeInput | None,
-) -> LLMTaskOutcome:
-    if resume_input is not None and resume_input_matches(request, resume_input):
-        return service.execute_or_resume(context, request, input=resume_input)
-    return service.execute_or_resume(context, request)
-
-
-def _outer_resume_input(context: RunContext) -> ResumeInput | None:
-    if context.resume_input is None:
-        return None
-    try:
-        return decode_resume_input(context.resume_input)
-    except Exception as exc:
-        raise PaperWorkflowError(
-            "summary_resume_input_invalid", f"Invalid LLM resume input: {exc}"
-        ) from exc
-
-
-def _provenance(task_id: str, outcome: LLMCompleted) -> LLMCallProvenance:
-    return LLMCallProvenance(
-        task_id,
-        outcome.provider,
-        outcome.model,
-        _usage_document(outcome.usage),
-    )
-
-
-def _usage_document(value: ProviderUsage | None) -> Mapping[str, JsonValue] | None:
-    if value is None:
-        return None
-    return {
-        "input_tokens": value.input_tokens,
-        "output_tokens": value.output_tokens,
-        "cached_input_tokens": value.cached_input_tokens,
-    }
-
-
 def _batch_result_document(
     result: GroupResult,
     *,
@@ -667,14 +586,6 @@ def _batch_result_document(
         "pending_unit_ids": [
             unit_id for unit_id in all_unit_ids if unit_id not in completed_ids
         ],
-    }
-
-
-def _model_document(value: ModelSelection) -> dict[str, JsonValue]:
-    return {
-        "provider": value.provider,
-        "model": value.model,
-        "tier": value.tier,
     }
 
 

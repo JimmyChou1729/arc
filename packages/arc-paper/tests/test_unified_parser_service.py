@@ -453,7 +453,7 @@ def test_scanned_pdf_validator_is_successful_partial_and_visual_hook_is_pagewise
         SourceBundle(primary=primary, validators=(pdf,)),
         policy=ValidationPolicy.VISUAL_ALL_PAGES,
     )
-    parsed_pdf = service._parse_one(pdf)  # noqa: SLF001 - visual handoff fixture
+    parsed_pdf = service.parse_source(pdf)  # noqa: SLF001 - visual handoff fixture
     requests = build_visual_page_review_inputs(outcome.document, parsed_pdf)
 
     assert outcome.document.math_spans[0].normalized_tex == "x+y"
