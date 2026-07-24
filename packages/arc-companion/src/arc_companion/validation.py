@@ -285,12 +285,14 @@ def _validate_anchor(
         rows = payload.get("rows")
         if isinstance(headers, (list, tuple)) and isinstance(rows, (list, tuple)):
             width = len(headers)
+            if width == 0 and rows and isinstance(rows[0], (list, tuple)):
+                width = len(rows[0])
             if any(not isinstance(row, (list, tuple)) or len(row) != width for row in rows):
                 _issue(
                     issues,
                     "invalid_table_shape",
                     f"{path}.payload.rows",
-                    "table rows must match the header width",
+                    "table rows must have a consistent width",
                 )
     elif anchor.kind == "figure":
         _require_payload_fields(

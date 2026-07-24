@@ -34,6 +34,7 @@ class FakeCompanionTasks:
         pause_chapter_title: str | None = None,
         unsafe_review_title: str | None = None,
         invalid_review_title: str | None = None,
+        identity_break_review_title: str | None = None,
         pause_translation_window: int | None = None,
         max_translation_prompt_bytes: int | None = None,
         invalid_translation_identity_window: int | None = None,
@@ -45,6 +46,7 @@ class FakeCompanionTasks:
         self.pause_chapter_title = pause_chapter_title
         self.unsafe_review_title = unsafe_review_title
         self.invalid_review_title = invalid_review_title
+        self.identity_break_review_title = identity_break_review_title
         self.pause_translation_window = pause_translation_window
         self.max_translation_prompt_bytes = max_translation_prompt_bytes
         self.invalid_translation_identity_window = (
@@ -250,6 +252,23 @@ class FakeCompanionTasks:
                     "learning_unit_patches": [],
                     "summary": "This patch empties required translated text.",
                 }
+            elif title == self.identity_break_review_title:
+                identity_translation = next(
+                    item
+                    for item in payload["draft"]["translations"]
+                    if "x=1" in item["text"]
+                )
+                value = {
+                    "guide_replacement": None,
+                    "translation_patches": [
+                        {
+                            "id": identity_translation["block_id"],
+                            "replacement": "Translated without source structure.",
+                        }
+                    ],
+                    "learning_unit_patches": [],
+                    "summary": "This patch removes formula and link identity.",
+                }
             else:
                 value = {
                     "guide_replacement": None,
@@ -322,7 +341,7 @@ def _rich_document(tmp_path: Path):
     repository = SourceRepository(tmp_path / "paper")
     payload = b"""# First
 
-The first chapter has $x=1$.
+The first chapter has $x=1$ and a [source link](https://example.test/source).
 
 ## Detail
 
@@ -658,6 +677,44 @@ def test_review_patch_that_breaks_draft_validation_pauses_and_discards(
         anchor.block_id for anchor in first.source_anchors
     ]
     assert all(item.text for item in first.translations)
+
+
+def test_review_patch_cannot_remove_formula_or_link_identity(
+    tmp_path: Path,
+) -> None:
+    document = _rich_document(tmp_path)
+    request = CompanionBuildRequest(document, target_language="en")
+    tasks = FakeCompanionTasks(
+        language="fr",
+        identity_break_review_title="First",
+    )
+    service = CompanionService(tmp_path / "jobs")
+
+    paused = service.build(
+        request,
+        execution=CompanionExecutionOptions(workers=2),
+        task_service=tasks,
+    )
+    assert paused.status is RunStatus.PAUSED
+    assert paused.awaiting is not None
+    assert paused.awaiting.reason is ResumeReason.SUPERVISION_REQUIRED
+    assert tasks.review_titles["First"] == 1
+
+    completed = service.resume(
+        paused.run_id,
+        input={
+            "schema_version": "arc.companion.review_supervision.v1",
+            "resume_key": paused.awaiting.resume_key,
+            "action": "discard_review",
+        },
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,
+    )
+    assert completed.status is RunStatus.SUCCEEDED
+    assert tasks.review_titles["First"] == 1
+    first = service.accepted_book(completed.run_id).chapters[0]
+    protected = next(item.text for item in first.translations if "x=1" in item.text)
+    assert "https://example.test/source" in protected
 
 
 def _accepted_chapter_keys(

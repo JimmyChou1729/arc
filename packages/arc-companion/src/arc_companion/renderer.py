@@ -20,8 +20,8 @@ from .contracts import AcceptedBook, LearningUnit, SourceAnchor
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v1"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v1"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v2"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v2"
 _SOURCE_DATE_EPOCH = "946684800"
 _AssetLoader = Callable[[str], bytes | None]
 
@@ -154,6 +154,15 @@ class CompanionRenderer:
             text = text_path.read_text(encoding="utf-8", errors="replace")
             if not text.strip() or book.title not in text:
                 raise CompanionRenderError("PDF searchable text is incomplete")
+            for chapter in book.chapters:
+                for anchor in chapter.source_anchors:
+                    if anchor.kind != "table" or not anchor.payload["rows"]:
+                        continue
+                    for cell in anchor.payload["rows"][-1]:
+                        if str(cell).strip() and str(cell) not in text:
+                            raise CompanionRenderError(
+                                "PDF searchable table content is incomplete"
+                            )
             for evidence in book.bibliography:
                 if any(
                     value not in text
@@ -370,7 +379,8 @@ def _render_html_source(
             if payload["caption"]
             else ""
         )
-        return f"<table>{caption}<thead><tr>{headers}</tr></thead><tbody>{rows}</tbody></table>"
+        head = f"<thead><tr>{headers}</tr></thead>" if headers else ""
+        return f"<table>{caption}{head}<tbody>{rows}</tbody></table>"
     source = source_urls.get(anchor.block_id)
     caption = escape_html(str(payload["caption"]))
     alt = escape_html(str(payload["alt_text"]))
@@ -520,13 +530,26 @@ def _render_tex_chapter(
             if anchor.page_number is not None
             else ""
         )
-        values.append(
+        anchor_target = (
             rf"\par\noindent\hypertarget{{anchor-{_tex_id(anchor.block_id)}}}{{}}{page}"
-            rf"\begin{{tcolorbox}}[breakable,colback=SourceBg,colframe=SourceBg,"
-            rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
-            rf"\textbf{{Source}}\par {_render_tex_source(anchor, source_paths=source_paths)}"
-            rf"\end{{tcolorbox}}"
         )
+        source = _render_tex_source(anchor, source_paths=source_paths)
+        if anchor.kind == "table":
+            # longtable must remain in the main vertical list to split across
+            # pages.  Nesting it in a tcolorbox/tabular silently clips rows.
+            values.append(
+                anchor_target
+                + r"\textbf{Source}\par"
+                + source
+            )
+        else:
+            values.append(
+                anchor_target
+                + rf"\begin{{tcolorbox}}[breakable,colback=SourceBg,colframe=SourceBg,"
+                rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
+                rf"\textbf{{Source}}\par {source}"
+                rf"\end{{tcolorbox}}"
+            )
         translation = translations.get(anchor.block_id)
         if translation is not None:
             values.append(
@@ -574,23 +597,36 @@ def _render_tex_source(
         )
         return rf"\[{_sanitize_math(payload['tex'])}{label}\]"
     if anchor.kind == "table":
-        width = max(1, len(payload["headers"]))
+        headers = payload["headers"]
+        rows_value = payload["rows"]
+        width = len(headers) or (len(rows_value[0]) if rows_value else 1)
         columns = " ".join([r">{\raggedright\arraybackslash}p{" + f"{0.88 / width:.3f}" + r"\linewidth}"] * width)
-        header = " & ".join(_tex_escape(item) for item in payload["headers"]) + r" \\"
+        header = " & ".join(_tex_escape(item) for item in headers) + r" \\"
         rows = "\n".join(
             " & ".join(_tex_escape(cell) for cell in row) + r" \\"
-            for row in payload["rows"]
+            for row in rows_value
         )
         caption = (
             rf"\textit{{{_tex_escape(payload['caption'])}}}\par"
             if payload["caption"]
             else ""
         )
+        repeated_header = (
+            rf"\toprule {header}\midrule\endfirsthead"
+            "\n"
+            rf"\toprule {header}\midrule\endhead"
+            "\n"
+            if headers
+            else "\n".join(
+                (r"\toprule\endfirsthead", r"\toprule\endhead", "")
+            )
+        )
         return (
             caption
-            + rf"\begin{{tabular}}{{{columns}}}\toprule {header}\midrule "
+            + rf"\begin{{longtable}}{{{columns}}}"
+            + repeated_header
             + rows
-            + r"\bottomrule\end{tabular}"
+            + r"\bottomrule\end{longtable}"
         )
     source = source_paths.get(anchor.block_id)
     caption = _tex_escape(payload["caption"])

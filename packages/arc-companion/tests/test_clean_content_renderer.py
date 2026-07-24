@@ -452,6 +452,58 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
         assert forbidden not in html.casefold()
 
 
+def test_headerless_table_uses_row_width_and_omits_empty_web_header(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    table = replace(
+        chapter.source_anchors[2],
+        payload={
+            "headers": (),
+            "rows": (("alpha", "1"), ("beta", "2")),
+            "caption": "Headerless values",
+        },
+    )
+    table_chapter = replace(
+        chapter,
+        source_anchors=(table,),
+        translations=(
+            TranslatedBlock(block_id=table.block_id, text="Translated table."),
+        ),
+        learning_units=(),
+    )
+    book = replace(
+        accepted_book,
+        chapters=(table_chapter,),
+        glossary=(),
+        bibliography=(),
+    )
+
+    require_valid_accepted_book(book)
+    html = CompanionRenderer().render_web(
+        book, tmp_path / "headerless-reader"
+    ).read_text(encoding="utf-8")
+    table_html = html[html.index("<table>") : html.index("</table>") + 8]
+    assert "<thead>" not in table_html
+    assert "<tbody><tr><td>alpha</td><td>1</td></tr>" in table_html
+
+    malformed = replace(
+        table,
+        payload={
+            "headers": (),
+            "rows": (("alpha", "1"), ("beta",)),
+            "caption": "Broken values",
+        },
+    )
+    invalid = replace(
+        book,
+        chapters=(replace(table_chapter, source_anchors=(malformed,)),),
+    )
+    assert "invalid_table_shape" in {
+        item.code for item in validate_accepted_book(invalid)
+    }
+
+
 @pytest.mark.skipif(
     any(shutil.which(item) is None for item in _PDF_TOOLS),
     reason="offline PDF toolchain is unavailable",
@@ -487,6 +539,68 @@ def test_pdf_is_searchable_complete_and_anchor_interleaved(
     assert hashlib.sha256(second.read_bytes()).digest() == hashlib.sha256(
         output.read_bytes()
     ).digest()
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in _PDF_TOOLS),
+    reason="offline PDF toolchain is unavailable",
+)
+def test_pdf_longtable_keeps_all_180_rows_and_rasters_every_page(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    rows = tuple(
+        (f"record-{index:03d}", f"value-{index:03d}")
+        for index in range(180)
+    )
+    table = replace(
+        accepted_book.chapters[0].source_anchors[2],
+        payload={
+            "headers": (),
+            "rows": rows,
+            "caption": "All deterministic records",
+        },
+    )
+    chapter = replace(
+        accepted_book.chapters[0],
+        source_anchors=(table,),
+        translations=(
+            TranslatedBlock(block_id=table.block_id, text="Translated table."),
+        ),
+        learning_units=(),
+    )
+    book = replace(
+        accepted_book,
+        chapters=(chapter,),
+        glossary=(),
+        bibliography=(),
+    )
+
+    output = CompanionRenderer().render_pdf(book, tmp_path / "longtable.pdf")
+    extracted = subprocess.run(
+        ["pdftotext", str(output), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    info = subprocess.run(
+        ["pdfinfo", str(output)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    page_count = int(
+        next(
+            line.split(":", 1)[1]
+            for line in info.splitlines()
+            if line.startswith("Pages:")
+        )
+    )
+
+    assert page_count >= 3
+    assert "All deterministic records" in extracted
+    assert "record-000" in extracted
+    assert "record-179" in extracted
+    assert "value-179" in extracted
 
 
 def test_unfrozen_remote_figure_is_rendered_as_attributed_link(

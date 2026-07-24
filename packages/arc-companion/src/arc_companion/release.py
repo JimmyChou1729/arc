@@ -24,7 +24,7 @@ from .renderer import (
 
 RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v1"
 DELIVERY_RECIPE = "arc.companion.delivery.v1"
-RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v1"
+RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v2"
 
 
 class CompanionReleaseError(RuntimeError):

@@ -714,6 +714,11 @@ class CompanionBuildHandler:
                         str(item["evidence_id"]) for item in chapter_evidence
                     ],
                 )
+                if translation_required:
+                    _validate_translation_text_structure(
+                        reviewed["translations"],
+                        source_documents,
+                    )
             except CompanionContentError as exc:
                 supervision = self._review_supervision(
                     context,
@@ -1080,30 +1085,69 @@ def _validate_translation_window(
                     f"or asset identity for {source['block_id']}"
                 ),
             )
-        text = str(translated["text"])
-        if identity["code_text"] is not None and text != identity["code_text"]:
-            raise CompanionContentError(
-                "translation_source_identity_invalid",
-                f"translation changed code text for {source['block_id']}",
-            )
-        if any(
-            token not in text
-            for token in [
-                *identity["equations"],
-                *identity["link_targets"],
-            ]
-        ):
-            raise CompanionContentError(
-                "translation_source_identity_invalid",
-                (
-                    "translation text omitted a formula or link target for "
-                    f"{source['block_id']}"
-                ),
-            )
+        _validate_translation_text(str(translated["text"]), source)
     return [
         {"block_id": item["block_id"], "text": item["text"]}
         for item in translations
     ]
+
+
+def _validate_translation_text_structure(
+    translations: Sequence[Mapping[str, Any]],
+    source_blocks: Sequence[Mapping[str, Any]],
+) -> None:
+    """Recheck immutable source structure after text-only reviewer patches.
+
+    The accepted draft intentionally does not retain the model's
+    ``source_identity`` echo.  Source structure is therefore recomputed from
+    the frozen blocks and checked directly against each reviewed text.
+    """
+
+    expected = [str(item["block_id"]) for item in source_blocks]
+    if [item.get("block_id") for item in translations] != expected:
+        raise CompanionContentError(
+            "translation_coverage_invalid",
+            "reviewed translation block IDs must exactly match source order",
+        )
+    for translated, source in zip(translations, source_blocks, strict=True):
+        _validate_translation_text(str(translated["text"]), source)
+
+
+def _validate_translation_text(
+    text: str,
+    source: Mapping[str, Any],
+) -> None:
+    identity = _source_identity(source)
+    if identity["code_text"] is not None and text != identity["code_text"]:
+        raise CompanionContentError(
+            "translation_source_identity_invalid",
+            f"translation changed code text for {source['block_id']}",
+        )
+    if any(
+        token not in text
+        for token in [
+            *identity["equations"],
+            *identity["link_targets"],
+        ]
+    ):
+        raise CompanionContentError(
+            "translation_source_identity_invalid",
+            (
+                "translation text omitted a formula or link target for "
+                f"{source['block_id']}"
+            ),
+        )
+    # Figure identity is carried by the immutable source block rather than
+    # natural-language translation text.  Recomputing it here ensures the
+    # structural check covers the asset contract without retaining or trusting
+    # a reviewer-editable model echo.
+    if identity["asset_digest"] is not None and not str(
+        identity["asset_digest"]
+    ).strip():
+        raise CompanionContentError(
+            "translation_source_identity_invalid",
+            f"translation source asset identity is invalid for {source['block_id']}",
+        )
 
 
 def _source_identity(block: Mapping[str, Any]) -> dict[str, Any]:
