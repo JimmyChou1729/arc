@@ -1,67 +1,98 @@
-"""Build source-faithful, chapter-aware companions for papers and books."""
+"""Source-anchored textbook companions from ARC rich documents."""
 
-from pathlib import Path
 from typing import Any
+
+from .contracts import (
+    ACCEPTED_BOOK_SCHEMA,
+    AcceptedBook,
+    AcceptedChapter,
+    ChapterPlan,
+    CompanionContentCodec,
+    GlossaryEntry,
+    LearningUnit,
+    PlannedLearningUnit,
+    SourceAnchor,
+    TranslatedBlock,
+)
+from .project import CompanionProjectError, CompanionProjectPaths
+from .release import (
+    CompanionRelease,
+    CompanionReleasePublisher,
+    release_id_for,
+)
+from .renderer import (
+    CompanionRenderError,
+    CompanionRenderer,
+    RenderedCompanion,
+)
+from .validation import (
+    AcceptedBookValidationError,
+    ValidationIssue,
+    require_valid_accepted_book,
+    validate_accepted_book,
+)
+
+__version__ = "1.0.1"
 
 
 def __getattr__(name: str) -> Any:
-    """Keep lightweight render/reader imports independent of the LLM pipeline."""
-    if name == "BuildOptions":
-        from .pipeline import BuildOptions
+    """Keep render-only imports independent of the LLM runtime."""
 
-        return BuildOptions
-    if name == "build_companion":
-        from .pipeline import build_companion
+    if name in {"COMPANION_BUILD_HANDLER", "CompanionBuildHandler"}:
+        from . import build
 
-        return build_companion
+        return getattr(build, name)
+    if name in {
+        "COMPANION_CONTENT_CONTRACT",
+        "NEUTRAL_TEXTBOOK_INTENT",
+        "CompanionBuildRequest",
+        "CompanionExecutionOptions",
+        "CompanionGenerationRecipe",
+    }:
+        from . import request_contracts
+
+        return getattr(request_contracts, name)
+    if name in {
+        "CompanionService",
+        "CompanionServiceError",
+        "companion_run_id",
+    }:
+        from . import service
+
+        return getattr(service, name)
     raise AttributeError(name)
 
-
-def build_reader_snapshot(
-    project_dir: Path,
-    *,
-    state: dict[str, Any] | None = None,
-    final_overrides: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    from .web import build_reader_snapshot as implementation
-
-    return implementation(
-        project_dir, state=state, final_overrides=final_overrides
-    )
-
-
-def publish_reader(
-    project_dir: Path,
-    *,
-    snapshot: dict[str, Any] | None = None,
-    state: dict[str, Any] | None = None,
-    final_overrides: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    from .web import publish_reader as implementation
-
-    return implementation(
-        project_dir,
-        snapshot=snapshot,
-        state=state,
-        final_overrides=final_overrides,
-    )
-
-
-def validate_reader_project(
-    project_dir: Path,
-    *,
-    state: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    from .web import validate_reader_project as implementation
-
-    return implementation(project_dir, state=state)
-
-
 __all__ = [
-    "BuildOptions",
-    "build_companion",
-    "build_reader_snapshot",
-    "publish_reader",
-    "validate_reader_project",
+    "ACCEPTED_BOOK_SCHEMA",
+    "COMPANION_BUILD_HANDLER",
+    "COMPANION_CONTENT_CONTRACT",
+    "NEUTRAL_TEXTBOOK_INTENT",
+    "AcceptedBook",
+    "AcceptedBookValidationError",
+    "AcceptedChapter",
+    "ChapterPlan",
+    "CompanionBuildHandler",
+    "CompanionBuildRequest",
+    "CompanionContentCodec",
+    "CompanionExecutionOptions",
+    "CompanionGenerationRecipe",
+    "CompanionProjectError",
+    "CompanionProjectPaths",
+    "CompanionRelease",
+    "CompanionReleasePublisher",
+    "CompanionRenderError",
+    "CompanionRenderer",
+    "CompanionService",
+    "CompanionServiceError",
+    "GlossaryEntry",
+    "LearningUnit",
+    "PlannedLearningUnit",
+    "RenderedCompanion",
+    "SourceAnchor",
+    "TranslatedBlock",
+    "ValidationIssue",
+    "companion_run_id",
+    "release_id_for",
+    "require_valid_accepted_book",
+    "validate_accepted_book",
 ]
-__version__ = "1.0.1"
