@@ -20,8 +20,8 @@ from .contracts import AcceptedBook, LearningUnit, SourceAnchor
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v2"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v2"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v3"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v3"
 _SOURCE_DATE_EPOCH = "946684800"
 _AssetLoader = Callable[[str], bytes | None]
 
@@ -35,6 +35,13 @@ class RenderedCompanion:
     accepted_book_digest: str
     web_index: Path | None = None
     pdf_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class _SourceAssetReference:
+    display_path: str
+    original_path: str
+    media_type: str
 
 
 class CompanionRenderer:
@@ -52,13 +59,17 @@ class CompanionRenderer:
         _write_if_changed(assets / "reader.css", _WEB_CSS.encode("utf-8"))
         _write_if_changed(assets / "reader.js", _WEB_JS.encode("utf-8"))
         _copy_katex_assets(assets / "katex")
-        source_urls = {
-            block_id: f"assets/{relative}"
-            for block_id, relative in self._write_source_assets(
+        source_assets = {
+            block_id: _SourceAssetReference(
+                display_path=f"assets/{reference.display_path}",
+                original_path=f"assets/{reference.original_path}",
+                media_type=reference.media_type,
+            )
+            for block_id, reference in self._write_source_assets(
                 book, assets / "source", pdf_compatible=False
             ).items()
         }
-        html = _render_html(book, source_urls=source_urls)
+        html = _render_html(book, source_assets=source_assets)
         index = root / "index.html"
         _write_if_changed(index, html.encode("utf-8"))
         self.validate_web(book, index)
@@ -72,10 +83,16 @@ class CompanionRenderer:
             prefix=".arc-companion-render-", dir=target.parent
         ) as temporary:
             workspace = Path(temporary)
-            source_paths = self._write_source_assets(
+            source_assets = self._write_source_assets(
                 book, workspace / "source", pdf_compatible=True
             )
-            tex = _render_tex(book, source_paths=source_paths)
+            tex = _render_tex(
+                book,
+                source_paths={
+                    block_id: reference.display_path
+                    for block_id, reference in source_assets.items()
+                },
+            )
             tex_path = workspace / "companion.tex"
             tex_path.write_text(tex, encoding="utf-8")
             built = _compile_tex(tex_path, book.content_digest)
@@ -131,6 +148,30 @@ class CompanionRenderer:
         ):
             if not (index_path.parent / relative).is_file():
                 raise CompanionRenderError(f"Web reader asset is missing: {relative}")
+        for chapter in book.chapters:
+            for anchor in chapter.source_anchors:
+                if anchor.kind != "figure":
+                    continue
+                digest = str(anchor.payload.get("asset_digest") or "")
+                if not digest:
+                    continue
+                media_type = str(anchor.payload.get("media_type") or "")
+                original = (
+                    index_path.parent
+                    / "assets"
+                    / "source"
+                    / f"{digest}{_asset_suffix(media_type)}"
+                )
+                if not original.is_file() or original.stat().st_size == 0:
+                    raise CompanionRenderError(
+                        f"Web reader source asset is missing: {digest}"
+                    )
+                if _requires_web_preview(media_type):
+                    preview = original.with_name(f"{digest}.preview.png")
+                    if not preview.is_file() or preview.stat().st_size == 0:
+                        raise CompanionRenderError(
+                            f"Web reader source preview is missing: {digest}"
+                        )
 
     def validate_pdf(self, book: AcceptedBook, pdf_path: Path) -> None:
         if not pdf_path.is_file() or pdf_path.stat().st_size == 0:
@@ -218,8 +259,8 @@ class CompanionRenderer:
         output_dir: Path,
         *,
         pdf_compatible: bool,
-    ) -> dict[str, str]:
-        resolved: dict[str, str] = {}
+    ) -> dict[str, _SourceAssetReference]:
+        resolved: dict[str, _SourceAssetReference] = {}
         for chapter in book.chapters:
             for anchor in chapter.source_anchors:
                 if anchor.kind != "figure":
@@ -259,14 +300,27 @@ class CompanionRenderer:
                         media_type=media_type,
                         digest=digest,
                     )
-                    relative = rendered.name
-                resolved[anchor.block_id] = f"source/{relative}"
+                else:
+                    rendered = _prepare_web_asset(
+                        original,
+                        media_type=media_type,
+                        digest=digest,
+                    )
+                resolved[anchor.block_id] = _SourceAssetReference(
+                    display_path=f"source/{rendered.name}",
+                    original_path=f"source/{original.name}",
+                    media_type=media_type,
+                )
         return resolved
 
 
-def _render_html(book: AcceptedBook, *, source_urls: Mapping[str, str]) -> str:
+def _render_html(
+    book: AcceptedBook,
+    *,
+    source_assets: Mapping[str, _SourceAssetReference],
+) -> str:
     chapters = "\n".join(
-        _render_html_chapter(book, chapter, source_urls=source_urls)
+        _render_html_chapter(book, chapter, source_assets=source_assets)
         for chapter in book.chapters
     )
     glossary = _render_html_glossary(book)
@@ -296,13 +350,16 @@ def _render_html(book: AcceptedBook, *, source_urls: Mapping[str, str]) -> str:
 
 
 def _render_html_chapter(
-    book: AcceptedBook, chapter: Any, *, source_urls: Mapping[str, str]
+    book: AcceptedBook,
+    chapter: Any,
+    *,
+    source_assets: Mapping[str, _SourceAssetReference],
 ) -> str:
     translation_by_id = {item.block_id: item for item in chapter.translations}
     units_by_anchor = _units_by_first_anchor(chapter.learning_units)
     anchors: list[str] = []
     for anchor in chapter.source_anchors:
-        source = _render_html_source(anchor, source_urls=source_urls)
+        source = _render_html_source(anchor, source_assets=source_assets)
         translation = translation_by_id.get(anchor.block_id)
         translated = (
             f'<section class="translation-layer" lang="{escape_html(book.target_language)}">'
@@ -340,7 +397,9 @@ def _render_html_chapter(
 
 
 def _render_html_source(
-    anchor: SourceAnchor, *, source_urls: Mapping[str, str]
+    anchor: SourceAnchor,
+    *,
+    source_assets: Mapping[str, _SourceAssetReference],
 ) -> str:
     payload = anchor.payload
     if anchor.kind == "heading":
@@ -381,7 +440,7 @@ def _render_html_source(
         )
         head = f"<thead><tr>{headers}</tr></thead>" if headers else ""
         return f"<table>{caption}{head}<tbody>{rows}</tbody></table>"
-    source = source_urls.get(anchor.block_id)
+    source = source_assets.get(anchor.block_id)
     caption = escape_html(str(payload["caption"]))
     alt = escape_html(str(payload["alt_text"]))
     if source is None:
@@ -396,9 +455,15 @@ def _render_html_source(
             '<figure class="figure-unfrozen">'
             f"<p>{description}{link}</p><figcaption>{caption}</figcaption></figure>"
         )
+    original_link = ""
+    if source.display_path != source.original_path:
+        original_link = (
+            f' <a class="figure-original" href="{escape_html(source.original_path)}" '
+            f'type="{escape_html(source.media_type)}">Open original figure</a>'
+        )
     return (
-        f'<figure><img src="{escape_html(source)}" alt="{alt}">'
-        f"<figcaption>{caption}</figcaption></figure>"
+        f'<figure><img src="{escape_html(source.display_path)}" alt="{alt}">'
+        f"<figcaption>{caption}{original_link}</figcaption></figure>"
     )
 
 
@@ -784,10 +849,68 @@ def _asset_suffix(media_type: str) -> str:
         "image/webp": ".webp",
         "image/svg+xml": ".svg",
         "application/pdf": ".pdf",
+        "application/postscript": ".eps",
+        "application/eps": ".eps",
+        "image/eps": ".eps",
+        "image/x-eps": ".eps",
     }
     if media_type in suffixes:
         return suffixes[media_type]
     return ".bin"
+
+
+def _requires_web_preview(media_type: str) -> bool:
+    return media_type == "application/pdf" or _is_eps(media_type)
+
+
+def _is_eps(media_type: str) -> bool:
+    return media_type in {
+        "application/postscript",
+        "application/eps",
+        "image/eps",
+        "image/x-eps",
+    }
+
+
+def _prepare_web_asset(
+    source: Path,
+    *,
+    media_type: str,
+    digest: str,
+) -> Path:
+    if not _requires_web_preview(media_type):
+        return source
+    target = source.with_name(f"{digest}.preview.png")
+    if media_type == "application/pdf":
+        converter = shutil.which("pdftocairo")
+        if converter is None:
+            raise CompanionRenderError(
+                "pdftocairo is required to preview PDF source figures in Web"
+            )
+        output_prefix = target.with_suffix("")
+        _run(
+            [
+                converter,
+                "-f",
+                "1",
+                "-l",
+                "1",
+                "-singlefile",
+                "-png",
+                "-r",
+                "144",
+                str(source),
+                str(output_prefix),
+            ]
+        )
+    else:
+        _convert_eps_to_png(
+            source,
+            target=target,
+            purpose="preview EPS source figures in Web",
+        )
+    _require_converted_asset(target, media_type)
+    return target
 
 
 def _prepare_pdf_asset(
@@ -822,15 +945,44 @@ def _prepare_pdf_asset(
                 str(target),
             ]
         )
+    elif _is_eps(media_type):
+        _convert_eps_to_png(
+            source,
+            target=target,
+            purpose="render EPS source figures in PDF",
+        )
     else:
         raise CompanionRenderError(
             f"unsupported source figure media type for PDF: {media_type or 'unknown'}"
         )
+    _require_converted_asset(target, media_type)
+    return target
+
+
+def _convert_eps_to_png(source: Path, *, target: Path, purpose: str) -> None:
+    converter = shutil.which("gs")
+    if converter is None:
+        raise CompanionRenderError(f"Ghostscript is required to {purpose}")
+    _run(
+        [
+            converter,
+            "-dSAFER",
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-dEPSCrop",
+            "-sDEVICE=pngalpha",
+            "-r144",
+            f"-sOutputFile={target}",
+            str(source),
+        ]
+    )
+
+
+def _require_converted_asset(target: Path, media_type: str) -> None:
     if not target.is_file() or target.stat().st_size == 0:
         raise CompanionRenderError(
             f"source figure conversion produced no output: {media_type}"
         )
-    return target
 
 
 def _tex_escape(value: Any) -> str:

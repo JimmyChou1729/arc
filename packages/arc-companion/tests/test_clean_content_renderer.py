@@ -55,6 +55,30 @@ _SVG = (
     b'viewBox="0 0 24 16"><rect width="24" height="16" fill="#367aa4"/></svg>'
 )
 _SVG_DIGEST = hashlib.sha256(_SVG).hexdigest()
+_EPS = b"""%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 180 90
+%%LanguageLevel: 2
+%%Pages: 1
+%%EndComments
+0.15 0.42 0.68 setrgbcolor
+10 10 160 70 rectfill
+1 1 1 setrgbcolor
+/Helvetica findfont 16 scalefont setfont
+42 40 moveto (EPS fixture) show
+showpage
+%%EOF
+"""
+_EPS_DIGEST = hashlib.sha256(_EPS).hexdigest()
+_PDF_SOURCE_EPS = b"""%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 180 90
+%%LanguageLevel: 2
+%%Pages: 1
+%%EndComments
+0.68 0.29 0.18 setrgbcolor
+10 10 160 70 rectfill
+showpage
+%%EOF
+"""
 _PDF_TOOLS = (
     "latexmk",
     "xelatex",
@@ -74,6 +98,77 @@ def _plain_inline(text: str) -> dict[str, object]:
             {"kind": "text", "start": 0, "end": len(text), "text": text},
         ),
     }
+
+
+def _pdf_from_eps(path: Path) -> bytes:
+    completed = subprocess.run(
+        [
+            "gs",
+            "-q",
+            "-dSAFER",
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-dEPSCrop",
+            "-sDEVICE=pdfwrite",
+            f"-sOutputFile={path}",
+            "-",
+        ],
+        input=_PDF_SOURCE_EPS,
+        check=False,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stderr.decode(
+        "utf-8", errors="replace"
+    )
+    return path.read_bytes()
+
+
+def _book_with_pdf_and_eps_figures(
+    accepted_book: AcceptedBook,
+    *,
+    pdf_data: bytes,
+) -> AcceptedBook:
+    chapter = accepted_book.chapters[0]
+    existing = chapter.source_anchors[-1]
+    pdf_digest = hashlib.sha256(pdf_data).hexdigest()
+    pdf_figure = replace(
+        existing,
+        payload={
+            "asset_digest": pdf_digest,
+            "alt_text": "A PDF state-space diagram.",
+            "caption": "Typed PDF figure",
+            "target": "state-space.pdf",
+            "media_type": "application/pdf",
+            "logical_name": "state-space.pdf",
+            "size": len(pdf_data),
+        },
+    )
+    eps_figure = replace(
+        existing,
+        block_id="b-eps",
+        ordinal=existing.ordinal + 1,
+        payload={
+            "asset_digest": _EPS_DIGEST,
+            "alt_text": "An EPS state-space diagram.",
+            "caption": "Typed EPS figure",
+            "target": "state-space.eps",
+            "media_type": "application/postscript",
+            "logical_name": "state-space.eps",
+            "size": len(_EPS),
+        },
+    )
+    return replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                source_anchors=chapter.source_anchors[:-1]
+                + (pdf_figure, eps_figure),
+                translations=chapter.translations
+                + (TranslatedBlock(block_id="b-eps", text="Spanish b-eps"),),
+            ),
+        ),
+    )
 
 
 @pytest.fixture
@@ -685,6 +780,91 @@ def test_pdf_converts_typed_svg_asset(
     index = renderer.render_web(book, tmp_path / "reader")
     assert (tmp_path / "reader" / "assets" / "source" / f"{_SVG_DIGEST}.svg").read_bytes() == _SVG
     assert f"assets/source/{_SVG_DIGEST}.svg" in index.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in ("gs", "pdftocairo")),
+    reason="offline PDF/EPS preview toolchain is unavailable",
+)
+def test_web_previews_pdf_and_eps_and_links_typed_originals(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    pdf_data = _pdf_from_eps(tmp_path / "source-figure.pdf")
+    pdf_digest = hashlib.sha256(pdf_data).hexdigest()
+    book = _book_with_pdf_and_eps_figures(
+        accepted_book,
+        pdf_data=pdf_data,
+    )
+    assets = {
+        pdf_digest: pdf_data,
+        _EPS_DIGEST: _EPS,
+    }
+    renderer = CompanionRenderer(asset_loader=assets.get)
+    reader = tmp_path / "reader"
+
+    index = renderer.render_web(book, reader)
+    html = index.read_text(encoding="utf-8")
+    pdf_original = reader / "assets" / "source" / f"{pdf_digest}.pdf"
+    pdf_preview = reader / "assets" / "source" / f"{pdf_digest}.preview.png"
+    eps_original = reader / "assets" / "source" / f"{_EPS_DIGEST}.eps"
+    eps_preview = reader / "assets" / "source" / f"{_EPS_DIGEST}.preview.png"
+
+    assert pdf_original.read_bytes() == pdf_data
+    assert eps_original.read_bytes() == _EPS
+    assert pdf_preview.stat().st_size > 0
+    assert eps_preview.stat().st_size > 0
+    assert f'src="assets/source/{pdf_digest}.preview.png"' in html
+    assert f'href="assets/source/{pdf_digest}.pdf"' in html
+    assert 'type="application/pdf"' in html
+    assert f'src="assets/source/{_EPS_DIGEST}.preview.png"' in html
+    assert f'href="assets/source/{_EPS_DIGEST}.eps"' in html
+    assert 'type="application/postscript"' in html
+    assert f'src="assets/source/{pdf_digest}.pdf"' not in html
+    assert f'src="assets/source/{_EPS_DIGEST}.eps"' not in html
+
+    preview_digests = (
+        hashlib.sha256(pdf_preview.read_bytes()).hexdigest(),
+        hashlib.sha256(eps_preview.read_bytes()).hexdigest(),
+    )
+    renderer.render_web(book, reader)
+    assert preview_digests == (
+        hashlib.sha256(pdf_preview.read_bytes()).hexdigest(),
+        hashlib.sha256(eps_preview.read_bytes()).hexdigest(),
+    )
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in _PDF_TOOLS + ("gs",)),
+    reason="offline PDF/EPS rendering toolchain is unavailable",
+)
+def test_pdf_renders_native_pdf_and_converted_eps_figures(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    pdf_data = _pdf_from_eps(tmp_path / "source-figure.pdf")
+    pdf_digest = hashlib.sha256(pdf_data).hexdigest()
+    book = _book_with_pdf_and_eps_figures(
+        accepted_book,
+        pdf_data=pdf_data,
+    )
+    renderer = CompanionRenderer(
+        asset_loader={
+            pdf_digest: pdf_data,
+            _EPS_DIGEST: _EPS,
+        }.get
+    )
+
+    output = renderer.render_pdf(book, tmp_path / "document-figures.pdf")
+    extracted = subprocess.run(
+        ["pdftotext", str(output), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    assert "Typed PDF figure" in extracted
+    assert "Typed EPS figure" in extracted
+    assert output.stat().st_size > 0
+    assert not list(tmp_path.glob(".arc-companion-render-*"))
 
 
 @pytest.mark.skipif(
