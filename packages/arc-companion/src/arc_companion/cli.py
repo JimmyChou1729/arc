@@ -179,6 +179,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
     )
     run_id = companion_run_id(request, recipe)
     paths.select_run(run_id)
+    paths.write_source_diagnostics(run_id, warnings)
     snapshot = CompanionService(paths.jobs_root).build(
         request,
         recipe=recipe,
@@ -217,7 +218,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
         run=base.run,
         data=data,
         artifacts=base.artifacts,
-        warnings=base.warnings,
+        warnings=_source_warnings(paths, run_id),
         error=base.error,
         resume=base.resume,
     )
@@ -289,8 +290,11 @@ def _snapshot_result(
     warnings: tuple[str, ...] = (),
 ) -> CommandResult:
     base = command_result_from_snapshot(snapshot)
+    persisted = paths.source_diagnostics(snapshot.run_id)
+    effective_warnings = warnings or persisted
     command_warnings = tuple(
-        CommandWarning("source_diagnostic", item) for item in warnings
+        CommandWarning("source_diagnostic", item)
+        for item in effective_warnings
     )
     if snapshot.status is not RunStatus.SUCCEEDED:
         return CommandResult(
@@ -382,6 +386,15 @@ def _current_run(paths: CompanionProjectPaths) -> str:
             "run_not_found", "project has no selected build run"
         )
     return value
+
+
+def _source_warnings(
+    paths: CompanionProjectPaths, run_id: str
+) -> tuple[CommandWarning, ...]:
+    return tuple(
+        CommandWarning("source_diagnostic", item)
+        for item in paths.source_diagnostics(run_id)
+    )
 
 
 def _json_input(value: str) -> Mapping[str, Any]:

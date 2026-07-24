@@ -12,6 +12,7 @@ from typing import Any
 
 PROJECT_SCHEMA = "arc.companion.project.v1"
 CURRENT_SCHEMA = "arc.companion.current_release.v1"
+DIAGNOSTICS_SCHEMA = "arc.companion.source_diagnostics.v1"
 
 
 class CompanionProjectError(RuntimeError):
@@ -116,6 +117,41 @@ class CompanionProjectPaths:
                 )
         return value
 
+    def write_source_diagnostics(
+        self, run_id: str, warnings: tuple[str, ...]
+    ) -> None:
+        if not run_id or any(
+            not isinstance(item, str) or not item for item in warnings
+        ):
+            raise ValueError("source diagnostics are invalid")
+        _atomic_json(
+            self._diagnostics_path(run_id),
+            {
+                "schema_version": DIAGNOSTICS_SCHEMA,
+                "run_id": run_id,
+                "warnings": list(warnings),
+            },
+        )
+
+    def source_diagnostics(self, run_id: str) -> tuple[str, ...]:
+        path = self._diagnostics_path(run_id)
+        if not path.exists():
+            return ()
+        value = _read_json(path, "source diagnostics")
+        if set(value) != {"schema_version", "run_id", "warnings"} or (
+            value.get("schema_version") != DIAGNOSTICS_SCHEMA
+            or value.get("run_id") != run_id
+            or not isinstance(value.get("warnings"), list)
+            or any(
+                not isinstance(item, str) or not item
+                for item in value["warnings"]
+            )
+        ):
+            raise CompanionProjectError(
+                "project_state_invalid", "source diagnostics are invalid"
+            )
+        return tuple(value["warnings"])
+
     def publish_current(
         self, *, release_id: str, manifest: Path, run_id: str
     ) -> None:
@@ -159,6 +195,16 @@ class CompanionProjectPaths:
             self.marker,
             {"schema_version": PROJECT_SCHEMA, "current_run_id": run_id},
         )
+
+    def _diagnostics_path(self, run_id: str) -> Path:
+        if (
+            not run_id
+            or "/" in run_id
+            or "\\" in run_id
+            or run_id in {".", ".."}
+        ):
+            raise ValueError("run_id must be a local identifier")
+        return self.runtime_root / "diagnostics" / f"{run_id}.json"
 
 
 def _read_json(path: Path, description: str) -> dict[str, Any]:
@@ -215,6 +261,7 @@ def _fsync_directory(path: Path) -> None:
 
 __all__ = [
     "CURRENT_SCHEMA",
+    "DIAGNOSTICS_SCHEMA",
     "PROJECT_SCHEMA",
     "CompanionProjectError",
     "CompanionProjectPaths",

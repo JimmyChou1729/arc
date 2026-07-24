@@ -6,6 +6,7 @@ from pathlib import Path
 import arc_companion.project as project_module
 import arc_companion.release as release_module
 import pytest
+from arc_jobs import RunRepository, RunSpec
 from arc_companion.cli import _parser, main
 from arc_companion.contracts import (
     AcceptedBook,
@@ -110,6 +111,50 @@ def test_legacy_project_is_rejected_without_modification(
     assert result["error"]["code"] == "legacy_project_state"
     assert legacy.read_bytes() == before
     assert tuple(project.iterdir()) == (legacy,)
+
+
+def test_status_persists_source_diagnostics_and_cancel_uses_protocol(
+    tmp_path: Path, capsys
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    run_id = "companion-diagnostics"
+    project.select_run(run_id)
+    project.write_source_diagnostics(
+        run_id,
+        ("no PDF validator was supplied",),
+    )
+    repository = RunRepository(project.jobs_root)
+    repository.create(
+        RunSpec(run_id, "arc.companion.build.v1", {})
+    )
+    repository.request_cancel(run_id, reason="prepared fixture")
+
+    assert main(
+        ["status", "--project-dir", str(project.root), "--json"]
+    ) == 3
+    status = json.loads(capsys.readouterr().out)
+    assert status["schema_version"] == "arc.command_result.v1"
+    assert status["status"] == "cancelled"
+    assert status["warnings"] == [
+        {
+            "code": "source_diagnostic",
+            "details": {},
+            "message": "no PDF validator was supplied",
+        }
+    ]
+
+    assert main(
+        [
+            "cancel",
+            "--project-dir",
+            str(project.root),
+            "--reason",
+            "user requested",
+            "--json",
+        ]
+    ) == 3
+    cancelled = json.loads(capsys.readouterr().out)
+    assert cancelled["status"] == "cancelled"
 
 
 def test_release_is_immutable_reused_and_current_updates_last(
