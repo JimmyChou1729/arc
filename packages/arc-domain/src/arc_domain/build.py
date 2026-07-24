@@ -108,6 +108,8 @@ _SUMMARY_ARTIFACT = "summary/json"
 _SUMMARY_MARKDOWN_ARTIFACT = "summary/markdown"
 _SUMMARY_UNAVAILABLE_ARTIFACT = "summary/unavailable"
 _RESULT_ARTIFACT = "result"
+_FOUNDATION_RECENT_CITER_WITNESS_LIMIT = 50
+_FOUNDATION_WITNESS_LIMIT = 60
 
 
 class DomainBuildStageError(RuntimeError):
@@ -230,19 +232,22 @@ class DomainBuildHandler:
         if input_ref is None:
             seed_metadata = self.paper.metadata(seed_id)
             newest_citers = self.paper.citers(
-                seed_id, limit=50, sort="mostrecent"
-            )[:50]
+                seed_id,
+                limit=_FOUNDATION_RECENT_CITER_WITNESS_LIMIT,
+                sort="mostrecent",
+            )[:_FOUNDATION_RECENT_CITER_WITNESS_LIMIT]
             seed_references = self.paper.references(seed_id)
-            sampled = deterministic_sample(
-                [item for item in seed_references if paper_key(item)],
-                count=max(0, 60 - len(newest_citers)),
-                seed=f"{seed_id}\n{self.request.intent}",
+            sampled_references = _sample_foundation_witness_references(
+                seed_references=seed_references,
+                newest_citers=newest_citers,
+                seed_id=seed_id,
+                intent=self.request.intent,
             )
             foundation_input = {
                 "seed_metadata": seed_metadata,
                 "newest_citers": newest_citers,
                 "seed_references": seed_references,
-                "sampled_references": sampled,
+                "sampled_references": sampled_references,
             }
             context.artifacts.publish_json("foundation/input", foundation_input)
         else:
@@ -259,6 +264,17 @@ class DomainBuildHandler:
                 foundation_input.get("seed_references"), "seed references"
             )
 
+        # Candidate evidence has a fixed witness budget.  Keep the complete
+        # reference list in foundation/input for provenance, but derive the
+        # candidate-facing subset again so resumed legacy artifacts cannot
+        # widen the metadata-acquisition scope.
+        newest_citers = newest_citers[:_FOUNDATION_RECENT_CITER_WITNESS_LIMIT]
+        witness_references = _sample_foundation_witness_references(
+            seed_references=seed_references,
+            newest_citers=newest_citers,
+            seed_id=seed_id,
+            intent=self.request.intent,
+        )
         citer_ids = _unique_paper_ids(newest_citers)
         refs_by_citer, reference_errors = self._group_values(
             context,
@@ -277,7 +293,7 @@ class DomainBuildHandler:
         )
         preliminary = build_candidate_records(
             seed_metadata=seed_metadata,
-            seed_references=seed_references,
+            seed_references=witness_references,
             newest_citers=newest_citers,
             refs_by_citer=refs_by_citer,
             metadata_by_id={},
@@ -297,7 +313,7 @@ class DomainBuildHandler:
         )
         candidates = build_candidate_records(
             seed_metadata=seed_metadata,
-            seed_references=seed_references,
+            seed_references=witness_references,
             newest_citers=newest_citers,
             refs_by_citer=refs_by_citer,
             metadata_by_id=metadata_by_id,
@@ -962,6 +978,22 @@ def _mapping_list(value: Any, description: str) -> list[dict[str, Any]]:
             f"{description} must be an array of JSON objects.",
         )
     return [dict(item) for item in value]
+
+
+def _sample_foundation_witness_references(
+    *,
+    seed_references: list[dict[str, Any]],
+    newest_citers: list[dict[str, Any]],
+    seed_id: str,
+    intent: str,
+) -> list[dict[str, Any]]:
+    """Deterministically fill the fixed foundation witness budget with references."""
+
+    return deterministic_sample(
+        [item for item in seed_references if paper_key(item)],
+        count=max(0, _FOUNDATION_WITNESS_LIMIT - len(newest_citers)),
+        seed=f"{seed_id}\n{intent}",
+    )
 
 
 def _unit_id(paper_id: str) -> str:

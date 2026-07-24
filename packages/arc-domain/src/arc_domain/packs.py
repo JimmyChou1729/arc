@@ -138,7 +138,9 @@ def _paper_evidence(
         metadata = _mapping_copy(record.get("metadata"))
         conclusion = _conclusion(record.get("conclusion"))
         warnings = _warning_strings(record.get("warnings"))
-        if conclusion is None and "conclusion_section_unavailable" not in warnings:
+        if conclusion is None and not _has_warning_code(
+            warnings, "conclusion_section_unavailable"
+        ):
             warnings.append("conclusion_section_unavailable")
     return {
         "paper_id": paper_id,
@@ -188,19 +190,23 @@ def _warning_string(warning: Any) -> str:
     return f"{code}:{message}" if message else code
 
 
+def _has_warning_code(warnings: list[str], code: str) -> bool:
+    return any(warning == code or warning.startswith(f"{code}:") for warning in warnings)
+
+
 def _paper_pack_warnings(papers: list[dict[str, Any]]) -> list[str]:
     warnings: list[str] = []
     missing_toc = sum(
         1
         for paper in papers
-        if any(warning.startswith("toc_unavailable:") for warning in paper["warnings"])
+        if _has_warning_code(paper["warnings"], "toc_unavailable")
     )
     if missing_toc:
         warnings.append(f"{missing_toc} papers have no cached ar5iv table of contents")
     missing_references = sum(
         1
         for paper in papers
-        if any(warning.startswith("references_unavailable:") for warning in paper["warnings"])
+        if _has_warning_code(paper["warnings"], "references_unavailable")
     )
     if missing_references:
         warnings.append(f"{missing_references} papers have no cached reference list")

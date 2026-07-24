@@ -11,9 +11,13 @@ from arc_domain.contracts import DomainBuildResult, decode_domain_build_result, 
 from arc_domain.paths import DomainPaths
 from arc_llm import ResumeAction, ResumeInput, resume_input_to_document
 from arc_jobs import (
+    Awaiting,
+    CancelledError,
     CommandResult,
     CommandStatus,
     ImmutableArtifactStore,
+    Paused,
+    ResumeReason,
     RunEngine,
     RunRepository,
     RunSpec,
@@ -63,6 +67,29 @@ class _SucceededDomainHandler:
         return Succeeded(result_ref)
 
 
+class _PausedDomainHandler:
+    name = "arc.domain.build.v1"
+
+    def execute(self, context):
+        request = context.artifacts.publish_json("resume-request", {"resume": True})
+        return Paused(
+            Awaiting(
+                ResumeReason.EXTERNAL_CONDITION,
+                "resume-domain-build",
+                True,
+                request,
+                "arc.domain.resume.v1",
+            )
+        )
+
+
+class _CancelledDomainHandler:
+    name = "arc.domain.build.v1"
+
+    def execute(self, _context):
+        raise CancelledError("cancelled for CLI test")
+
+
 def _succeeded_snapshot(
     repository: RunRepository, *, run_id: str, domain_id: str = "domain-cli"
 ):
@@ -71,6 +98,21 @@ def _succeeded_snapshot(
         _SucceededDomainHandler(domain_id),
     )
     assert snapshot.status is RunStatus.SUCCEEDED
+    return snapshot
+
+
+def _snapshot_with_status(
+    repository: RunRepository, *, run_id: str, status: RunStatus
+):
+    handler = (
+        _PausedDomainHandler()
+        if status is RunStatus.PAUSED
+        else _CancelledDomainHandler()
+    )
+    snapshot = RunEngine(repository).execute(
+        RunSpec(run_id, handler.name, {"request": run_id}), handler
+    )
+    assert snapshot.status is status
     return snapshot
 
 
@@ -301,6 +343,71 @@ def test_invalid_requests_always_emit_shared_envelope(argv: list[str], capsys) -
     assert envelope["error"]["code"] == "invalid_request"
 
 
+@pytest.mark.parametrize(
+    "model_args",
+    [
+        ["--model", "exact-model"],
+        [
+            "--llm-provider",
+            "manual",
+            "--model",
+            "exact-model",
+            "--model-tier",
+            "high",
+        ],
+    ],
+)
+def test_build_rejects_invalid_exact_model_selection(model_args: list[str], capsys) -> None:
+    assert cli.main(["build", "arXiv:2401.00001", *model_args]) == 2
+    envelope = _envelope(capsys)
+    assert envelope["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {
+            key: value
+            for key, value in POLICY.items()
+            if key != "graph_node_limit"
+        },
+        {**POLICY, "unexpected": True},
+    ],
+)
+def test_build_rejects_incomplete_or_unknown_policy_fields(
+    policy: dict, capsys
+) -> None:
+    assert (
+        cli.main(
+            ["build", "arXiv:2401.00001", "--policy", json.dumps(policy)]
+        )
+        == 2
+    )
+    envelope = _envelope(capsys)
+    assert envelope["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "init",
+        "identify-foundation",
+        "llm-identify-foundation",
+        "build-network",
+        "llm-build-network",
+        "build-paper-json-pack",
+        "build-evidence",
+        "summarize",
+        "llm-summarize",
+        "llm-build",
+    ],
+)
+def test_retired_stage_commands_and_llm_aliases_are_rejected(command: str, capsys) -> None:
+    assert cli.main([command]) == 2
+    envelope = _envelope(capsys)
+    assert envelope["error"]["code"] == "invalid_request"
+
+
 def test_build_without_policy_freezes_a_complete_default_policy() -> None:
     args = cli._parser().parse_args(["build", "arXiv:2401.00001"])
 
@@ -367,3 +474,52 @@ def test_completed_run_with_failed_publication_is_command_failure(
     envelope = _envelope(capsys)
     assert envelope["status"] == "failed"
     assert envelope["error"]["code"] == "domain_publication_failed"
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_command_status"),
+    [
+        (RunStatus.PAUSED, "paused"),
+        (RunStatus.CANCELLED, "cancelled"),
+    ],
+)
+def test_noncompleted_build_snapshots_return_success_without_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+    status: RunStatus,
+    expected_command_status: str,
+) -> None:
+    repository = RunRepository(tmp_path)
+    snapshot = _snapshot_with_status(repository, run_id=f"{status.value}-run", status=status)
+
+    class Runner:
+        def __init__(self, received_repository: RunRepository) -> None:
+            assert received_repository.root == repository.root
+
+        def execute(self, _request, *, run_id, max_workers):
+            assert run_id is None
+            assert max_workers == 8
+            return snapshot
+
+    def publication_must_not_run(*_args, **_kwargs):
+        raise AssertionError("non-completed snapshots must not be published")
+
+    monkeypatch.setattr(cli, "DomainBuildRunner", Runner)
+    monkeypatch.setattr(cli, "publish_domain_result", publication_must_not_run)
+
+    assert (
+        cli.main(
+            [
+                "build",
+                "arXiv:2401.00001",
+                "--policy",
+                json.dumps(POLICY),
+                "--cache-root",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    envelope = _envelope(capsys)
+    assert envelope["status"] == expected_command_status

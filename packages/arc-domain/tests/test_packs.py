@@ -184,3 +184,45 @@ def test_build_domain_packs_orders_roles_and_marks_missing_acquisition():
     assert packs.evidence_pack["warnings"] == [
         "2 papers have no cached conclusion/outlook/discussion section"
     ]
+
+
+def test_pack_warnings_recognize_codes_with_or_without_messages() -> None:
+    acquired = _acquired()
+    acquired["2301.00001"]["conclusion"] = None
+    acquired["2301.00001"]["warnings"] = [
+        {"code": "toc_unavailable"},
+        {"code": "references_unavailable"},
+        {"code": "conclusion_section_unavailable"},
+    ]
+    acquired["arXiv:2401.00002"]["warnings"] = [
+        {"code": "toc_unavailable", "message": "document parse failed"},
+        {"code": "references_unavailable", "message": "source unavailable"},
+        {
+            "code": "conclusion_section_unavailable",
+            "message": "section not present",
+        },
+    ]
+
+    packs = build_domain_packs(_graph(), acquired)
+    paper_by_id = {paper["paper_id"]: paper for paper in packs.paper_json_pack["papers"]}
+    evidence_by_id = {paper["paper_id"]: paper for paper in packs.evidence_pack["papers"]}
+
+    assert paper_by_id["arXiv:2301.00001"]["warnings"] == [
+        "toc_unavailable",
+        "references_unavailable",
+        "conclusion_section_unavailable",
+    ]
+    assert evidence_by_id["arXiv:2301.00001"]["warnings"] == [
+        "toc_unavailable",
+        "references_unavailable",
+        "conclusion_section_unavailable",
+    ]
+    assert evidence_by_id["arXiv:2401.00002"]["warnings"] == [
+        "toc_unavailable:document parse failed",
+        "references_unavailable:source unavailable",
+        "conclusion_section_unavailable:section not present",
+    ]
+    assert packs.paper_json_pack["warnings"] == [
+        "3 papers have no cached ar5iv table of contents",
+        "3 papers have no cached reference list",
+    ]

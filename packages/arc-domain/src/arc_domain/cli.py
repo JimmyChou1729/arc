@@ -24,7 +24,7 @@ from arc_jobs import (
     run_control_main,
     snapshot_data,
 )
-from arc_llm import ModelSelection, decode_resume_input
+from arc_llm import InvalidRequestError, ModelSelection, decode_resume_input
 
 from . import (
     DomainBuildRequest,
@@ -154,7 +154,7 @@ def _request_from_args(args: argparse.Namespace) -> DomainBuildRequest:
         )
     except _UsageError:
         raise
-    except ValueError as exc:
+    except (InvalidRequestError, ValueError) as exc:
         raise _UsageError(str(exc)) from exc
 
 

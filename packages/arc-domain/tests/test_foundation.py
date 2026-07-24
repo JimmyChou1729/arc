@@ -39,6 +39,24 @@ def test_candidate_threshold_is_a_priority_not_an_exclusion_rule() -> None:
     assert selected["selected_foundation"]["paper_id"] == high["paper_id"]
 
 
+def test_deterministic_selection_uses_normalized_id_ascending_independent_of_input_order() -> None:
+    first = _paper("arXiv:2301.00001", title="First", year=2023, citations=300)
+    second = _paper("arXiv:2301.00002", title="Second", year=2023, citations=300)
+    for candidate in (first, second):
+        candidate["witness_citation_overlap"] = 2
+        candidate["intent_overlap"] = 0.5
+
+    forward = foundation.deterministic_foundation_selection(
+        [second, first], intent="same scope"
+    )
+    reversed_order = foundation.deterministic_foundation_selection(
+        [first, second], intent="same scope"
+    )
+
+    assert forward["selected_foundation"]["paper_id"] == first["paper_id"]
+    assert reversed_order["selected_foundation"]["paper_id"] == first["paper_id"]
+
+
 def test_audit_expansion_requires_every_gate() -> None:
     incomplete = foundation.normalize_candidate_audit(
         {
