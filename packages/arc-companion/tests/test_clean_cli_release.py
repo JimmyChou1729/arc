@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import arc_companion.project as project_module
+import arc_companion.release as release_module
 from arc_companion.cli import _parser, main
 from arc_companion.contracts import (
     AcceptedBook,
@@ -104,11 +106,26 @@ def test_legacy_project_is_rejected_without_modification(
 
 
 def test_release_is_immutable_reused_and_current_updates_last(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
     project = CompanionProjectPaths.open(tmp_path / "project")
     publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
     book = _book()
+    events: list[tuple[str, Path, bool]] = []
+    original_release_fsync = release_module._fsync_directory
+    original_project_fsync = project_module._fsync_directory
+
+    def record_release_fsync(path: Path) -> None:
+        release_path = path / release_module.release_id_for(book)
+        events.append(("release", path, release_path.is_dir()))
+        original_release_fsync(path)
+
+    def record_project_fsync(path: Path) -> None:
+        events.append(("project", path, project.current.is_file()))
+        original_project_fsync(path)
+
+    monkeypatch.setattr(release_module, "_fsync_directory", record_release_fsync)
+    monkeypatch.setattr(project_module, "_fsync_directory", record_project_fsync)
 
     first = publisher.publish(book, run_id="run-one")
     second = publisher.publish(book, run_id="run-two")
@@ -127,3 +144,17 @@ def test_release_is_immutable_reused_and_current_updates_last(
     assert current is not None
     assert current["release_id"] == first.release_id
     assert current["run_id"] == "run-two"
+    release_parent_syncs = [
+        event for event in events
+        if event[0] == "release" and event[1] == project.releases_root
+    ]
+    assert release_parent_syncs[-1][2]
+    current_parent_syncs = [
+        event for event in events
+        if event[0] == "project" and event[1] == project.root
+    ]
+    assert current_parent_syncs
+    assert all(event[2] for event in current_parent_syncs)
+    assert events.index(release_parent_syncs[-1]) < events.index(
+        current_parent_syncs[0]
+    )

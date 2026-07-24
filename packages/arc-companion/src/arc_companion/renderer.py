@@ -52,7 +52,12 @@ class CompanionRenderer:
         _write_if_changed(assets / "reader.css", _WEB_CSS.encode("utf-8"))
         _write_if_changed(assets / "reader.js", _WEB_JS.encode("utf-8"))
         _copy_katex_assets(assets / "katex")
-        source_urls = self._write_source_assets(book, assets / "source")
+        source_urls = {
+            block_id: f"assets/{relative}"
+            for block_id, relative in self._write_source_assets(
+                book, assets / "source"
+            ).items()
+        }
         html = _render_html(book, source_urls=source_urls)
         index = root / "index.html"
         _write_if_changed(index, html.encode("utf-8"))
@@ -528,7 +533,14 @@ def _render_tex_glossary(book: AcceptedBook) -> str:
         return ""
     rows = "\n".join(
         rf"\textbf{{{_tex_escape(item.term)}}} & "
-        rf"{_tex_escape(item.translated_term)} & {_tex_escape(item.definition)} \\"
+        rf"{_tex_escape(item.translated_term)} & {_tex_escape(item.definition)}"
+        + (
+            rf"\par{{\footnotesize\itshape Evidence: "
+            rf"{_tex_escape('; '.join(item.citations))}}}"
+            if item.citations
+            else ""
+        )
+        + r" \\"
         for item in book.glossary
     )
     return (

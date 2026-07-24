@@ -177,7 +177,7 @@ def accepted_book() -> AcceptedBook:
                 translated_term="entropia",
                 definition="A measure formed from weighted logarithms.",
                 anchor_ids=("b-equation",),
-                citations=("paper:1234.56789",),
+                citations=("glossary:entropy-reference",),
             ),
         ),
     )
@@ -323,7 +323,12 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
     assert "window.katex.render" in javascript
     assert "innerHTML" not in javascript
     assert (reader / "assets" / "katex" / "LICENSE").is_file()
-    assert (reader / "assets" / "source" / f"{_PNG_DIGEST}.png").read_bytes() == _PNG
+    figure_asset = reader / "assets" / "source" / f"{_PNG_DIGEST}.png"
+    assert figure_asset.read_bytes() == _PNG
+    assert f'src="assets/source/{_PNG_DIGEST}.png"' in html
+    assert (
+        reader / f"assets/source/{_PNG_DIGEST}.png"
+    ).resolve() == figure_asset.resolve()
     for forbidden in ("provider", "cache", "run_id", "schema_version", "warning"):
         assert forbidden not in html.casefold()
 
@@ -353,6 +358,7 @@ def test_pdf_is_searchable_complete_and_anchor_interleaved(
     assert "Two-state example" in extracted
     assert "State-space diagram" in extracted
     assert "paper:1234.56789" in extracted
+    assert "glossary:entropy-reference" in extracted
     assert "entropia" in extracted
     assert not list(tmp_path.glob(".arc-companion-render-*"))
     second = renderer.render_pdf(accepted_book, tmp_path / "companion-copy.pdf")

@@ -91,6 +91,8 @@ class CompanionReleasePublisher:
             except FileExistsError:
                 # A cooperating publisher won the exact immutable release.
                 shutil.rmtree(staging)
+            else:
+                _fsync_directory(self.project.releases_root)
             release = self._verify_existing(
                 target, release_id=release_id, identity=expected_identity
             )
@@ -264,6 +266,18 @@ def _fsync_tree(root: Path) -> None:
     for path in (item for item in root.rglob("*") if item.is_file()):
         with path.open("rb") as handle:
             os.fsync(handle.fileno())
+    directories = [item for item in root.rglob("*") if item.is_dir()]
+    for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        _fsync_directory(path)
+    _fsync_directory(root)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 __all__ = [
