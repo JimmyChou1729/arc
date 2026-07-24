@@ -199,6 +199,22 @@ def test_accepted_book_codec_is_canonical_strict_and_immutable(
     document["diagnostics"] = {"provider": "must stay outside content"}
     with pytest.raises(ContentCodecError, match="invalid fields"):
         CompanionContentCodec.from_document(document)
+    document = CompanionContentCodec.to_document(accepted_book)
+    document["chapters"] = tuple(document["chapters"])
+    with pytest.raises(ContentCodecError, match="arrays must be lists"):
+        CompanionContentCodec.from_document(document)
+    document = CompanionContentCodec.to_document(accepted_book)
+    document["chapters"][0]["source_anchors"][0]["payload"] = {
+        1: "non-string key"
+    }
+    with pytest.raises(ContentCodecError, match="keys must be strings"):
+        CompanionContentCodec.from_document(document)
+    document = CompanionContentCodec.to_document(accepted_book)
+    document["chapters"][0]["source_anchors"][0]["payload"] = {
+        "invalid": float("nan")
+    }
+    with pytest.raises(ContentCodecError, match="finite"):
+        CompanionContentCodec.from_document(document)
 
 
 def test_renderer_public_import_does_not_load_llm_runtime() -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import arc_companion.project as project_module
 import arc_companion.release as release_module
+import pytest
 from arc_companion.cli import _parser, main
 from arc_companion.contracts import (
     AcceptedBook,
@@ -12,7 +13,13 @@ from arc_companion.contracts import (
     SourceAnchor,
 )
 from arc_companion.project import CompanionProjectPaths
-from arc_companion.release import CompanionReleasePublisher
+from arc_companion.release import (
+    DELIVERY_RECIPE,
+    RELEASE_MANIFEST_SCHEMA,
+    CompanionReleaseError,
+    CompanionReleasePublisher,
+    release_id_for,
+)
 
 
 class _FakeRenderer:
@@ -158,3 +165,22 @@ def test_release_is_immutable_reused_and_current_updates_last(
     assert events.index(release_parent_syncs[-1]) < events.index(
         current_parent_syncs[0]
     )
+
+
+def test_release_identity_covers_delivery_contract_and_rejects_extra_files(
+    tmp_path: Path,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    book = _book()
+
+    release = publisher.publish(book, run_id="run-one")
+    manifest = json.loads(release.manifest.read_text(encoding="utf-8"))
+    assert manifest["release_id"] == release_id_for(book)
+    assert manifest["identity"]["delivery_recipe"] == DELIVERY_RECIPE
+    assert manifest["identity"]["manifest_schema"] == RELEASE_MANIFEST_SCHEMA
+
+    extra = release.directory / "reader" / "unexpected.txt"
+    extra.write_text("not declared by the immutable manifest", encoding="utf-8")
+    with pytest.raises(CompanionReleaseError, match="file set"):
+        publisher.publish(book, run_id="run-two")

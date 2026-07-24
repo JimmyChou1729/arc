@@ -23,6 +23,7 @@ from .renderer import (
 
 
 RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v1"
+DELIVERY_RECIPE = "arc.companion.delivery.v1"
 RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v1"
 
 
@@ -161,8 +162,24 @@ class CompanionReleasePublisher:
             raise CompanionReleaseError(
                 "release_invalid", "release manifest has no files"
             )
+        record_paths: list[str] = []
         for record in records:
             _verify_file_record(target, record)
+            record_paths.append(record["path"])
+        if len(record_paths) != len(set(record_paths)):
+            raise CompanionReleaseError(
+                "release_invalid", "release manifest contains duplicate files"
+            )
+        actual_paths = {
+            path.relative_to(target).as_posix()
+            for path in target.rglob("*")
+            if path.is_file() and path != manifest
+        }
+        if set(record_paths) != actual_paths:
+            raise CompanionReleaseError(
+                "release_invalid",
+                "release file set does not exactly match its manifest",
+            )
         pdf = target / "companion.pdf"
         web_index = target / "reader" / "index.html"
         if not pdf.is_file() or not web_index.is_file():
@@ -192,6 +209,8 @@ def _release_identity(book: AcceptedBook) -> dict[str, str]:
         "pdf_render_recipe": PDF_RENDER_RECIPE,
         "web_render_recipe": WEB_RENDER_RECIPE,
         "validator_version": RENDER_VALIDATOR_VERSION,
+        "delivery_recipe": DELIVERY_RECIPE,
+        "manifest_schema": RELEASE_MANIFEST_SCHEMA,
     }
 
 
@@ -281,6 +300,7 @@ def _fsync_directory(path: Path) -> None:
 
 
 __all__ = [
+    "DELIVERY_RECIPE",
     "RELEASE_MANIFEST_SCHEMA",
     "RENDER_VALIDATOR_VERSION",
     "CompanionRelease",

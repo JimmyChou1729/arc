@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import hashlib
 import json
+import math
 import re
 from types import MappingProxyType
 from typing import Any
@@ -249,6 +250,7 @@ class CompanionContentCodec:
     @staticmethod
     def from_document(value: Mapping[str, Any]) -> AcceptedBook:
         try:
+            _require_json_document(value, "accepted book")
             return _book_from_document(_mapping(value, "accepted book"))
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, ContentCodecError):
@@ -281,6 +283,7 @@ class CompanionContentCodec:
     @staticmethod
     def plan_from_document(value: Mapping[str, Any]) -> ChapterPlan:
         try:
+            _require_json_document(value, "chapter plan")
             return _plan_from_document(_mapping(value, "chapter plan"))
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, ContentCodecError):
@@ -630,9 +633,32 @@ def _mapping(value: Any, description: str) -> Mapping[str, Any]:
 
 
 def _sequence(value: Any, description: str) -> Sequence[Any]:
-    if not isinstance(value, (list, tuple)):
+    if not isinstance(value, list):
         raise ContentCodecError(f"{description} must be a list")
     return value
+
+
+def _require_json_document(value: Any, description: str) -> None:
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise ContentCodecError(
+                f"{description} object keys must be strings"
+            )
+        for item in value.values():
+            _require_json_document(item, description)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _require_json_document(item, description)
+        return
+    if isinstance(value, tuple):
+        raise ContentCodecError(f"{description} arrays must be lists")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ContentCodecError(f"{description} numbers must be finite")
+    if value is not None and not isinstance(value, (str, int, float, bool)):
+        raise ContentCodecError(
+            f"{description} must contain JSON-compatible values"
+        )
 
 
 def _strings(value: Any, description: str) -> tuple[str, ...]:
