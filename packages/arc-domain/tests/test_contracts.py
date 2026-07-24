@@ -8,7 +8,9 @@ from arc_jobs import ArtifactDigest, ArtifactRef
 from arc_llm import ModelSelection
 from arc_domain.contracts import (
     DOMAIN_BUILD_POLICY_SCHEMA_VERSION,
+    DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
     DOMAIN_BUILD_REQUEST_SCHEMA_VERSION,
+    DOMAIN_BUILD_REQUEST_SCHEMA_VERSION_V2,
     DOMAIN_BUILD_RESULT_SCHEMA_VERSION,
     DomainBuildPolicy,
     DomainBuildRequest,
@@ -42,6 +44,56 @@ def test_policy_defaults_and_closed_round_trip() -> None:
         "graph_node_limit": 90,
     }
     assert decode_domain_build_policy(document) == policy
+
+
+def test_v2_policy_and_request_are_closed_and_round_trip() -> None:
+    policy = DomainBuildPolicy(
+        as_of_date="2026-07-24",
+        recent_window_days=730,
+        citer_pool_limit=100,
+        ranked_paper_limit=20,
+        graph_node_limit=30,
+        schema_version=DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
+        foundation_mode="fixed_seed",
+        citer_selection_mode="strict_window",
+    )
+    assert encode_domain_build_policy(policy) == {
+        "schema_version": "arc.domain_build_policy.v2",
+        "as_of_date": "2026-07-24",
+        "recent_window_days": 730,
+        "citer_pool_limit": 100,
+        "ranked_paper_limit": 20,
+        "graph_node_limit": 30,
+        "foundation_mode": "fixed_seed",
+        "citer_selection_mode": "strict_window",
+    }
+    request = DomainBuildRequest("2401.00001", "scope", policy)
+    assert request.schema_version == DOMAIN_BUILD_REQUEST_SCHEMA_VERSION_V2
+    assert encode_domain_build_request(request)["schema_version"] == (
+        DOMAIN_BUILD_REQUEST_SCHEMA_VERSION_V2
+    )
+    assert decode_domain_build_request(encode_domain_build_request(request)) == request
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"foundation_mode": "fixed_seed"},
+        {
+            "schema_version": DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
+            "foundation_mode": "unknown",
+            "citer_selection_mode": "strict_window",
+        },
+        {
+            "schema_version": DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
+            "foundation_mode": "fixed_seed",
+            "citer_selection_mode": "unknown",
+        },
+    ],
+)
+def test_policy_rejects_incomplete_or_unknown_v2_modes(kwargs) -> None:
+    with pytest.raises(ValueError):
+        DomainBuildPolicy("2026-07-24", **kwargs)
 
 
 @pytest.mark.parametrize(

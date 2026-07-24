@@ -8,7 +8,9 @@ from .build import (
 )
 from .contracts import (
     DOMAIN_BUILD_POLICY_SCHEMA_VERSION,
+    DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
     DOMAIN_BUILD_REQUEST_SCHEMA_VERSION,
+    DOMAIN_BUILD_REQUEST_SCHEMA_VERSION_V2,
     DOMAIN_BUILD_RESULT_SCHEMA_VERSION,
     DomainBuildPolicy,
     DomainBuildRequest,
@@ -29,7 +31,9 @@ from .summary import mathematical_opportunities_validation_error
 
 __all__ = [
     "DOMAIN_BUILD_POLICY_SCHEMA_VERSION",
+    "DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2",
     "DOMAIN_BUILD_REQUEST_SCHEMA_VERSION",
+    "DOMAIN_BUILD_REQUEST_SCHEMA_VERSION_V2",
     "DOMAIN_BUILD_RESULT_SCHEMA_VERSION",
     "DOMAIN_BUILD_HANDLER",
     "DomainBuildHandler",

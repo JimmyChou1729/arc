@@ -206,6 +206,48 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
     assert catalog.active == "build-run"
 
 
+def test_mode_flags_promote_a_resolved_v1_policy_to_v2(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+) -> None:
+    repository = RunRepository(tmp_path)
+    snapshot = _succeeded_snapshot(repository, run_id="build-v2")
+
+    class RecordingRunner:
+        request = None
+
+        def __init__(self, received_repository: RunRepository) -> None:
+            assert received_repository.root == repository.root
+
+        def execute(self, request, *, run_id, max_workers):
+            del run_id, max_workers
+            type(self).request = request
+            return snapshot
+
+    monkeypatch.setattr(cli, "DomainBuildRunner", RecordingRunner)
+    assert (
+        cli.main(
+            [
+                "build",
+                "arXiv:2401.00001",
+                "--policy",
+                json.dumps(POLICY),
+                "--foundation-mode",
+                "fixed-seed",
+                "--citer-selection-mode",
+                "strict-window",
+                "--cache-root",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    _envelope(capsys)
+    assert RecordingRunner.request.schema_version == "arc.domain_build_request.v2"
+    assert RecordingRunner.request.policy.schema_version == "arc.domain_build_policy.v2"
+    assert RecordingRunner.request.policy.foundation_mode == "fixed_seed"
+    assert RecordingRunner.request.policy.citer_selection_mode == "strict_window"
+
+
 def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:

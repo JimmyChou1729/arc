@@ -39,6 +39,51 @@ def test_candidate_threshold_is_a_priority_not_an_exclusion_rule() -> None:
     assert selected["selected_foundation"]["paper_id"] == high["paper_id"]
 
 
+def test_citation_band_is_configurable_and_only_changes_v2_prompt_semantics() -> None:
+    broad = _paper("arXiv:2301.00001", title="Broad", year=2023, citations=501)
+    candidates = foundation.build_candidate_records(
+        seed_metadata=broad,
+        seed_references=[],
+        newest_citers=[],
+        refs_by_citer={},
+        metadata_by_id={broad["paper_id"]: broad},
+        intent="",
+        heuristics=foundation.FoundationHeuristics(
+            min_citation_count=50,
+            max_citation_count=500,
+        ),
+    )
+    assert "high_citation_parent_domain_risk" in candidates[0]["warnings"]
+    v1 = foundation.foundation_selection_prompt(
+        seed_metadata=broad, candidates=candidates, intent=""
+    )
+    v2 = foundation.foundation_selection_prompt(
+        seed_metadata=broad,
+        candidates=candidates,
+        intent="",
+        min_citation_count=50,
+        max_citation_count=500,
+        v2_semantics=True,
+        fixed_seed=True,
+    )
+    assert "50–500" not in v1
+    assert "50–500" in v2
+    assert "Fixed-seed mode" in v2
+
+
+def test_v1_high_citation_boundary_remains_inclusive() -> None:
+    boundary = _paper("arXiv:2301.00001", title="Boundary", year=2023, citations=1000)
+    candidates = foundation.build_candidate_records(
+        seed_metadata=boundary,
+        seed_references=[],
+        newest_citers=[],
+        refs_by_citer={},
+        metadata_by_id={boundary["paper_id"]: boundary},
+        intent="",
+    )
+    assert "high_citation_parent_domain_risk" in candidates[0]["warnings"]
+
+
 def test_deterministic_selection_uses_normalized_id_ascending_independent_of_input_order() -> None:
     first = _paper("arXiv:2301.00001", title="First", year=2023, citations=300)
     second = _paper("arXiv:2301.00002", title="Second", year=2023, citations=300)

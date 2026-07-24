@@ -30,6 +30,87 @@ RECENT_ARXIV_WINDOW_DAYS = 365
 MAX_GRAPH_PAPER_COUNT = 90
 
 
+def strict_window_citer_streams(
+    foundation_id: str,
+    *,
+    most_recent: list[dict[str, Any]],
+    most_cited: list[dict[str, Any]],
+    as_of_date: date,
+    window_days: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
+    """Return first-public-date eligible citer streams before merge/capping.
+
+    The provider may return the same paper in both rankings with slightly
+    different metadata.  Classify each normalized paper ID once after merging
+    its available metadata, then project that decision back to both ranking
+    streams.  This keeps the merge order while ensuring neither stream can
+    consume capacity with an out-of-window or undated citer.
+    """
+
+    if isinstance(window_days, bool) or not isinstance(window_days, int) or window_days < 1:
+        raise ValueError("window_days must be a positive integer")
+    normalized_foundation = normalize_paper_id(foundation_id)
+    records: dict[str, dict[str, Any]] = {}
+    stream_ids: dict[str, list[str]] = {"mostrecent": [], "mostcited": []}
+    for source, stream in (("mostrecent", most_recent), ("mostcited", most_cited)):
+        seen_in_stream: set[str] = set()
+        for item in stream:
+            if not isinstance(item, dict):
+                continue
+            paper_id = normalize_paper_id(paper_key(item))
+            if not paper_id or paper_id == normalized_foundation:
+                continue
+            if paper_id not in seen_in_stream:
+                stream_ids[source].append(paper_id)
+                seen_in_stream.add(paper_id)
+            candidate = dict(item)
+            candidate["paper_id"] = paper_id
+            existing = records.get(paper_id)
+            if existing is None:
+                records[paper_id] = candidate
+            else:
+                existing.update(
+                    {
+                        key: value
+                        for key, value in candidate.items()
+                        if value not in (None, "", [], {})
+                    }
+                )
+
+    start = as_of_date - timedelta(days=window_days)
+    eligible: set[str] = set()
+    stats = {
+        "unique_citers": len(records),
+        "eligible_citers": 0,
+        "excluded_missing_first_public_date": 0,
+        "excluded_outside_window": 0,
+    }
+    for paper_id, record in records.items():
+        paper_date, _basis = first_public_date(record)
+        if paper_date is None:
+            stats["excluded_missing_first_public_date"] += 1
+        elif start <= paper_date <= as_of_date:
+            eligible.add(paper_id)
+        else:
+            stats["excluded_outside_window"] += 1
+    stats["eligible_citers"] = len(eligible)
+    return (
+        [dict(records[paper_id]) for paper_id in stream_ids["mostrecent"] if paper_id in eligible],
+        [dict(records[paper_id]) for paper_id in stream_ids["mostcited"] if paper_id in eligible],
+        stats,
+    )
+
+
+def first_public_date(record: dict[str, Any]) -> tuple[date | None, str | None]:
+    """Return the earliest usable public date without considering updates."""
+
+    paper_date, basis = _paper_date_with_basis(record)
+    if paper_date is not None:
+        return paper_date, basis
+    fallback = _arxiv_month_date(record)
+    return fallback, "arxiv_id_month" if fallback is not None else None
+
+
 def merge_citer_pool(
     foundation_id: str,
     *,
@@ -213,6 +294,7 @@ def _select_domain_papers(
     max_total: int = MAX_GRAPH_PAPER_COUNT,
     recent_window_days: int = RECENT_ARXIV_WINDOW_DAYS,
     as_of_date: date | None = None,
+    strict_window: bool = False,
 ) -> list[dict[str, Any]]:
     current = as_of_date or datetime.now(timezone.utc).date()
     now = datetime.combine(current, datetime.min.time(), tzinfo=timezone.utc)
@@ -255,12 +337,20 @@ def _select_domain_papers(
         record["in_graph_citer_score"] = 0.0
         record["reference_edge_count"] = 0
         record["reference_edge_score"] = 0.0
-        paper_date, basis = _paper_date_with_basis(record)
-        if paper_date is None:
-            paper_date, basis = _arxiv_month_date(record), "arxiv_id_month"
+        paper_date, basis = first_public_date(record)
         record["first_public_date"] = paper_date.isoformat() if paper_date else None
         record["recency_basis"] = basis if paper_date else None
-        record["recent_arxiv"] = _is_recent_arxiv_paper(record, now=now, window_days=recent_window_days)
+        if strict_window:
+            record["recent_arxiv"] = bool(
+                paper_date is not None
+                and current - timedelta(days=recent_window_days)
+                <= paper_date
+                <= current
+            )
+        else:
+            record["recent_arxiv"] = _is_recent_arxiv_paper(
+                record, now=now, window_days=recent_window_days
+            )
         record["selection_reason"] = _selection_reason(record, paper_id in intent_rank)
         scored.append(record)
     scored.sort(
@@ -275,7 +365,7 @@ def _select_domain_papers(
         for item in scored[selected_count:]
         if item.get("recent_arxiv") and item["paper_id"] not in selected_ids
     ][: max(0, max_total - len(selected))]
-    return [*selected, *recent]
+    return selected if strict_window else [*selected, *recent]
 
 
 def _parent_foundation_ids(parent_foundations: list[dict[str, Any]]) -> set[str]:
@@ -539,6 +629,14 @@ def _build_graph(
                 _add_edge(edges, seen_edges, source_id, target_id, relation="cites")
     current = as_of_date or datetime.now(timezone.utc).date()
     included = sum(bool(item.get("recent_arxiv")) for item in selected_papers)
+    recency: dict[str, Any] = {
+        "window_days": recent_window_days,
+        "start_date": (current - timedelta(days=recent_window_days)).isoformat(),
+        "end_date": current.isoformat(),
+        "recency_basis": dict(sorted(Counter(str(item.get("recency_basis") or "unavailable") for item in selected_papers).items())),
+        "included_count": included,
+        "excluded_count": len(selected_papers) - included,
+    }
     return {
         "schema_version": "arc.domain_graph.v1",
         "domain_id": domain_id,
@@ -547,14 +645,7 @@ def _build_graph(
         "nodes": list(nodes.values()),
         "edges": edges,
         "created_at": created_at,
-        "recency": {
-            "window_days": recent_window_days,
-            "start_date": (current - timedelta(days=recent_window_days)).isoformat(),
-            "end_date": current.isoformat(),
-            "recency_basis": dict(sorted(Counter(str(item.get("recency_basis") or "unavailable") for item in selected_papers).items())),
-            "included_count": included,
-            "excluded_count": len(selected_papers) - included,
-        },
+        "recency": recency,
     }
 
 

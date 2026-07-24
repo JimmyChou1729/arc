@@ -107,6 +107,51 @@ def test_recent_candidates_only_fill_the_remaining_graph_capacity() -> None:
     assert sum(bool(item["recent_arxiv"]) for item in selected) == 1
 
 
+def test_strict_window_filters_unique_citers_before_merge_and_accepts_dated_non_arxiv() -> None:
+    old = _paper("arXiv:2001.00002", year=2020, citations=1000, published="2020-01-02")
+    boundary = _paper("arXiv:2407.00001", year=2024, citations=1, published="2024-07-24")
+    doi = _paper(
+        "doi:10.1000/recent",
+        year=2026,
+        citations=2,
+        published="2026-07-20",
+        identifiers={"doi": "10.1000/recent"},
+    )
+    missing = _paper(
+        "doi:10.1000/undated",
+        year=2025,
+        citations=3,
+        identifiers={"doi": "10.1000/undated"},
+    )
+    revised_old = _paper(
+        "arXiv:2002.00001",
+        year=2020,
+        citations=4,
+        published="2020-02-01",
+        updated="2026-07-20",
+    )
+    recent, cited, stats = network.strict_window_citer_streams(
+        FOUNDATION,
+        most_recent=[old, boundary, doi, missing, revised_old],
+        most_cited=[old, doi],
+        as_of_date=date(2026, 7, 24),
+        window_days=730,
+    )
+
+    assert [item["paper_id"] for item in recent] == [boundary["paper_id"], doi["paper_id"]]
+    assert [item["paper_id"] for item in cited] == [doi["paper_id"]]
+    assert stats == {
+        "unique_citers": 5,
+        "eligible_citers": 2,
+        "excluded_missing_first_public_date": 1,
+        "excluded_outside_window": 2,
+    }
+    merged = network.merge_citer_pool(
+        FOUNDATION, most_recent=recent, most_cited=cited, limit=1
+    )
+    assert merged[0]["paper_id"] == boundary["paper_id"]
+
+
 def test_network_scores_recompute_across_initial_citer_and_reference_stages() -> None:
     initial = network._select_domain_papers(
         [

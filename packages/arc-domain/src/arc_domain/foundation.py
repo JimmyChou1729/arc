@@ -28,10 +28,20 @@ class FoundationHeuristics:
     min_citation_count: int = 100
     candidate_limit: int = 10
     candidate_scan_limit: int = 20
+    max_citation_count: int = 1000
+
+    def __post_init__(self) -> None:
+        if self.min_citation_count < 0:
+            raise ValueError("min_citation_count must be non-negative")
+        if self.max_citation_count < self.min_citation_count:
+            raise ValueError("max_citation_count must be at least min_citation_count")
+        if self.candidate_limit < 1 or self.candidate_scan_limit < 1:
+            raise ValueError("candidate limits must be positive")
 
 
 DEFAULT_FOUNDATION_HEURISTICS = FoundationHeuristics()
 MIN_FOUNDATION_CITATION_COUNT = DEFAULT_FOUNDATION_HEURISTICS.min_citation_count
+MAX_FOUNDATION_CITATION_COUNT = DEFAULT_FOUNDATION_HEURISTICS.max_citation_count
 MAX_AUDIT_SEARCH_QUERIES = 3
 LLM_CANDIDATE_SOURCE_ROLE = "llm_added_foundation_candidate"
 LLM_SELECTION_MARK_FIELDS = (
@@ -210,6 +220,7 @@ def build_candidate_records(
                 witness_citation_overlap=int(overlap[candidate_id]),
                 supported_by=support.get(candidate_id, []),
                 min_citation_count=heuristics.min_citation_count,
+                max_citation_count=heuristics.max_citation_count,
             )
         )
     return records[: max(0, heuristics.candidate_limit)]
@@ -221,11 +232,12 @@ def candidate_audit_prompt(
     candidates: Sequence[Mapping[str, Any]],
     intent: str,
     min_citation_count: int = MIN_FOUNDATION_CITATION_COUNT,
+    max_citation_count: int = MAX_FOUNDATION_CITATION_COUNT,
+    v2_semantics: bool = False,
 ) -> str:
     """Return the fixed prompt contract for an external candidate audit."""
 
-    return "\n\n".join(
-        [
+    lines = [
             "You audit a theoretical-physics foundation-paper candidate set before selection.",
             "Decide whether the supplied candidates are sufficient for choosing the same-scope foundation paper.",
             "Propose a search_queries entry only when you are completely sure a likely foundational or canonical same-scope paper is missing.",
@@ -236,8 +248,16 @@ def candidate_audit_prompt(
             f"Seed paper:\n{dict(seed_metadata)}",
             f"Candidate papers:\n{[dict(candidate) for candidate in candidates]}",
             "Return JSON only.",
-        ]
-    )
+    ]
+    if v2_semantics:
+        lines.insert(
+            5,
+            "Citation counts are a soft scope prior: papers below "
+            f"{min_citation_count} citations may indicate a too-shallow field, while "
+            f"papers above {max_citation_count} may be broader parent domains. "
+            "Evidence for a canonical same-scope origin may override either signal.",
+        )
+    return "\n\n".join(lines)
 
 
 def default_candidate_audit() -> dict[str, Any]:
@@ -432,6 +452,7 @@ def apply_reference_inference_result(
             witness_citation_overlap=0,
             supported_by=[],
             min_citation_count=MIN_FOUNDATION_CITATION_COUNT,
+            max_citation_count=MAX_FOUNDATION_CITATION_COUNT,
         )
         record.update(
             {
@@ -464,11 +485,13 @@ def foundation_selection_prompt(
     candidates: Sequence[Mapping[str, Any]],
     intent: str,
     min_citation_count: int = MIN_FOUNDATION_CITATION_COUNT,
+    max_citation_count: int = MAX_FOUNDATION_CITATION_COUNT,
+    v2_semantics: bool = False,
+    fixed_seed: bool = False,
 ) -> str:
     """Return the fixed prompt contract for external foundation selection."""
 
-    return "\n\n".join(
-        [
+    lines = [
             "You are selecting the foundation paper for a theoretical-physics research domain.",
             "Choose selected_foundation and best_reference_paper only from the supplied candidates. They may be the same paper.",
             "The selected foundation is the same-scope paper that best defines the field represented by the seed and its citers.",
@@ -479,8 +502,22 @@ def foundation_selection_prompt(
             f"Seed paper:\n{dict(seed_metadata)}",
             f"Candidate papers:\n{[dict(candidate) for candidate in candidates]}",
             "Return JSON only.",
-        ]
-    )
+    ]
+    if v2_semantics:
+        lines.insert(
+            6,
+            f"The {min_citation_count}–{max_citation_count} citation band is a soft scope prior: below it may be "
+            "too shallow and at or above its upper end may be an over-broad parent domain. Do not "
+            "override direct canonical-origin evidence solely because of this prior.",
+        )
+        if fixed_seed:
+            lines.insert(
+                2,
+                "Fixed-seed mode is active: selected_foundation must be the supplied "
+                "seed paper. Use the other fields to describe better reading references "
+                "or earlier parents, not to replace the seed.",
+            )
+    return "\n\n".join(lines)
 
 
 def deterministic_foundation_selection(
@@ -592,6 +629,75 @@ def normalize_foundation_selection(
     }
 
 
+def enforce_fixed_seed_foundation(
+    selection: Mapping[str, Any],
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    seed_paper_id: str,
+    seed_metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Repair a selection so fixed-seed mode cannot move the network anchor.
+
+    The audit and selection stages still contribute the best reading reference
+    and earlier contextual parents.  Only the selected foundation is fixed.
+    """
+
+    normalized_seed = _normalized_id(seed_paper_id)
+    candidate_by_id = {
+        _paper_id(candidate): dict(candidate)
+        for candidate in candidates
+        if _paper_id(candidate)
+    }
+    seed = candidate_by_id.get(normalized_seed)
+    result = dict(selection)
+    warnings = _string_list(result.get("warnings"))
+    if seed is None:
+        # Candidate scanning deliberately prioritizes high-witness papers and
+        # can omit the seed.  Fixed-seed mode keeps independently acquired
+        # seed metadata as an anchor even in that bounded candidate case.
+        seed = dict(seed_metadata)
+        seed["paper_id"] = normalized_seed
+        warnings.append("fixed_seed_recovered_from_seed_metadata")
+
+    previous_id = _choice_id(result.get("selected_foundation"))
+    result["selected_foundation"] = _choice(
+        seed,
+        "Fixed-seed mode keeps the requested seed as the network foundation.",
+    )
+    if previous_id != normalized_seed:
+        warnings.append(f"fixed_seed_foundation_enforced:{normalized_seed}")
+
+    seed_year = _candidate_year(seed)
+    parents: list[dict[str, Any]] = []
+    rejected = [
+        dict(item)
+        for item in result.get("rejected_candidates", [])
+        if isinstance(item, Mapping)
+    ]
+    for choice in result.get("parent_foundations", []):
+        parent_id = _choice_id(choice)
+        parent = candidate_by_id.get(parent_id)
+        if (
+            parent is None
+            or parent_id == normalized_seed
+            or not _is_valid_parent_year(_candidate_year(parent), seed_year)
+        ):
+            if parent is not None:
+                rejected.append(
+                    _choice(
+                        parent,
+                        "Rejected because it is not an earlier parent of the fixed seed.",
+                    )
+                )
+            warnings.append(f"fixed_seed_parent_rejected:{parent_id or 'unknown'}")
+            continue
+        parents.append(_known_choice(choice, parent))
+    result["parent_foundations"] = _dedupe_choices(parents)
+    result["rejected_candidates"] = _dedupe_choices(rejected)
+    result["warnings"] = _dedupe_strings(warnings)
+    return result
+
+
 def _metadata_candidate_record(
     *,
     candidate_id: str,
@@ -603,6 +709,7 @@ def _metadata_candidate_record(
     witness_citation_overlap: int,
     supported_by: Sequence[str],
     min_citation_count: int,
+    max_citation_count: int,
 ) -> dict[str, Any]:
     title = _text(metadata.get("title")) or _text(fallback.get("title"))
     abstract = _text(metadata.get("abstract")) or _text(fallback.get("abstract"))
@@ -626,7 +733,7 @@ def _metadata_candidate_record(
     }
     if citation_count < min_citation_count:
         record["warnings"].append("low_citation_foundation_priority")
-    if citation_count >= 1000:
+    if citation_count >= max_citation_count:
         record["warnings"].append("high_citation_parent_domain_risk")
     return record
 

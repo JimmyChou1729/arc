@@ -201,3 +201,49 @@ def test_foundation_candidates_use_only_the_bounded_witness_subset(
     assert witness_reference_ids == {
         citer["paper_id"] for citer in newest_citers
     }
+
+
+def test_fixed_seed_anchors_to_seed_metadata_when_candidate_scan_omits_seed(
+    tmp_path: Path,
+) -> None:
+    class ScanExcludesSeedPaperAccess(WitnessPaperAccess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seed_references = []
+
+        def references(self, paper_id: str) -> list[dict[str, object]]:
+            self.calls.append(("references", paper_id))
+            if paper_id == SEED:
+                return []
+            if paper_id.startswith("arXiv:2501."):
+                index = paper_id.rsplit(".", 1)[-1]
+                return [_paper(f"arXiv:2101.{index}", citations=500)]
+            return []
+
+    repository = RunRepository(tmp_path / "runs")
+    request = DomainBuildRequest(
+        SEED,
+        "foundation methods",
+        DomainBuildPolicy(
+            as_of_date="2026-07-24",
+            citer_pool_limit=2,
+            ranked_paper_limit=1,
+            graph_node_limit=3,
+            schema_version="arc.domain_build_policy.v2",
+            foundation_mode="fixed_seed",
+            citer_selection_mode="representative_plus_recent",
+        ),
+    )
+    snapshot = DomainBuildRunner(repository).execute(
+        request,
+        paper_access=ScanExcludesSeedPaperAccess(),
+        task_service=SufficientCandidateTasks(),
+        reference_service=NoReferenceInference(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    candidates = _read_artifact(repository, snapshot.run_id, "foundation/candidates")
+    selection = _read_artifact(repository, snapshot.run_id, "foundation/selection")
+    assert SEED not in {candidate["paper_id"] for candidate in candidates["candidates"]}
+    assert selection["selected_foundation"]["paper_id"] == SEED
+    assert "fixed_seed_recovered_from_seed_metadata" in selection["warnings"]

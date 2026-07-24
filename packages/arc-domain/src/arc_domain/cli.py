@@ -27,6 +27,7 @@ from arc_jobs import (
 from arc_llm import InvalidRequestError, ModelSelection, decode_resume_input
 
 from . import (
+    DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
     DomainBuildRequest,
     DomainBuildRunner,
     decode_domain_build_policy,
@@ -58,6 +59,14 @@ def _parser() -> _Parser:
     build.add_argument("--citer-pool-limit", type=int)
     build.add_argument("--ranked-paper-limit", type=int)
     build.add_argument("--graph-node-limit", type=int)
+    build.add_argument(
+        "--foundation-mode",
+        choices=("infer-from-seed", "fixed-seed"),
+    )
+    build.add_argument(
+        "--citer-selection-mode",
+        choices=("representative-plus-recent", "strict-window"),
+    )
     build.add_argument("--llm-provider", default="auto")
     build.add_argument("--model")
     build.add_argument(
@@ -136,6 +145,41 @@ def _request_from_args(args: argparse.Namespace) -> DomainBuildRequest:
             }.items()
             if value is not None
         }
+        mode_overrides = {
+            "foundation_mode": (
+                args.foundation_mode.replace("-", "_")
+                if args.foundation_mode is not None
+                else None
+            ),
+            "citer_selection_mode": (
+                args.citer_selection_mode.replace("-", "_")
+                if args.citer_selection_mode is not None
+                else None
+            ),
+        }
+        if any(value is not None for value in mode_overrides.values()):
+            # Mode flags opt the whole semantic input into the closed v2
+            # contract.  Carry every resolved numeric setting forward rather
+            # than mixing a partial v2 document with a v1 policy.
+            policy_document = {
+                "schema_version": DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
+                "as_of_date": policy.as_of_date,
+                "recent_window_days": policy.recent_window_days,
+                "citer_pool_limit": policy.citer_pool_limit,
+                "ranked_paper_limit": policy.ranked_paper_limit,
+                "graph_node_limit": policy.graph_node_limit,
+                "foundation_mode": (
+                    mode_overrides["foundation_mode"]
+                    or policy.foundation_mode
+                    or "infer_from_seed"
+                ),
+                "citer_selection_mode": (
+                    mode_overrides["citer_selection_mode"]
+                    or policy.citer_selection_mode
+                    or "representative_plus_recent"
+                ),
+            }
+            policy = decode_domain_build_policy(policy_document)
         if overrides:
             policy_document = encode_domain_build_policy(policy)
             policy_document.update(overrides)

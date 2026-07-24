@@ -46,6 +46,7 @@ from ._llm import (
 )
 from .catalog import register_domain_run
 from .contracts import (
+    DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
     DomainBuildRequest,
     DomainBuildResult,
     DomainBuildWarning,
@@ -65,6 +66,7 @@ from .foundation import (
     candidate_audit_prompt,
     default_candidate_audit,
     deterministic_foundation_selection,
+    enforce_fixed_seed_foundation,
     foundation_selection_prompt,
     normalize_candidate_audit,
     normalize_foundation_selection,
@@ -81,6 +83,7 @@ from .network import (
     intent_ranking_prompt,
     merge_citer_pool,
     normalize_intent_ranking,
+    strict_window_citer_streams,
 )
 from .packs import build_domain_packs
 from .paths import DomainPaths, domain_id_for
@@ -326,6 +329,10 @@ class DomainBuildHandler:
                 seed_metadata=seed_metadata,
                 candidates=candidates,
                 intent=self.request.intent,
+                v2_semantics=(
+                    self.request.policy.schema_version
+                    == DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2
+                ),
             ),
             JsonOutput(FOUNDATION_CANDIDATE_AUDIT_SCHEMA, repair="local"),
             self.request.model,
@@ -416,6 +423,11 @@ class DomainBuildHandler:
                 seed_metadata=seed_metadata,
                 candidates=candidates,
                 intent=self.request.intent,
+                v2_semantics=(
+                    self.request.policy.schema_version
+                    == DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2
+                ),
+                fixed_seed=self.request.policy.foundation_mode == "fixed_seed",
             ),
             JsonOutput(FOUNDATION_SELECTION_SCHEMA, repair="local"),
             self.request.model,
@@ -451,6 +463,13 @@ class DomainBuildHandler:
             raise CancelledError("foundation selection cancelled")
         else:
             raise RuntimeError("unknown foundation-selection outcome")
+        if self.request.policy.foundation_mode == "fixed_seed":
+            selection = enforce_fixed_seed_foundation(
+                selection,
+                candidates,
+                seed_paper_id=seed_id,
+                seed_metadata=seed_metadata,
+            )
         context.artifacts.publish_json(
             _FOUNDATION_WARNINGS_ARTIFACT,
             [_warning_document(item) for item in warnings[warning_start:]],
@@ -482,6 +501,7 @@ class DomainBuildHandler:
             )
         policy = self.request.policy
         network_input_ref = context.artifacts.find("network/input")
+        strict_window_stats: dict[str, int] | None = None
         if network_input_ref is None:
             foundation = self.paper.metadata(foundation_id)
             foundation["paper_id"] = foundation_id
@@ -492,16 +512,27 @@ class DomainBuildHandler:
             most_cited = self.paper.citers(
                 foundation_id, limit=policy.citer_pool_limit, sort="mostcited"
             )
+            if policy.citer_selection_mode == "strict_window":
+                most_recent, most_cited, strict_window_stats = strict_window_citer_streams(
+                    foundation_id,
+                    most_recent=most_recent,
+                    most_cited=most_cited,
+                    as_of_date=date.fromisoformat(policy.as_of_date),
+                    window_days=policy.recent_window_days,
+                )
             citer_pool = merge_citer_pool(
                 foundation_id,
                 most_recent=most_recent,
                 most_cited=most_cited,
                 limit=policy.citer_pool_limit,
             )
-            context.artifacts.publish_json(
-                "network/input",
-                {"foundation": foundation, "citer_pool": citer_pool},
-            )
+            network_input: dict[str, Any] = {
+                "foundation": foundation,
+                "citer_pool": citer_pool,
+            }
+            if strict_window_stats is not None:
+                network_input["strict_window"] = strict_window_stats
+            context.artifacts.publish_json("network/input", network_input)
         else:
             network_input = _read_json(context, network_input_ref, "network input")
             foundation = _mapping(
@@ -510,42 +541,80 @@ class DomainBuildHandler:
             citer_pool = _mapping_list(
                 network_input.get("citer_pool"), "citer pool"
             )
+            raw_stats = network_input.get("strict_window")
+            if isinstance(raw_stats, Mapping):
+                strict_window_stats = {
+                    key: int(value)
+                    for key, value in raw_stats.items()
+                    if isinstance(key, str) and isinstance(value, int) and not isinstance(value, bool)
+                }
 
-        ranking_request = LLMRequest(
-            _task_id("network-rank", foundation_id, self.request.intent),
-            intent_ranking_prompt(citer_pool, intent=self.request.intent),
-            JsonOutput(INTENT_RANKING_SCHEMA, repair="local"),
-            self.request.model,
-        )
-        ranking_outcome = execute_routed(
-            self.task_service, context, ranking_request, resume_input=resume_input
-        )
-        if isinstance(ranking_outcome, LLMCompleted):
-            ranking = normalize_intent_ranking(
-                _mapping(ranking_outcome.value, "intent ranking"),
-                citer_pool=citer_pool,
+        if strict_window_stats is not None:
+            missing_dates = strict_window_stats.get(
+                "excluded_missing_first_public_date", 0
             )
-        elif isinstance(ranking_outcome, LLMPaused):
-            return Paused(awaiting_from_pause(ranking_outcome))
-        elif isinstance(ranking_outcome, LLMFailed):
-            if not is_transient_failure(ranking_outcome):
-                return Failed(run_error_from_failure(ranking_outcome))
-            ranking = deterministic_intent_ranking(
-                citer_pool,
-                intent=self.request.intent,
-                reason=str(ranking_outcome.error),
-            )
-            warnings.append(
-                DomainBuildWarning(
-                    "intent_ranking_unavailable",
-                    str(ranking_outcome.error),
-                    "network",
+            outside_window = strict_window_stats.get("excluded_outside_window", 0)
+            if missing_dates or outside_window:
+                warnings.append(
+                    DomainBuildWarning(
+                        "strict_window_citers_excluded",
+                        "Excluded "
+                        f"{missing_dates} citer(s) without a first-public date and "
+                        f"{outside_window} citer(s) outside the requested window.",
+                        "network",
+                    )
                 )
+            if strict_window_stats.get("eligible_citers", 0) == 0:
+                warnings.append(
+                    DomainBuildWarning(
+                        "strict_window_no_eligible_citers",
+                        "No direct foundation citers were eligible for the requested time window; generated no domain-paper nodes and retained foundation/context nodes only.",
+                        "network",
+                    )
+                )
+
+        if policy.citer_selection_mode == "strict_window" and not citer_pool:
+            ranking = deterministic_intent_ranking(
+                [],
+                intent=self.request.intent,
+                reason="No citers were eligible for strict-window ranking.",
             )
-        elif isinstance(ranking_outcome, LLMCancelled):
-            raise CancelledError("intent ranking cancelled")
         else:
-            raise RuntimeError("unknown intent-ranking outcome")
+            ranking_request = LLMRequest(
+                _task_id("network-rank", foundation_id, self.request.intent),
+                intent_ranking_prompt(citer_pool, intent=self.request.intent),
+                JsonOutput(INTENT_RANKING_SCHEMA, repair="local"),
+                self.request.model,
+            )
+            ranking_outcome = execute_routed(
+                self.task_service, context, ranking_request, resume_input=resume_input
+            )
+            if isinstance(ranking_outcome, LLMCompleted):
+                ranking = normalize_intent_ranking(
+                    _mapping(ranking_outcome.value, "intent ranking"),
+                    citer_pool=citer_pool,
+                )
+            elif isinstance(ranking_outcome, LLMPaused):
+                return Paused(awaiting_from_pause(ranking_outcome))
+            elif isinstance(ranking_outcome, LLMFailed):
+                if not is_transient_failure(ranking_outcome):
+                    return Failed(run_error_from_failure(ranking_outcome))
+                ranking = deterministic_intent_ranking(
+                    citer_pool,
+                    intent=self.request.intent,
+                    reason=str(ranking_outcome.error),
+                )
+                warnings.append(
+                    DomainBuildWarning(
+                        "intent_ranking_unavailable",
+                        str(ranking_outcome.error),
+                        "network",
+                    )
+                )
+            elif isinstance(ranking_outcome, LLMCancelled):
+                raise CancelledError("intent ranking cancelled")
+            else:
+                raise RuntimeError("unknown intent-ranking outcome")
         context.artifacts.publish_json("network/intent-ranking", ranking)
 
         parent_choices = [
@@ -574,6 +643,7 @@ class DomainBuildHandler:
             max_total=max(0, policy.graph_node_limit - fixed_count),
             recent_window_days=policy.recent_window_days,
             as_of_date=date.fromisoformat(policy.as_of_date),
+            strict_window=policy.citer_selection_mode == "strict_window",
         )
         selected_ids = _unique_paper_ids(selected)
         refs_by_selected, selected_reference_errors = self._group_values(

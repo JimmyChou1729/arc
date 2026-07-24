@@ -7,6 +7,7 @@ import pytest
 
 from arc_domain.build import DomainBuildRunner
 from arc_domain.contracts import (
+    DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
     DomainBuildPolicy,
     DomainBuildRequest,
     decode_domain_build_result,
@@ -52,6 +53,25 @@ def _request() -> DomainBuildRequest:
             citer_pool_limit=10,
             ranked_paper_limit=1,
             graph_node_limit=5,
+        ),
+    )
+
+
+def _v2_request(*, fixed_seed: bool = False, strict_window: bool = False) -> DomainBuildRequest:
+    return DomainBuildRequest(
+        SEED,
+        "recent methods",
+        DomainBuildPolicy(
+            as_of_date="2026-07-24",
+            recent_window_days=730,
+            citer_pool_limit=10,
+            ranked_paper_limit=1,
+            graph_node_limit=5,
+            schema_version=DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
+            foundation_mode="fixed_seed" if fixed_seed else "infer_from_seed",
+            citer_selection_mode=(
+                "strict_window" if strict_window else "representative_plus_recent"
+            ),
         ),
     )
 
@@ -307,6 +327,110 @@ def test_verified_reference_inference_candidate_is_available_to_selection(
         store.read_bytes(result.foundation_selection).decode("utf-8")
     )
     assert selection["selected_foundation"]["paper_id"] == INFERRED_FOUNDATION
+
+
+def test_fixed_seed_v2_repairs_an_llm_attempt_to_move_the_foundation(tmp_path: Path) -> None:
+    repository = RunRepository(tmp_path / "runs")
+    snapshot = DomainBuildRunner(repository).execute(
+        _v2_request(fixed_seed=True),
+        paper_access=FakePaperAccess(),
+        task_service=DomainTaskService(selected_foundation=FOUNDATION),
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    result, store = _result(repository, snapshot)
+    selection = json.loads(store.read_bytes(result.foundation_selection).decode("utf-8"))
+    graph = json.loads(store.read_bytes(result.graph).decode("utf-8"))
+    assert selection["selected_foundation"]["paper_id"] == SEED
+    assert any(item.startswith("fixed_seed_foundation_enforced:") for item in selection["warnings"])
+    assert graph["foundation_paper"] == SEED
+
+
+def test_strict_window_v2_excludes_undated_and_old_citers_before_ranking(
+    tmp_path: Path,
+) -> None:
+    old = "arXiv:2001.00002"
+    missing = "doi:10.1000/undated"
+
+    class StrictPaper(FakePaperAccess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.metadata_by_id[DOMAIN_PAPER]["published"] = "2025-01-15"
+            self.metadata_by_id[old] = _metadata(old, title="Old", year=2020, citations=10)
+            self.metadata_by_id[old]["published"] = "2020-01-15"
+            self.metadata_by_id[missing] = _metadata(missing, title="Undated", year=2025, citations=10)
+            self.metadata_by_id[missing]["identifiers"] = {"doi": "10.1000/undated"}
+
+        def citers(self, paper_id: str, *, limit: int, sort: str) -> list[dict]:
+            del limit, sort
+            if paper_id == FOUNDATION:
+                return [
+                    dict(self.metadata_by_id[old]),
+                    dict(self.metadata_by_id[DOMAIN_PAPER]),
+                    dict(self.metadata_by_id[missing]),
+                ]
+            return [dict(self.metadata_by_id[DOMAIN_PAPER])]
+
+    repository = RunRepository(tmp_path / "runs")
+    snapshot = DomainBuildRunner(repository).execute(
+        _v2_request(strict_window=True),
+        paper_access=StrictPaper(),
+        task_service=DomainTaskService(selected_foundation=FOUNDATION),
+        reference_service=ForbiddenReferenceService(),
+    )
+    assert snapshot.status is RunStatus.SUCCEEDED
+    result, store = _result(repository, snapshot)
+    graph = json.loads(store.read_bytes(result.graph).decode("utf-8"))
+    assert {
+        node["paper_id"] for node in graph["nodes"] if node["role"] == "domain_paper"
+    } == {DOMAIN_PAPER}
+    assert "strict_window_citers_excluded" in _warning_codes(repository, snapshot)
+    network_input_ref = store.find("network/input")
+    assert network_input_ref is not None
+    network_input = json.loads(store.read_bytes(network_input_ref).decode("utf-8"))
+    assert network_input["strict_window"] == {
+        "unique_citers": 3,
+        "eligible_citers": 1,
+        "excluded_missing_first_public_date": 1,
+        "excluded_outside_window": 1,
+    }
+
+
+def test_strict_window_with_no_eligible_citers_skips_llm_ranking(tmp_path: Path) -> None:
+    old = "doi:10.1000/old-citer"
+
+    class NoEligiblePaper(FakePaperAccess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.metadata_by_id[old] = _metadata(old, title="Old", year=2020, citations=10)
+            self.metadata_by_id[old].update(
+                {"published": "2020-01-15", "identifiers": {"doi": "10.1000/old-citer"}}
+            )
+
+        def citers(self, paper_id: str, *, limit: int, sort: str) -> list[dict]:
+            del limit, sort
+            if paper_id == FOUNDATION:
+                return [dict(self.metadata_by_id[old])]
+            return [dict(self.metadata_by_id[DOMAIN_PAPER])]
+
+    repository = RunRepository(tmp_path / "runs")
+    service = DomainTaskService(selected_foundation=FOUNDATION)
+    snapshot = DomainBuildRunner(repository).execute(
+        _v2_request(strict_window=True),
+        paper_access=NoEligiblePaper(),
+        task_service=service,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    assert not any(
+        request.task_id.startswith("network-rank-") for request in service.requests
+    )
+    assert "strict_window_no_eligible_citers" in _warning_codes(repository, snapshot)
+    result, store = _result(repository, snapshot)
+    graph = json.loads(store.read_bytes(result.graph).decode("utf-8"))
+    assert not [node for node in graph["nodes"] if node["role"] == "domain_paper"]
 
 
 @pytest.mark.parametrize(
