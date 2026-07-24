@@ -181,6 +181,66 @@ def test_html_rich_parse_preserves_equation_table_figure_and_selector(tmp_path):
     assert document.assets[0].media_type == "image/svg+xml"
 
 
+def test_html_locators_use_opening_tags_and_cover_top_level_articles_once(
+    tmp_path,
+):
+    source = tmp_path / "articles.html"
+    source.write_text(
+        "\n".join(
+            [
+                "<nav><p id='navigation'>Outside</p></nav>",
+                "<article>",
+                "  <h1 data-role='title' id='first'>First</h1>",
+                "    <img alt='void image' src='missing.png'>",
+                "  <article><p id='nested'>Nested once</p></article>",
+                "</article>",
+                "<article>",
+                " <p class='last'>Second article</p>",
+                "</article>",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    repository = SourceRepository(tmp_path / "cache")
+
+    document = RichDocumentParserService(repository).parse(
+        SourceBundle(primary=repository.import_path(source))
+    ).document
+
+    assert [
+        block.payload.get("text", block.payload.get("alt_text"))
+        for block in document.blocks
+    ] == [
+        "First",
+        "void image",
+        "Nested once",
+        "Second article",
+    ]
+    assert [
+        (
+            block.locator.line_start,
+            block.locator.column_start,
+            block.locator.line_end,
+            block.locator.column_end,
+        )
+        for block in document.blocks
+    ] == [
+        (3, 3, 3, 3),
+        (4, 5, 4, 5),
+        (5, 12, 5, 12),
+        (8, 2, 8, 2),
+    ]
+    assert [block.locator.selector for block in document.blocks] == [
+        "#first",
+        "img:nth-block(2)",
+        "#nested",
+        "p:nth-block(4)",
+    ]
+    assert all(
+        block.locator.source_id != "navigation" for block in document.blocks
+    )
+
+
 @pytest.mark.parametrize("source_format", [SourceFormat.MARKDOWN, SourceFormat.HTML])
 def test_inline_images_are_imported_as_figure_blocks(tmp_path, source_format):
     image = tmp_path / "inline.png"
@@ -344,6 +404,102 @@ def test_flattened_tex_rich_parse_and_multifile_rejection(tmp_path):
     assert getattr(error.value, "code", "") == "unsupported_tex_project"
 
 
+def test_tex_headings_support_balanced_starred_short_and_multiline_titles(
+    tmp_path,
+):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        "\n".join(
+            [
+                r"\section{Ordinary}",
+                r"\section*{Starred}",
+                r"\subsection[Short {with ] brace}]{Long {nested} \{literal\}}",
+                r"\subsubsection{Across",
+                r"  \textbf{multiple lines}}",
+                r"\section{\texorpdfstring{TeX choice}{PDF choice}}",
+            ]
+        ).encode(),
+        SourceFormat.TEX,
+    )
+
+    document = RichDocumentParserService(repository).parse(
+        SourceBundle(primary=artifact)
+    ).document
+
+    assert [block.payload["text"] for block in document.blocks] == [
+        "Ordinary",
+        "Starred",
+        "Long nested {literal}",
+        "Across multiple lines",
+        "TeX choice",
+    ]
+    assert [block.payload["level"] for block in document.blocks] == [
+        1,
+        1,
+        2,
+        3,
+        1,
+    ]
+    assert [
+        (block.locator.line_start, block.locator.line_end)
+        for block in document.blocks
+    ] == [(1, 1), (2, 2), (3, 3), (4, 5), (6, 6)]
+    assert all(
+        block.locator.column_start is None
+        and block.locator.column_end is None
+        for block in document.blocks
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_format", "text"),
+    [
+        (SourceFormat.MARKDOWN, "$$\nx+y"),
+        (SourceFormat.MARKDOWN, "\\[\nx+y"),
+        (SourceFormat.MARKDOWN, "\\begin{align}\nx&=y"),
+        (SourceFormat.TEX, "$$\nx+y"),
+        (SourceFormat.TEX, "\\[\nx+y"),
+        (SourceFormat.TEX, "\\begin{equation}\nx=y"),
+        (SourceFormat.TEX, "\\section[Short]{Unclosed"),
+    ],
+)
+def test_unclosed_rich_blocks_fail_before_document_creation(
+    tmp_path, source_format, text
+):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, text.encode(), source_format)
+
+    with pytest.raises(Exception) as error:
+        RichDocumentParserService(repository).parse(
+            SourceBundle(primary=artifact)
+        )
+
+    assert getattr(error.value, "code", "") == "unclosed_rich_block"
+
+
+def test_unclosed_markdown_fence_extends_to_real_eof_with_line_locator(
+    tmp_path,
+):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        b"before\n\n```python\none\ntwo",
+        SourceFormat.MARKDOWN,
+    )
+
+    document = RichDocumentParserService(repository).parse(
+        SourceBundle(primary=artifact)
+    ).document
+
+    code = document.blocks[-1]
+    assert code.kind is RichBlockKind.CODE
+    assert code.payload["text"] == "one\ntwo"
+    assert (code.locator.line_start, code.locator.line_end) == (3, 5)
+    assert code.locator.column_start is None
+    assert code.locator.column_end is None
+
+
 def test_multiline_tex_figure_preserves_asset_and_caption(tmp_path):
     image = tmp_path / "plot.png"
     image.write_bytes(b"\x89PNG plot")
@@ -393,6 +549,10 @@ def test_rich_document_and_block_codecs_are_strict_and_path_free(tmp_path):
 
     assert decoded.document_digest == document.document_digest
     assert decoded.source.origin.kind is SourceOriginKind.REPOSITORY
+    assert encoded["blocks"][0]["locator"]["column_start"] is None
+    assert encoded["blocks"][0]["locator"]["column_end"] is None
+    assert decoded.blocks[0].locator.column_start is None
+    assert decoded.blocks[0].locator.column_end is None
     assert str(source) not in str(encoded)
     assert (
         rich_block_from_document(encoded_block).block_id
