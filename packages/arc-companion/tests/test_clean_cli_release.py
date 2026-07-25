@@ -268,6 +268,74 @@ def test_status_does_not_attribute_an_old_release_to_the_selected_run(
     assert matched["release_matches_selected_run"] is True
 
 
+@pytest.mark.parametrize("delivery_state", ["missing", "mixed", "corrupt"])
+def test_status_warns_when_current_delivery_pair_is_invalid(
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+    delivery_state: str,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    run_id = "companion-delivery-status"
+    project.select_run(run_id)
+    repository = RunRepository(project.jobs_root)
+
+    class PausingHandler:
+        name = "arc.companion.build.v2"
+
+        def execute(self, _context):
+            return Paused(
+                Awaiting(ResumeReason.EXTERNAL_CONDITION, "resume", False)
+            )
+
+    RunEngine(repository).execute(
+        RunSpec(run_id, PausingHandler.name, {}),
+        PausingHandler(),
+    )
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    first = publisher.publish(_book(), run_id=run_id)
+    if delivery_state == "missing":
+        project.delivery_html.unlink()
+    elif delivery_state == "corrupt":
+        project.delivery_pdf.write_bytes(b"corrupt")
+    else:
+        publisher.publish(
+            replace(_book(), title="Second fixture"),
+            run_id="other-run",
+        )
+        project.delivery_pdf.write_bytes(first.pdf.read_bytes())
+        project.publish_current(
+            release_id=first.release_id,
+            manifest=first.manifest,
+            run_id=run_id,
+        )
+    before = {
+        path.relative_to(project.root): path.read_bytes()
+        for path in project.root.rglob("*")
+        if path.is_file()
+    }
+
+    monkeypatch.setattr(
+        "arc_companion.cli._publisher",
+        lambda _paths: (_ for _ in ()).throw(
+            AssertionError("status must not construct a publisher")
+        ),
+    )
+
+    assert main(["status", "--project-dir", str(project.root)]) == 2
+
+    result = json.loads(capsys.readouterr().out)
+    assert [item["code"] for item in result["warnings"]] == [
+        "delivery_invalid"
+    ]
+    after = {
+        path.relative_to(project.root): path.read_bytes()
+        for path in project.root.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
 def test_stop_acknowledges_a_running_attempt_before_it_pauses(
     tmp_path: Path, capsys
 ) -> None:
@@ -473,9 +541,7 @@ def test_delivery_failure_keeps_current_pointer_last_and_retry_repairs(
     assert current is not None
     assert current["release_id"] == first.release_id
     assert current["run_id"] == "run-one"
-    assert project.delivery_pdf.read_bytes() == (
-        project.releases_root / second_id / "companion.pdf"
-    ).read_bytes()
+    assert project.delivery_pdf.read_bytes() == first.pdf.read_bytes()
     assert first.release_id in project.delivery_html.read_text(encoding="utf-8")
 
     monkeypatch.undo()
@@ -483,6 +549,123 @@ def test_delivery_failure_keeps_current_pointer_last_and_retry_repairs(
     assert repaired.reused
     assert project.current_release()["release_id"] == second_id  # type: ignore[index]
     assert second_id in project.delivery_html.read_text(encoding="utf-8")
+
+
+def test_first_publish_failure_removes_both_new_delivery_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    original_replace = publisher._replace_delivery_file
+
+    def fail_html(staged: Path, target: Path) -> None:
+        if target == project.delivery_html:
+            raise OSError("delivery interruption")
+        original_replace(staged, target)
+
+    monkeypatch.setattr(publisher, "_replace_delivery_file", fail_html)
+
+    with pytest.raises(OSError, match="delivery interruption"):
+        publisher.publish(_book(), run_id="run-one")
+
+    assert not project.delivery_pdf.exists()
+    assert not project.delivery_html.exists()
+    assert not project.current.exists()
+    assert not tuple(project.runtime_root.glob(".delivery.*"))
+
+    monkeypatch.undo()
+    repaired = publisher.publish(_book(), run_id="run-one")
+    assert repaired.reused
+    assert project.delivery_pdf.read_bytes() == repaired.pdf.read_bytes()
+    assert repaired.release_id in project.delivery_html.read_text(encoding="utf-8")
+
+
+def test_delivery_verification_failure_restores_prior_pair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    first = publisher.publish(_book(), run_id="run-one")
+    old_pdf = project.delivery_pdf.read_bytes()
+    old_html = project.delivery_html.read_bytes()
+    old_current = project.current.read_bytes()
+    second_book = replace(_book(), title="Second fixture")
+
+    monkeypatch.setattr(
+        publisher,
+        "_verify_delivery",
+        lambda _release: (_ for _ in ()).throw(
+            CompanionReleaseError("delivery_invalid", "verification failed")
+        ),
+    )
+
+    with pytest.raises(CompanionReleaseError, match="verification failed"):
+        publisher.publish(second_book, run_id="run-two")
+
+    assert project.delivery_pdf.read_bytes() == old_pdf == first.pdf.read_bytes()
+    assert project.delivery_html.read_bytes() == old_html
+    assert project.current.read_bytes() == old_current
+
+
+def test_current_publish_failure_restores_prior_pair_and_pointer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    first = publisher.publish(_book(), run_id="run-one")
+    old_pdf = project.delivery_pdf.read_bytes()
+    old_html = project.delivery_html.read_bytes()
+    old_current = project.current.read_bytes()
+    original_publish_current = CompanionProjectPaths.publish_current
+
+    def fail_after_publish(self, **kwargs) -> None:
+        original_publish_current(self, **kwargs)
+        raise OSError("current pointer interruption")
+
+    monkeypatch.setattr(
+        CompanionProjectPaths,
+        "publish_current",
+        fail_after_publish,
+    )
+
+    with pytest.raises(OSError, match="current pointer interruption"):
+        publisher.publish(
+            replace(_book(), title="Second fixture"),
+            run_id="run-two",
+        )
+
+    assert project.delivery_pdf.read_bytes() == old_pdf == first.pdf.read_bytes()
+    assert project.delivery_html.read_bytes() == old_html
+    assert project.current.read_bytes() == old_current
+
+
+def test_first_current_publish_failure_removes_new_delivery_and_pointer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    original_publish_current = CompanionProjectPaths.publish_current
+
+    def fail_after_publish(self, **kwargs) -> None:
+        original_publish_current(self, **kwargs)
+        raise OSError("current pointer interruption")
+
+    monkeypatch.setattr(
+        CompanionProjectPaths,
+        "publish_current",
+        fail_after_publish,
+    )
+
+    with pytest.raises(OSError, match="current pointer interruption"):
+        publisher.publish(_book(), run_id="run-one")
+
+    assert not project.delivery_pdf.exists()
+    assert not project.delivery_html.exists()
+    assert not project.current.exists()
 
 
 def test_validate_current_verifies_root_delivery_copies(

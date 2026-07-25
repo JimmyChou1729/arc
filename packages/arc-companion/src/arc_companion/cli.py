@@ -34,6 +34,7 @@ from .project import CompanionProjectError, CompanionProjectPaths
 from .release import (
     CompanionReleaseError,
     CompanionReleasePublisher,
+    validate_current_delivery,
 )
 from .renderer import CompanionRenderError, CompanionRenderer
 from .request_contracts import (
@@ -317,6 +318,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
     release_matches_selected_run = (
         current is not None and current["run_id"] == run_id
     )
+    release_warnings = _release_pointer_warnings(paths, current)
     data: dict[str, Any] = {
         "selected_run": selected_run,
         "active_release": current,
@@ -329,7 +331,12 @@ def _status(args: argparse.Namespace) -> CommandResult:
         artifacts=base.artifacts,
         warnings=(
             *_source_warnings(paths, run_id),
-            *_release_pointer_warnings(paths, current),
+            *release_warnings,
+            *_delivery_warnings(
+                paths,
+                current,
+                release_warnings=release_warnings,
+            ),
         ),
         error=base.error,
         resume=base.resume,
@@ -556,6 +563,21 @@ def _release_pointer_warnings(
                 "active release is missing; rerun render for the selected run",
             ),
         )
+    return ()
+
+
+def _delivery_warnings(
+    paths: CompanionProjectPaths,
+    current: Mapping[str, Any] | None,
+    *,
+    release_warnings: tuple[CommandWarning, ...],
+) -> tuple[CommandWarning, ...]:
+    if current is None or release_warnings:
+        return ()
+    try:
+        validate_current_delivery(paths, dict(current))
+    except CompanionReleaseError as exc:
+        return (CommandWarning("delivery_invalid", str(exc)),)
     return ()
 
 

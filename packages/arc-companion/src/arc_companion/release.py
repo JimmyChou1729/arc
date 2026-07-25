@@ -46,6 +46,19 @@ class CompanionRelease:
     reused: bool
 
 
+@dataclass(frozen=True)
+class _FileSnapshot:
+    existed: bool
+    payload: bytes = b""
+
+
+@dataclass(frozen=True)
+class _DeliverySnapshot:
+    pdf: _FileSnapshot
+    html: _FileSnapshot
+    current: _FileSnapshot
+
+
 class CompanionReleasePublisher:
     def __init__(
         self,
@@ -185,20 +198,25 @@ class CompanionReleasePublisher:
             staged_html.write_bytes(
                 _delivery_html_bytes(release.web_index, release.release_id)
             )
-            self._replace_delivery_file(
-                staged_pdf,
-                self.project.delivery_pdf,
-            )
-            self._replace_delivery_file(
-                staged_html,
-                self.project.delivery_html,
-            )
-            self._verify_delivery(release)
-            self.project.publish_current(
-                release_id=release.release_id,
-                manifest=release.manifest,
-                run_id=run_id,
-            )
+            previous = self._snapshot_delivery()
+            try:
+                self._replace_delivery_file(
+                    staged_pdf,
+                    self.project.delivery_pdf,
+                )
+                self._replace_delivery_file(
+                    staged_html,
+                    self.project.delivery_html,
+                )
+                self._verify_delivery(release)
+                self.project.publish_current(
+                    release_id=release.release_id,
+                    manifest=release.manifest,
+                    run_id=run_id,
+                )
+            except BaseException:
+                self._restore_delivery(previous)
+                raise
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
@@ -207,26 +225,33 @@ class CompanionReleasePublisher:
         atomic_write_bytes(target, staged.read_bytes())
 
     def _verify_delivery(self, release: CompanionRelease) -> None:
-        expected = {
-            self.project.delivery_pdf: release.pdf.read_bytes(),
-            self.project.delivery_html: _delivery_html_bytes(
-                release.web_index,
-                release.release_id,
-            ),
-        }
-        for path, payload in expected.items():
+        _verify_delivery_files(self.project, release.release_id)
+
+    def _snapshot_delivery(self) -> _DeliverySnapshot:
+        return _DeliverySnapshot(
+            pdf=_snapshot_file(self.project.delivery_pdf),
+            html=_snapshot_file(self.project.delivery_html),
+            current=_snapshot_file(self.project.current),
+        )
+
+    def _restore_delivery(self, previous: _DeliverySnapshot) -> None:
+        for path, snapshot in (
+            (self.project.delivery_pdf, previous.pdf),
+            (self.project.delivery_html, previous.html),
+            (self.project.current, previous.current),
+        ):
             try:
-                actual = path.read_bytes()
-            except OSError as exc:
-                raise CompanionReleaseError(
-                    "delivery_invalid",
-                    f"project delivery is missing: {path.name}",
-                ) from exc
-            if actual != payload:
-                raise CompanionReleaseError(
-                    "delivery_invalid",
-                    f"project delivery does not match the current release: {path.name}",
-                )
+                if snapshot.existed:
+                    atomic_write_bytes(path, snapshot.payload)
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                # Preserve the publication failure; rollback is best effort.
+                continue
+        try:
+            _fsync_directory(self.project.root)
+        except OSError:
+            pass
 
     def _assert_delivery_targets_known(self) -> None:
         current = self.project.current_release()
@@ -368,6 +393,61 @@ def _release_identity(book: AcceptedBook) -> dict[str, str]:
         "delivery_recipe": DELIVERY_RECIPE,
         "manifest_schema": RELEASE_MANIFEST_SCHEMA,
     }
+
+
+def validate_current_delivery(
+    project: CompanionProjectPaths,
+    pointer: dict[str, Any],
+) -> None:
+    """Read-only validation of root projections for the pointed release."""
+
+    release_id = pointer.get("release_id")
+    if not isinstance(release_id, str) or not release_id:
+        raise CompanionReleaseError(
+            "delivery_invalid",
+            "current release has no usable delivery identity",
+        )
+    _verify_delivery_files(project, release_id)
+
+
+def _verify_delivery_files(
+    project: CompanionProjectPaths,
+    release_id: str,
+) -> None:
+    release = project.releases_root / release_id
+    canonical_pdf = release / "companion.pdf"
+    canonical_html = release / "reader" / "index.html"
+    try:
+        expected_pdf = canonical_pdf.read_bytes()
+        expected_html = _delivery_html_bytes(canonical_html, release_id)
+    except OSError as exc:
+        raise CompanionReleaseError(
+            "delivery_invalid",
+            "current release delivery sources are unavailable",
+        ) from exc
+    expected = {
+        project.delivery_pdf: expected_pdf,
+        project.delivery_html: expected_html,
+    }
+    for path, payload in expected.items():
+        try:
+            actual = path.read_bytes()
+        except OSError as exc:
+            raise CompanionReleaseError(
+                "delivery_invalid",
+                f"project delivery is missing: {path.name}",
+            ) from exc
+        if actual != payload:
+            raise CompanionReleaseError(
+                "delivery_invalid",
+                f"project delivery does not match the current release: {path.name}",
+            )
+
+
+def _snapshot_file(path: Path) -> _FileSnapshot:
+    if not path.exists():
+        return _FileSnapshot(False)
+    return _FileSnapshot(True, path.read_bytes())
 
 
 def _delivery_html_bytes(index: Path, release_id: str) -> bytes:
@@ -517,4 +597,5 @@ __all__ = [
     "CompanionReleaseError",
     "CompanionReleasePublisher",
     "release_id_for",
+    "validate_current_delivery",
 ]
