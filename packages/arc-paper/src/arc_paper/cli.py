@@ -384,18 +384,29 @@ def main(argv: list[str] | None = None) -> int:
             ),
             exit_code=0,
         )
-    except (_UsageError, ValueError, TypeError) as exc:
-        code = str(getattr(exc, "code", "invalid_request"))
-        message = str(getattr(exc, "message", str(exc)))
+    except _UsageError as exc:
         return _emit(
             CommandResult(
                 CommandStatus.FAILED,
-                error=CommandError(code, message),
+                error=CommandError("invalid_request", str(exc)),
             ),
             exit_code=2,
         )
+    except OSError as exc:
+        return _emit(
+            CommandResult(
+                CommandStatus.FAILED,
+                error=CommandError("local_io_error", str(exc)),
+            ),
+            exit_code=1,
+        )
     except Exception as exc:
-        code = str(getattr(exc, "code", "arc_paper_error"))
+        raw_code = getattr(exc, "code", None)
+        code = (
+            raw_code
+            if isinstance(raw_code, str) and raw_code
+            else "internal_error"
+        )
         message = str(getattr(exc, "message", str(exc)))
         return _emit(
             CommandResult(

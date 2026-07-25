@@ -350,6 +350,38 @@ def test_cli_requires_one_unambiguous_section_selector(
     assert value["error"]["code"] == "invalid_request"
 
 
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (
+            OperationRequestError("invalid_parameters", "bad request"),
+            "invalid_parameters",
+        ),
+        (OSError("disk unavailable"), "local_io_error"),
+        (RuntimeError("unexpected failure"), "internal_error"),
+    ],
+)
+def test_cli_classifies_typed_io_and_internal_failures(
+    error: Exception,
+    code: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail(_name, _values):
+        raise error
+
+    monkeypatch.setattr("arc_paper.cli.dispatch_operation", fail)
+
+    assert main(["get-title", "0911.3380"]) == 1
+    value = json.loads(capsys.readouterr().out)
+    assert value["status"] == "failed"
+    assert value["error"] == {
+        "code": code,
+        "message": str(error),
+        "details": {},
+    }
+
+
 def test_cli_preserves_nonfatal_domain_warnings_in_shared_envelope(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
