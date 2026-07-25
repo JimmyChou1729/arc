@@ -1042,6 +1042,13 @@ def test_real_renderer_release_manifest_exactly_matches_files(
     }
 
     assert declared == actual
+    assert project.delivery_pdf.read_bytes() == release.pdf.read_bytes()
+    delivered_html = project.delivery_html.read_text(encoding="utf-8")
+    assert (
+        f'<base href="releases/{release.release_id}/reader/index.html">'
+        in delivered_html
+    )
+    assert 'href="assets/reader.css"' in delivered_html
 
 
 @pytest.mark.skipif(

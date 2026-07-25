@@ -90,6 +90,14 @@ diagnostics remain in command results and run events, never in reader content.
 Successful build and resume commands perform this formal publication
 automatically.
 
+Deliver `<project-dir>/companion.pdf` and
+`<project-dir>/companion.html` to the user. They are managed root projections
+of the active immutable release. The PDF is an exact physical copy; the HTML
+uses a base pointing to
+`releases/<release-id>/reader/index.html` so canonical reader assets and links
+remain valid. CLI artifacts and the release manifest continue to identify the
+canonical files under `releases/`.
+
 ### Step 2: Render without model calls
 
 Use render after a style, font, renderer, or validator change:

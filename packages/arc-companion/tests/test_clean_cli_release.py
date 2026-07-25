@@ -4,6 +4,7 @@ import errno
 import json
 import shutil
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import arc_companion.project as project_module
@@ -42,7 +43,11 @@ class _FakeRenderer:
             ".source{display:block}", encoding="utf-8"
         )
         (web_dir / "index.html").write_text(
-            f'<html data-book-digest="{book.content_digest}"></html>',
+            (
+                f'<html data-book-digest="{book.content_digest}">'
+                '<head><link rel="stylesheet" href="assets/reader.css"></head>'
+                '<body><a href="#chapter">Chapter</a></body></html>'
+            ),
             encoding="utf-8",
         )
         pdf_path.write_bytes(b"%PDF-1.4\n% deterministic fixture\n")
@@ -325,8 +330,12 @@ def test_release_is_immutable_reused_and_current_updates_last(
         original_release_fsync(path)
 
     def record_project_write(path: Path, value) -> None:
+        delivery_ready = (
+            project.delivery_pdf.is_file()
+            and project.delivery_html.is_file()
+        )
         original_project_write(path, value)
-        events.append(("project", path.parent, project.current.is_file()))
+        events.append(("project", path.parent, delivery_ready))
 
     monkeypatch.setattr(release_module, "_fsync_directory", record_release_fsync)
     monkeypatch.setattr(project_module, "atomic_write_json", record_project_write)
@@ -338,6 +347,14 @@ def test_release_is_immutable_reused_and_current_updates_last(
     assert second.reused
     assert first.directory == second.directory
     assert first.pdf.read_bytes() == second.pdf.read_bytes()
+    assert project.delivery_pdf.read_bytes() == first.pdf.read_bytes()
+    delivered_html = project.delivery_html.read_text(encoding="utf-8")
+    assert (
+        f'<base href="releases/{first.release_id}/reader/index.html">'
+        in delivered_html
+    )
+    assert 'href="assets/reader.css"' in delivered_html
+    assert project.delivery_html.read_bytes() != first.web_index.read_bytes()
     manifest = json.loads(first.manifest.read_text(encoding="utf-8"))
     assert manifest["identity"]["accepted_book_digest"] == book.content_digest
     assert {item["path"] for item in manifest["files"]} >= {
@@ -362,6 +379,135 @@ def test_release_is_immutable_reused_and_current_updates_last(
     assert events.index(release_parent_syncs[-1]) < events.index(
         current_parent_syncs[0]
     )
+
+
+def test_reused_release_repairs_missing_and_corrupt_delivery_copies(
+    tmp_path: Path,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    book = _book()
+    first = publisher.publish(book, run_id="run-one")
+    project.delivery_pdf.unlink()
+    project.delivery_html.write_text("corrupt", encoding="utf-8")
+
+    repaired = publisher.publish(book, run_id="run-two")
+
+    assert repaired.reused
+    assert repaired.release_id == first.release_id
+    assert project.delivery_pdf.read_bytes() == repaired.pdf.read_bytes()
+    assert (
+        f'<base href="releases/{repaired.release_id}/reader/index.html">'
+        in project.delivery_html.read_text(encoding="utf-8")
+    )
+
+
+def test_new_release_replaces_delivery_but_keeps_old_release(
+    tmp_path: Path,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    first = publisher.publish(_book(), run_id="run-one")
+    second_book = replace(_book(), title="Second fixture")
+
+    second = publisher.publish(second_book, run_id="run-two")
+
+    assert second.release_id != first.release_id
+    assert first.directory.is_dir()
+    assert second.directory.is_dir()
+    assert project.delivery_pdf.read_bytes() == second.pdf.read_bytes()
+    delivered_html = project.delivery_html.read_text(encoding="utf-8")
+    assert (
+        f'<base href="releases/{second.release_id}/reader/index.html">'
+        in delivered_html
+    )
+    assert first.release_id not in delivered_html
+    current = project.current_release()
+    assert current is not None
+    assert current["release_id"] == second.release_id
+    assert current["run_id"] == "run-two"
+
+
+@pytest.mark.parametrize("target_name", ["companion.pdf", "companion.html"])
+def test_unknown_preexisting_delivery_target_is_rejected(
+    tmp_path: Path,
+    target_name: str,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    target = project.root / target_name
+    target.write_bytes(b"user-owned content")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+
+    with pytest.raises(CompanionReleaseError) as exc_info:
+        publisher.publish(_book(), run_id="run-conflict")
+
+    assert exc_info.value.code == "delivery_conflict"
+    assert target.read_bytes() == b"user-owned content"
+    assert not project.current.exists()
+    assert not project.releases_root.exists()
+
+
+def test_delivery_failure_keeps_current_pointer_last_and_retry_repairs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    first = publisher.publish(_book(), run_id="run-one")
+    second_book = replace(_book(), title="Second fixture")
+    second_id = release_id_for(second_book)
+    original_replace = publisher._replace_delivery_file
+
+    def fail_html(staged: Path, target: Path) -> None:
+        if target == project.delivery_html:
+            raise OSError("delivery interruption")
+        original_replace(staged, target)
+
+    monkeypatch.setattr(publisher, "_replace_delivery_file", fail_html)
+
+    with pytest.raises(OSError, match="delivery interruption"):
+        publisher.publish(second_book, run_id="run-two")
+
+    assert not tuple(project.runtime_root.glob(".delivery.*"))
+    current = project.current_release()
+    assert current is not None
+    assert current["release_id"] == first.release_id
+    assert current["run_id"] == "run-one"
+    assert project.delivery_pdf.read_bytes() == (
+        project.releases_root / second_id / "companion.pdf"
+    ).read_bytes()
+    assert first.release_id in project.delivery_html.read_text(encoding="utf-8")
+
+    monkeypatch.undo()
+    repaired = publisher.publish(second_book, run_id="run-two")
+    assert repaired.reused
+    assert project.current_release()["release_id"] == second_id  # type: ignore[index]
+    assert second_id in project.delivery_html.read_text(encoding="utf-8")
+
+
+def test_validate_current_verifies_root_delivery_copies(
+    tmp_path: Path,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    book = _book()
+    publisher.publish(book, run_id="run-one")
+    current = project.current_release()
+    assert current is not None
+    assert publisher.validate_current(current, book).release_id == current["release_id"]
+
+    project.delivery_pdf.write_bytes(b"corrupt")
+    with pytest.raises(CompanionReleaseError) as pdf_error:
+        publisher.validate_current(current, book)
+    assert pdf_error.value.code == "delivery_invalid"
+
+    publisher.publish(book, run_id="run-repair")
+    project.delivery_html.unlink()
+    current = project.current_release()
+    assert current is not None
+    with pytest.raises(CompanionReleaseError) as html_error:
+        publisher.validate_current(current, book)
+    assert html_error.value.code == "delivery_invalid"
 
 
 def test_release_directory_fsync_is_skipped_on_windows(

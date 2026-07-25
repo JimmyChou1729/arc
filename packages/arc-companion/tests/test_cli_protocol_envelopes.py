@@ -172,12 +172,20 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
     assert rendered["data"] == {
         "release_id": "release-fake",
         "reused": False,
+        "delivery": {
+            "pdf": str(project / "companion.pdf"),
+            "html": str(project / "companion.html"),
+        },
     }
     assert {item["role"] for item in rendered["artifacts"]} == {
         "manifest",
         "pdf",
         "web",
     }
+    assert all(
+        str(project / "releases") in item["path"]
+        for item in rendered["artifacts"]
+    )
 
     paths = CompanionProjectPaths.load(project)
     paths.publish_current(
@@ -190,6 +198,10 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
     assert validated["data"] == {
         "release_id": "release-fake",
         "valid": True,
+        "delivery": {
+            "pdf": str(project / "companion.pdf"),
+            "html": str(project / "companion.html"),
+        },
     }
     assert {item["role"] for item in validated["artifacts"]} == {
         "manifest",

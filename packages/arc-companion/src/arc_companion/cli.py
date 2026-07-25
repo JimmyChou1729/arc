@@ -381,6 +381,7 @@ def _render(args: argparse.Namespace) -> CommandResult:
         data={
             "release_id": release.release_id,
             "reused": release.reused,
+            "delivery": _delivery_paths(paths),
         },
         artifacts=tuple(artifacts),
     )
@@ -396,7 +397,11 @@ def _validate(args: argparse.Namespace) -> CommandResult:
     release = _publisher(paths).validate_current(current, book)
     return CommandResult(
         CommandStatus.COMPLETED,
-        data={"release_id": release.release_id, "valid": True},
+        data={
+            "release_id": release.release_id,
+            "valid": True,
+            "delivery": _delivery_paths(paths),
+        },
         artifacts=(
             CommandArtifact("manifest", release.release_id, str(release.manifest)),
             CommandArtifact("pdf", release.release_id, str(release.pdf)),
@@ -438,6 +443,7 @@ def _snapshot_result(
             "run": snapshot_data(snapshot),
             "release_id": release.release_id,
             "reused": release.reused,
+            "delivery": _delivery_paths(paths),
         },
         artifacts=(
             CommandArtifact("pdf", release.release_id, str(release.pdf)),
@@ -508,6 +514,13 @@ def _current_run(paths: CompanionProjectPaths) -> str:
             "run_not_found", "project has no selected build run"
         )
     return value
+
+
+def _delivery_paths(paths: CompanionProjectPaths) -> dict[str, str]:
+    return {
+        "pdf": str(paths.delivery_pdf),
+        "html": str(paths.delivery_html),
+    }
 
 
 def _source_warnings(

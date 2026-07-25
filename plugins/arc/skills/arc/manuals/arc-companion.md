@@ -67,6 +67,14 @@ PDF/Web release. Use `render` manually to republish that accepted book after a
 renderer, font, style, or validator change; `--format` filters only the
 artifacts reported to the caller, not what is validated and published.
 
+After publication, open `<project-dir>/companion.pdf` or
+`<project-dir>/companion.html` for convenient delivery. These are managed,
+rebuildable projections: the PDF is an exact copy, while the HTML points its
+base at `releases/<release-id>/reader/index.html` so canonical assets and links
+remain in the immutable release. The release manifest and CLI artifacts remain
+the authoritative immutable records. Do not place unrelated files at either
+managed root path.
+
 ## Help
 
 ```bash

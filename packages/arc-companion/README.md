@@ -41,6 +41,13 @@ A successful build or resume formally publishes and validates one complete
 immutable PDF/Web release. The model-free `render` command is the manual
 republication path for an already accepted book after renderer, font, style,
 or validation changes; its `--format` option only filters reported artifacts.
+Every successful publication also refreshes the managed project-root
+`companion.pdf` and `companion.html` delivery copies. The PDF is byte-for-byte
+the canonical release PDF. The HTML contains a base link to the canonical
+`releases/<release-id>/reader/index.html`, so reader assets and fragment links
+continue to resolve inside the immutable release. Command artifacts still
+identify the canonical immutable files; command data reports the two delivery
+paths.
 
 ## Tests
 

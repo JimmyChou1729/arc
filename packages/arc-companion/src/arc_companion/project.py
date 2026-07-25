@@ -89,6 +89,18 @@ class CompanionProjectPaths:
         return self.root / "current.json"
 
     @property
+    def delivery_pdf(self) -> Path:
+        return self.root / "companion.pdf"
+
+    @property
+    def delivery_html(self) -> Path:
+        return self.root / "companion.html"
+
+    @property
+    def delivery_lease(self) -> Path:
+        return self.runtime_root / "delivery.lock"
+
+    @property
     def current_run_id(self) -> str | None:
         return self._read_project()["current_run_id"]
 

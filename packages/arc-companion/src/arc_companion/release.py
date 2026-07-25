@@ -6,13 +6,14 @@ import errno
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from arc_jobs import canonical_json_bytes
+from arc_jobs import atomic_write_bytes, canonical_json_bytes, file_lease
 
 from .contracts import AcceptedBook
 from .project import CompanionProjectPaths
@@ -55,6 +56,16 @@ class CompanionReleasePublisher:
         self.renderer = renderer
 
     def publish(self, book: AcceptedBook, *, run_id: str) -> CompanionRelease:
+        with file_lease(self.project.delivery_lease, blocking=True):
+            self._assert_delivery_targets_known()
+            return self._publish_locked(book, run_id=run_id)
+
+    def _publish_locked(
+        self,
+        book: AcceptedBook,
+        *,
+        run_id: str,
+    ) -> CompanionRelease:
         release_id = release_id_for(book)
         target = self.project.releases_root / release_id
         expected_identity = _release_identity(book)
@@ -62,11 +73,7 @@ class CompanionReleasePublisher:
             release = self._verify_existing(
                 target, release_id=release_id, identity=expected_identity
             )
-            self.project.publish_current(
-                release_id=release_id,
-                manifest=release.manifest,
-                run_id=run_id,
-            )
+            self._publish_delivery(release, run_id=run_id)
             return release
         self.project.releases_root.mkdir(parents=True, exist_ok=True)
         staging = Path(
@@ -106,12 +113,7 @@ class CompanionReleasePublisher:
             release = self._verify_existing(
                 target, release_id=release_id, identity=expected_identity
             )
-            self.project.publish_current(
-                release_id=release_id,
-                manifest=release.manifest,
-                run_id=run_id,
-            )
-            return CompanionRelease(
+            published = CompanionRelease(
                 release.release_id,
                 release.directory,
                 release.pdf,
@@ -119,6 +121,8 @@ class CompanionReleasePublisher:
                 release.manifest,
                 reused,
             )
+            self._publish_delivery(published, run_id=run_id)
+            return published
         except BaseException:
             if staging.exists():
                 shutil.rmtree(staging)
@@ -140,6 +144,14 @@ class CompanionReleasePublisher:
         pointer: dict[str, Any],
         book: AcceptedBook,
     ) -> CompanionRelease:
+        with file_lease(self.project.delivery_lease, blocking=True):
+            return self._validate_current_locked(pointer, book)
+
+    def _validate_current_locked(
+        self,
+        pointer: dict[str, Any],
+        book: AcceptedBook,
+    ) -> CompanionRelease:
         release_id = pointer["release_id"]
         expected_manifest = (
             self.project.releases_root / release_id / "manifest.json"
@@ -149,7 +161,126 @@ class CompanionReleasePublisher:
                 "release_pointer_invalid",
                 "current release manifest does not match its release ID",
             )
-        return self.validate(release_id, book)
+        release = self.validate(release_id, book)
+        self._verify_delivery(release)
+        return release
+
+    def _publish_delivery(
+        self,
+        release: CompanionRelease,
+        *,
+        run_id: str,
+    ) -> None:
+        self.project.runtime_root.mkdir(parents=True, exist_ok=True)
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=".delivery.",
+                dir=self.project.runtime_root,
+            )
+        )
+        try:
+            staged_pdf = staging / "companion.pdf"
+            staged_html = staging / "companion.html"
+            shutil.copyfile(release.pdf, staged_pdf)
+            staged_html.write_bytes(
+                _delivery_html_bytes(release.web_index, release.release_id)
+            )
+            self._replace_delivery_file(
+                staged_pdf,
+                self.project.delivery_pdf,
+            )
+            self._replace_delivery_file(
+                staged_html,
+                self.project.delivery_html,
+            )
+            self._verify_delivery(release)
+            self.project.publish_current(
+                release_id=release.release_id,
+                manifest=release.manifest,
+                run_id=run_id,
+            )
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    @staticmethod
+    def _replace_delivery_file(staged: Path, target: Path) -> None:
+        atomic_write_bytes(target, staged.read_bytes())
+
+    def _verify_delivery(self, release: CompanionRelease) -> None:
+        expected = {
+            self.project.delivery_pdf: release.pdf.read_bytes(),
+            self.project.delivery_html: _delivery_html_bytes(
+                release.web_index,
+                release.release_id,
+            ),
+        }
+        for path, payload in expected.items():
+            try:
+                actual = path.read_bytes()
+            except OSError as exc:
+                raise CompanionReleaseError(
+                    "delivery_invalid",
+                    f"project delivery is missing: {path.name}",
+                ) from exc
+            if actual != payload:
+                raise CompanionReleaseError(
+                    "delivery_invalid",
+                    f"project delivery does not match the current release: {path.name}",
+                )
+
+    def _assert_delivery_targets_known(self) -> None:
+        current = self.project.current_release()
+        for target, role in (
+            (self.project.delivery_pdf, "pdf"),
+            (self.project.delivery_html, "html"),
+        ):
+            if not target.exists():
+                continue
+            if not target.is_file():
+                raise CompanionReleaseError(
+                    "delivery_conflict",
+                    f"project delivery target is not a file: {target.name}",
+                )
+            if current is None and not self._matches_known_release(
+                target,
+                role=role,
+            ):
+                raise CompanionReleaseError(
+                    "delivery_conflict",
+                    f"project delivery target is not managed by Companion: {target.name}",
+                )
+
+    def _matches_known_release(self, target: Path, *, role: str) -> bool:
+        try:
+            payload = target.read_bytes()
+        except OSError:
+            return False
+        if not self.project.releases_root.is_dir():
+            return False
+        for release_dir in self.project.releases_root.iterdir():
+            if not release_dir.is_dir():
+                continue
+            if role == "pdf":
+                canonical = release_dir / "companion.pdf"
+                try:
+                    if canonical.read_bytes() == payload:
+                        return True
+                except OSError:
+                    continue
+            else:
+                canonical = release_dir / "reader" / "index.html"
+                if not canonical.is_file():
+                    continue
+                try:
+                    expected = _delivery_html_bytes(
+                        canonical,
+                        release_dir.name,
+                    )
+                except CompanionReleaseError:
+                    continue
+                if expected == payload:
+                    return True
+        return False
 
     def _verify_existing(
         self,
@@ -237,6 +368,58 @@ def _release_identity(book: AcceptedBook) -> dict[str, str]:
         "delivery_recipe": DELIVERY_RECIPE,
         "manifest_schema": RELEASE_MANIFEST_SCHEMA,
     }
+
+
+def _delivery_html_bytes(index: Path, release_id: str) -> bytes:
+    if re.fullmatch(r"[A-Za-z0-9._-]+", release_id) is None:
+        raise CompanionReleaseError(
+            "delivery_invalid",
+            "release ID cannot be used in the delivery base path",
+        )
+    try:
+        text = index.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise CompanionReleaseError(
+            "delivery_invalid",
+            "canonical Web reader index is unreadable",
+        ) from exc
+    base = (
+        f'<base href="releases/{release_id}/reader/index.html">'
+    )
+    folded = text.casefold()
+    head_start = folded.find("<head")
+    if head_start >= 0:
+        insertion = text.find(">", head_start)
+        if insertion < 0:
+            raise CompanionReleaseError(
+                "delivery_invalid",
+                "canonical Web reader has a malformed head element",
+            )
+        return (
+            text[: insertion + 1]
+            + "\n  "
+            + base
+            + text[insertion + 1 :]
+        ).encode("utf-8")
+    html_start = folded.find("<html")
+    if html_start < 0:
+        raise CompanionReleaseError(
+            "delivery_invalid",
+            "canonical Web reader has no html element",
+        )
+    insertion = text.find(">", html_start)
+    if insertion < 0:
+        raise CompanionReleaseError(
+            "delivery_invalid",
+            "canonical Web reader has a malformed html element",
+        )
+    return (
+        text[: insertion + 1]
+        + "\n<head>\n  "
+        + base
+        + "\n</head>"
+        + text[insertion + 1 :]
+    ).encode("utf-8")
 
 
 def _file_records(root: Path) -> list[dict[str, Any]]:
