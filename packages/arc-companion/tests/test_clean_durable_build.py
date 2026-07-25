@@ -23,7 +23,7 @@ from arc_paper import (
     SourceRepository,
 )
 
-from arc_companion.request_contracts import (
+from arc_companion.request_contracts_v1 import (
     CompanionBuildRequest,
     CompanionExecutionOptions,
     CompanionGenerationRecipe,

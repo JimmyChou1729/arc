@@ -4,11 +4,13 @@
 Markdown, HTML, or single-file flattened TeX. The rich source is authoritative;
 an optional PDF validates source alignment and supplies page mappings.
 
-One durable build detects source language once, plans chapters from source
-headings, creates one whole-book glossary, translates every source block when
-the primary language differs, generates selective textbook notes, and runs one
-text-only reviewer per chapter. The immutable `AcceptedBook` then drives both
-the searchable PDF and responsive static Web reader.
+New durable builds delegate language detection, terminology, translation, and
+translation review to `arc-translate`. After chapter planning and frozen
+evidence, a glossary barrier starts independent translation and guide lanes for
+each chapter. Companion reviews only the guide lane and joins the accepted
+outputs deterministically. When source and target have the same primary
+language, terminology and translation are skipped while guides are still
+generated. Existing v1 run lineages remain replayable and resumable.
 
 ## Commands
 
@@ -17,7 +19,7 @@ All commands write one `arc.command_result.v2` JSON document:
 ```bash
 arc-companion build SOURCE --project-dir DIR \
   --target-language zh-CN --user-intent '...' \
-  --provider auto --workers 4 --json
+  --provider auto --workers 4 --approx-term-count 50 --json
 
 arc-companion status --project-dir DIR --json
 arc-companion resume --project-dir DIR --input response.json --json

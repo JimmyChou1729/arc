@@ -22,14 +22,25 @@ from arc_jobs import (
 from arc_llm import LLMTaskService
 
 from .build import COMPANION_BUILD_HANDLER, CompanionBuildHandler
+from .build_v2 import (
+    COMPANION_BUILD_HANDLER_V2,
+    CompanionBuildHandlerV2,
+)
 from .contracts import AcceptedBook, CompanionContentCodec
-from .request_contracts import (
+from .request_contracts_v1 import (
     CompanionBuildRequest,
     CompanionExecutionOptions,
     CompanionGenerationRecipe,
     decode_handler_semantic_input,
     encode_handler_semantic_input,
 )
+from .request_contracts_v2 import (
+    CompanionBuildRequestV2,
+    CompanionGenerationRecipeV2,
+    decode_handler_semantic_input_v2,
+    encode_handler_semantic_input_v2,
+)
+from .translation_adapter import CompanionTranslationAdapter
 
 
 class CompanionServiceError(RuntimeError):
@@ -51,35 +62,53 @@ class CompanionService:
 
     def build(
         self,
-        request: CompanionBuildRequest,
+        request: CompanionBuildRequest | CompanionBuildRequestV2,
         *,
-        recipe: CompanionGenerationRecipe = CompanionGenerationRecipe(),
+        recipe: (
+            CompanionGenerationRecipe | CompanionGenerationRecipeV2 | None
+        ) = None,
         execution: CompanionExecutionOptions = CompanionExecutionOptions(),
         run_id: str | None = None,
         task_service: LLMTaskService | None = None,
+        translation_adapter: CompanionTranslationAdapter | None = None,
     ) -> RunSnapshot:
         prepared = self.prepare(request, recipe=recipe, run_id=run_id)
         return self.execute(
             prepared.run_id,
             execution=execution,
             task_service=task_service,
+            translation_adapter=translation_adapter,
         )
 
     def prepare(
         self,
-        request: CompanionBuildRequest,
+        request: CompanionBuildRequest | CompanionBuildRequestV2,
         *,
-        recipe: CompanionGenerationRecipe = CompanionGenerationRecipe(),
+        recipe: (
+            CompanionGenerationRecipe | CompanionGenerationRecipeV2 | None
+        ) = None,
         run_id: str | None = None,
     ) -> RunSnapshot:
         """Durably create one build before an external selector points to it."""
 
+        resolved_recipe = _recipe_for_request(request, recipe)
         resolved = run_id or companion_run_id(request, recipe)
-        spec = RunSpec(
-            resolved,
-            COMPANION_BUILD_HANDLER,
-            encode_handler_semantic_input(request, recipe),
-        )
+        if isinstance(request, CompanionBuildRequestV2):
+            assert isinstance(resolved_recipe, CompanionGenerationRecipeV2)
+            spec = RunSpec(
+                resolved,
+                COMPANION_BUILD_HANDLER_V2,
+                encode_handler_semantic_input_v2(
+                    request, resolved_recipe
+                ),
+            )
+        else:
+            assert isinstance(resolved_recipe, CompanionGenerationRecipe)
+            spec = RunSpec(
+                resolved,
+                COMPANION_BUILD_HANDLER,
+                encode_handler_semantic_input(request, resolved_recipe),
+            )
         return self.repository.create(spec)
 
     def execute(
@@ -88,20 +117,16 @@ class CompanionService:
         *,
         execution: CompanionExecutionOptions = CompanionExecutionOptions(),
         task_service: LLMTaskService | None = None,
+        translation_adapter: CompanionTranslationAdapter | None = None,
     ) -> RunSnapshot:
         """Execute or replay one already prepared Companion build."""
 
         spec = self.repository.read_spec(run_id)
-        if spec.handler != COMPANION_BUILD_HANDLER:
-            raise CompanionServiceError(
-                "run_handler_invalid", "run is not a Companion build"
-            )
-        request, recipe = decode_handler_semantic_input(spec.semantic_input)
-        handler = CompanionBuildHandler(
-            request,
-            recipe,
+        handler = self._handler(
+            spec,
             execution=execution,
             task_service=task_service,
+            translation_adapter=translation_adapter,
         )
         return self.engine.execute(spec, handler)
 
@@ -112,20 +137,49 @@ class CompanionService:
         input: Mapping[str, Any] | None = None,
         execution: CompanionExecutionOptions = CompanionExecutionOptions(),
         task_service: LLMTaskService | None = None,
+        translation_adapter: CompanionTranslationAdapter | None = None,
     ) -> RunSnapshot:
         spec = self.repository.read_spec(run_id)
-        if spec.handler != COMPANION_BUILD_HANDLER:
-            raise CompanionServiceError(
-                "run_handler_invalid", "run is not a Companion build"
-            )
-        request, recipe = decode_handler_semantic_input(spec.semantic_input)
-        handler = CompanionBuildHandler(
-            request,
-            recipe,
+        handler = self._handler(
+            spec,
             execution=execution,
             task_service=task_service,
+            translation_adapter=translation_adapter,
         )
         return self.engine.resume(run_id, handler, input=input)
+
+    def _handler(
+        self,
+        spec: RunSpec,
+        *,
+        execution: CompanionExecutionOptions,
+        task_service: LLMTaskService | None,
+        translation_adapter: CompanionTranslationAdapter | None,
+    ) -> CompanionBuildHandler | CompanionBuildHandlerV2:
+        if spec.handler == COMPANION_BUILD_HANDLER:
+            request, recipe = decode_handler_semantic_input(
+                spec.semantic_input
+            )
+            return CompanionBuildHandler(
+                request,
+                recipe,
+                execution=execution,
+                task_service=task_service,
+            )
+        if spec.handler == COMPANION_BUILD_HANDLER_V2:
+            request, recipe = decode_handler_semantic_input_v2(
+                spec.semantic_input
+            )
+            return CompanionBuildHandlerV2(
+                request,
+                recipe,
+                execution=execution,
+                task_service=task_service,
+                translation_adapter=translation_adapter,
+            )
+        raise CompanionServiceError(
+            "run_handler_invalid", "run is not a Companion build"
+        )
 
     def inspect(self, run_id: str) -> RunView:
         return self.repository.inspect(run_id)
@@ -174,13 +228,38 @@ class CompanionService:
 
 
 def companion_run_id(
-    request: CompanionBuildRequest,
-    recipe: CompanionGenerationRecipe,
+    request: CompanionBuildRequest | CompanionBuildRequestV2,
+    recipe: CompanionGenerationRecipe | CompanionGenerationRecipeV2 | None,
 ) -> str:
+    resolved_recipe = _recipe_for_request(request, recipe)
+    semantic_input = (
+        encode_handler_semantic_input_v2(request, resolved_recipe)
+        if isinstance(request, CompanionBuildRequestV2)
+        else encode_handler_semantic_input(request, resolved_recipe)
+    )
     digest = hashlib.sha256(
-        canonical_json_bytes(encode_handler_semantic_input(request, recipe))
+        canonical_json_bytes(semantic_input)
     ).hexdigest()
     return f"companion-{digest[:24]}"
+
+
+def _recipe_for_request(
+    request: CompanionBuildRequest | CompanionBuildRequestV2,
+    recipe: CompanionGenerationRecipe | CompanionGenerationRecipeV2 | None,
+) -> CompanionGenerationRecipe | CompanionGenerationRecipeV2:
+    if isinstance(request, CompanionBuildRequestV2):
+        if recipe is None:
+            return CompanionGenerationRecipeV2()
+        if not isinstance(recipe, CompanionGenerationRecipeV2):
+            raise ValueError("v2 build request requires a v2 recipe")
+        return recipe
+    if not isinstance(request, CompanionBuildRequest):
+        raise ValueError("unsupported Companion build request")
+    if recipe is None:
+        return CompanionGenerationRecipe()
+    if not isinstance(recipe, CompanionGenerationRecipe):
+        raise ValueError("v1 build request requires a v1 recipe")
+    return recipe
 
 
 __all__ = [

@@ -13,14 +13,14 @@ from arc_paper import (
     SourceRepository,
 )
 
-import arc_companion.request_contracts as request_contracts
+import arc_companion.request_contracts_v1 as request_contracts
 from arc_companion.build import CompanionBuildHandler
 from arc_companion.prompts_v1 import (
     CHAPTER_PLAN_SCHEMA,
     LANGUAGE_SCHEMA,
     chapter_plan_prompt,
 )
-from arc_companion.request_contracts import (
+from arc_companion.request_contracts_v1 import (
     NEUTRAL_TEXTBOOK_INTENT,
     CompanionBuildRequest,
     CompanionExecutionOptions,

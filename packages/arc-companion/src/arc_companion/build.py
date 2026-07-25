@@ -73,7 +73,7 @@ from .prompts_v1 import (
     language_prompt,
     translation_prompt,
 )
-from .request_contracts import (
+from .request_contracts_v1 import (
     DEFAULT_TRANSLATION_INPUT_BUDGET_BYTES,
     CompanionBuildRequest,
     CompanionExecutionOptions,

@@ -36,10 +36,10 @@ from .release import (
     CompanionReleasePublisher,
 )
 from .renderer import CompanionRenderError, CompanionRenderer
-from .request_contracts import (
-    CompanionBuildRequest,
-    CompanionExecutionOptions,
-    CompanionGenerationRecipe,
+from .request_contracts import CompanionExecutionOptions
+from .request_contracts_v2 import (
+    CompanionBuildRequestV2,
+    CompanionGenerationRecipeV2,
 )
 from .service import (
     CompanionService,
@@ -73,6 +73,7 @@ def _parser() -> _Parser:
     build.add_argument("--provider", default="auto")
     build.add_argument("--model")
     build.add_argument("--workers", type=int, default=4)
+    build.add_argument("--approx-term-count", type=int, default=50)
     build.add_argument("--refresh", action="store_true")
     build.add_argument("--json", action="store_true")
 
@@ -159,6 +160,10 @@ def _build(args: argparse.Namespace) -> CommandResult:
         raise _UsageError("--model must be non-empty")
     if args.model is not None and args.provider == "auto":
         raise _UsageError("--model requires an explicit --provider")
+    if not 1 <= args.approx_term_count <= 200:
+        raise _UsageError(
+            "--approx-term-count must be between 1 and 200"
+        )
     if (
         args.pdf is not None
         and args.pdf != "fetch"
@@ -174,18 +179,19 @@ def _build(args: argparse.Namespace) -> CommandResult:
         pdf=args.pdf,
         refresh=args.refresh,
     )
-    request = CompanionBuildRequest(
+    request = CompanionBuildRequestV2(
         source=rich,
         validator_digests=validators,
         target_language=args.target_language,
         user_intent=args.user_intent,
     )
-    recipe = CompanionGenerationRecipe(
+    recipe = CompanionGenerationRecipeV2(
         model=ModelSelection(
             provider=args.provider,
             model=args.model,
             tier="medium",
-        )
+        ),
+        approx_term_count=args.approx_term_count,
     )
     execution = CompanionExecutionOptions(
         workers=args.workers,

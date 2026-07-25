@@ -41,19 +41,56 @@ def __getattr__(name: str) -> Any:
     """Keep render-only imports independent of the LLM runtime."""
 
     if name in {"COMPANION_BUILD_HANDLER", "CompanionBuildHandler"}:
-        from . import build
+        from .build_v2 import (
+            COMPANION_BUILD_HANDLER_V2,
+            CompanionBuildHandlerV2,
+        )
 
-        return getattr(build, name)
+        return {
+            "COMPANION_BUILD_HANDLER": COMPANION_BUILD_HANDLER_V2,
+            "CompanionBuildHandler": CompanionBuildHandlerV2,
+        }[name]
+    if name in {
+        "LEGACY_COMPANION_BUILD_HANDLER",
+        "LegacyCompanionBuildHandler",
+    }:
+        from .build import COMPANION_BUILD_HANDLER, CompanionBuildHandler
+
+        return {
+            "LEGACY_COMPANION_BUILD_HANDLER": COMPANION_BUILD_HANDLER,
+            "LegacyCompanionBuildHandler": CompanionBuildHandler,
+        }[name]
     if name in {
         "COMPANION_CONTENT_CONTRACT",
         "NEUTRAL_TEXTBOOK_INTENT",
-        "CompanionBuildRequest",
         "CompanionExecutionOptions",
-        "CompanionGenerationRecipe",
     }:
         from . import request_contracts
 
         return getattr(request_contracts, name)
+    if name in {"CompanionBuildRequest", "CompanionGenerationRecipe"}:
+        from .request_contracts_v2 import (
+            CompanionBuildRequestV2,
+            CompanionGenerationRecipeV2,
+        )
+
+        return {
+            "CompanionBuildRequest": CompanionBuildRequestV2,
+            "CompanionGenerationRecipe": CompanionGenerationRecipeV2,
+        }[name]
+    if name in {
+        "LegacyCompanionBuildRequest",
+        "LegacyCompanionGenerationRecipe",
+    }:
+        from .request_contracts_v1 import (
+            CompanionBuildRequest,
+            CompanionGenerationRecipe,
+        )
+
+        return {
+            "LegacyCompanionBuildRequest": CompanionBuildRequest,
+            "LegacyCompanionGenerationRecipe": CompanionGenerationRecipe,
+        }[name]
     if name in {
         "CompanionService",
         "CompanionServiceError",
@@ -90,6 +127,10 @@ __all__ = [
     "EvidenceSource",
     "GlossaryEntry",
     "LearningUnit",
+    "LEGACY_COMPANION_BUILD_HANDLER",
+    "LegacyCompanionBuildHandler",
+    "LegacyCompanionBuildRequest",
+    "LegacyCompanionGenerationRecipe",
     "PlannedLearningUnit",
     "RenderedCompanion",
     "SourceAnchor",
