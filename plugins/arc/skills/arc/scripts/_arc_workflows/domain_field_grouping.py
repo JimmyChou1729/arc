@@ -323,15 +323,15 @@ def _build_field_groups(
                         "well_defined_problems": [
                             problem
                             for item in members
-                            for problem in item[
-                                "mathematical_opportunities"
-                            ].get("well_defined_problems", [])
                             if isinstance(
                                 item[
                                     "mathematical_opportunities"
                                 ],
                                 dict,
                             )
+                            for problem in item[
+                                "mathematical_opportunities"
+                            ].get("well_defined_problems", [])
                         ]
                     },
                     "summary_schema_versions": [
