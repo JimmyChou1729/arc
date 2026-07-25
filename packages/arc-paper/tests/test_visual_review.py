@@ -56,8 +56,14 @@ from arc_paper import (
     VisualReviewService,
     MarkdownPDFVisualParseRunner,
     decode_visual_page_review,
+    visual_page_review_schema,
 )
 from arc_paper.parse.visual import PDFRenderError
+
+
+def test_visual_review_provider_const_declares_string_type() -> None:
+    schema = visual_page_review_schema()
+    assert schema["properties"]["schema_version"]["type"] == "string"
 
 
 def _png(width: int = 100, height: int = 200) -> bytes:

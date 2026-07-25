@@ -55,18 +55,21 @@
             "agreed_proposer_ids": {
               "type": "array",
               "items": {
+                "type": "string",
                 "enum": []
               }
             },
             "likely_wrong_proposer_ids": {
               "type": "array",
               "items": {
+                "type": "string",
                 "enum": []
               }
             },
             "recalculate_proposer_ids": {
               "type": "array",
               "items": {
+                "type": "string",
                 "enum": []
               }
             },
@@ -79,6 +82,7 @@
             "best_written_proposer_id": {
               "anyOf": [
                 {
+                  "type": "string",
                   "enum": []
                 },
                 {

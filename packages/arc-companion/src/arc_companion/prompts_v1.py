@@ -35,7 +35,10 @@ _BLOCK_IDS = {
 LANGUAGE_SCHEMA = _closed(
     {
         "language_tag": _NONEMPTY,
-        "classification": {"enum": ["known", "mixed", "unknown"]},
+        "classification": {
+            "type": "string",
+            "enum": ["known", "mixed", "unknown"],
+        },
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     },
     ("language_tag", "classification", "confidence"),
@@ -45,6 +48,7 @@ _PLANNED_UNIT = _closed(
     {
         "unit_id": _NONEMPTY,
         "kind": {
+            "type": "string",
             "enum": [
                 "prerequisite",
                 "intuition",
@@ -73,7 +77,10 @@ _GLOSSARY_CANDIDATE = _closed(
 _EVIDENCE_REQUEST = _closed(
     {
         "request_id": _NONEMPTY,
-        "kind": {"enum": ["paper", "web", "user"]},
+        "kind": {
+            "type": "string",
+            "enum": ["paper", "web", "user"],
+        },
         "query": _NONEMPTY,
         "purpose": _NONEMPTY,
         "anchor_block_ids": _BLOCK_IDS,

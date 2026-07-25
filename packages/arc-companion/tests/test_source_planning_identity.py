@@ -15,7 +15,11 @@ from arc_paper import (
 
 import arc_companion.request_contracts as request_contracts
 from arc_companion.build import CompanionBuildHandler
-from arc_companion.prompts_v1 import chapter_plan_prompt
+from arc_companion.prompts_v1 import (
+    CHAPTER_PLAN_SCHEMA,
+    LANGUAGE_SCHEMA,
+    chapter_plan_prompt,
+)
 from arc_companion.request_contracts import (
     NEUTRAL_TEXTBOOK_INTENT,
     CompanionBuildRequest,
@@ -47,6 +51,14 @@ def _prompt_payload(prompt: str) -> dict:
     _prefix, found, payload = prompt.partition(marker)
     assert found
     return json.loads(payload)
+
+
+def test_companion_provider_enum_nodes_declare_string_types() -> None:
+    assert LANGUAGE_SCHEMA["properties"]["classification"]["type"] == "string"
+    planned_unit = CHAPTER_PLAN_SCHEMA["properties"]["learning_units"]["items"]
+    assert planned_unit["properties"]["kind"]["type"] == "string"
+    evidence = CHAPTER_PLAN_SCHEMA["properties"]["evidence_requests"]["items"]
+    assert evidence["properties"]["kind"]["type"] == "string"
 
 
 def test_language_samples_are_stable_beginning_middle_end(

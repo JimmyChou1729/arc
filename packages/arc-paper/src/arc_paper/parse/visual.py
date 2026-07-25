@@ -579,7 +579,10 @@ def visual_page_review_schema() -> Mapping[str, Any]:
             "notes",
         ],
         "properties": {
-            "schema_version": {"const": VISUAL_PAGE_REVIEW_SCHEMA},
+            "schema_version": {
+                "type": "string",
+                "const": VISUAL_PAGE_REVIEW_SCHEMA,
+            },
             "page_number": {"type": "integer", "minimum": 1},
             "reviewed_span_ids": {
                 "type": "array",

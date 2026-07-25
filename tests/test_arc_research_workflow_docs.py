@@ -21,6 +21,27 @@ WJ = WF / "json"
 SCRIPTS = SKILL / "scripts"
 
 
+def _schema_keyword_nodes(value, *, path="$"):
+    if isinstance(value, dict):
+        if "const" in value or "enum" in value:
+            yield path, value
+        for key, child in value.items():
+            yield from _schema_keyword_nodes(child, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _schema_keyword_nodes(child, path=f"{path}[{index}]")
+
+
+def test_active_workflow_const_and_enum_nodes_declare_provider_types() -> None:
+    missing = []
+    for path in sorted(WJ.glob("*.json")):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        for node_path, node in _schema_keyword_nodes(document):
+            if "type" not in node:
+                missing.append(f"{path.name}:{node_path}")
+    assert missing == []
+
+
 def test_calculation_workflow_files_exist() -> None:
     for name in ["plan.md", "calculate.md", "check.md"]:
         assert (WF / name).is_file()
@@ -1479,6 +1500,7 @@ def test_domain_origin_resolution_keeps_the_seed_date_unbounded() -> None:
 
     assert schema["additionalProperties"] is False
     assert schema["properties"]["schema_version"]["const"] == "arc.domain_origin_selection.v1"
+    assert schema["properties"]["schema_version"]["type"] == "string"
     assert set(schema["required"]) == {
         "schema_version",
         "selected_paper_id",
