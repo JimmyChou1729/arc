@@ -865,14 +865,14 @@ def _parse_html(
                 )
             )
         elif node.name == "table":
-            equation_math = (
-                node.find("math")
-                if any(
-                    "equation" in str(class_name).casefold()
-                    for class_name in node.get("class") or ()
+            if _html_is_equation_table(node):
+                _append_html_equation_table_blocks(
+                    output,
+                    locator=locator,
+                    node=node,
+                    import_asset=import_asset,
                 )
-                else None
-            )
+                continue
             caption = node.find("caption")
             rows = node.find_all("tr")
             header_cells = rows[0].find_all(["th", "td"]) if rows else []
@@ -891,18 +891,6 @@ def _parse_html(
                     else ""
                 ),
                 import_asset=import_asset,
-                forced_block_math=(
-                    equation_math if isinstance(equation_math, Tag) else None
-                ),
-                forced_block_math_label=str(
-                    node.get("id")
-                    or (
-                        equation_math.get("id")
-                        if isinstance(equation_math, Tag)
-                        else ""
-                    )
-                    or ""
-                ),
             )
         elif node.name in {"figure", "img"}:
             image = node.find("img") if node.name == "figure" else node
@@ -934,7 +922,11 @@ def _parse_html(
                     _RawBlock(
                         RichBlockKind.EQUATION,
                         locator,
-                        {"tex": tex, "display": True, "label": str(node.get("id") or "")},
+                        {
+                            "tex": tex,
+                            "display": True,
+                            "label": _html_displayed_equation_label(node),
+                        },
                     )
                 )
     return output
@@ -1030,6 +1022,38 @@ def _append_html_list_blocks(
     flush()
 
 
+def _html_is_equation_table(node: Tag) -> bool:
+    return any(
+        "equation" in str(class_name).casefold()
+        for class_name in node.get("class") or ()
+    )
+
+
+def _append_html_equation_table_blocks(
+    output: list[_RawBlock],
+    *,
+    locator: SourceLocator,
+    node: Tag,
+    import_asset: AssetImporter,
+) -> None:
+    """Emit one display block per MathML unit in an equation-table wrapper."""
+
+    math_nodes = [
+        math
+        for math in node.find_all("math")
+        if isinstance(math, Tag) and math.find_parent("math") is None
+    ]
+    for math in math_nodes:
+        embedded = _html_embedded_block(
+            locator,
+            math,
+            import_asset,
+            equation_label=_html_displayed_equation_label(math),
+        )
+        if embedded is not None:
+            output.append(embedded)
+
+
 def _append_html_table_blocks(
     output: list[_RawBlock],
     *,
@@ -1038,8 +1062,6 @@ def _append_html_table_blocks(
     rows: list[list[Tag]],
     caption: str,
     import_asset: AssetImporter,
-    forced_block_math: Tag | None = None,
-    forced_block_math_label: str = "",
 ) -> None:
     shape = [headers, *rows]
     pending = [["" for _ in row] for row in shape]
@@ -1068,21 +1090,13 @@ def _append_html_table_blocks(
 
     for row_index, row in enumerate(shape):
         for column, cell in enumerate(row):
-            for segment in _html_inline_segments(
-                cell,
-                forced_block_math=forced_block_math,
-            ):
+            for segment in _html_inline_segments(cell):
                 if isinstance(segment, Tag):
                     flush()
                     embedded = _html_embedded_block(
                         locator,
                         segment,
                         import_asset,
-                        equation_label=(
-                            forced_block_math_label
-                            if segment is forced_block_math
-                            else ""
-                        ),
                     )
                     if embedded is not None:
                         output.append(embedded)
@@ -1117,7 +1131,7 @@ def _html_embedded_block(
             {
                 "tex": tex,
                 "display": True,
-                "label": equation_label or str(node.get("id") or ""),
+                "label": equation_label,
             },
         )
     target = str(node.get("src") or "")
@@ -1135,19 +1149,12 @@ def _html_embedded_block(
 
 def _html_inline_segments(
     node: Tag,
-    *,
-    forced_block_math: Tag | None = None,
 ) -> list[dict[str, Any] | Tag]:
-    return _html_inline_segments_from_values(
-        (node,),
-        forced_block_math=forced_block_math,
-    )
+    return _html_inline_segments_from_values((node,))
 
 
 def _html_inline_segments_from_values(
     values: tuple[Tag | NavigableString, ...],
-    *,
-    forced_block_math: Tag | None = None,
 ) -> list[dict[str, Any] | Tag]:
     segments: list[dict[str, Any] | Tag] = []
     parts: list[dict[str, str]] = []
@@ -1178,8 +1185,7 @@ def _html_inline_segments_from_values(
             return
         if value.name == "math":
             if (
-                value is forced_block_math
-                or str(value.get("display") or "").casefold() == "block"
+                str(value.get("display") or "").casefold() == "block"
             ):
                 flush()
                 segments.append(value)
@@ -1215,6 +1221,28 @@ def _html_math_tex(node: Tag) -> str:
         if isinstance(annotation, Tag):
             tex = annotation.get_text(" ", strip=True)
     return normalize_tex(tex or node.get_text(" ", strip=True))
+
+
+def _html_displayed_equation_label(math: Tag) -> str:
+    """Use the rendered tag, never a structural HTML ID, as an equation label."""
+
+    row = math.find_parent("tr")
+    containers = (row, math.find_parent("table"), math.parent)
+    for container in containers:
+        if not isinstance(container, Tag):
+            continue
+        tag = container.find(
+            class_=re.compile(r"(?:^|\s)ltx_tag(?:\s|$)")
+        )
+        if isinstance(tag, Tag):
+            return _normalize_displayed_equation_label(tag.get_text(" ", strip=True))
+    return ""
+
+
+def _normalize_displayed_equation_label(value: str) -> str:
+    compact = re.sub(r"\s+", " ", value).strip()
+    match = re.fullmatch(r"\(\s*([^()]+?)\s*\)", compact)
+    return match.group(1).strip() if match else compact
 
 
 def _parse_tex(

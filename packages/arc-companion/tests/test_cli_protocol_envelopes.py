@@ -8,6 +8,7 @@ import pytest
 from arc_jobs import CommandResult, CommandStatus, RunStatus
 from arc_paper import (
     RichDocumentParserService,
+    RichDocumentValidationError,
     SourceFormat,
     SourceOrigin,
     SourceOriginKind,
@@ -357,3 +358,32 @@ def test_main_classifies_typed_io_and_internal_failures(
         "message": str(error),
         "details": {},
     }
+
+
+def test_main_propagates_all_structured_pdf_conflicts(capsys, monkeypatch) -> None:
+    conflicts = (
+        {
+            "subject_id": "section:first",
+            "status": "missing",
+            "page_candidates": [],
+        },
+        {
+            "subject_id": "section:second",
+            "status": "ambiguous",
+            "page_candidates": [1, 2],
+        },
+    )
+
+    def fail(_args):
+        raise RichDocumentValidationError(
+            "pdf_validator_ambiguous",
+            "PDF validator ambiguous for 2 source subjects",
+            details=conflicts,
+        )
+
+    monkeypatch.setattr(cli_module, "_dispatch", fail)
+
+    assert main(["build", "source", "--project-dir", "unused"]) == 1
+    result = _result(capsys)
+    assert result["error"]["code"] == "pdf_validator_ambiguous"
+    assert result["error"]["details"] == {"conflicts": list(conflicts)}

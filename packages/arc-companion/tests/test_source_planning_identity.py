@@ -18,6 +18,7 @@ from arc_paper import (
 import arc_companion.request_contracts as request_contracts
 from arc_companion import __all__ as public_names
 from arc_companion.build import CompanionBuildHandler
+from arc_companion.contracts import AcceptedBook, AcceptedChapter, SourceAnchor
 from arc_companion.prompts import (
     CHAPTER_PLAN_SCHEMA,
     chapter_plan_prompt,
@@ -31,8 +32,10 @@ from arc_companion.request_contracts import (
 )
 from arc_companion.service import companion_run_id
 from arc_companion.source_planning import (
+    block_prompt_document,
     plan_source_chapters,
 )
+from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
@@ -117,6 +120,53 @@ def test_source_chapter_without_heading_uses_document_title(
     assert chapters[0].block_ids == tuple(
         block.block_id for block in document.blocks
     )
+
+
+def test_equation_label_provenance_projects_to_prompts_anchors_and_reader(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, "# Source\n\n$$\nx = 1\n$$\n")
+    equation = next(
+        block for block in document.blocks if block.kind is RichBlockKind.EQUATION
+    )
+    provenance = {
+        "source_label": "22",
+        "pdf_label": "19",
+        "effective_label": "19",
+        "page_number": 3,
+        "matching_method": "strict_complete_pdf_sequence",
+    }
+
+    prompt_block = block_prompt_document(
+        equation, equation_label_provenance=provenance
+    )
+    anchor = SourceAnchor.from_rich_block(
+        equation, page_number=3, equation_label_provenance=provenance
+    )
+    book = AcceptedBook(
+        document_digest=document.document_digest,
+        title="Companion",
+        source_language="en",
+        target_language="zh-CN",
+        translation_mode="skipped",
+        chapters=(
+            AcceptedChapter(
+                chapter_id="chapter",
+                title="Source",
+                guide="Guide.",
+                source_anchors=(anchor,),
+            ),
+        ),
+    )
+
+    assert prompt_block["payload"]["label"] == "19"
+    assert prompt_block["equation_label_provenance"] == provenance
+    assert anchor.payload["label"] == "19"
+    assert anchor.locator["equation_label_provenance"] == provenance
+    reader = CompanionRenderer().render_web(book, tmp_path / "reader")
+    html = reader.read_text(encoding="utf-8")
+    assert 'class="equation-label">19' in html
+    assert "Rich-source label: 22" in html
 
 
 def test_empty_intent_contract_enters_prompt_and_identity(

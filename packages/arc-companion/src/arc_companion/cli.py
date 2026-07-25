@@ -191,13 +191,19 @@ def main(argv: list[str] | None = None) -> int:
         RichDocumentValidationError,
     ) as exc:
         code = str(exc.code)
+        raw_details = getattr(exc, "details", {}) or {}
+        details = (
+            dict(raw_details)
+            if isinstance(raw_details, Mapping)
+            else {"conflicts": list(raw_details)}
+        )
         result = _failed(
             code,
             str(exc),
             details=(
                 {"help_command": _help_command(arguments)}
                 if code == "invalid_request"
-                else None
+                else details
             ),
         )
     except OSError as exc:

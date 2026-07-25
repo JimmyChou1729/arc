@@ -80,6 +80,7 @@ from .request_contracts import (
 from .source_planning import (
     SourceChapter,
     block_prompt_document,
+    equation_label_provenance,
     plan_source_chapters,
 )
 from .translation_adapter import (
@@ -286,7 +287,7 @@ class CompanionBuildHandler:
                     chapter_id=chapter.chapter_id,
                     title=chapter.title,
                     blocks=[
-                        block_prompt_document(blocks[item])
+                        _source_block_document(self.request.source, blocks[item])
                         for item in chapter.block_ids
                     ],
                     target_language=self.request.target_language,
@@ -381,7 +382,7 @@ class CompanionBuildHandler:
             chapter.chapter_id: _literal_glossary_entries(
                 entries,
                 [
-                    block_prompt_document(blocks[block_id])
+                    _source_block_document(self.request.source, blocks[block_id])
                     for block_id in chapter.block_ids
                 ],
             )
@@ -533,6 +534,9 @@ class CompanionBuildHandler:
                     SourceAnchor.from_rich_block(
                         blocks[block_id],
                         page_number=page_by_block.get(block_id),
+                        equation_label_provenance=equation_label_provenance(
+                            self.request.source, block_id
+                        ),
                     )
                     for block_id in chapter.block_ids
                 ),
@@ -594,7 +598,7 @@ class CompanionBuildHandler:
         if existing is not None:
             return read_json(context, existing, "accepted chapter guide")
         source_documents = [
-            block_prompt_document(blocks[item])
+            _source_block_document(self.request.source, blocks[item])
             for item in chapter.block_ids
         ]
         planned_documents = planned_source_documents(
@@ -773,7 +777,7 @@ def _glossary_contracts(
     glossary: Mapping[str, Any], source: Any
 ) -> tuple[GlossaryEntry, ...]:
     block_documents = {
-        block.block_id: block_prompt_document(block)
+        block.block_id: _source_block_document(source, block)
         for block in source.blocks
     }
     values = []
@@ -804,6 +808,13 @@ def _glossary_contracts(
             )
         )
     return tuple(values)
+
+
+def _source_block_document(source: Any, block: Any) -> dict[str, Any]:
+    return block_prompt_document(
+        block,
+        equation_label_provenance=equation_label_provenance(source, block.block_id),
+    )
 
 
 def _document_title(request: CompanionBuildRequest) -> str:

@@ -28,10 +28,17 @@ PDF_VALIDATOR_MISSING_WARNING = (
 
 
 class RichDocumentValidationError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: tuple[dict[str, object], ...] = (),
+    ):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = tuple(dict(item) for item in details)
 
 
 @dataclass(frozen=True)
@@ -122,9 +129,6 @@ class RichDocumentParserService:
         entries, reconciliation_warnings = reconcile_validator(
             standard_primary, parsed_validator
         )
-        entries = _reconcile_synthetic_section(
-            parsed.document, entries, parsed_validator.pages
-        )
         conflicts = [
             entry
             for entry in entries
@@ -144,24 +148,31 @@ class RichDocumentParserService:
                 )
                 else "mismatch"
             )
-            subjects = ", ".join(entry.subject_id for entry in conflicts[:5])
             raise RichDocumentValidationError(
                 f"pdf_validator_{status}",
-                f"PDF validator {status} for source subjects: {subjects}",
+                f"PDF validator {status} for {len(conflicts)} source subjects",
+                details=tuple(_conflict_detail(entry) for entry in conflicts),
             )
+        equation_provenance, equation_warning = _equation_label_provenance(
+            parsed.document, entries
+        )
         page_map = _build_page_map(
             parsed.document,
             entries,
             standard_primary.sections,
             parsed_validator.pages,
         )
+        page_map = _with_equation_pages(page_map, equation_provenance)
+        metadata = dict(parsed.document.metadata)
+        if equation_provenance:
+            metadata["equation_label_reconciliation"] = equation_provenance
         document = RichDocument(
             source=parsed.document.source,
             blocks=parsed.document.blocks,
             sections=parsed.document.sections,
             assets=parsed.document.assets,
             page_map=page_map,
-            metadata=parsed.document.metadata,
+            metadata=metadata,
         )
         return RichParseOutcome(
             document=document,
@@ -171,7 +182,11 @@ class RichDocumentParserService:
                 entries=entries,
             ),
             warnings=tuple(
-                dict.fromkeys(parsed.warnings + reconciliation_warnings)
+                dict.fromkeys(
+                    parsed.warnings
+                    + reconciliation_warnings
+                    + ((equation_warning,) if equation_warning else ())
+                )
             ),
         )
 
@@ -308,67 +323,81 @@ def _phrase_occurs_on_page(phrase: str, page_phrase: str) -> bool:
     return f" {phrase} " in f" {page_phrase} "
 
 
-def _reconcile_synthetic_section(document, entries, pages):
-    """Use body text when a heading-free source has no literal PDF title."""
+def _conflict_detail(entry: ReconciliationEntry) -> dict[str, object]:
+    return {
+        "subject_id": entry.subject_id,
+        "status": entry.status.value,
+        "message": entry.message,
+        **dict(entry.provenance),
+    }
 
-    if (
-        len(document.sections) != 1
-        or document.sections[0].title != "Document"
-    ):
-        return entries
-    section_index = next(
+
+def _equation_label_provenance(
+    document: RichDocument,
+    entries: tuple[ReconciliationEntry, ...],
+) -> tuple[dict[str, dict[str, object]], str]:
+    """Project a complete reconciled PDF label sequence onto rich equation blocks."""
+
+    entry = next(
         (
-            index
-            for index, entry in enumerate(entries)
-            if entry.subject_id.startswith("section:")
+            item
+            for item in entries
+            if item.subject_id == "equation-labels"
+            and item.status is ReconciliationStatus.VERIFIED
         ),
         None,
     )
-    if section_index is None:
-        return entries
-    entry = entries[section_index]
-    if entry.status is not ReconciliationStatus.MISSING:
-        return entries
-    source_text = " ".join(_block_text(block) for block in document.blocks)
-    source_phrase = _text_fingerprint(source_text)
-    source_tokens = set(source_phrase.split())
-    candidates: list[int] = []
-    for page in pages:
-        page_phrase = _text_fingerprint(page.text)
-        if not source_tokens:
-            continue
-        if len(source_tokens) < 3:
-            matched = bool(source_phrase and source_phrase in page_phrase)
-        else:
-            matched = (
-                len(source_tokens.intersection(page_phrase.split()))
-                / len(source_tokens)
-                >= 0.6
-            )
-        if matched:
-            candidates.append(page.page_number)
-    if not candidates:
-        return entries
-    status = (
-        ReconciliationStatus.VERIFIED
-        if len(candidates) == 1
-        else ReconciliationStatus.AMBIGUOUS
-    )
-    replacement = ReconciliationEntry(
-        validator=entry.validator,
-        status=status,
-        subject_id=entry.subject_id,
-        message=(
-            "heading-free rich source body maps to one PDF page"
-            if status is ReconciliationStatus.VERIFIED
-            else "heading-free rich source body maps to multiple PDF pages"
-        ),
-        provenance={
-            "page_candidates": candidates,
-            "matching_method": "source_body_text",
-        },
-    )
-    return entries[:section_index] + (replacement,) + entries[section_index + 1 :]
+    if entry is None:
+        return {}, ""
+    raw_mappings = entry.provenance.get("mappings")
+    if not isinstance(raw_mappings, list):
+        return {}, "PDF equation labels were not projected: reconciliation metadata is invalid"
+    blocks = [
+        block
+        for block in document.blocks
+        if block.kind is RichBlockKind.EQUATION
+        and isinstance(block.payload.get("label"), str)
+        and block.payload["label"]
+    ]
+    by_label: dict[str, object] = {}
+    for block in blocks:
+        label = str(block.payload["label"])
+        if label in by_label:
+            return {}, "PDF equation labels were not projected: rich labels are not unique"
+        by_label[label] = block
+    output: dict[str, dict[str, object]] = {}
+    for raw in raw_mappings:
+        if not isinstance(raw, dict):
+            return {}, "PDF equation labels were not projected: reconciliation metadata is invalid"
+        source_label = raw.get("source_label")
+        block = by_label.get(source_label) if isinstance(source_label, str) else None
+        if block is None:
+            return {}, "PDF equation labels were not projected: rich and parsed labels disagree"
+        block_id = getattr(block, "block_id")
+        output[block_id] = {
+            "source_label": source_label,
+            "pdf_label": raw["pdf_label"],
+            "effective_label": raw["effective_label"],
+            "page_number": raw["page_number"],
+            "matching_method": raw["matching_method"],
+        }
+    if len(output) != len(blocks):
+        return {}, "PDF equation labels were not projected: rich equation coverage is incomplete"
+    return output, ""
+
+
+def _with_equation_pages(
+    page_map: tuple[RichPageMapEntry, ...],
+    provenance: dict[str, dict[str, object]],
+) -> tuple[RichPageMapEntry, ...]:
+    known = {item.block_id for item in page_map}
+    extra = [
+        RichPageMapEntry(block_id=block_id, page_number=page_number)
+        for block_id, details in provenance.items()
+        if block_id not in known
+        and isinstance((page_number := details.get("page_number")), int)
+    ]
+    return page_map + tuple(extra)
 
 
 def _block_text(block) -> str:

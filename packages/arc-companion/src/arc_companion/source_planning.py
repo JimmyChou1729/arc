@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -85,10 +86,33 @@ def validate_chapter_coverage(
         )
 
 
-def block_prompt_document(block: RichBlock) -> dict[str, Any]:
-    """Public-codec projection used in all source-anchored prompts."""
+def block_prompt_document(
+    block: RichBlock,
+    *,
+    equation_label_provenance: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Source projection used in prompts, with validated PDF label provenance."""
 
-    return rich_block_to_document(block)
+    document = rich_block_to_document(block)
+    if block.kind is not RichBlockKind.EQUATION or not equation_label_provenance:
+        return document
+    effective = equation_label_provenance.get("effective_label")
+    source = equation_label_provenance.get("source_label")
+    if not isinstance(effective, str) or not isinstance(source, str):
+        return document
+    document["payload"]["label"] = effective
+    document["equation_label_provenance"] = dict(equation_label_provenance)
+    return document
+
+
+def equation_label_provenance(
+    document: RichDocument, block_id: str
+) -> Mapping[str, Any] | None:
+    values = document.metadata.get("equation_label_reconciliation")
+    if not isinstance(values, Mapping):
+        return None
+    value = values.get(block_id)
+    return value if isinstance(value, Mapping) else None
 
 
 def _chapter(
@@ -114,6 +138,7 @@ def _document_title(document: RichDocument) -> str:
 __all__ = [
     "SourceChapter",
     "block_prompt_document",
+    "equation_label_provenance",
     "plan_source_chapters",
     "validate_chapter_coverage",
 ]

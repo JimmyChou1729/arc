@@ -456,7 +456,7 @@ def test_html_nested_math_in_equation_container_is_not_duplicated(tmp_path):
     ).document
 
     assert len(document.math_spans) == 1
-    assert document.math_spans[0].source_label == "E1"
+    assert document.math_spans[0].source_label == ""
     assert document.math_spans[0].normalized_tex == "x = y"
 
 

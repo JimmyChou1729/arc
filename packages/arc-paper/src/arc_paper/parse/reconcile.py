@@ -260,16 +260,40 @@ def _reconcile_pdf(
     raw_pages = [page.text for page in validator.pages]
     for section in primary.sections:
         title = _fingerprint(section.title)
-        exact_matching_pages = _pages_for_exact_section_title(raw_pages, section.title)
+        exact_matching_pages = _pages_for_exact_section_title(
+            raw_pages, section.title
+        )
+        joined_matching_pages = _pages_for_joined_section_title(
+            raw_pages, section.title
+        )
+        body_anchor, body_matching_pages = _pages_for_section_body_anchor(
+            raw_pages, section.title, section.text
+        )
         substring_matching_pages = _pages_for_section_title_substrings(
-            raw_pages, title
+            raw_pages,
+            _fingerprint(
+                _without_conventional_pdf_section_prefix(section.title)
+            )
+            or title,
         )
-        matching_pages = exact_matching_pages or substring_matching_pages
-        method = (
-            "normalized_exact_line"
-            if exact_matching_pages
-            else ("normalized_page_substring" if substring_matching_pages else "none")
-        )
+        # A unique exact title is strongest.  A title can also occur in a TOC,
+        # however, so a bounded joined-heading or body anchor may safely break
+        # that tie before the deliberately conservative substring fallback.
+        if len(exact_matching_pages) == 1:
+            matching_pages, method = exact_matching_pages, "normalized_exact_line"
+        elif len(joined_matching_pages) == 1:
+            matching_pages, method = joined_matching_pages, "joined_heading_lines"
+        elif len(body_matching_pages) == 1:
+            matching_pages, method = body_matching_pages, "content_anchor"
+        elif exact_matching_pages:
+            matching_pages, method = exact_matching_pages, "normalized_exact_line"
+        elif joined_matching_pages:
+            matching_pages, method = joined_matching_pages, "joined_heading_lines"
+        elif body_matching_pages:
+            matching_pages, method = body_matching_pages, "content_anchor"
+        else:
+            matching_pages = substring_matching_pages
+            method = "normalized_page_substring" if matching_pages else "none"
         if len(matching_pages) == 1:
             status = ReconciliationStatus.VERIFIED
             message = "primary section title maps to one PDF page"
@@ -288,6 +312,7 @@ def _reconcile_pdf(
                 page_candidates=matching_pages,
                 title=section.title,
                 matching_method=method,
+                body_anchor=body_anchor,
             )
         )
         if status is not ReconciliationStatus.VERIFIED:
@@ -298,8 +323,11 @@ def _reconcile_pdf(
     for span in primary.math_spans:
         pages_by_label = _pages_for_printed_label(raw_pages, span.source_label)
         pages_by_math = _pages_for_math(raw_pages, span.normalized_tex)
-        matching_pages = sorted(set(pages_by_label or pages_by_math))
-        method = "printed_number" if pages_by_label else "normalized_math"
+        # A printed number locates an equation, but it does not independently
+        # prove that the equation's mathematical content agrees.  Preserve it
+        # as provenance only; content verification requires math evidence.
+        matching_pages = sorted(set(pages_by_math))
+        method = "normalized_math" if pages_by_math else "none"
         if len(matching_pages) == 1:
             status = ReconciliationStatus.VERIFIED
             message = "PDF text layer provides deterministic math evidence"
@@ -311,8 +339,10 @@ def _reconcile_pdf(
             message = "PDF text layer does not provide deterministic evidence for this span"
         provenance: dict[str, Any] = {
             "page_candidates": matching_pages,
-            "matching_method": method if matching_pages else "none",
+            "matching_method": method,
         }
+        if pages_by_label:
+            provenance["printed_label_page_candidates"] = pages_by_label
         printed = _printed_number(span.source_label)
         if printed:
             provenance["printed_equation_number"] = printed
@@ -327,6 +357,13 @@ def _reconcile_pdf(
         )
         if status is not ReconciliationStatus.VERIFIED:
             warnings.append(f"PDF math evidence {status.value} for {span.span_id}")
+    label_entry, label_warning = _strict_pdf_equation_label_mapping(
+        primary, validator, raw_pages
+    )
+    if label_entry is not None:
+        entries.append(label_entry)
+    if label_warning:
+        warnings.append(label_warning)
     return tuple(entries), tuple(warnings)
 
 
@@ -351,6 +388,20 @@ def _pages_for_exact_section_title(pages: list[str], title: str) -> list[int]:
     ]
     if exact_matching_pages:
         return exact_matching_pages
+    semantic_needle = _fingerprint(_without_conventional_pdf_section_prefix(title))
+    if semantic_needle and semantic_needle != needle:
+        semantic_matches = [
+            page_number
+            for page_number, page in enumerate(pages, 1)
+            if any(
+                _fingerprint(line) == semantic_needle
+                or _fingerprint(_without_conventional_pdf_section_prefix(line))
+                == semantic_needle
+                for line in page.splitlines()
+            )
+        ]
+        if semantic_matches:
+            return semantic_matches
     return [
         page_number
         for page_number, page in enumerate(pages, 1)
@@ -363,15 +414,17 @@ def _pages_for_exact_section_title(pages: list[str], title: str) -> list[int]:
 
 _PDF_CONVENTIONAL_SECTION_PREFIX = re.compile(
     r"^\s*(?:"
-    r"\d{1,2}(?:\s*\.\s*\d{1,2})+(?:\s*[.)])?"
+    r"(?:\d{1,2}|[IVXLCDM]+)(?:\s*\.\s*\d{1,2})+(?:\s*[.)])?"
     r"|\d{1,2}\s*[.)]"
     r"|\d{1,2}"
     r"|[IVXLCDM]+\s*[.)]"
     r"|[IVXLCDM]+"
+    r"|[A-Z]\s*[.)]"
+    r"|[A-Z]"
     r")\s+(?=\S)"
 )
 _PDF_SECTION_LIKE_PREFIX = re.compile(
-    r"^\s*(?:\d+(?:\s*\.\s*\d+)*|[IVXLCDM]+)\s*[.)]?\s+(?=\S)"
+    r"^\s*(?:(?:\d+|[IVXLCDM]+)(?:\s*\.\s*\d+)*|[IVXLCDM]+)\s*[.)]?\s+(?=\S)"
 )
 
 
@@ -388,6 +441,67 @@ def _pages_for_section_title_substrings(pages: list[str], title: str) -> list[in
             for line in page.splitlines()
         )
     ]
+
+
+def _pages_for_joined_section_title(pages: list[str], title: str) -> list[int]:
+    """Find an exact heading split across at most three extracted lines."""
+
+    needle = _fingerprint(_without_conventional_pdf_section_prefix(title))
+    if not needle:
+        return []
+    matches: list[int] = []
+    for page_number, page in enumerate(pages, 1):
+        lines = page.splitlines()
+        for index in range(len(lines)):
+            for width in (2, 3):
+                joined = " ".join(lines[index : index + width])
+                if len(lines[index : index + width]) != width:
+                    continue
+                normalized = _fingerprint(joined)
+                stripped = _fingerprint(_without_conventional_pdf_section_prefix(joined))
+                if normalized == needle or stripped == needle:
+                    matches.append(page_number)
+                    break
+            else:
+                continue
+            break
+    return matches
+
+
+def _pages_for_section_body_anchor(
+    pages: list[str], title: str, text: str
+) -> tuple[list[str], list[int]]:
+    """Return the first unique eight-token body anchor within the first 128 tokens."""
+
+    tokens = _fingerprint(text).split()
+    title_tokens = _fingerprint(title).split()
+    if title_tokens and tokens[: len(title_tokens)] == title_tokens:
+        tokens = tokens[len(title_tokens) :]
+    tokens = tokens[:128]
+    if len(tokens) < 8:
+        return [], []
+    page_tokens = [_fingerprint(page).split() for page in pages]
+    fallback: tuple[list[str], list[int]] = ([], [])
+    for start in range(len(tokens) - 7):
+        anchor = tokens[start : start + 8]
+        candidates = [
+            page_number
+            for page_number, observed in enumerate(page_tokens, 1)
+            if _contains_token_run(observed, anchor)
+        ]
+        if len(candidates) == 1:
+            return anchor, candidates
+        if candidates and not fallback[1]:
+            fallback = (anchor, candidates)
+    return fallback
+
+
+def _contains_token_run(values: list[str], needle: list[str]) -> bool:
+    width = len(needle)
+    return any(
+        values[index : index + width] == needle
+        for index in range(len(values) - width + 1)
+    )
 
 
 def _line_has_section_title_substring(line: str, title: str) -> bool:
@@ -429,6 +543,88 @@ def _pages_for_printed_label(pages: list[str], label: str) -> list[int]:
 def _printed_number(label: str) -> str:
     match = re.search(r"(?:^|[^\d])(\d+(?:\.\d+)+|\d+)(?:$|[^\d])", label)
     return match.group(1) if match else ""
+
+
+def _pure_equation_number(label: str) -> str:
+    value = label.strip()
+    return value if re.fullmatch(r"[1-9]\d*", value) else ""
+
+
+def _strict_pdf_equation_label_mapping(
+    primary: ParsedDocument,
+    validator: ParsedDocument,
+    raw_pages: list[str],
+) -> tuple[ReconciliationEntry | None, str]:
+    """Map labels only when both complete ordered equation sequences agree.
+
+    The mapping is intentionally separate from math-content reconciliation: a
+    sequence of printed numbers can establish a display-label provenance, but
+    it cannot prove the TeX extracted from a PDF is equivalent.
+    """
+
+    primary_spans = [
+        span
+        for span in primary.math_spans
+        if span.kind.value == "display" and _pure_equation_number(span.source_label)
+    ]
+    if not primary_spans:
+        return None, ""
+    primary_labels = [
+        _pure_equation_number(span.source_label) for span in primary_spans
+    ]
+    if len(set(primary_labels)) != len(primary_labels):
+        return (
+            None,
+            "PDF equation labels were not canonically mapped: primary labels are not unique",
+        )
+    pdf_spans = [
+        span
+        for span in validator.math_spans
+        if span.kind.value == "display" and _pure_equation_number(span.source_label)
+    ]
+    pdf_labels = [_pure_equation_number(span.source_label) for span in pdf_spans]
+    expected = [str(index) for index in range(1, len(primary_spans) + 1)]
+    if len(pdf_spans) != len(primary_spans) or pdf_labels != expected:
+        return (
+            None,
+            "PDF equation labels were not canonically mapped: complete numeric sequence is unavailable",
+        )
+    pages = [_pages_for_printed_label(raw_pages, label) for label in pdf_labels]
+    if any(len(candidate) != 1 for candidate in pages):
+        return (
+            None,
+            "PDF equation labels were not canonically mapped: printed labels are not page-unique",
+        )
+    page_numbers = [candidate[0] for candidate in pages]
+    if page_numbers != sorted(page_numbers):
+        return (
+            None,
+            "PDF equation labels were not canonically mapped: printed labels are out of document order",
+        )
+    mappings = [
+        {
+            "primary_span_id": span.span_id,
+            "source_label": source_label,
+            "pdf_label": pdf_label,
+            "effective_label": pdf_label,
+            "page_number": page_number,
+            "matching_method": "strict_complete_pdf_sequence",
+        }
+        for span, source_label, pdf_label, page_number in zip(
+            primary_spans, primary_labels, pdf_labels, page_numbers, strict=True
+        )
+    ]
+    return (
+        _entry(
+            validator.source,
+            ReconciliationStatus.VERIFIED,
+            "equation-labels",
+            "PDF printed equation labels form a complete ordered canonical sequence",
+            mappings=mappings,
+            matching_method="strict_complete_pdf_sequence",
+        ),
+        "",
+    )
 
 
 def _pages_for_math(pages: list[str], tex: str) -> list[int]:

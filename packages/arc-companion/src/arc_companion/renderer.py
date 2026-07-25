@@ -527,9 +527,20 @@ def _render_html_source(
             if payload["label"]
             else ""
         )
+        provenance = anchor.locator.get("equation_label_provenance")
+        source_note = ""
+        if (
+            isinstance(provenance, Mapping)
+            and provenance.get("source_label") != payload["label"]
+            and isinstance(provenance.get("source_label"), str)
+        ):
+            source_note = (
+                '<span class="equation-source-label">'
+                f'Rich-source label: {escape_html(provenance["source_label"])}</span>'
+            )
         return (
             f'<div class="math math-display" data-tex="{escape_html(str(payload["tex"]))}">'
-            f'{escape_html(str(payload["tex"]))}</div>{label}'
+            f'{escape_html(str(payload["tex"]))}</div>{label}{source_note}'
         )
     if anchor.kind == "table":
         headers = "".join(f"<th>{_html_text(item)}</th>" for item in payload["headers"])
@@ -804,7 +815,18 @@ def _render_tex_source(
         label = (
             rf"\tag{{{_tex_escape(payload['label'])}}}" if payload["label"] else ""
         )
-        return rf"\[{_sanitize_math(payload['tex'])}{label}\]"
+        provenance = anchor.locator.get("equation_label_provenance")
+        source_note = ""
+        if (
+            isinstance(provenance, Mapping)
+            and provenance.get("source_label") != payload["label"]
+            and isinstance(provenance.get("source_label"), str)
+        ):
+            source_note = (
+                rf"\par{{\footnotesize\itshape Rich-source label: "
+                rf"{_tex_escape(provenance['source_label'])}}}"
+            )
+        return rf"\[{_sanitize_math(payload['tex'])}{label}\]" + source_note
     if anchor.kind == "table":
         headers = payload["headers"]
         rows_value = payload["rows"]
@@ -1325,6 +1347,7 @@ a { color: #235b83; text-underline-offset: .15em; }
 pre { overflow-x: auto; padding: .7rem; background: #eef1f4; border-radius: .35rem; }
 .math-display { overflow-x: auto; padding: .4rem 0; text-align: center; }
 .equation-label { display: block; color: var(--muted); text-align: right; }
+.equation-source-label { display: block; color: var(--muted); text-align: right; font-size: .8rem; }
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 caption { padding: .4rem; color: var(--muted); }
 th, td { padding: .4rem .5rem; border: 1px solid #ccd4dc; text-align: left; vertical-align: top; }

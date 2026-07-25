@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
 
@@ -753,29 +754,41 @@ def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
     math_nodes = [
         node
         for root in roots
-        for node in root.select("math, .ltx_equation, .ltx_Math")
-        if isinstance(node, Tag)
-        and not (
-            node.name == "math"
-            and node.find_parent(class_=re.compile(r"(?:ltx_equation|ltx_Math)"))
-        )
+        for node in root.find_all("math")
+        if isinstance(node, Tag) and node.find_parent("math") is None
     ]
-    for ordinal, node in enumerate(math_nodes):
-        math = node if node.name == "math" else node.find("math")
-        tex = ""
-        if isinstance(math, Tag):
-            tex = str(math.get("alttext") or math.get("alt") or "")
-            if not tex:
-                annotation = math.find("annotation", attrs={"encoding": re.compile("tex", re.I)})
-                tex = annotation.get_text(" ", strip=True) if isinstance(annotation, Tag) else ""
-        tex = normalize_tex(tex or node.get_text(" ", strip=True))
+    for ordinal, math in enumerate(math_nodes):
+        tex = str(math.get("alttext") or math.get("alt") or "")
+        if not tex:
+            annotation = math.find(
+                "annotation", attrs={"encoding": re.compile("tex", re.I)}
+            )
+            tex = (
+                annotation.get_text(" ", strip=True)
+                if isinstance(annotation, Tag)
+                else ""
+            )
+        tex = normalize_tex(tex or math.get_text(" ", strip=True))
         if not tex:
             continue
-        display = node.name != "math" or str(node.get("display") or "").casefold() == "block"
-        line_start, column_start, line_end, column_end = (
-            html_source_position(node)
+        container = math.find_parent(
+            class_=re.compile(r"(?:^|\s)(?:ltx_equation|ltx_Math)(?:\s|$)")
         )
-        source_key = str(node.get("id") or ordinal)
+        display = isinstance(container, Tag) or (
+            str(math.get("display") or "").casefold() == "block"
+        )
+        line_start, column_start, line_end, column_end = (
+            html_source_position(math)
+        )
+        source_key = ":".join(
+            str(value)
+            for value in (
+                math.get("id") or "",
+                line_start,
+                column_start,
+                ordinal,
+            )
+        )
         span_id = (
             f"math-{hashlib.sha256((artifact.artifact_digest + source_key + tex).encode()).hexdigest()[:24]}"
         )
@@ -788,9 +801,11 @@ def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
                 source_line_end=line_end,
                 source_column_end=column_end,
                 normalized_tex=tex,
-                context_before=_html_neighbor_text(node, previous=True),
-                context_after=_html_neighbor_text(node, previous=False),
-                source_label=str(node.get("id") or ""),
+                context_before=_html_neighbor_text(math, previous=True),
+                context_after=_html_neighbor_text(math, previous=False),
+                source_label=(
+                    _html_displayed_equation_label(math) if display else ""
+                ),
             )
         )
     metadata: dict[str, object] = {"format": "html"}
@@ -816,6 +831,28 @@ def _html_neighbor_text(node: Tag, *, previous: bool) -> str:
     if section is not None and candidate.find_parent("section") is not section:
         return ""
     return candidate.get_text(" ", strip=True)
+
+
+def _html_displayed_equation_label(math: Tag) -> str:
+    """Return a visible equation tag, never an implementation DOM identifier."""
+
+    row = math.find_parent("tr")
+    containers = (row, math.find_parent("table"), math.parent)
+    for container in containers:
+        if not isinstance(container, Tag):
+            continue
+        tag = container.find(
+            class_=re.compile(r"(?:^|\s)ltx_tag(?:\s|$)")
+        )
+        if isinstance(tag, Tag):
+            return _normalize_displayed_equation_label(tag.get_text(" ", strip=True))
+    return ""
+
+
+def _normalize_displayed_equation_label(value: str) -> str:
+    compact = re.sub(r"\s+", " ", value).strip()
+    match = re.fullmatch(r"\(\s*([^()]+?)\s*\)", compact)
+    return match.group(1).strip() if match else compact
 
 
 def _markdown_explicit_term_fields(text: str) -> list[dict[str, object]]:
@@ -1030,7 +1067,12 @@ def _parse_pdf(
                 raw=raw,
             )
             if span:
-                spans.append(span)
+                spans.append(
+                    replace(
+                        span,
+                        source_label=_pdf_printed_equation_label(line),
+                    )
+                )
     warnings = (result.warning,) if result.warning else ()
     return ParsedDocument(
         source=artifact,
@@ -1057,6 +1099,11 @@ def _looks_like_pdf_math(value: str) -> bool:
     has_operator = bool(re.search(r"[=+\-*/^_≤≥∑∫√]", stripped))
     printed_number = bool(re.search(r"\([^()]*\d[^()]*\)\s*$", stripped))
     return has_operator and (printed_number or len(stripped.split()) <= 24)
+
+
+def _pdf_printed_equation_label(value: str) -> str:
+    match = re.search(r"\(\s*([^()]+?)\s*\)\s*$", value)
+    return match.group(1).strip() if match else ""
 
 
 __all__ = [

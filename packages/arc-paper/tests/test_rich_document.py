@@ -391,7 +391,7 @@ def test_html_rich_parse_preserves_equation_table_figure_and_selector(tmp_path):
     assert document.blocks[2].payload == {
         "tex": "F=ma",
         "display": True,
-        "label": "eq1",
+        "label": "",
     }
     assert document.blocks[3].payload["headers"] == ("x", "y")
     assert document.blocks[3].payload["caption"] == "Inputs"
@@ -544,7 +544,7 @@ def test_html_block_math_splits_paragraph_and_table_in_source_order(
     assert paragraph_equation.payload == {
         "tex": "x = 1",
         "display": True,
-        "label": "paragraph-equation",
+        "label": "",
     }
     assert after.payload["text"] == "after."
     assert left.payload["headers"] == ("Value",)
@@ -552,7 +552,7 @@ def test_html_block_math_splits_paragraph_and_table_in_source_order(
     assert table_equation.payload == {
         "tex": "y = 2",
         "display": True,
-        "label": "table-equation",
+        "label": "",
     }
     assert right.payload["headers"] == ("",)
     assert right.payload["rows"] == (("right.",),)
@@ -1073,13 +1073,17 @@ def test_heading_free_source_reconciles_by_body_text(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     primary = _store(
         repository,
-        b"A distinctive compact source body.",
+        b"A distinctive compact source body contains enough stable words for validation.",
         SourceFormat.MARKDOWN,
     )
     pdf_payload = b"%PDF heading-free"
     pdf = _store(repository, pdf_payload, SourceFormat.PDF)
     extractor = FakePDFTextExtractor(
-        {pdf_payload: PDFTextLayer(("A distinctive compact source body.",))}
+            {
+                pdf_payload: PDFTextLayer(
+                    ("A distinctive compact source body contains enough stable words for validation.",)
+                )
+            }
     )
 
     outcome = RichDocumentParserService(
@@ -1089,6 +1093,230 @@ def test_heading_free_source_reconciles_by_body_text(tmp_path):
     assert len(outcome.document.sections) == 1
     assert outcome.document.sections[0].title == "Document"
     assert outcome.document.page_map[0].page_number == 1
+
+
+def test_pdf_section_body_anchor_reconciles_titleless_section_and_stays_unique(
+    tmp_path,
+):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        (
+            b"# Abstract\n\n"
+            b"Eight stable words make this opening body anchor unique today.\n"
+        ),
+        SourceFormat.MARKDOWN,
+    )
+    pdf_payload = b"%PDF titleless abstract"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            pdf_payload: PDFTextLayer(
+                ("Eight stable words make this opening body anchor unique today.",)
+            )
+        }
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    section = next(
+        entry
+        for entry in outcome.report.entries
+        if entry.subject_id.startswith("section:")
+    )
+    assert section.status.value == "verified"
+    assert section.provenance["matching_method"] == "content_anchor"
+    assert section.provenance["body_anchor"] == [
+        "eight",
+        "stable",
+        "words",
+        "make",
+        "this",
+        "opening",
+        "body",
+        "anchor",
+    ]
+
+
+def test_pdf_section_body_anchor_rejects_multiple_pages(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# Summary\n\nEight stable words make this opening body anchor unique today.\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf_payload = b"%PDF repeated body"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    repeated = "Eight stable words make this opening body anchor unique today."
+    extractor = FakePDFTextExtractor(
+        {pdf_payload: PDFTextLayer((repeated, repeated))}
+    )
+
+    with pytest.raises(RichDocumentValidationError) as error:
+        RichDocumentParserService(
+            repository, pdf_text_extractor=extractor
+        ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    assert error.value.code == "pdf_validator_ambiguous"
+    assert error.value.details[0]["matching_method"] == "content_anchor"
+    assert error.value.details[0]["page_candidates"] == [1, 2]
+
+
+def test_pdf_section_matches_wrapped_semantic_heading_with_different_labels(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# III.1 Tidal response beyond equilibrium\n\nSource body.\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf_payload = b"%PDF wrapped heading"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            pdf_payload: PDFTextLayer(
+                ("A. Tidal response beyond\nequilibrium\nSource body.",)
+            )
+        }
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    section = next(
+        entry
+        for entry in outcome.report.entries
+        if entry.subject_id.startswith("section:")
+    )
+    assert section.provenance["matching_method"] == "joined_heading_lines"
+
+
+def test_html_equation_table_preserves_each_visible_displayed_label(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"""
+        <article><h1>Overview</h1>
+        <table class="ltx_equation" id="S3.E23">
+          <tr><td><math alttext="x = 1"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
+          <tr><td><math alttext="y = 2"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+        </table></article>
+        """,
+        SourceFormat.HTML,
+    )
+
+    document = RichDocumentParserService(repository).parse_source(primary)
+
+    equations = [
+        block for block in document.blocks if block.kind is RichBlockKind.EQUATION
+    ]
+    assert [block.payload["tex"] for block in equations] == ["x = 1", "y = 2"]
+    assert [block.payload["label"] for block in equations] == ["4", "5"]
+    assert all(block.payload["label"] != "S3.E23" for block in equations)
+
+
+def test_complete_pdf_equation_sequence_projects_canonical_labels(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"""
+        <article><h1>Overview</h1>
+        <table class="ltx_equation" id="S3.E23">
+          <tr><td><math alttext="x = 1"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
+          <tr><td><math alttext="y = 2"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+        </table></article>
+        """,
+        SourceFormat.HTML,
+    )
+    pdf_payload = b"%PDF canonical labels"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {pdf_payload: PDFTextLayer(("Overview\nx = 1 (1)\ny = 2 (2)",))}
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    equations = [
+        block for block in outcome.document.blocks if block.kind is RichBlockKind.EQUATION
+    ]
+    provenance = outcome.document.metadata["equation_label_reconciliation"]
+    assert [provenance[block.block_id]["effective_label"] for block in equations] == [
+        "1",
+        "2",
+    ]
+    assert [provenance[block.block_id]["source_label"] for block in equations] == [
+        "4",
+        "5",
+    ]
+    assert all(
+        provenance[block.block_id]["matching_method"]
+        == "strict_complete_pdf_sequence"
+        for block in equations
+    )
+
+
+def test_pdf_number_alone_does_not_verify_math_content(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"""
+        <article><h1>Overview</h1>
+        <table class="ltx_equation"><tr><td><math alttext="a = b"></math></td><td><span class="ltx_tag">(4)</span></td></tr></table>
+        </article>
+        """,
+        SourceFormat.HTML,
+    )
+    pdf_payload = b"%PDF number only"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {pdf_payload: PDFTextLayer(("Overview\nunrelated = content (1)",))}
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    span_entry = next(
+        entry
+        for entry in outcome.report.entries
+        if entry.subject_id.startswith("math-")
+    )
+    assert span_entry.status.value == "unreviewed"
+    assert outcome.document.metadata["equation_label_reconciliation"]
+
+
+def test_incomplete_pdf_equation_sequence_keeps_rich_labels(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"""
+        <article><h1>Overview</h1>
+        <table class="ltx_equation">
+          <tr><td><math alttext="x = 1"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
+          <tr><td><math alttext="y = 2"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+        </table></article>
+        """,
+        SourceFormat.HTML,
+    )
+    pdf_payload = b"%PDF incomplete labels"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {pdf_payload: PDFTextLayer(("Overview\nx = 1 (1)",))}
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    assert "equation_label_reconciliation" not in outcome.document.metadata
+    assert any(
+        "complete numeric sequence is unavailable" in warning
+        for warning in outcome.warnings
+    )
 
 
 def test_preface_does_not_shift_heading_page_map(tmp_path):

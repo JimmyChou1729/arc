@@ -69,28 +69,44 @@ class SourceAnchor:
 
     @classmethod
     def from_rich_block(
-        cls, block: Any, *, page_number: int | None = None
+        cls,
+        block: Any,
+        *,
+        page_number: int | None = None,
+        equation_label_provenance: Mapping[str, Any] | None = None,
     ) -> SourceAnchor:
         """Snapshot a public ``arc_paper.RichBlock`` without deep imports."""
 
         locator = block.locator
+        payload = dict(block.payload)
+        anchor_locator: dict[str, Any] = {
+            "source_format": getattr(
+                locator.source_format, "value", str(locator.source_format)
+            ),
+            "line_start": locator.line_start,
+            "column_start": locator.column_start,
+            "line_end": locator.line_end,
+            "column_end": locator.column_end,
+            "selector": locator.selector,
+            "source_id": locator.source_id,
+        }
+        if (
+            getattr(block.kind, "value", str(block.kind)) == "equation"
+            and isinstance(equation_label_provenance, Mapping)
+            and isinstance(equation_label_provenance.get("effective_label"), str)
+            and isinstance(equation_label_provenance.get("source_label"), str)
+        ):
+            payload["label"] = equation_label_provenance["effective_label"]
+            anchor_locator["equation_label_provenance"] = dict(
+                equation_label_provenance
+            )
         return cls(
             block_id=block.block_id,
             ordinal=block.ordinal,
             kind=getattr(block.kind, "value", str(block.kind)),
             section_path=tuple(block.section_path),
-            payload=block.payload,
-            locator={
-                "source_format": getattr(
-                    locator.source_format, "value", str(locator.source_format)
-                ),
-                "line_start": locator.line_start,
-                "column_start": locator.column_start,
-                "line_end": locator.line_end,
-                "column_end": locator.column_end,
-                "selector": locator.selector,
-                "source_id": locator.source_id,
-            },
+            payload=payload,
+            locator=anchor_locator,
             page_number=page_number,
         )
 
