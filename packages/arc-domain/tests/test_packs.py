@@ -5,6 +5,7 @@ from arc_domain.packs import (
     PAPER_JSON_PACK_SCHEMA_VERSION,
     build_domain_packs,
 )
+from arc_domain.package_view import decode_domain_paper_pack
 
 
 def _graph() -> dict:
@@ -184,6 +185,28 @@ def test_build_domain_packs_orders_roles_and_marks_missing_acquisition():
     assert packs.evidence_pack["warnings"] == [
         "2 papers have no cached conclusion/outlook/discussion section"
     ]
+
+
+def test_build_domain_packs_projects_only_references_with_valid_identity() -> None:
+    acquired = _acquired()
+    acquired["2301.00001"]["references"] = [
+        {"paper_id": "", "title": "Title only"},
+        {"paper_id": None, "doi": "10.1234/VALID"},
+        {"paper_id": " 0911.3380 ", "title": "Canonical arXiv identity"},
+        {"identifiers": {"inspire_recid": 12345}},
+        {"identifiers": "malformed", "title": "No identity"},
+        "not an object",
+    ]
+
+    paper_pack = build_domain_packs(_graph(), acquired).paper_json_pack
+    foundation = paper_pack["papers"][0]
+
+    assert [reference["paper_id"] for reference in foundation["references"]] == [
+        "doi:10.1234/valid",
+        "arXiv:0911.3380",
+        "inspire:12345",
+    ]
+    decode_domain_paper_pack(paper_pack)
 
 
 def test_pack_warnings_recognize_codes_with_or_without_messages() -> None:

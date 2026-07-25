@@ -15,6 +15,7 @@ from typing import Any
 from arc_paper import normalize_paper_id
 
 from ._roles import role_order
+from .text import paper_key
 
 
 PAPER_JSON_PACK_SCHEMA_VERSION = "arc.domain_paper_json_pack.v1"
@@ -114,7 +115,7 @@ def _paper_json(
         warnings = _missing_acquisition_warnings()[:-1]
     else:
         metadata = _mapping_copy(record.get("metadata"))
-        references = _list_copy(record.get("references"))
+        references = _project_references(record.get("references"))
         toc = _list_copy(record.get("toc"))
         warnings = _warning_strings(record.get("warnings"))
     return {
@@ -222,6 +223,24 @@ def _evidence_pack_warnings(papers: list[dict[str, Any]]) -> list[str]:
 
 def _mapping_copy(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _project_references(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    references: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        reference = dict(item)
+        if not isinstance(reference.get("identifiers"), Mapping):
+            reference.pop("identifiers", None)
+        paper_id = paper_key(reference)
+        if not paper_id:
+            continue
+        reference["paper_id"] = paper_id
+        references.append(reference)
+    return references
 
 
 def _list_copy(value: Any) -> list[Any]:
