@@ -40,7 +40,9 @@ from arc_paper.cli import main
 from arc_paper.parse.parser import parse_artifact_bytes
 from arc_paper.workflows.keywords import (
     KEYWORD_CHAPTER_PROMPT_CONTRACT,
+    KeywordExtractionError,
     _chapter_allocations,
+    _llm_resume_input,
     _lineage as workflow_lineage,
 )
 
@@ -367,6 +369,27 @@ def test_unusable_explicit_list_pauses_without_cache_then_discards_or_aborts(
     assert aborted.error is not None
     assert aborted.error.code == "explicit_term_list_unusable"
     assert other_cache.admin_entries() == ()
+
+
+def test_keyword_llm_resume_ignores_foreign_parent_response() -> None:
+    assert _llm_resume_input(
+        {
+            "schema_version": "arc.companion.evidence_response.v1",
+            "resume_key": "evidence-example",
+            "responses": [],
+        }
+    ) is None
+
+
+def test_keyword_llm_resume_rejects_malformed_claimed_arc_llm_input() -> None:
+    with pytest.raises(KeywordExtractionError) as exc_info:
+        _llm_resume_input(
+            {
+                "schema_version": "arc.llm.resume_input.v2",
+                "resume_key": "missing-action",
+            }
+        )
+    assert exc_info.value.code == "keyword_resume_input_invalid"
 
 
 def test_current_rebuilds_from_batch_but_batch_damage_is_hard(

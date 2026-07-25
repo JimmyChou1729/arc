@@ -891,6 +891,12 @@ def _llm_resume_input(
         "abort",
     }:
         return None
+    # Keyword extraction may run inside another durable workflow.  Parent
+    # interaction responses (for example a Companion evidence response) are
+    # owned by that workflow, not by arc-llm.  Only a payload that explicitly
+    # claims the arc-llm resume schema belongs on this recovery path.
+    if resume_input.get("schema_version") != "arc.llm.resume_input.v2":
+        return None
     try:
         return decode_resume_input(resume_input)
     except Exception as exc:
