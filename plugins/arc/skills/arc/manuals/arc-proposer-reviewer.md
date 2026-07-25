@@ -42,6 +42,21 @@ verified committed-round references; `show-round` is the public expansion of
 one committed proposal/review envelope. Never reconstruct results from
 sessions, partial files, or physical durable-state paths.
 
+## Stop
+
+```bash
+<skill-dir>/scripts/arc-runtime arc-proposer-reviewer stop \
+  --run-root <project-dir>/proposer-reviewer \
+  --run-id <stable-run-id> \
+  --reason "<specific observed reason>"
+```
+
+Interactive workers do not have an arbitrary tool-turn quota. Normal research
+may take a long time. Compare public `inspect` snapshots and stop cautiously
+only when interaction turns continue without useful progress, failures recur,
+or the provider is no longer advancing the task. A stop pauses the current
+attempt and preserves its durable frontier for same-run resume.
+
 ## Resume
 
 ```bash

@@ -20,7 +20,7 @@ Prepare a closed request such as:
 
 ```json
 {
-  "schema_version": "arc.llm.request.v2",
+  "schema_version": "arc.llm.request.v3",
   "task_id": "bounded_assessment",
   "prompt": "Return a concise structured assessment.",
   "output": {

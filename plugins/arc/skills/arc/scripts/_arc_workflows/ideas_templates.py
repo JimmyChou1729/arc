@@ -170,7 +170,6 @@ def worker_spec(
         interaction_operations=(
             evidence_operation_contracts() if evidence_enabled else {}
         ),
-        max_interaction_turns=2,
     )
 
 

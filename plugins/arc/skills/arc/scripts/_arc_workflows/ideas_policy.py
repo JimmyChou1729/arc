@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import os
 import re
+from collections.abc import Iterable
 from typing import Any, Mapping
 
 from arc_proposer_reviewer import BatchRequest, LoopSpec
@@ -50,6 +51,26 @@ DEFAULT_CROSS_DOMAIN_PROFILES = [
         ),
     },
 ]
+
+
+def scientific_run_status(
+    durable_lifecycle: str,
+    loop_lifecycles: Iterable[str],
+    *,
+    trace_verified: bool,
+) -> str:
+    """Separate scientific usability from the durable executor lifecycle."""
+    if durable_lifecycle == "paused":
+        return "paused"
+    if durable_lifecycle != "succeeded" or not trace_verified:
+        return "failed"
+    lifecycles = tuple(loop_lifecycles)
+    succeeded = sum(lifecycle == "succeeded" for lifecycle in lifecycles)
+    if lifecycles and succeeded == len(lifecycles):
+        return "succeeded"
+    if succeeded:
+        return "degraded"
+    return "failed"
 
 
 def max_concurrent_loops(proposal_count: int) -> int:

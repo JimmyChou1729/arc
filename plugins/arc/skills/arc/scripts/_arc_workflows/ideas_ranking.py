@@ -7,7 +7,6 @@ from typing import Any, Mapping
 
 from arc_jobs import RunRepository
 from arc_proposer_reviewer import (
-    BatchProjectionIntegrityError,
     BatchRequest,
     LoopSpec,
     inspect_batch,
@@ -26,6 +25,7 @@ from _arc_workflows.ideas_policy import (
     is_cross_domain_context,
     loop_requires_idea_assessment,
     normalized_central_mechanism,
+    scientific_run_status,
     single_domain_qualification,
 )
 from _arc_workflows.ideas_report import (
@@ -33,21 +33,26 @@ from _arc_workflows.ideas_report import (
     single_domain_diagnostics,
 )
 
-SELECTED_ROUNDS_SCHEMA = "arc.ideas.selected_rounds.v4"
+SELECTED_ROUNDS_SCHEMA = "arc.ideas.selected_rounds.v5"
 
 
 def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
     """Rank verified committed rounds without exposing run-directory layout."""
     repository = RunRepository(run_root)
     request = _batch_request(repository, run_id)
-    inspection = inspect_batch(repository, run_id)
+    try:
+        inspection = inspect_batch(repository, run_id)
+    except Exception:
+        raise SystemExit(
+            "cannot rank ideas because batch inspection is unavailable"
+        ) from None
     try:
         trace = read_batch_trace(repository, run_id)
-    except BatchProjectionIntegrityError as exc:
+    except Exception:
         raise SystemExit(
             "cannot rank ideas because the committed proposer-reviewer trace "
-            "failed integrity verification"
-        ) from exc
+            "is unavailable"
+        ) from None
 
     contexts = {loop.loop_id: _loop_context(loop) for loop in request.loops}
     cross_contexts = {
@@ -103,11 +108,10 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
                     loop.loop_id,
                     round_ref.round_number,
                 )
-            except BatchProjectionIntegrityError as exc:
+            except Exception:
                 raise SystemExit(
-                    "cannot rank ideas because a committed round failed "
-                    "integrity verification"
-                ) from exc
+                    "cannot rank ideas because a committed round is unavailable"
+                ) from None
             loop_rounds.append(
                 _round_entry(
                     loop,
@@ -148,6 +152,18 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
 
     ranking = sorted(selected, key=rank_key, reverse=True)
     warnings: list[str] = []
+    evidence_incomplete = [
+        entry["loop_id"]
+        for entry in ranking
+        if not entry.get("evidence_checked")
+        or not entry.get("tool_queries_used")
+    ]
+    if evidence_incomplete:
+        warnings.append(
+            "WARNING: NOVELTY SCOUTING INCOMPLETE — reviewer evidence or query "
+            "records are missing for: "
+            + ", ".join(evidence_incomplete)
+        )
     if excluded_loops:
         warnings.append(
             "WARNING: EXCLUDED NON-USABLE LOOPS — failed or incomplete loops "
@@ -221,7 +237,12 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
     payload = {
         "schema_version": SELECTED_ROUNDS_SCHEMA,
         "run_id": run_id,
-        "run_lifecycle": inspection.run_lifecycle,
+        "status": scientific_run_status(
+            inspection.durable_lifecycle,
+            (loop.lifecycle for loop in inspection.loops),
+            trace_verified=True,
+        ),
+        "durable_lifecycle": inspection.durable_lifecycle,
         "run_revision": inspection.run_revision,
         "loop_revisions": dict(trace.loop_revisions),
         "user_intent": _run_user_intent(contexts),
@@ -342,6 +363,9 @@ def _round_entry(
         "round": committed.round_number,
         "title": title.strip(),
         "marks": marks,
+        "evidence_checked": _string_list(payload.get("evidence_checked")),
+        "tool_queries_used": _string_list(payload.get("tool_queries_used")),
+        "reviewer_limitations": _reviewer_limitations(payload),
         "proposer_output": proposer_output,
         "proposer_id": proposer_id,
         "proposer_artifact": _safe_artifact_ref(
@@ -461,6 +485,43 @@ def _exclusion_reason(loop_inspection: Any) -> str:
 
 def _json_object(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [
+        item.strip()
+        for item in value
+        if isinstance(item, str) and item.strip()
+    ]
+
+
+def _reviewer_limitations(payload: Mapping[str, Any]) -> list[str]:
+    limitations: list[str] = []
+    for assessment_name, fields in (
+        (
+            "idea_assessment",
+            (
+                "blocking_feasibility_failures",
+                "manageable_feasibility_risks",
+            ),
+        ),
+        (
+            "cross_domain_assessment",
+            (
+                "blocking_compatibility_failures",
+                "manageable_compatibility_risks",
+                "disqualifying_reasons",
+            ),
+        ),
+    ):
+        assessment = payload.get(assessment_name)
+        if not isinstance(assessment, Mapping):
+            continue
+        for field in fields:
+            limitations.extend(_string_list(assessment.get(field)))
+    return list(dict.fromkeys(limitations))
 
 
 def _safe_artifact_ref(ref: Any) -> dict[str, Any]:

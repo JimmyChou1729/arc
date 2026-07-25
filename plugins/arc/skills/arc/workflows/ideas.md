@@ -67,10 +67,38 @@ python3 <skill-dir>/scripts/run-ideas.py \
 ```
 
 LLM calls have no absolute runtime limit and stop after 30 minutes with no
-substantive provider output. The foreground runner streams start/finish progress
-JSON to stderr. Keep its terminal session active; do not interrupt merely
-because the run is long. `SIGINT`, `SIGTERM`, and ordinary durable stop remain
-available; a stop pauses the current attempt for same-run resume.
+substantive provider output. The foreground runner streams batch, loop, round,
+and worker boundary progress JSON to stderr. Keep its terminal session active;
+theoretical research can take a long time, so do not interrupt merely because
+the run is slow.
+
+If one loop or worker is clearly slower than its peers or than the scientific
+task reasonably suggests, or if several loops fail, inspect the public
+snapshot:
+
+```bash
+<skill-dir>/scripts/arc-runtime arc-proposer-reviewer inspect \
+  --run-root <project-dir>/ideas \
+  --run-id <run-id>
+```
+
+Compare snapshots rather than treating elapsed time alone as failure. Inspect
+the active worker, interaction turn, last operation names, last activity,
+pause information, and sanitized failure causes. Be patient when these show
+normal scientific progress. Stop only when snapshots show a repeated
+no-progress interaction loop, recurring errors, or a provider that is no
+longer making useful progress:
+
+```bash
+<skill-dir>/scripts/arc-runtime arc-proposer-reviewer stop \
+  --run-root <project-dir>/ideas \
+  --run-id <run-id> \
+  --reason "<specific observed reason>"
+```
+
+Use stop cautiously and record the concrete reason. `SIGINT` and `SIGTERM`
+remain available for the foreground process. A stop pauses the current attempt
+for same-run resume.
 
 Step 2: Treat the runner result as the public batch handoff. It materializes
 one `BatchRequest` and executes it through `ProposerReviewerHandler` in the
@@ -100,7 +128,7 @@ formal ranking. For loop concurrency and durable pause/resume behavior, see
 ### Evidence Boundary
 
 When the selected variant attaches ARC-paper evidence, every proposer and
-reviewer receives the same bounded interaction resolver. Its complete allowlist
+reviewer receives the same typed interaction resolver. Its complete allowlist
 is exactly:
 
 - `get-metadata`
@@ -128,26 +156,30 @@ likely to find the literature, and use Web search for open-world discovery,
 uncached or very recent work, and non-arXiv public sources. After shortlisting
 an ARC-resolvable paper, use the typed operations to inspect its metadata and,
 as useful, its table of contents, relevant sections, full text, equations,
-references, or citers. Spend deep-reading requests only on the strongest
-candidates so the shared budget remains useful, and record each query,
-operation, and result.
+references, or citers. Deep-read the strongest candidates first. Continue with
+another operation only when its expected result can resolve a relevant
+uncertainty, test or rule out a live hypothesis, validate a claim, or recover
+from a failed or ambiguous lookup. Negative results and excluded routes count
+as progress. When no further request has a concrete expected contribution,
+complete the proposal or review with an honest statement of remaining
+uncertainty. Record each query, operation, and result.
 
-The entire ideas batch shares one budget of 24 ARC-paper requests, rather than
-24 requests per worker or per round. Each worker may automatically complete at
-most two interaction rounds; a third interaction request pauses the durable
-batch for explicit resume handling. Resolver responses record the versioned
-operation ID, normalized parameters, canonical arXiv ID when available, source
-and document digests, and typed error provenance.
+There is no batch-wide paper-request quota and no automatic interaction-turn
+quota. Resolver responses still record the versioned operation ID, normalized
+parameters, canonical arXiv ID when available, source and document digests, and
+typed error provenance. The model must return a completed result when further
+interaction would not advance the task; the main agent supervises unusual
+runtime behavior through the public snapshot and cautious durable stop above.
 
-The result's `evidence.per_loop` object reports `attempted`, `consumed`,
-`exhausted`, and `repeated_request` counts for each loop. `Attempted` counts
-all resolver calls, while `consumed` excludes calls rejected because the
-global budget was already exhausted. `Repeated_request` means only that the
-raw operation-and-arguments signature was observed earlier; it is a diagnostic,
-does not report cache behavior, and can include rejected duplicate requests.
-It does not refund a request. The 24-request cap remains global. Concurrent
-loops consume that cap in actual execution order: these counters do not promise
-fair scheduling and do not introduce a workflow scheduler.
+The result's `evidence` object reports `attempted`, `succeeded`, `failed`,
+`errors_by_code`, and `repeated_raw_signature` globally and per loop, together
+with records sorted by request number. `Repeated_raw_signature` is only an
+in-process diagnostic for an exactly repeated operation-and-arguments
+signature; it is not a cache hit and does not block or refund a request.
+`observation_scope` is `current_process`, so these operational counters do not
+claim to aggregate earlier processes after a durable resume. Any evidence
+operation failures produce a visible novelty-scouting warning but do not by
+themselves invalidate an otherwise supported scientific result.
 
 Workers cannot invoke shell commands, ARC CLIs, arbitrary paths, cache
 administration, recursive LLM calls, or MCP tools. Do not add a fallback for
@@ -194,6 +226,11 @@ for each succeeded loop, rather than assuming the final round is best. It emits
 logical artifact IDs and content digests, never physical proposal or review
 paths.
 
+The JSON ranking contract is `arc.ideas.selected_rounds.v5`. Read its
+scientific `status` separately from `durable_lifecycle`: a durable batch may
+finish successfully while the scientific status is `degraded` because one or
+more loops failed. The current contract has no `run_lifecycle` alias.
+
 Write the deterministic ranked report directly to both readable destinations:
 
 ```bash
@@ -217,12 +254,14 @@ WD=well-definedness, T=total.` List each ranked idea in the same form used by
 `round_marks_by_idea.md`: a loop-id heading, the selected title, and the
 compact round marks table with columns `Round`, `IR`, `N`, `CN`, `SV`, `PL`,
 `WD`, and `T`. The report must then include `# Appendix: Idea Details` with one subsection per
-ranked idea. Each subsection lists all referee marks from
-every round in that idea loop and quotes only the selected handoff text: title,
-idea summary, and calculation plan. Render that handoff text as normal
-Markdown paragraphs, not a fenced code block. Follow `rules/math_typeset.md`
-for math and TeX snippets. Use PDF-friendly wrapping for long titles and
-proposer text; avoid wide tables with long prose.
+ranked idea. Each subsection lists all referee marks from every round in that
+idea loop, a focused novelty audit with evidence checked, tool queries, and
+unresolved reviewer limitations, and only the selected proposer handoff text:
+title, idea summary, and calculation plan. The audit is explicitly
+non-exhaustive. Render the handoff text as normal Markdown paragraphs, not a
+fenced code block. Follow `rules/math_typeset.md` for math and TeX snippets.
+Use PDF-friendly wrapping for long titles and proposer text; avoid wide tables
+with long prose.
 
 For cross-domain runs, use the abbreviations and score columns declared by the
 selected cross-domain marking scheme. List qualified candidates first in

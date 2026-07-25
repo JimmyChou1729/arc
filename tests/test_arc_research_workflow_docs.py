@@ -1163,8 +1163,11 @@ def test_ideas_workflow_documents_public_batch_evidence_contract() -> None:
         "search-arxiv-equations",
     ):
         assert f"`{operation}`" in text
-    assert "one budget of 24 ARC-paper requests" in text
-    assert "at most two interaction rounds; a third interaction request pauses" in " ".join(text.split())
+    compact = " ".join(text.split())
+    assert "no batch-wide paper-request quota" in compact
+    assert "no automatic interaction-turn quota" in compact
+    assert "When no further request has a concrete expected contribution" in compact
+    assert "Negative results and excluded routes count as progress" in compact
     assert "`inspect_batch`" in text
     assert "`read_batch_trace`" in text
     assert "`read_batch_round`" in text
@@ -1270,22 +1273,36 @@ def test_ideas_config_template_has_no_global_reviewer() -> None:
     assert config["domain_manifest_path"] == "<project-dir>/domain/domain-manifest.json"
 
 
-def test_ideas_workflow_documents_global_evidence_accounting() -> None:
+def test_ideas_workflow_documents_unbounded_truthful_evidence_accounting() -> None:
     ideas = (WF / "ideas.md").read_text(encoding="utf-8")
     compact = " ".join(ideas.split())
 
-    assert "`evidence.per_loop`" in ideas
+    assert "no batch-wide paper-request quota" in compact
+    assert "no automatic interaction-turn quota" in compact
     for field in (
         "`attempted`",
+        "`succeeded`",
+        "`failed`",
+        "`errors_by_code`",
+        "`repeated_raw_signature`",
+    ):
+        assert field in ideas
+    assert "`observation_scope` is `current_process`" in compact
+    assert "it is not a cache hit" in compact
+    assert "does not block or refund a request" in compact
+    assert "`arc.ideas.selected_rounds.v5`" in ideas
+    assert "scientific `status` separately from `durable_lifecycle`" in compact
+    assert "no `run_lifecycle` alias" in compact
+    assert "focused novelty audit" in compact
+    assert "explicitly non-exhaustive" in compact
+    for retired in (
+        "budget of 24",
+        "shared budget",
         "`consumed`",
         "`exhausted`",
         "`repeated_request`",
     ):
-        assert field in ideas
-    assert "does not report cache behavior" in compact
-    assert "can include rejected duplicate requests" in compact
-    assert "does not refund a request" in compact
-    assert "do not promise fair scheduling" in compact
+        assert retired not in ideas
 
 
 def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
@@ -1679,7 +1696,10 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
     assert "30 minutes" in ideas
     assert "owning package's status command" in skill
     assert "background-command facility" in skill
-    assert "streams start/finish progress\nJSON to" in ideas
+    assert "streams batch, loop, round,\nand worker boundary progress JSON" in ideas
+    assert "arc-proposer-reviewer inspect" in ideas
+    assert "arc-proposer-reviewer stop" in ideas
+    assert "Use stop cautiously" in ideas
     assert "stderr" in ideas
     assert "SIGINT" in ideas and "SIGTERM" in ideas
     assert "same-run resume" in skill
@@ -1733,6 +1753,7 @@ def test_domain_origin_resolution_keeps_the_seed_date_unbounded() -> None:
 
 def test_arc_llm_manual_uses_only_the_current_durable_cli() -> None:
     manual = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
+    domain = (SKILL / "workflows/domain.md").read_text(encoding="utf-8")
 
     for command in (
         "arc-llm generate",
@@ -1757,6 +1778,10 @@ def test_arc_llm_manual_uses_only_the_current_durable_cli() -> None:
         assert obsolete not in manual
     assert "arc-proposer-reviewer inspect" not in manual
     assert "arc-llm <command> --help" in manual
+    assert "arc.llm.request.v3" in manual
+    assert "arc.llm.request.v3" in domain
+    assert "arc.llm.request.v2" not in manual
+    assert "arc.llm.request.v2" not in domain
 
 
 def test_core_skill_docs_keep_arc_cli_only() -> None:

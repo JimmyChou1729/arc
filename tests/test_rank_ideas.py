@@ -107,6 +107,40 @@ def test_compatibility_classification_requires_current_fields() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("durable", "lifecycles", "trace_verified", "expected"),
+    (
+        ("paused", ("running",), True, "paused"),
+        ("failed", ("succeeded",), True, "failed"),
+        ("succeeded", ("succeeded", "succeeded"), True, "succeeded"),
+        ("succeeded", ("succeeded", "failed"), True, "degraded"),
+        ("succeeded", ("failed",), True, "failed"),
+        ("succeeded", ("succeeded",), False, "failed"),
+    ),
+)
+def test_scientific_status_is_separate_from_durable_lifecycle(
+    durable: str,
+    lifecycles: tuple[str, ...],
+    trace_verified: bool,
+    expected: str,
+) -> None:
+    old_path = list(sys.path)
+    sys.path.insert(0, str(SCRIPT.parent))
+    try:
+        from _arc_workflows.ideas_policy import scientific_run_status
+    finally:
+        sys.path[:] = old_path
+
+    assert (
+        scientific_run_status(
+            durable,
+            lifecycles,
+            trace_verified=trace_verified,
+        )
+        == expected
+    )
+
+
 def _cross_scheme() -> dict[str, Any]:
     marks = [
         ("user_intent_relevance", "Intent Relevance"),
@@ -368,6 +402,10 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v5"
+    assert payload["status"] == "succeeded"
+    assert payload["durable_lifecycle"] == "succeeded"
+    assert "run_lifecycle" not in payload
     assert payload["ranking"][0]["title"] == "Best first-round idea"
     assert payload["ranking"][0]["round"] == 1
     assert [round_entry["round"] for round_entry in payload["ranking"][0]["rounds"]] == [1, 2]
@@ -413,7 +451,7 @@ def test_ranker_preserves_cross_domain_qualification_before_score(tmp_path: Path
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v4"
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v5"
     assert [entry["title"] for entry in payload["ranking"]] == ["Genuine lower score"]
     assert payload["unqualified"][0]["title"] == "Decorative high score"
     assert "transfer_status_must_be_genuine" in payload["unqualified"][0][
@@ -450,7 +488,7 @@ def test_ranker_preserves_single_domain_feasibility_gate(tmp_path: Path) -> None
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v4"
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v5"
     assert payload["ranking"][0]["title"] == "Feasible lower-score idea"
     blocked = next(
         entry
@@ -487,7 +525,16 @@ def test_no_assessment_report_uses_canonical_ranking(tmp_path: Path) -> None:
         "Lower no-assessment idea",
     ]
     assert "summary_order" not in payload
-    assert "no_assessment policy" in payload["warnings"][0]
+    assert any(
+        "no_assessment policy" in warning
+        for warning in payload["warnings"]
+    )
+    report = ranker.markdown_table(payload)
+    assert "#### Focused Novelty Audit" in report
+    assert "not an exhaustive proof of novelty" in report
+    assert "Evidence checked:" in report
+    assert "Tool queries used:" in report
+    assert "Unresolved reviewer limitations:" in report
 
 
 def test_ranker_excludes_failed_and_incomplete_lifecycle_states(tmp_path: Path) -> None:
@@ -510,6 +557,10 @@ def test_ranker_excludes_failed_and_incomplete_lifecycle_states(tmp_path: Path) 
     )
 
     completed_payload = ranker.rank_run(repository.root, "ideas-run")
+    assert completed_payload["schema_version"] == "arc.ideas.selected_rounds.v5"
+    assert completed_payload["status"] == "degraded"
+    assert completed_payload["durable_lifecycle"] == "succeeded"
+    assert "run_lifecycle" not in completed_payload
     assert [entry["loop_id"] for entry in completed_payload["ranking"]] == ["usable"]
     assert completed_payload["excluded_loops"] == [
         {
@@ -529,6 +580,8 @@ def test_ranker_excludes_failed_and_incomplete_lifecycle_states(tmp_path: Path) 
         )
     )
     pending_payload = ranker.rank_run(pending_root, "pending-run")
+    assert pending_payload["status"] == "failed"
+    assert pending_payload["durable_lifecycle"] == "pending"
     assert pending_payload["ranking"] == []
     assert pending_payload["excluded_loops"] == [
         {
@@ -537,6 +590,59 @@ def test_ranker_excludes_failed_and_incomplete_lifecycle_states(tmp_path: Path) 
             "reason": "loop_is_incomplete",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("reader_name", "public_message"),
+    (
+        (
+            "inspect_batch",
+            "cannot rank ideas because batch inspection is unavailable",
+        ),
+        (
+            "read_batch_trace",
+            "cannot rank ideas because the committed proposer-reviewer trace "
+            "is unavailable",
+        ),
+        (
+            "read_batch_round",
+            "cannot rank ideas because a committed round is unavailable",
+        ),
+    ),
+)
+def test_ranker_sanitizes_public_read_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reader_name: str,
+    public_message: str,
+) -> None:
+    ranker = _load_rank_module()
+    loop = _single_loop("safe-read", max_rounds=1)
+    repository = _execute(
+        tmp_path / "runs",
+        _request(loop),
+        _ScriptedLLM(
+            proposals={("safe-read", 1): _proposal("Safe idea")},
+            reviews={
+                ("safe-read", 1): {
+                    "marks": _single_marks(80),
+                    "idea_assessment": _single_assessment(),
+                }
+            },
+        ),
+    )
+    ranking_module = sys.modules["_arc_workflows.ideas_ranking"]
+
+    def fail_read(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("/private/sensitive/research-path")
+
+    monkeypatch.setattr(ranking_module, reader_name, fail_read)
+    with pytest.raises(SystemExit) as caught:
+        ranker.rank_run(repository.root, "ideas-run")
+
+    assert str(caught.value) == public_message
+    assert "/private/sensitive" not in str(caught.value)
+
 
 def test_ranker_has_no_legacy_layout_reader_and_cli_uses_durable_identifiers(
     tmp_path: Path,

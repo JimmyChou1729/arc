@@ -68,7 +68,7 @@ only when its field has no explicit paper anchor.
   the requested program can override either prior.
 
 Step 5: For every unresolved field, select one canonical origin with one
-durable, closed ARC-LLM task. Build a separate `arc.llm.request.v2` document
+durable, closed ARC-LLM task. Build a separate `arc.llm.request.v3` document
 at `<project-dir>/context/domain-origin-selection-<field-id>-request.json`.
 Set its JSON output schema to the exact contents of
 `<skill-dir>/workflows/json/domain-origin-selection.schema.json`, set `repair`

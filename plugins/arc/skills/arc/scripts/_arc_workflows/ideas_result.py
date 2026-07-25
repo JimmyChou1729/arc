@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import copy
-from typing import Any
+from dataclasses import asdict, is_dataclass
+from typing import Any, Mapping
 
 from arc_jobs import RunRepository
 from arc_proposer_reviewer import (
     BatchInspection,
-    BatchProjectionIntegrityError,
     BatchRequest,
     BatchTrace,
     read_batch_round,
@@ -18,6 +18,7 @@ from arc_proposer_reviewer.protocol import encode_batch_request
 from _arc_workflows.evidence import IdeasEvidenceLedger
 from _arc_workflows.ideas_config import IdeasConfig
 from _arc_workflows.ideas_marking import load_marking_scheme
+from _arc_workflows.ideas_policy import scientific_run_status
 from _arc_workflows.ideas_ranking import (
     normalized_review_marks,
     proposal_title,
@@ -25,7 +26,7 @@ from _arc_workflows.ideas_ranking import (
 from _arc_workflows.ideas_templates import IdeaPlan
 
 
-IDEAS_RESULT_SCHEMA = "arc.workflow.ideas.result.v2"
+IDEAS_RESULT_SCHEMA = "arc.workflow.ideas.result.v3"
 
 
 def observed_result(
@@ -47,10 +48,12 @@ def observed_result(
             run_id=inspection.run_id,
             trace=trace,
         )
-    except BatchProjectionIntegrityError:
+    except Exception as exc:
         warnings.append(
-            "committed_round_unavailable: committed artifacts could not be verified"
+            "committed_round_unavailable: "
+            f"{type(exc).__name__}"
         )
+        trace = None
         score_table = round_score_table(
             ideas,
             repository=None,
@@ -63,25 +66,76 @@ def observed_result(
         if trace is not None
         else {}
     )
-    loops = [
-        {
-            "idea_id": idea.idea_id,
-            "variant_id": idea.variant_id,
-            "idea_index": idea.idea_index,
-            "loop_id": idea.loop_id,
-            "lifecycle": loop_by_id[idea.loop_id].lifecycle,
-            "phase": loop_by_id[idea.loop_id].phase,
-            "current_round": loop_by_id[idea.loop_id].current_round,
-            "rounds_completed": loop_by_id[idea.loop_id].rounds_completed,
-            "committed_rounds": committed_rounds.get(idea.loop_id, 0),
-            "integrity_error": loop_by_id[idea.loop_id].integrity_error,
-        }
-        for idea in ideas
-    ]
+    loops = []
+    for idea in ideas:
+        observed = loop_by_id[idea.loop_id]
+        loops.append(
+            {
+                "idea_id": idea.idea_id,
+                "variant_id": idea.variant_id,
+                "idea_index": idea.idea_index,
+                "loop_id": idea.loop_id,
+                "lifecycle": observed.lifecycle,
+                "phase": observed.phase,
+                "current_round": observed.current_round,
+                "rounds_completed": observed.rounds_completed,
+                "committed_rounds": committed_rounds.get(idea.loop_id, 0),
+                "active_workers": _document(observed.active_workers),
+                "last_activity_at": observed.last_activity_at,
+                "pause": _document(observed.pause),
+                "failure": _document(observed.failure),
+                "integrity_error": observed.integrity_error,
+            }
+        )
+    status = scientific_run_status(
+        inspection.durable_lifecycle,
+        (loop.lifecycle for loop in inspection.loops),
+        trace_verified=trace is not None,
+    )
+    rankable_loop_count = (
+        sum(loop.lifecycle == "succeeded" for loop in inspection.loops)
+        if trace is not None
+        else 0
+    )
+    if status == "degraded":
+        _append_warning(
+            warnings,
+            "WARNING: IDEAS RUN DEGRADED — only succeeded loops are rankable",
+        )
+    elif status == "failed" and rankable_loop_count == 0:
+        _append_warning(
+            warnings,
+            "WARNING: IDEAS RUN FAILED — no loop produced a rankable result",
+        )
+    failure_codes = _failure_codes(inspection)
+    if failure_codes:
+        _append_warning(
+            warnings,
+            "WARNING: LOOP FAILURES — "
+            + ", ".join(
+                f"{code}={count}"
+                for code, count in sorted(failure_codes.items())
+            ),
+        )
+    evidence = copy.deepcopy(evidence_ledger.to_document())
+    if int(evidence.get("failed", 0)) > 0:
+        errors = evidence.get("errors_by_code", {})
+        detail = ", ".join(
+            f"{code}={count}"
+            for code, count in sorted(
+                errors.items() if isinstance(errors, Mapping) else ()
+            )
+        )
+        _append_warning(
+            warnings,
+            "WARNING: NOVELTY SCOUTING INCOMPLETE — "
+            f"{evidence['failed']} ARC-paper operations failed"
+            + (f" ({detail})" if detail else ""),
+        )
     reviewer_call_count = sum(committed_rounds.values())
     return {
         "schema_version": IDEAS_RESULT_SCHEMA,
-        "status": inspection.run_lifecycle,
+        "status": status,
         "run_id": config.run_id,
         "run_root": str(repository.root),
         "research_scope": config.research_scope,
@@ -93,11 +147,17 @@ def observed_result(
         "batch_request_artifact_id": "proposer-reviewer/request",
         "batch": {
             "batch_id": request.batch_id,
+            "durable_lifecycle": inspection.durable_lifecycle,
             "run_revision": inspection.run_revision,
             "loop_revisions": dict(inspection.loop_revisions),
             "trace_verified": trace is not None,
+            "loop_lifecycle_counts": dict(inspection.lifecycle_counts),
+            "rankable_loop_count": rankable_loop_count,
+            "activity_integrity_error": (
+                inspection.activity_integrity_error
+            ),
         },
-        "evidence": copy.deepcopy(evidence_ledger.to_document()),
+        "evidence": evidence,
         "loops": loops,
         "round_score_table": score_table,
     }
@@ -136,6 +196,10 @@ def dry_run_result(
                 "current_round": 1,
                 "rounds_completed": 0,
                 "committed_rounds": 0,
+                "active_workers": [],
+                "last_activity_at": None,
+                "pause": None,
+                "failure": None,
                 "integrity_error": None,
             }
             for idea in ideas
@@ -169,6 +233,34 @@ def not_started_result(
     result.pop("batch_request", None)
     result["reviewer_call_count"] = 0
     return result
+
+
+def _failure_codes(inspection: BatchInspection) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for loop in inspection.loops:
+        failure = loop.failure
+        if failure is None:
+            continue
+        code = str(failure.code)
+        result[code] = result.get(code, 0) + 1
+    return result
+
+
+def _document(value: Any) -> Any:
+    if value is None:
+        return None
+    if is_dataclass(value):
+        return asdict(value)
+    if isinstance(value, tuple):
+        return [_document(item) for item in value]
+    if isinstance(value, Mapping):
+        return {str(key): _document(item) for key, item in value.items()}
+    return value
+
+
+def _append_warning(warnings: list[str], warning: str) -> None:
+    if warning not in warnings:
+        warnings.append(warning)
 
 
 def round_score_table(

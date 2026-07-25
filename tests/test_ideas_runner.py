@@ -17,7 +17,13 @@ from typing import Any
 import pytest
 
 from arc_jobs import canonical_json_bytes
-from arc_llm import InteractionRequest, InteractionResponse, LLMCompleted
+from arc_llm import (
+    InteractionRequest,
+    InteractionResponse,
+    InvalidRequestError,
+    LLMCompleted,
+    LLMFailed,
+)
 from arc_proposer_reviewer import ProposerReviewerHandler
 from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 
@@ -218,6 +224,12 @@ class _ThreeRoundLLM:
                 "reason": "Refine the proposal.",
                 "feedback": {worker_id: "Make the first calculation sharper." for worker_id in feedback},
                 "payload": {
+                    "evidence_checked": [
+                        "arXiv:0911.3380 table of contents"
+                    ],
+                    "tool_queries_used": [
+                        "get-arxiv-table-of-contents arXiv:0911.3380"
+                    ],
                     "marks": {
                         "user_intent_relevance": 20,
                         "novelty": 10,
@@ -237,8 +249,7 @@ class _ThreeRoundLLM:
 
 
 class _CachingResolver:
-    def __init__(self, *, request_limit: int = 24) -> None:
-        self.request_limit = request_limit
+    def __init__(self) -> None:
         self.request_count = 0
         self.records: list[dict[str, Any]] = []
         self._cache: dict[tuple[str, str], dict[str, Any]] = {}
@@ -253,17 +264,59 @@ class _CachingResolver:
             if key not in self._cache:
                 self.fetch_count += 1
                 self._cache[key] = {"cached": True}
-            self.records.append({"operation_id": request.operation, "parameters": dict(request.arguments)})
             result = self._cache[key]
-        if request_number > self.request_limit:
-            return InteractionResponse(
-                request.request_id,
-                error={
-                    "code": "evidence_budget_exhausted",
-                    "message": "test budget exhausted",
-                },
+            self.records.append(
+                {
+                    "request_number": request_number,
+                    "operation_id": request.operation,
+                    "parameters": dict(request.arguments),
+                    "ok": True,
+                    "result": result,
+                    "error": None,
+                }
             )
         return InteractionResponse(request.request_id, result=result)
+
+
+class _FailingResolver:
+    def __init__(self) -> None:
+        self.request_count = 0
+        self.records: list[dict[str, Any]] = []
+
+    def resolve(self, request: InteractionRequest) -> InteractionResponse:
+        self.request_count += 1
+        error = {
+            "code": "evidence_operation_failed",
+            "message": "fixture lookup failed",
+        }
+        self.records.append(
+            {
+                "request_number": self.request_count,
+                "operation_id": request.operation,
+                "parameters": dict(request.arguments),
+                "ok": False,
+                "result": None,
+                "error": error,
+            }
+        )
+        return InteractionResponse(request.request_id, error=error)
+
+
+class _SelectiveFailureLLM(_ThreeRoundLLM):
+    def __init__(self, failed_loops: set[str]) -> None:
+        super().__init__()
+        self.failed_loops = failed_loops
+
+    def execute(self, context: Any, request: Any, *, options: Any) -> Any:
+        task = json.loads(request.prompt.rsplit("## Round task\n", 1)[1])
+        if (
+            "one proposer" in request.prompt
+            and task["loop_id"] in self.failed_loops
+        ):
+            return LLMFailed(
+                InvalidRequestError("deliberate proposer failure")
+            )
+        return super().execute(context, request, options=options)
 
 
 def test_dry_run_materializes_public_typed_request_with_three_rounds(tmp_path: Path) -> None:
@@ -277,8 +330,8 @@ def test_dry_run_materializes_public_typed_request_with_three_rounds(tmp_path: P
     assert request["loops"][0]["max_rounds"] == 3
     proposer = request["loops"][0]["proposers"][0]
     reviewer = request["loops"][0]["reviewer"]
-    assert proposer["max_interaction_turns"] == 2
-    assert reviewer["max_interaction_turns"] == 2
+    assert "max_interaction_turns" not in proposer
+    assert "max_interaction_turns" not in reviewer
     assert set(proposer["interaction_operations"]) == set(EVIDENCE_OPERATION_NAMES)
     assert proposer["capabilities"] == {
         "internet": True,
@@ -431,20 +484,24 @@ def test_execution_uses_public_projection_for_three_committed_rounds_and_scores(
     assert observed["spec"].handler == ProposerReviewerHandler.name
     assert observed["handler"].options.max_concurrent_loops == 1
     assert len(llm.calls) == 6
-    assert result["loops"] == [
-        {
-            "idea_id": "domain/idea_001",
-            "variant_id": "domain",
-            "idea_index": 1,
-            "loop_id": "domain_idea_001",
-            "lifecycle": "succeeded",
-            "phase": "completed",
-            "current_round": None,
-            "rounds_completed": 3,
-            "committed_rounds": 3,
-            "integrity_error": None,
-        }
-    ]
+    loop = result["loops"][0]
+    assert loop["idea_id"] == "domain/idea_001"
+    assert loop["variant_id"] == "domain"
+    assert loop["idea_index"] == 1
+    assert loop["loop_id"] == "domain_idea_001"
+    assert loop["lifecycle"] == "succeeded"
+    assert loop["phase"] == "completed"
+    assert loop["current_round"] is None
+    assert loop["rounds_completed"] == 3
+    assert loop["committed_rounds"] == 3
+    assert loop["active_workers"] == []
+    assert isinstance(loop["last_activity_at"], str)
+    assert loop["pause"] is None
+    assert loop["failure"] is None
+    assert loop["integrity_error"] is None
+    assert result["batch"]["loop_lifecycle_counts"]["succeeded"] == 1
+    assert sum(result["batch"]["loop_lifecycle_counts"].values()) == 1
+    assert result["batch"]["rankable_loop_count"] == 1
     table = result["round_score_table"]
     assert table["source"] == "committed_trace"
     assert table["rows"][0]["total_scores_by_round"] == {"1": 76, "2": 77, "3": 78}
@@ -453,7 +510,10 @@ def test_execution_uses_public_projection_for_three_committed_rounds_and_scores(
     assert result["batch_request_artifact_id"] == "proposer-reviewer/request"
     ranking = ranker.rank_run(Path(result["run_root"]), result["run_id"])
     assert ranking["run_id"] == result["run_id"]
-    assert ranking["run_lifecycle"] == "succeeded"
+    assert ranking["schema_version"] == "arc.ideas.selected_rounds.v5"
+    assert ranking["status"] == "succeeded"
+    assert ranking["durable_lifecycle"] == "succeeded"
+    assert "run_lifecycle" not in ranking
 
 
 def test_no_info_disables_evidence_and_cross_domain_keeps_structured_context(tmp_path: Path) -> None:
@@ -475,7 +535,7 @@ def test_no_info_disables_evidence_and_cross_domain_keeps_structured_context(tmp
     )
     no_info_loop = no_info_result["batch_request"]["loops"][0]
     assert no_info_loop["proposers"][0]["interaction_operations"] == {}
-    assert no_info_loop["proposers"][0]["max_interaction_turns"] == 2
+    assert "max_interaction_turns" not in no_info_loop["proposers"][0]
     assert "controller_evidence_operations" not in no_info_loop["context"]
     assert "review_payload" not in no_info_loop["reviewer"]["output_schema"]["properties"]
 
@@ -779,7 +839,7 @@ def test_cross_domain_cards_reject_domain_id_in_closed_v5_summary(
         )
 
 
-def test_one_shared_evidence_resolver_enforces_allowlist_budget_and_cache_reuse(tmp_path: Path) -> None:
+def test_one_shared_evidence_resolver_preserves_cache_reuse_without_cap(tmp_path: Path) -> None:
     runner = _load_runner_module()
     llm = _ThreeRoundLLM(interaction=True)
     resolver = _CachingResolver()
@@ -791,18 +851,19 @@ def test_one_shared_evidence_resolver_enforces_allowlist_budget_and_cache_reuse(
     )
 
     assert result["status"] == "succeeded"
-    assert resolver.request_limit == 24
     assert resolver.request_count == 6
     assert resolver.fetch_count == 1
     assert {record["operation_id"] for record in resolver.records} == {"get-arxiv-table-of-contents"}
-    assert result["evidence"]["request_count"] == 6
+    assert result["evidence"]["attempted"] == 6
+    assert result["evidence"]["succeeded"] == 6
+    assert result["evidence"]["failed"] == 0
 
 
-def test_evidence_accounting_is_per_loop_with_one_unchanged_global_cap(
+def test_evidence_accounting_is_per_loop_without_a_global_cap(
     tmp_path: Path,
 ) -> None:
     runner = _load_runner_module()
-    resolver = _CachingResolver(request_limit=2)
+    resolver = _CachingResolver()
 
     result = runner.run_ideas(
         _single_domain_config(tmp_path, loops=2),
@@ -811,19 +872,51 @@ def test_evidence_accounting_is_per_loop_with_one_unchanged_global_cap(
     )
 
     per_loop = result["evidence"]["per_loop"]
-    assert result["evidence"]["request_limit"] == 2
-    assert result["evidence"]["request_count"] == 6
+    assert result["evidence"]["observation_scope"] == "current_process"
+    assert result["evidence"]["attempted"] == 6
+    assert result["evidence"]["succeeded"] == 6
+    assert result["evidence"]["failed"] == 0
     assert set(per_loop) == {"domain_idea_001", "domain_idea_002"}
     assert all(
         set(item)
-        == {"attempted", "consumed", "exhausted", "repeated_request"}
+        == {
+            "attempted",
+            "succeeded",
+            "failed",
+            "errors_by_code",
+            "repeated_raw_signature",
+        }
         for item in per_loop.values()
     )
     assert sum(item["attempted"] for item in per_loop.values()) == 6
-    assert sum(item["consumed"] for item in per_loop.values()) == 2
-    assert sum(item["exhausted"] for item in per_loop.values()) == 4
-    assert sum(item["repeated_request"] for item in per_loop.values()) == 5
+    assert sum(item["succeeded"] for item in per_loop.values()) == 6
+    assert sum(item["failed"] for item in per_loop.values()) == 0
+    assert sum(item["repeated_raw_signature"] for item in per_loop.values()) == 5
     assert {item["attempted"] for item in per_loop.values()} == {3}
+
+
+def test_evidence_failures_are_counted_and_warned_without_false_accounting(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+
+    result = runner.run_ideas(
+        _single_domain_config(tmp_path),
+        llm_service=_ThreeRoundLLM(interaction=True),  # type: ignore[arg-type]
+        evidence_resolver=_FailingResolver(),  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["evidence"]["attempted"] == 3
+    assert result["evidence"]["succeeded"] == 0
+    assert result["evidence"]["failed"] == 3
+    assert result["evidence"]["errors_by_code"] == {
+        "evidence_operation_failed": 3
+    }
+    assert any(
+        "NOVELTY SCOUTING INCOMPLETE" in warning
+        for warning in result["warnings"]
+    )
 
 
 def test_execution_exception_reports_committed_durable_progress(
@@ -842,16 +935,213 @@ def test_execution_exception_reports_committed_durable_progress(
     )
 
     assert result["status"] == "failed"
-    assert result["schema_version"] == "arc.workflow.ideas.result.v2"
+    assert result["schema_version"] == "arc.workflow.ideas.result.v3"
     assert result["execution_error"] == {
         "code": "ideas_batch_execution_failed",
         "exception_type": "RuntimeError",
+        "message": "proposer-reviewer batch execution failed",
     }
     assert result["batch"]["durable_lifecycle"] == "succeeded"
     assert result["reviewer_call_count"] == 3
     assert "loop_reviewer_call_count" not in result
     assert "max_concurrent_proposal_calls" not in result
     assert result["loops"][0]["committed_rounds"] == 3
+
+
+def test_partial_loop_failure_is_degraded_and_failed_loop_is_visible(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+
+    result = runner.run_ideas(
+        _single_domain_config(tmp_path, loops=2),
+        llm_service=_SelectiveFailureLLM({"domain_idea_002"}),  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "degraded"
+    assert result["batch"]["durable_lifecycle"] == "succeeded"
+    assert result["batch"]["loop_lifecycle_counts"]["failed"] == 1
+    assert result["batch"]["loop_lifecycle_counts"]["succeeded"] == 1
+    assert sum(result["batch"]["loop_lifecycle_counts"].values()) == 2
+    assert result["batch"]["rankable_loop_count"] == 1
+    failed = next(
+        loop for loop in result["loops"] if loop["lifecycle"] == "failed"
+    )
+    assert failed["failure"]["code"] == "proposer_failed"
+    assert failed["failure"]["worker_causes"][0]["code"] == "invalid_request"
+    assert any("IDEAS RUN DEGRADED" in item for item in result["warnings"])
+    assert any("LOOP FAILURES" in item for item in result["warnings"])
+
+
+def test_all_loop_failures_make_the_ideas_result_failed(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+
+    result = runner.run_ideas(
+        _single_domain_config(tmp_path, loops=2),
+        llm_service=_SelectiveFailureLLM(  # type: ignore[arg-type]
+            {"domain_idea_001", "domain_idea_002"}
+        ),
+    )
+
+    assert result["status"] == "failed"
+    assert result["batch"]["durable_lifecycle"] == "succeeded"
+    assert result["batch"]["rankable_loop_count"] == 0
+    assert result["batch"]["loop_lifecycle_counts"]["failed"] == 2
+    assert sum(result["batch"]["loop_lifecycle_counts"].values()) == 2
+    assert any("IDEAS RUN FAILED" in item for item in result["warnings"])
+
+
+def test_unverified_trace_is_failed_and_has_no_rankable_loops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_runner_module()
+
+    def corrupt_trace(_repository: Any, _run_id: str) -> Any:
+        raise OSError("sensitive/path/digest mismatch")
+
+    monkeypatch.setattr(runner, "read_batch_trace", corrupt_trace)
+    result = runner.run_ideas(
+        _single_domain_config(tmp_path),
+        llm_service=_ThreeRoundLLM(),  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failed"
+    assert result["batch"]["trace_verified"] is False
+    assert result["batch"]["rankable_loop_count"] == 0
+    assert any("IDEAS RUN FAILED" in item for item in result["warnings"])
+    assert any(
+        item.startswith("committed_trace_unavailable:")
+        for item in result["warnings"]
+    )
+
+
+def test_unverified_committed_round_is_failed_not_rankable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_runner_module()
+    result_module = sys.modules["_arc_workflows.ideas_result"]
+
+    def corrupt_round(*_args: Any, **_kwargs: Any) -> Any:
+        raise ValueError("sensitive/path/round digest mismatch")
+
+    monkeypatch.setattr(result_module, "read_batch_round", corrupt_round)
+    result = runner.run_ideas(
+        _single_domain_config(tmp_path),
+        llm_service=_ThreeRoundLLM(),  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failed"
+    assert result["batch"]["trace_verified"] is False
+    assert result["batch"]["rankable_loop_count"] == 0
+    assert result["reviewer_call_count"] == 0
+    assert any(
+        item.startswith("committed_round_unavailable:")
+        for item in result["warnings"]
+    )
+
+
+def test_inspection_failure_is_explicit_not_not_started(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_runner_module()
+
+    def fail_inspection(_repository: Any, _run_id: str) -> Any:
+        raise ValueError("projection unavailable")
+
+    monkeypatch.setattr(runner, "inspect_batch", fail_inspection)
+    result = runner.run_ideas(
+        _single_domain_config(tmp_path),
+        llm_service=_ThreeRoundLLM(),  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failed"
+    assert result["loops"][0]["lifecycle"] == "unknown"
+    assert result["loops"][0]["phase"] == "inspection_failed"
+    assert result["inspection_error"] == {
+        "code": "ideas_batch_inspection_failed",
+        "exception_type": "ValueError",
+        "message": "proposer-reviewer batch inspection failed",
+    }
+
+
+def test_foreground_progress_is_ordered_and_filters_interaction_detail(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    events: list[dict[str, Any]] = []
+
+    result = runner.run_ideas(
+        _single_domain_config(tmp_path),
+        llm_service=_ThreeRoundLLM(interaction=True),  # type: ignore[arg-type]
+        evidence_resolver=_CachingResolver(),  # type: ignore[arg-type]
+        progress_callback=events.append,
+    )
+
+    assert result["status"] == "succeeded"
+    assert [item["sequence"] for item in events] == list(
+        range(1, len(events) + 1)
+    )
+    assert all(item["run_id"] == "ideas-test" for item in events)
+    assert all(isinstance(item["emitted_at"], str) for item in events)
+    names = [item["event"] for item in events]
+    assert names[0] == "ideas_batch_started"
+    assert names[-1] == "ideas_batch_finished"
+    assert "proposer_reviewer_worker_interaction" not in names
+    assert set(names[1:-1]) <= runner._FOREGROUND_PROGRESS_EVENTS
+    assert "proposer_reviewer_round_committed" in names
+
+
+def test_progress_metadata_cannot_be_overwritten_by_an_event() -> None:
+    runner = _load_runner_module()
+    events: list[dict[str, Any]] = []
+    emitter = runner.IdeasProgressEmitter(events.append, run_id="trusted-run")
+
+    emitter.emit(
+        {
+            "event": "fixture",
+            "sequence": 999,
+            "emitted_at": "forged",
+            "run_id": "forged-run",
+        }
+    )
+
+    assert events[0]["sequence"] == 1
+    assert events[0]["emitted_at"] != "forged"
+    assert events[0]["run_id"] == "trusted-run"
+
+
+def test_progress_callback_failure_does_not_fail_durable_execution(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    sidechannel = tmp_path / "progress/events.jsonl"
+
+    def fail_progress(_event: dict[str, Any]) -> None:
+        raise RuntimeError("display unavailable")
+
+    result = runner.run_ideas(
+        _single_domain_config(tmp_path),
+        llm_service=_ThreeRoundLLM(),  # type: ignore[arg-type]
+        progress_callback=fail_progress,
+        base_env={"ARC_JOB_PROGRESS_FILE": str(sidechannel)},
+    )
+
+    assert result["status"] == "succeeded"
+    assert (
+        "ideas_progress_callback_failed: RuntimeError"
+        in result["warnings"]
+    )
+    persisted = [
+        json.loads(line)
+        for line in sidechannel.read_text(encoding="utf-8").splitlines()
+    ]
+    assert persisted[0]["event"] == "ideas_batch_started"
+    assert persisted[-1]["event"] == "ideas_batch_finished"
 
 
 def test_duplicate_enabled_variant_ids_are_rejected(tmp_path: Path) -> None:

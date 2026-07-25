@@ -657,7 +657,7 @@ def test_default_executor_uses_public_engine_and_committed_round(
         def inspect(self) -> Any:
             calls["inspect"] = True
             return SimpleNamespace(
-                run_lifecycle="succeeded",
+                durable_lifecycle="succeeded",
                 run_revision=2,
                 loops=(
                     SimpleNamespace(
@@ -739,7 +739,7 @@ def test_default_executor_recovers_committed_frontier_after_exception(
             calls.append("inspect")
             return SimpleNamespace(
                 run_id="calculate_calc_001_step_001_attempt_001",
-                run_lifecycle="running",
+                durable_lifecycle="running",
                 run_revision=3,
                 loop_revisions={request.loops[0].loop_id: 2},
                 loops=(
@@ -812,7 +812,7 @@ def test_succeeded_batch_projection_failure_reports_durable_frontier(
         def inspect(self) -> Any:
             return SimpleNamespace(
                 run_id="calculate_calc_001_step_001_attempt_001",
-                run_lifecycle="succeeded",
+                durable_lifecycle="succeeded",
                 run_revision=4,
                 loop_revisions={request.loops[0].loop_id: 2},
                 loops=(

@@ -358,6 +358,22 @@ def _appendix_section(entry: dict[str, Any]) -> list[str]:
         "",
         _round_marks_table(entry),
         "",
+        "#### Focused Novelty Audit",
+        "",
+        "This is a focused evidence audit, not an exhaustive proof of novelty.",
+        "",
+        "Evidence checked:",
+        "",
+        *_bullet_items(entry.get("evidence_checked", [])),
+        "",
+        "Tool queries used:",
+        "",
+        *_bullet_items(entry.get("tool_queries_used", [])),
+        "",
+        "Unresolved reviewer limitations:",
+        "",
+        *_bullet_items(entry.get("reviewer_limitations", [])),
+        "",
         "#### Full Idea Verbatim",
         "",
         _handoff_text(entry.get("proposer_output", {})),
@@ -397,6 +413,17 @@ def _format_mark(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f"{value:g}"
     return ""
+
+
+def _bullet_items(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return ["- None recorded."]
+    items = [
+        str(item).strip()
+        for item in value
+        if str(item).strip()
+    ]
+    return [f"- {item}" for item in items] or ["- None recorded."]
 
 
 def _heading_text(value: Any) -> str:

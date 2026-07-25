@@ -463,9 +463,7 @@ def _recover_committed_round_or_raise(
             dict(encoded_frontier)
             if isinstance(encoded_frontier, Mapping)
             else {
-                "run_lifecycle": str(
-                    getattr(inspection, "run_lifecycle", "")
-                ),
+                "run_lifecycle": inspection.durable_lifecycle,
                 "run_revision": getattr(inspection, "run_revision", None),
             }
         )

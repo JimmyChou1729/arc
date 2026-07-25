@@ -14,7 +14,6 @@ bootstrap_arc_pythonpath()
 from arc_jobs import RunEngine, RunRepository, RunSnapshot, RunSpec
 from arc_llm import LLMTaskService
 from arc_proposer_reviewer import (
-    BatchProjectionIntegrityError,
     BatchRunner,
     ProposerReviewerHandler,
     ProposerReviewerService,
@@ -39,8 +38,8 @@ from _arc_workflows.ideas_policy import (
 )
 from _arc_workflows.ideas_progress import (
     combined_progress_callback,
-    emit_progress,
     foreground_progress_callback,
+    IdeasProgressEmitter,
     IdeasStopController,
     progress_sidechannel_callback,
 )
@@ -66,6 +65,18 @@ class BatchExecutor(Protocol):
         spec: RunSpec,
         handler: ProposerReviewerHandler,
     ) -> RunSnapshot: ...
+
+
+_FOREGROUND_PROGRESS_EVENTS = frozenset(
+    {
+        "proposer_reviewer_loop_started",
+        "proposer_reviewer_round_started",
+        "proposer_reviewer_worker_started",
+        "proposer_reviewer_worker_finished",
+        "proposer_reviewer_round_committed",
+        "proposer_reviewer_loop_finished",
+    }
+)
 
 
 def run_ideas(
@@ -116,8 +127,21 @@ def run_ideas(
             ideas=ideas,
             warnings=warnings,
             max_concurrent=max_concurrent,
-            status="stopped",
+            status="paused",
         )
+
+    effective_progress = combined_progress_callback(
+        progress_callback,
+        progress_sidechannel_callback(base_env),
+    )
+    progress = IdeasProgressEmitter(
+        effective_progress,
+        run_id=ideas_config.run_id,
+    )
+
+    def package_progress(event: dict[str, Any]) -> None:
+        if event.get("event") in _FOREGROUND_PROGRESS_EVENTS:
+            progress.emit(event)
 
     resolver = evidence_resolver or ArcPaperEvidenceResolver()
     evidence_ledger = IdeasEvidenceLedger(
@@ -129,6 +153,7 @@ def run_ideas(
         options=ExecutionOptions(
             max_concurrent_loops=max_concurrent,
             max_concurrent_workers=1,
+            progress_callback=package_progress,
             loop_interaction_resolvers={
                 idea.loop_id: evidence_ledger.scoped(idea.loop_id)
                 for idea in ideas
@@ -140,14 +165,7 @@ def run_ideas(
         handler.name,
         encode_batch_request(request),
     )
-    effective_progress = combined_progress_callback(
-        progress_callback,
-        progress_sidechannel_callback(base_env),
-    )
-    emit_progress(
-        effective_progress,
-        {"event": "ideas_batch_started", "run_id": ideas_config.run_id},
-    )
+    progress.emit({"event": "ideas_batch_started"})
     snapshot = None
     execution_error: Exception | None = None
     try:
@@ -171,11 +189,12 @@ def run_ideas(
         execution_error = exc
     for error_type in controller.errors:
         warnings.append(f"ideas_stop_request_failed: {error_type}")
+    _append_progress_errors(warnings, progress)
     if execution_error is not None:
         warnings.append(
             f"ideas_batch_execution_failed: {type(execution_error).__name__}"
         )
-        return _recover_execution_failure(
+        result = _recover_execution_failure(
             ideas_config,
             repository=repository,
             request=request,
@@ -185,6 +204,11 @@ def run_ideas(
             evidence_ledger=evidence_ledger,
             error=execution_error,
         )
+        progress.emit(
+            {"event": "ideas_batch_finished", "status": result["status"]}
+        )
+        _append_progress_errors(warnings, progress)
+        return result
     assert snapshot is not None
 
     try:
@@ -193,31 +217,36 @@ def run_ideas(
         warnings.append(
             f"ideas_batch_inspection_failed: {type(exc).__name__}"
         )
-        return not_started_result(
+        result = not_started_result(
             ideas_config,
             request=request,
             ideas=ideas,
             warnings=warnings,
             max_concurrent=max_concurrent,
-            status=snapshot.status.value,
+            status="failed",
         )
+        for loop in result["loops"]:
+            loop["lifecycle"] = "unknown"
+            loop["phase"] = "inspection_failed"
+        result["inspection_error"] = {
+            "code": "ideas_batch_inspection_failed",
+            "exception_type": type(exc).__name__,
+            "message": "proposer-reviewer batch inspection failed",
+        }
+        progress.emit(
+            {"event": "ideas_batch_finished", "status": result["status"]}
+        )
+        _append_progress_errors(warnings, progress)
+        return result
 
     try:
         trace = read_batch_trace(repository, snapshot.run_id)
-    except BatchProjectionIntegrityError:
+    except Exception as exc:
         trace = None
         warnings.append(
-            "committed_trace_unavailable: committed artifacts could not be verified"
+            f"committed_trace_unavailable: {type(exc).__name__}"
         )
-    emit_progress(
-        effective_progress,
-        {
-            "event": "ideas_batch_finished",
-            "run_id": ideas_config.run_id,
-            "status": inspection.run_lifecycle,
-        },
-    )
-    return observed_result(
+    result = observed_result(
         ideas_config,
         repository=repository,
         request=request,
@@ -228,6 +257,11 @@ def run_ideas(
         trace=trace,
         evidence_ledger=evidence_ledger,
     )
+    progress.emit(
+        {"event": "ideas_batch_finished", "status": result["status"]}
+    )
+    _append_progress_errors(warnings, progress)
+    return result
 
 
 def _execute_batch(
@@ -264,14 +298,23 @@ def _recover_execution_failure(
             max_concurrent=max_concurrent,
             status="failed",
         )
+        for loop in result["loops"]:
+            loop["lifecycle"] = "unknown"
+            loop["phase"] = "inspection_failed"
+        result["inspection_error"] = {
+            "code": "ideas_batch_inspection_failed",
+            "exception_type": type(inspection_error).__name__,
+            "message": "proposer-reviewer batch inspection failed",
+        }
         result["evidence"] = evidence_ledger.to_document()
     else:
         try:
             trace = read_batch_trace(repository, config.run_id)
-        except BatchProjectionIntegrityError:
+        except Exception as trace_error:
             trace = None
             warnings.append(
-                "committed_trace_unavailable: committed artifacts could not be verified"
+                "committed_trace_unavailable: "
+                f"{type(trace_error).__name__}"
             )
         result = observed_result(
             config,
@@ -285,16 +328,27 @@ def _recover_execution_failure(
             evidence_ledger=evidence_ledger,
         )
         result["status"] = "failed"
-        result["batch"]["durable_lifecycle"] = inspection.run_lifecycle
+        result["batch"]["durable_lifecycle"] = inspection.durable_lifecycle
     result["execution_error"] = {
         "code": "ideas_batch_execution_failed",
         "exception_type": type(error).__name__,
+        "message": "proposer-reviewer batch execution failed",
     }
     return result
 
 
 def _read_config_file(path: str) -> dict[str, Any]:
     return read_json(Path(path))
+
+
+def _append_progress_errors(
+    warnings: list[str],
+    progress: IdeasProgressEmitter,
+) -> None:
+    for error_type in progress.errors:
+        warning = f"ideas_progress_callback_failed: {error_type}"
+        if warning not in warnings:
+            warnings.append(warning)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -338,7 +392,7 @@ def main(argv: list[str] | None = None) -> int:
         table = result.get("round_score_table", {}).get("markdown")
         if table:
             print(table)
-    return 1 if result.get("status") in {"failed", "stopped", "paused"} else 0
+    return 1 if result.get("status") in {"failed", "paused"} else 0
 
 
 if __name__ == "__main__":
