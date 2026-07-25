@@ -152,6 +152,47 @@ def test_strict_window_filters_unique_citers_before_merge_and_accepts_dated_non_
     assert merged[0]["paper_id"] == boundary["paper_id"]
 
 
+def test_strict_window_uses_earliest_field_and_cross_stream_date_at_boundary() -> None:
+    boundary = _paper(
+        "doi:10.1000/boundary",
+        published="2024-07-24",
+        identifiers={"doi": "10.1000/boundary"},
+    )
+    earlier_field = _paper(
+        "doi:10.1000/earlier-field",
+        published="2026-07-20",
+        preprint_date="2024-07-23",
+        identifiers={"doi": "10.1000/earlier-field"},
+    )
+    cross_stream_recent = _paper(
+        "doi:10.1000/cross-stream",
+        published="2026-07-20",
+        identifiers={"doi": "10.1000/cross-stream"},
+    )
+    cross_stream_old = _paper(
+        "doi:10.1000/cross-stream",
+        published="2024-07-23",
+        identifiers={"doi": "10.1000/cross-stream"},
+    )
+
+    recent, cited, stats = network.strict_window_citer_streams(
+        FOUNDATION,
+        most_recent=[boundary, earlier_field, cross_stream_recent],
+        most_cited=[cross_stream_old, boundary],
+        as_of_date=date(2026, 7, 24),
+        window_days=730,
+    )
+
+    assert [item["paper_id"] for item in recent] == [boundary["paper_id"]]
+    assert [item["paper_id"] for item in cited] == [boundary["paper_id"]]
+    assert stats == {
+        "unique_citers": 3,
+        "eligible_citers": 1,
+        "excluded_missing_first_public_date": 0,
+        "excluded_outside_window": 2,
+    }
+
+
 def test_network_scores_recompute_across_initial_citer_and_reference_stages() -> None:
     initial = network._select_domain_papers(
         [

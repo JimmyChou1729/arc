@@ -53,6 +53,61 @@ def test_merge_citer_pool_balances_fixed_inspire_rankings():
     assert merged[1]["mostcited_rank"] == 1
 
 
+@pytest.mark.parametrize(
+    ("recent_published", "cited_published"),
+    [
+        ("2020-03-04", "2026-07-20"),
+        ("2026-07-20", "2020-03-04"),
+    ],
+)
+def test_merge_citer_pool_preserves_earliest_same_field_across_stream_order(
+    recent_published: str,
+    cited_published: str,
+):
+    paper_id = "arXiv:2003.00001"
+
+    merged = network.merge_citer_pool(
+        "arXiv:1901.00001",
+        most_recent=[_paper(paper_id, published=recent_published)],
+        most_cited=[_paper(paper_id, published=cited_published)],
+        limit=1,
+    )
+
+    assert merged[0]["published"] == "2020-03-04"
+    assert network.first_public_date(merged[0]) == (
+        date(2020, 3, 4),
+        "published",
+    )
+
+
+def test_merge_citer_pool_preserves_earliest_date_and_basis_across_fields():
+    paper_id = "doi:10.1000/date-conflict"
+    merged = network.merge_citer_pool(
+        "arXiv:1901.00001",
+        most_recent=[_paper(paper_id, published="2026-07-20")],
+        most_cited=[_paper(paper_id, preprint_date="2020-03-04")],
+        limit=1,
+    )
+
+    selected = network._select_domain_papers(
+        merged,
+        foundation_id="arXiv:1901.00001",
+        intent_ranking={"ranked_paper_ids": []},
+        intent="",
+        selected_count=1,
+        max_total=1,
+        as_of_date=date(2026, 7, 24),
+        strict_window=True,
+    )
+
+    assert network.first_public_date(merged[0]) == (
+        date(2020, 3, 4),
+        "preprint_date",
+    )
+    assert selected[0]["first_public_date"] == "2020-03-04"
+    assert selected[0]["recency_basis"] == "preprint_date"
+
+
 @pytest.mark.parametrize("limit", [0, -1, True])
 def test_merge_citer_pool_requires_positive_limit(limit):
     with pytest.raises(ValueError, match="positive"):
@@ -191,6 +246,28 @@ def test_recent_window_uses_first_public_date_and_arxiv_month_fallback():
     ) == (None, None)
     assert network._arxiv_month_date(_paper("arXiv:2507.12345")) == (
         date(2025, 7, 1)
+    )
+
+
+def test_first_public_date_uses_earliest_valid_field_not_field_priority():
+    record = _paper(
+        "doi:10.1000/field-order",
+        published="2026-07-20",
+        preprint_date="2020-03-04",
+        earliest_date="2019-02-03",
+        created="2021-04-05",
+        updated="2018-01-01",
+    )
+
+    assert network.first_public_date(record) == (
+        date(2019, 2, 3),
+        "earliest_date",
+    )
+
+    record["published"] = "2019-02-03"
+    assert network.first_public_date(record) == (
+        date(2019, 2, 3),
+        "published",
     )
 
 

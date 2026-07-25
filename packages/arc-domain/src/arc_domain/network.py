@@ -28,6 +28,7 @@ GRAPH_CITER_WEIGHT = 2.0
 REFERENCE_EDGE_WEIGHT = 0.5
 RECENT_ARXIV_WINDOW_DAYS = 365
 MAX_GRAPH_PAPER_COUNT = 90
+_PUBLIC_DATE_FIELDS = ("published", "preprint_date", "earliest_date", "created")
 
 
 def strict_window_citer_streams(
@@ -69,13 +70,7 @@ def strict_window_citer_streams(
             if existing is None:
                 records[paper_id] = candidate
             else:
-                existing.update(
-                    {
-                        key: value
-                        for key, value in candidate.items()
-                        if value not in (None, "", [], {})
-                    }
-                )
+                _merge_citer_metadata(existing, candidate)
 
     start = as_of_date - timedelta(days=window_days)
     eligible: set[str] = set()
@@ -147,12 +142,10 @@ def merge_citer_pool(
             record[f"{source}_rank"] = index + 1
             if paper_id in merged:
                 existing = merged[paper_id]
-                existing.update(
-                    {
-                        key: value
-                        for key, value in record.items()
-                        if key != "citer_sources" and value not in ("", None, [])
-                    }
+                _merge_citer_metadata(
+                    existing,
+                    record,
+                    excluded_fields={"citer_sources"},
                 )
                 for label in record["citer_sources"]:
                     if label not in existing["citer_sources"]:
@@ -766,12 +759,38 @@ def _paper_date(record: dict[str, Any]) -> date | None:
 
 
 def _paper_date_with_basis(record: dict[str, Any]) -> tuple[date | None, str | None]:
-    for key in ("published", "preprint_date", "earliest_date", "created"):
+    candidates: list[tuple[date, int, str]] = []
+    for priority, key in enumerate(_PUBLIC_DATE_FIELDS):
         value = str(record.get(key) or "").strip()
         parsed = _parse_date(value)
         if parsed is not None:
-            return parsed, key
-    return None, None
+            candidates.append((parsed, priority, key))
+    if not candidates:
+        return None, None
+    earliest, _priority, basis = min(candidates)
+    return earliest, basis
+
+
+def _merge_citer_metadata(
+    target: dict[str, Any],
+    incoming: dict[str, Any],
+    *,
+    excluded_fields: set[str] | None = None,
+) -> None:
+    """Merge non-empty metadata while retaining each field's earliest date."""
+
+    excluded = excluded_fields or set()
+    for key, value in incoming.items():
+        if key in excluded or value in (None, "", [], {}):
+            continue
+        if key in _PUBLIC_DATE_FIELDS:
+            current_date = _parse_date(str(target.get(key) or "").strip())
+            incoming_date = _parse_date(str(value).strip())
+            if current_date is not None and (
+                incoming_date is None or current_date <= incoming_date
+            ):
+                continue
+        target[key] = value
 
 
 def _parse_date(value: str) -> date | None:
