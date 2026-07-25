@@ -98,6 +98,72 @@ def test_public_parser_service_reads_all_formats_from_repository(
     assert extractor.calls == ([payload] if source_format is SourceFormat.PDF else [])
 
 
+def test_standard_markdown_projection_has_canonical_encoded_output(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        b"# Golden\nBefore $x+y$.\n\n$$\nz = 1\n$$\n",
+        SourceFormat.MARKDOWN,
+    )
+
+    document = PaperParserService(repository).parse_source(artifact)
+
+    assert parsed_document_to_document(document) == {
+        "schema_version": "arc.paper.parsed_document.v1",
+        "document_digest": (
+            "04147356935f48839d523c49200a26263553aa736b2903285e02a542ddd06ed1"
+        ),
+        "source": {
+            "source_format": "markdown",
+            "artifact_digest": (
+                "394fca4064f41a2583b7d57646649dea65e04a358a13b888abb2306dada0c484"
+            ),
+            "size": 36,
+            "media_type": "text/markdown",
+        },
+        "sections": [
+            {
+                "section_id": "sec-0a1663a039ea8af7f22d",
+                "title": "Golden",
+                "level": 1,
+                "text": "# Golden\nBefore $x+y$.\n\n$$\nz = 1\n$$",
+                "ordinal": 0,
+                "page_start": None,
+                "page_end": None,
+            }
+        ],
+        "math_spans": [
+            {
+                "span_id": "math-0fdd2cfeec4932e0842059a7",
+                "kind": "inline",
+                "source_line_start": 2,
+                "source_column_start": 8,
+                "source_line_end": 2,
+                "source_column_end": 12,
+                "normalized_tex": "x+y",
+                "context_before": "Before",
+                "context_after": ".",
+                "source_label": "",
+            },
+            {
+                "span_id": "math-acdec12f8a953f76d2b05527",
+                "kind": "display",
+                "source_line_start": 4,
+                "source_column_start": 1,
+                "source_line_end": 6,
+                "source_column_end": 2,
+                "normalized_tex": "z = 1",
+                "context_before": "Before $x+y$.",
+                "context_after": "",
+                "source_label": "",
+            },
+        ],
+        "pages": [],
+        "warnings": [],
+        "metadata": {"format": "markdown"},
+    }
+
+
 def test_html_math_context_does_not_cross_explicit_section_boundaries(tmp_path):
     payload = b"""
     <html><body>

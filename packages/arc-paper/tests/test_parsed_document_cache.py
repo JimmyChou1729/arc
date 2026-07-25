@@ -14,6 +14,7 @@ from arc_paper._parsed_document_cache import (
     PARSED_DOCUMENT_CACHE_SCHEMA,
     ParsedDocumentCache,
 )
+from arc_paper.parse.models import parsed_document_to_document
 from arc_paper.parse.parser import parse_artifact_bytes
 from arc_paper.source_repository import SourceRepository, SourceRepositoryError
 from arc_paper.sources import SourceFormat, SourceOrigin, SourceOriginKind
@@ -93,6 +94,56 @@ def test_cache_reuses_entry_across_instances_and_same_source_content(tmp_path: P
     assert first_calls == [1]
     assert second_calls == []
     assert warnings == ()
+
+
+def test_cache_round_trip_preserves_canonical_projection_bytes(
+    tmp_path: Path,
+) -> None:
+    repository = SourceRepository(tmp_path)
+    source = _source(repository)
+    first_cache = ParsedDocumentCache(repository=repository)
+    first_calls: list[int] = []
+
+    first, first_warnings = first_cache.get_or_parse(
+        source,
+        _parser(repository, first_calls),
+    )
+    entry_dir = first_cache._entry_dir(first_cache.cache_key(source))
+    expected_document = (
+        b'{"document_digest":"5c95a5d1dc770e20e72a01d8062113ea1b06d628d67d52d195863adaba55d146",'
+        b'"math_spans":[],"metadata":{"format":"html"},"pages":[],"schema_version":'
+        b'"arc.paper.parsed_document.v1","sections":[{"level":1,"ordinal":0,"page_end":'
+        b'null,"page_start":null,"section_id":"sec-c9d2ced32b55836bc942","text":"text",'
+        b'"title":"Intro"}],"source":{"artifact_digest":'
+        b'"bf364f6117c7bb6b0512a27500a0b274850ed6265389117f508a12da1d9023ba",'
+        b'"media_type":"text/html","size":25,"source_format":"html"},"warnings":[]}'
+    )
+    expected_manifest = (
+        b'{"document_digest":"5c95a5d1dc770e20e72a01d8062113ea1b06d628d67d52d195863adaba55d146",'
+        b'"parser_contract":"arc.paper.parser.v1","payload_digest":'
+        b'"7e9e4c81e6bab45877a66fa0f0d8900dfcebf38a40955cf2c2ead8db71c16a18",'
+        b'"payload_size":499,"schema_version":"arc.paper.parsed_document_cache.v1",'
+        b'"source_identity":{"artifact_digest":'
+        b'"bf364f6117c7bb6b0512a27500a0b274850ed6265389117f508a12da1d9023ba",'
+        b'"media_type":"text/html","size":25,"source_format":"html"}}'
+    )
+
+    assert first_warnings == ()
+    assert first_calls == [1]
+    assert (entry_dir / "document.json").read_bytes() == expected_document
+    assert (entry_dir / "manifest.json").read_bytes() == expected_manifest
+
+    second_cache = ParsedDocumentCache(repository=repository)
+    second_calls: list[int] = []
+    second, second_warnings = second_cache.get_or_parse(
+        source,
+        _parser(repository, second_calls),
+    )
+
+    assert second_calls == []
+    assert second_warnings == ()
+    assert second.document_digest == first.document_digest
+    assert parsed_document_to_document(second) == json.loads(expected_document)
 
 
 def test_cache_locks_concurrent_first_parse(tmp_path: Path) -> None:

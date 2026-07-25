@@ -127,6 +127,149 @@ def test_markdown_rich_parse_preserves_blocks_links_math_and_assets(tmp_path):
     assert all(block.section_path == document.sections[0].path for block in document.blocks)
 
 
+def test_rich_markdown_projection_has_canonical_encoded_output(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        b"# Golden\nBefore $x+y$.\n\n$$\nz = 1\n$$\n",
+        SourceFormat.MARKDOWN,
+    )
+
+    document = RichDocumentParserService(repository).parse_source(artifact)
+
+    assert rich_document_to_document(document) == {
+        "schema_version": "arc.paper.rich_document.v1",
+        "document_digest": (
+            "1c6ad6b327f29f911bd8a8445b0880a8241226850e050534fdb41e2e2ebed3c7"
+        ),
+        "source": {
+            "source_format": "markdown",
+            "artifact_digest": (
+                "394fca4064f41a2583b7d57646649dea65e04a358a13b888abb2306dada0c484"
+            ),
+            "size": 36,
+            "media_type": "text/markdown",
+        },
+        "blocks": [
+            {
+                "block_id": "block-ac7da08a86910854845ed54a",
+                "ordinal": 0,
+                "kind": "heading",
+                "section_path": ["sec-0c239875f2148884c1ab"],
+                "locator": {
+                    "source_format": "markdown",
+                    "line_start": 1,
+                    "column_start": None,
+                    "line_end": 1,
+                    "column_end": None,
+                    "selector": "",
+                    "source_id": "",
+                },
+                "payload": {"text": "Golden", "level": 1},
+            },
+            {
+                "block_id": "block-13493e2675229f5af83cb89a",
+                "ordinal": 1,
+                "kind": "paragraph",
+                "section_path": ["sec-0c239875f2148884c1ab"],
+                "locator": {
+                    "source_format": "markdown",
+                    "line_start": 2,
+                    "column_start": None,
+                    "line_end": 2,
+                    "column_end": None,
+                    "selector": "",
+                    "source_id": "",
+                },
+                "payload": {
+                    "text": "Before $x+y$.",
+                    "links": [],
+                    "inline_math": [{"tex": "x+y", "source": "$x+y$"}],
+                    "inline_spans": [
+                        {
+                            "kind": "text",
+                            "start": 0,
+                            "end": 7,
+                            "text": "Before ",
+                        },
+                        {
+                            "kind": "math",
+                            "start": 7,
+                            "end": 12,
+                            "text": "$x+y$",
+                            "tex": "x+y",
+                            "source": "$x+y$",
+                        },
+                        {
+                            "kind": "text",
+                            "start": 12,
+                            "end": 13,
+                            "text": ".",
+                        },
+                    ],
+                },
+            },
+            {
+                "block_id": "block-6579552946b1897b5a233497",
+                "ordinal": 2,
+                "kind": "equation",
+                "section_path": ["sec-0c239875f2148884c1ab"],
+                "locator": {
+                    "source_format": "markdown",
+                    "line_start": 4,
+                    "column_start": None,
+                    "line_end": 6,
+                    "column_end": None,
+                    "selector": "",
+                    "source_id": "",
+                },
+                "payload": {"tex": "z = 1", "display": True, "label": ""},
+            },
+        ],
+        "sections": [
+            {
+                "section_id": "sec-0c239875f2148884c1ab",
+                "title": "Golden",
+                "level": 1,
+                "ordinal": 0,
+                "path": ["sec-0c239875f2148884c1ab"],
+                "block_start": 0,
+                "block_end": 3,
+            }
+        ],
+        "assets": [],
+        "page_map": [],
+        "metadata": {"format": "markdown", "single_file": False},
+    }
+
+
+def test_rich_service_materializes_standard_primary_before_validator_branch(
+    tmp_path,
+    monkeypatch,
+):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        b"# Service calls\nBody.\n",
+        SourceFormat.MARKDOWN,
+    )
+    service = RichDocumentParserService(repository)
+    calls = []
+    parse_standard = service.standard_parser.parse_source
+
+    def record_standard_call(source):
+        calls.append(source.content_identity)
+        return parse_standard(source)
+
+    monkeypatch.setattr(service.standard_parser, "parse_source", record_standard_call)
+
+    outcome = service.parse(SourceBundle(primary=artifact))
+
+    assert calls == [artifact.content_identity]
+    assert outcome.report.primary.content_identity == artifact.content_identity
+    assert outcome.warnings == (PDF_VALIDATOR_MISSING_WARNING,)
+
+
 def test_html_rich_parse_preserves_equation_table_figure_and_selector(tmp_path):
     source = tmp_path / "paper.html"
     image = tmp_path / "plot.svg"
