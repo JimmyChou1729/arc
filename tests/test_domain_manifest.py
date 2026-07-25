@@ -107,6 +107,18 @@ def test_manifest_helper_uses_source_bootstrap_and_typed_llm_contract() -> None:
     assert "LLMAbortScope" not in source
 
 
+def test_json_reader_preserves_manifest_error_contract(tmp_path: Path) -> None:
+    module = _load_module()
+    path = tmp_path / "context.json"
+    path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(
+        module.ManifestError,
+        match=f"JSON root must be an object: {path}",
+    ):
+        module._read_object(path)
+
+
 def test_manifest_uses_distinct_domain_ids_and_relative_paths(tmp_path: Path) -> None:
     module = _load_module()
     project = tmp_path / "project"

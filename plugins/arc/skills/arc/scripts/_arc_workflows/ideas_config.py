@@ -3,16 +3,21 @@ from __future__ import annotations
 import copy
 import json
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+
+from _arc_workflows.workflow_io import (
+    NonObjectJsonError,
+    UNBOUNDED_SAFE_ID_RE,
+    read_json_object,
+    require_safe_id,
+)
 
 
 IDEAS_CONFIG_SCHEMA = "arc.workflow.ideas.config.v1"
 IDEAS_VARIANT_SCHEMA = "arc.workflow.ideas.variant.v1"
 DOMAIN_MANIFEST_SCHEMA = "arc.workflow.domain_manifest.v2"
-SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 RESEARCH_SCOPES = {"single_domain", "cross_domain"}
 
 
@@ -128,9 +133,10 @@ def _discover_variants(root: Path, pattern: str) -> list[VariantConfig]:
     for path in sorted(root.glob(pattern)):
         if "_inactivated" in path.name or ".disabled." in path.name:
             continue
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ConfigError(f"variant config must be an object: {path}")
+        try:
+            payload = read_json_object(path)
+        except NonObjectJsonError as exc:
+            raise ConfigError(f"variant config must be an object: {path}") from exc
         variant = _parse_variant(payload, path=path)
         if variant is not None:
             variants.append(variant)
@@ -221,11 +227,11 @@ def _load_domain_manifest(path: Path, *, required: bool) -> tuple[dict[str, Any]
             ],
         )
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = read_json_object(path)
     except (OSError, json.JSONDecodeError) as exc:
         raise ConfigError(f"Could not read domain manifest {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ConfigError(f"domain manifest must be an object: {path}")
+    except NonObjectJsonError as exc:
+        raise ConfigError(f"domain manifest must be an object: {path}") from exc
     if payload.get("schema_version") == "arc.workflow.domain_manifest.v1":
         raise ConfigError(f"{path} uses domain manifest v1; regenerate it to add semantic field grouping")
     if payload.get("schema_version") != DOMAIN_MANIFEST_SCHEMA:
@@ -270,10 +276,12 @@ def _load_domain_manifest(path: Path, *, required: bool) -> tuple[dict[str, Any]
     if not grouping_path.is_file():
         raise ConfigError(f"{path}.grouping_artifact does not exist: {grouping_path}")
     try:
-        grouping = json.loads(grouping_path.read_text(encoding="utf-8"))
+        grouping = read_json_object(grouping_path)
     except (OSError, json.JSONDecodeError) as exc:
         raise ConfigError(f"Could not read grouping artifact {grouping_path}: {exc}") from exc
-    if not isinstance(grouping, dict) or grouping.get("schema_version") != "arc.workflow.domain_field_grouping.v1":
+    except NonObjectJsonError:
+        grouping = {}
+    if grouping.get("schema_version") != "arc.workflow.domain_field_grouping.v1":
         raise ConfigError(f"{grouping_path} has the wrong schema_version")
     grouping_groups = grouping.get("field_groups")
     if not isinstance(grouping_groups, list) or {
@@ -343,9 +351,12 @@ def _variant_required_text(data: Mapping[str, Any], key: str, path: Path) -> str
 
 
 def _safe_id(value: str, field_name: str) -> str:
-    if not SAFE_ID_RE.match(value):
-        raise ConfigError(f"{field_name} must match {SAFE_ID_RE.pattern}")
-    return value
+    return require_safe_id(
+        value,
+        field_name,
+        pattern=UNBOUNDED_SAFE_ID_RE,
+        error_type=ConfigError,
+    )
 
 
 def _dict(value: Any, field_name: str) -> dict[str, Any]:

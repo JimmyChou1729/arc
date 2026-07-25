@@ -4,9 +4,7 @@ import argparse
 import copy
 import hashlib
 import json
-import os
 import re
-import tempfile
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -29,6 +27,12 @@ from arc_proposer_reviewer import (
     read_batch_round,
 )
 from arc_proposer_reviewer.protocol import encode_batch_request
+from _arc_workflows.workflow_io import (
+    NonObjectJsonError,
+    read_json_object,
+    require_safe_id,
+    write_json_object,
+)
 
 
 CALCULATE_CONFIG_SCHEMA = "arc.workflow.calculate.config.v1"
@@ -58,9 +62,6 @@ CALLER_ALLOWED_CONTEXT_OMIT_KEYS = {
     "mcp_call_instructions",
     "cli_invocations",
 }
-
-SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-
 
 class ConfigError(ValueError):
     """Invalid calculate-workflow configuration."""
@@ -1352,30 +1353,16 @@ def _read_template(path: Path) -> dict[str, Any]:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"Expected JSON object at {path}")
-    return payload
+    try:
+        return read_json_object(path)
+    except NonObjectJsonError as exc:
+        raise ValueError(f"Expected JSON object at {path}") from exc
 
 
-def _write_json(path: Path, payload: Any) -> None:
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
     """Atomically replace a calculation-owned JSON record."""
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    write_json_object(path, payload, sort_keys=True)
 
 
 def _default_workflow_json_dir() -> Path:
@@ -1393,9 +1380,7 @@ def _required_text(data: Mapping[str, Any], key: str) -> str:
 
 
 def _safe_id(value: str, field_name: str) -> str:
-    if not SAFE_ID_RE.match(value):
-        raise ConfigError(f"{field_name} must match {SAFE_ID_RE.pattern}")
-    return value
+    return require_safe_id(value, field_name, error_type=ConfigError)
 
 
 def _positive_int(value: Any, field_name: str) -> int:

@@ -499,6 +499,18 @@ def test_runner_has_no_retired_evidence_or_private_artifact_dependencies() -> No
     assert "rounds/" not in source
 
 
+def test_json_reader_preserves_ideas_error_contract(tmp_path: Path) -> None:
+    runner = _load_runner_module()
+    path = tmp_path / "config.json"
+    path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(
+        runner.ConfigError,
+        match=f"JSON file must contain an object: {path}",
+    ):
+        runner._read_json(path)
+
+
 def _write_cross_domain_manifest(project: Path) -> None:
     domain = project / "domain"
     domain.mkdir(parents=True)

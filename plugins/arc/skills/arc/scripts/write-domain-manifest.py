@@ -13,6 +13,12 @@ from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 
 bootstrap_arc_pythonpath()
 
+from _arc_workflows.workflow_io import (
+    NonObjectJsonError,
+    read_json_object,
+    write_json_object,
+)
+
 
 SCHEMA_VERSION = "arc.workflow.domain_manifest.v2"
 GROUPING_SCHEMA_VERSION = "arc.workflow.domain_field_grouping.v1"
@@ -207,7 +213,7 @@ def build_domain_manifest(project_dir: Path, *, grouping_result: dict[str, Any] 
         "warnings": [warning] if warning else [],
     }
     grouping_path = domain_dir / "field-grouping.json"
-    grouping_path.write_text(json.dumps(grouping_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_json_object(grouping_path, grouping_payload)
     return {
         "schema_version": SCHEMA_VERSION,
         "user_intent": str(context.get("user_intent", "")).strip(),
@@ -251,7 +257,7 @@ def write_domain_manifest(
         # Invalid model output and local grouping checks degrade safely to one
         # field. Typed non-terminal LLM outcomes are handled above and stop.
         payload = build_domain_manifest(project_dir)
-    destination.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_json_object(destination, payload)
     return destination
 
 
@@ -472,12 +478,11 @@ def _read_object(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise ManifestError(f"required JSON file does not exist: {path}")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        return read_json_object(path)
     except (OSError, json.JSONDecodeError) as exc:
         raise ManifestError(f"cannot read JSON object {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ManifestError(f"JSON root must be an object: {path}")
-    return payload
+    except NonObjectJsonError as exc:
+        raise ManifestError(f"JSON root must be an object: {path}") from exc
 
 
 def _required_text(payload: dict[str, Any], key: str, path: Path) -> str:
@@ -562,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.project_dir),
             Path(args.output) if args.output else None,
         )
-        payload = json.loads(destination.read_text(encoding="utf-8"))
+        payload = read_json_object(destination)
         result = {
             "status": "completed",
             "manifest_path": str(destination),

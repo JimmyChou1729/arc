@@ -49,6 +49,11 @@ from _arc_workflows.ideas_marking import (
     marks_schema,
     normalized_marks,
 )
+from _arc_workflows.workflow_io import (
+    NonObjectJsonError,
+    read_json_object,
+    require_strict_int,
+)
 
 
 MODEL_TIER_RANKS = {"low": 1, "medium": 2, "high": 3, "xhigh": 4}
@@ -913,12 +918,11 @@ def _replace_placeholders(value: Any, replacements: Mapping[str, str]) -> Any:
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        return read_json_object(path)
     except (OSError, json.JSONDecodeError) as exc:
         raise ConfigError(f"Could not read JSON file {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ConfigError(f"JSON file must contain an object: {path}")
-    return payload
+    except NonObjectJsonError as exc:
+        raise ConfigError(f"JSON file must contain an object: {path}") from exc
 
 
 def _read_config_file(path: str) -> dict[str, Any]:
@@ -933,9 +937,13 @@ def _required_text(payload: Mapping[str, Any], key: str, source: Path) -> str:
 
 
 def _positive_template_int(value: Any, key: str) -> int:
-    if type(value) is not int or value < 1:
-        raise ConfigError(f"{key} must be a positive integer")
-    return value
+    return require_strict_int(
+        value,
+        key,
+        minimum=1,
+        requirement="a positive integer",
+        error_type=ConfigError,
+    )
 
 
 def _progress_sidechannel_callback(

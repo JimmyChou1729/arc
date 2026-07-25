@@ -452,6 +452,15 @@ def test_config_parsing_and_model_selection_errors_are_typed(tmp_path: Path) -> 
         )
 
 
+def test_json_reader_preserves_calculate_error_contract(tmp_path: Path) -> None:
+    runner = load_calculate_runner()
+    path = tmp_path / "config.json"
+    path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=f"Expected JSON object at {path}"):
+        runner._read_json(path)
+
+
 def test_runner_has_no_retired_llm_or_private_artifact_dependencies() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 
