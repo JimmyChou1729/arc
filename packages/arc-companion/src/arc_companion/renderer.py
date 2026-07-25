@@ -14,14 +14,15 @@ import shutil
 import subprocess
 import tempfile
 from typing import Any
-from urllib.parse import urlparse
+import unicodedata
+from urllib.parse import quote, unquote, urlparse
 
 from .contracts import AcceptedBook, LearningUnit, SourceAnchor
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v3"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v4"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v4"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v5"
 _SOURCE_DATE_EPOCH = "946684800"
 _AssetLoader = Callable[[str], bytes | None]
 
@@ -44,6 +45,83 @@ class _SourceAssetReference:
     media_type: str
 
 
+@dataclass(frozen=True)
+class _ReleaseLinks:
+    fragment_blocks: Mapping[str, str]
+
+    def html_target(self, target: str) -> str:
+        block_id = self._fragment_block(target)
+        return (
+            f"#anchor-{_anchor_token(block_id)}"
+            if block_id is not None
+            else target
+        )
+
+    def tex_link(self, target: str, text: str) -> str:
+        block_id = self._fragment_block(target)
+        label = _tex_escape(text)
+        if block_id is not None:
+            return (
+                rf"\hyperlink{{anchor-{_anchor_token(block_id)}}}"
+                rf"{{{label}}}"
+            )
+        return rf"\href{{{_tex_url(target)}}}{{{label}}}"
+
+    def _fragment_block(self, target: str) -> str | None:
+        parsed = urlparse(target)
+        if parsed.scheme or parsed.netloc:
+            return None
+        if not parsed.path and not parsed.params and not parsed.query:
+            fragment = unquote(parsed.fragment)
+            if fragment and fragment in self.fragment_blocks:
+                return self.fragment_blocks[fragment]
+            if target.startswith("#"):
+                raise CompanionRenderError(
+                    f"source fragment does not resolve in this book: {target}"
+                )
+        raise CompanionRenderError(
+            f"relative source link is not included in the release: {target}"
+        )
+
+
+def _release_links(book: AcceptedBook) -> _ReleaseLinks:
+    fragment_blocks: dict[str, str] = {}
+    for chapter in book.chapters:
+        for anchor in chapter.source_anchors:
+            source_id = str(anchor.locator.get("source_id") or "")
+            if not source_id:
+                continue
+            existing = fragment_blocks.get(source_id)
+            if existing is not None and existing != anchor.block_id:
+                raise CompanionRenderError(
+                    f"source fragment is ambiguous in this book: #{source_id}"
+                )
+            fragment_blocks[source_id] = anchor.block_id
+
+    links = _ReleaseLinks(fragment_blocks)
+    for chapter in book.chapters:
+        for anchor in chapter.source_anchors:
+            payload = anchor.payload
+            span_groups: list[Sequence[Mapping[str, Any]]] = []
+            if anchor.kind == "paragraph":
+                span_groups.append(payload["inline_spans"])
+            elif anchor.kind == "list":
+                span_groups.extend(
+                    item["inline_spans"] for item in payload["items"]
+                )
+            for spans in span_groups:
+                for span in spans:
+                    if span["kind"] == "link":
+                        links.html_target(str(span["target"]))
+            if (
+                anchor.kind == "figure"
+                and not payload.get("asset_digest")
+                and payload.get("target")
+            ):
+                links.html_target(str(payload["target"]))
+    return links
+
+
 class CompanionRenderer:
     """Render one validated accepted book without loading an LLM runtime."""
 
@@ -52,6 +130,7 @@ class CompanionRenderer:
 
     def render_web(self, book: AcceptedBook, output_dir: Path) -> Path:
         require_valid_accepted_book(book)
+        release_links = _release_links(book)
         root = output_dir.resolve()
         root.mkdir(parents=True, exist_ok=True)
         assets = root / "assets"
@@ -69,7 +148,11 @@ class CompanionRenderer:
                 book, assets / "source", pdf_compatible=False
             ).items()
         }
-        html = _render_html(book, source_assets=source_assets)
+        html = _render_html(
+            book,
+            source_assets=source_assets,
+            release_links=release_links,
+        )
         index = root / "index.html"
         _write_if_changed(index, html.encode("utf-8"))
         self.validate_web(book, index)
@@ -77,6 +160,7 @@ class CompanionRenderer:
 
     def render_pdf(self, book: AcceptedBook, output_path: Path) -> Path:
         require_valid_accepted_book(book)
+        release_links = _release_links(book)
         target = output_path.resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
@@ -92,6 +176,7 @@ class CompanionRenderer:
                     block_id: reference.display_path
                     for block_id, reference in source_assets.items()
                 },
+                release_links=release_links,
             )
             tex_path = workspace / "companion.tex"
             tex_path.write_text(tex, encoding="utf-8")
@@ -193,20 +278,24 @@ class CompanionRenderer:
             text_path = workspace / "content.txt"
             _run([str(tools["pdftotext"]), str(pdf_path), str(text_path)])
             text = text_path.read_text(encoding="utf-8", errors="replace")
-            if not text.strip() or book.title not in text:
+            if not _normalize_pdf_search_text(text) or not _pdf_text_contains(
+                text, book.title
+            ):
                 raise CompanionRenderError("PDF searchable text is incomplete")
             for chapter in book.chapters:
                 for anchor in chapter.source_anchors:
                     if anchor.kind != "table" or not anchor.payload["rows"]:
                         continue
                     for cell in anchor.payload["rows"][-1]:
-                        if str(cell).strip() and str(cell) not in text:
+                        if str(cell).strip() and not _pdf_text_contains(
+                            text, str(cell)
+                        ):
                             raise CompanionRenderError(
                                 "PDF searchable table content is incomplete"
                             )
             for evidence in book.bibliography:
                 if any(
-                    value not in text
+                    not _pdf_text_contains(text, value)
                     for value in (
                         evidence.evidence_id,
                         evidence.title,
@@ -318,9 +407,15 @@ def _render_html(
     book: AcceptedBook,
     *,
     source_assets: Mapping[str, _SourceAssetReference],
+    release_links: _ReleaseLinks,
 ) -> str:
     chapters = "\n".join(
-        _render_html_chapter(book, chapter, source_assets=source_assets)
+        _render_html_chapter(
+            book,
+            chapter,
+            source_assets=source_assets,
+            release_links=release_links,
+        )
         for chapter in book.chapters
     )
     glossary = _render_html_glossary(book)
@@ -354,12 +449,17 @@ def _render_html_chapter(
     chapter: Any,
     *,
     source_assets: Mapping[str, _SourceAssetReference],
+    release_links: _ReleaseLinks,
 ) -> str:
     translation_by_id = {item.block_id: item for item in chapter.translations}
     units_by_anchor = _units_by_first_anchor(chapter.learning_units)
     anchors: list[str] = []
     for anchor in chapter.source_anchors:
-        source = _render_html_source(anchor, source_assets=source_assets)
+        source = _render_html_source(
+            anchor,
+            source_assets=source_assets,
+            release_links=release_links,
+        )
         translation = translation_by_id.get(anchor.block_id)
         translated = (
             f'<section class="translation-layer" lang="{escape_html(book.target_language)}">'
@@ -382,7 +482,8 @@ def _render_html_chapter(
             else ""
         )
         anchors.append(
-            f'<article class="source-anchor" id="anchor-{escape_html(anchor.block_id)}" '
+            f'<article class="source-anchor" '
+            f'id="anchor-{_anchor_token(anchor.block_id)}" '
             f'data-source-anchor="{escape_html(anchor.block_id)}">'
             f"{page}<div class=\"anchor-grid\">"
             f'<section class="source-layer" lang="{escape_html(book.source_language)}">'
@@ -400,17 +501,20 @@ def _render_html_source(
     anchor: SourceAnchor,
     *,
     source_assets: Mapping[str, _SourceAssetReference],
+    release_links: _ReleaseLinks,
 ) -> str:
     payload = anchor.payload
     if anchor.kind == "heading":
         level = max(3, min(6, int(payload["level"]) + 2))
         return f"<h{level}>{escape_html(str(payload['text']))}</h{level}>"
     if anchor.kind == "paragraph":
-        return f"<p>{_render_html_inline(payload['inline_spans'])}</p>"
+        return (
+            f"<p>{_render_html_inline(payload['inline_spans'], release_links)}</p>"
+        )
     if anchor.kind == "list":
         tag = "ol" if payload["ordered"] else "ul"
         items = "".join(
-            f"<li>{_render_html_inline(item['inline_spans'])}</li>"
+            f"<li>{_render_html_inline(item['inline_spans'], release_links)}</li>"
             for item in payload["items"]
         )
         return f"<{tag}>{items}</{tag}>"
@@ -446,7 +550,8 @@ def _render_html_source(
     if source is None:
         target = str(payload["target"])
         link = (
-            f' <a href="{escape_html(target)}">Original figure URL</a>'
+            f' <a href="{escape_html(release_links.html_target(target))}">'
+            "Original figure URL</a>"
             if target
             else ""
         )
@@ -491,29 +596,44 @@ def _render_html_glossary(book: AcceptedBook) -> str:
     return f'<section class="glossary" id="glossary"><h2>Glossary</h2><dl>{rows}</dl></section>'
 
 
+def _paper_landing_url(identifier: str) -> str | None:
+    # Keep the deterministic renderer importable without loading arc-paper's
+    # optional execution facade and its LLM runtime.
+    from arc_paper import paper_landing_url
+
+    return paper_landing_url(identifier)
+
+
 def _render_html_bibliography(book: AcceptedBook) -> str:
     if not book.bibliography:
         return ""
-    rows = "".join(
-        f'<li id="reference-{escape_html(item.evidence_id)}">'
-        f"<strong>{escape_html(item.title)}</strong> — "
-        f"{escape_html(item.source)} "
-        f'<code>{escape_html(item.evidence_id)}</code></li>'
-        for item in book.bibliography
-    )
+    rows: list[str] = []
+    for item in book.bibliography:
+        title = f"<strong>{escape_html(item.title)}</strong>"
+        landing_url = _paper_landing_url(item.source)
+        if landing_url is not None:
+            title = f'<a href="{escape_html(landing_url)}">{title}</a>'
+        rows.append(
+            f'<li id="reference-{escape_html(item.evidence_id)}">'
+            f"{title} — {escape_html(item.source)} "
+            f'<code>{escape_html(item.evidence_id)}</code></li>'
+        )
     return (
         '<section class="bibliography" id="references">'
-        f"<h2>References</h2><ol>{rows}</ol></section>"
+        f"<h2>References</h2><ol>{''.join(rows)}</ol></section>"
     )
 
 
-def _render_html_inline(spans: Sequence[Mapping[str, Any]]) -> str:
+def _render_html_inline(
+    spans: Sequence[Mapping[str, Any]], release_links: _ReleaseLinks
+) -> str:
     values: list[str] = []
     for item in spans:
         kind = str(item["kind"])
         if kind == "link":
+            target = release_links.html_target(str(item["target"]))
             values.append(
-                f'<a href="{escape_html(str(item["target"]))}">'
+                f'<a href="{escape_html(target)}">'
                 f'{escape_html(str(item["text"]))}</a>'
             )
         elif kind == "math":
@@ -539,9 +659,20 @@ def _html_text(value: str) -> str:
     return escape_html(value).replace("\n", "<br>")
 
 
-def _render_tex(book: AcceptedBook, *, source_paths: Mapping[str, str]) -> str:
+def _render_tex(
+    book: AcceptedBook,
+    *,
+    source_paths: Mapping[str, str],
+    release_links: _ReleaseLinks | None = None,
+) -> str:
+    exact_links = release_links or _release_links(book)
     chapters = "\n".join(
-        _render_tex_chapter(book, chapter, source_paths=source_paths)
+        _render_tex_chapter(
+            book,
+            chapter,
+            source_paths=source_paths,
+            release_links=exact_links,
+        )
         for chapter in book.chapters
     )
     glossary = _render_tex_glossary(book)
@@ -581,7 +712,11 @@ def _render_tex(book: AcceptedBook, *, source_paths: Mapping[str, str]) -> str:
 
 
 def _render_tex_chapter(
-    book: AcceptedBook, chapter: Any, *, source_paths: Mapping[str, str]
+    book: AcceptedBook,
+    chapter: Any,
+    *,
+    source_paths: Mapping[str, str],
+    release_links: _ReleaseLinks,
 ) -> str:
     translations = {item.block_id: item for item in chapter.translations}
     units = _units_by_first_anchor(chapter.learning_units)
@@ -596,9 +731,15 @@ def _render_tex_chapter(
             else ""
         )
         anchor_target = (
-            rf"\par\noindent\hypertarget{{anchor-{_tex_id(anchor.block_id)}}}{{}}{page}"
+            rf"\par\noindent"
+            rf"\hypertarget{{anchor-{_anchor_token(anchor.block_id)}}}{{}}"
+            rf"{page}"
         )
-        source = _render_tex_source(anchor, source_paths=source_paths)
+        source = _render_tex_source(
+            anchor,
+            source_paths=source_paths,
+            release_links=release_links,
+        )
         if anchor.kind == "table":
             # longtable must remain in the main vertical list to split across
             # pages.  Nesting it in a tcolorbox/tabular silently clips rows.
@@ -640,17 +781,20 @@ def _render_tex_chapter(
 
 
 def _render_tex_source(
-    anchor: SourceAnchor, *, source_paths: Mapping[str, str]
+    anchor: SourceAnchor,
+    *,
+    source_paths: Mapping[str, str],
+    release_links: _ReleaseLinks,
 ) -> str:
     payload = anchor.payload
     if anchor.kind == "heading":
         return rf"\textbf{{{_tex_escape(payload['text'])}}}"
     if anchor.kind == "paragraph":
-        return _render_tex_inline(payload["inline_spans"])
+        return _render_tex_inline(payload["inline_spans"], release_links)
     if anchor.kind == "list":
         environment = "enumerate" if payload["ordered"] else "itemize"
         items = "\n".join(
-            rf"\item {_render_tex_inline(item['inline_spans'])}"
+            rf"\item {_render_tex_inline(item['inline_spans'], release_links)}"
             for item in payload["items"]
         )
         return rf"\begin{{{environment}}}[leftmargin=*]{items}\end{{{environment}}}"
@@ -700,7 +844,7 @@ def _render_tex_source(
     else:
         target = str(payload["target"])
         link = (
-            rf"\par\url{{{_tex_url(target)}}}"
+            rf"\par {release_links.tex_link(target, target)}"
             if target
             else ""
         )
@@ -738,23 +882,35 @@ def _render_tex_glossary(book: AcceptedBook) -> str:
 def _render_tex_bibliography(book: AcceptedBook) -> str:
     if not book.bibliography:
         return ""
-    rows = "\n".join(
-        rf"\item \textbf{{{_tex_escape(item.title)}}} --- "
-        rf"{_tex_escape(item.source)} "
-        rf"[{_tex_escape(item.evidence_id)}]"
-        for item in book.bibliography
+    rows: list[str] = []
+    for item in book.bibliography:
+        title = rf"\textbf{{{_tex_escape(item.title)}}}"
+        landing_url = _paper_landing_url(item.source)
+        if landing_url is not None:
+            title = rf"\href{{{_tex_url(landing_url)}}}{{{title}}}"
+        rows.append(
+            rf"\item {title} --- {_tex_escape(item.source)} "
+            rf"[{_tex_escape(item.evidence_id)}]"
+        )
+    return (
+        r"\section{References}\begin{enumerate}"
+        + "\n".join(rows)
+        + r"\end{enumerate}"
     )
-    return r"\section{References}\begin{enumerate}" + rows + r"\end{enumerate}"
 
 
-def _render_tex_inline(spans: Sequence[Mapping[str, Any]]) -> str:
+def _render_tex_inline(
+    spans: Sequence[Mapping[str, Any]], release_links: _ReleaseLinks
+) -> str:
     values: list[str] = []
     for item in spans:
         kind = str(item["kind"])
         if kind == "link":
             values.append(
-                rf"\href{{{_tex_url(str(item['target']))}}}"
-                rf"{{{_tex_escape(item['text'])}}}"
+                release_links.tex_link(
+                    str(item["target"]),
+                    str(item["text"]),
+                )
             )
         elif kind == "math":
             values.append(rf"\({_sanitize_math(item['tex'])}\)")
@@ -784,6 +940,85 @@ def _render_tex_prose(value: Any) -> str:
     return r"\par ".join(
         r"\newline{} ".join(_tex_escape(line) for line in paragraph.split("\n"))
         for paragraph in paragraphs
+    )
+
+
+def _normalize_pdf_search_text(value: Any) -> str:
+    """Normalize Unicode and whitespace while retaining lexical boundaries."""
+
+    text = unicodedata.normalize("NFKC", str(value))
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\N{SOFT HYPHEN}", "")
+    text = "".join(
+        character
+        for character in text
+        if unicodedata.category(character) != "Cf"
+    )
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _pdf_search_alternatives(
+    extracted: Any, expected: str
+) -> tuple[str, ...]:
+    """Return projections for explicit extractor line-wrap behaviors."""
+
+    text = unicodedata.normalize("NFKC", str(extracted))
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\N{SOFT HYPHEN}", "")
+    text = "".join(
+        character
+        for character in text
+        if unicodedata.category(character) != "Cf"
+    )
+    line_break = r"(?:\n|\f|\v|\u2028|\u2029)"
+    values = [_normalize_pdf_search_text(text)]
+    hyphen_preserved = re.sub(
+        rf"(?<=\w)-[ \t]*{line_break}[ \t]*(?=\w)",
+        "-",
+        text,
+    )
+    values.append(_normalize_pdf_search_text(hyphen_preserved))
+    typeset_dehyphenated = re.sub(
+        rf"(?P<left>\w+)-[ \t]*{line_break}[ \t]*"
+        rf"(?P<right>\w+)",
+        lambda match: (
+            match.group("left") + match.group("right")
+            if match.group("left") + match.group("right") in expected
+            and (
+                match.group("left") + "-" + match.group("right")
+                not in expected
+            )
+            else match.group(0)
+        ),
+        text,
+    )
+    values.append(_normalize_pdf_search_text(typeset_dehyphenated))
+    if _allows_pdf_line_concat(expected):
+        line_unwrapped = re.sub(
+            rf"(?<=\S)[ \t]*{line_break}[ \t]*(?=\S)",
+            "",
+            text,
+        )
+        values.append(_normalize_pdf_search_text(line_unwrapped))
+    return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _allows_pdf_line_concat(expected: str) -> bool:
+    value = expected.strip()
+    if not value or any(character.isspace() for character in value):
+        return False
+    return value.casefold().startswith(
+        ("http://", "https://", "mailto:", "doi:", "arxiv:", "inspire:")
+    )
+
+
+def _pdf_text_contains(extracted_text: str, expected: Any) -> bool:
+    normalized_expected = _normalize_pdf_search_text(expected)
+    return bool(normalized_expected) and any(
+        normalized_expected in alternative
+        for alternative in _pdf_search_alternatives(
+            extracted_text, normalized_expected
+        )
     )
 
 
@@ -1024,11 +1259,23 @@ def _sanitize_math(value: Any) -> str:
 
 
 def _tex_url(value: str) -> str:
-    return value.replace("\\", "").replace("{", r"\{").replace("}", r"\}")
+    encoded = quote(
+        value,
+        safe=":/?#[]@!$&'()*+,;=%-._~",
+    )
+    replacements = {
+        "%": r"\%",
+        "&": r"\&",
+        "#": r"\#",
+        "$": r"\$",
+        "_": r"\_",
+        "~": r"\string~",
+    }
+    return "".join(replacements.get(char, char) for char in encoded)
 
 
-def _tex_id(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9:.-]+", "-", value).strip("-") or "source"
+def _anchor_token(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 _WEB_CSS = """\

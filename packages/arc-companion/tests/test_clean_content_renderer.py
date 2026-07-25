@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -12,6 +13,7 @@ import sys
 import zlib
 
 import pytest
+from bs4 import BeautifulSoup
 
 from arc_companion.contracts import (
     AcceptedBook,
@@ -29,7 +31,12 @@ from arc_companion.contracts import (
 )
 from arc_companion.renderer import (
     PDF_RENDER_RECIPE,
+    WEB_RENDER_RECIPE,
     CompanionRenderer,
+    CompanionRenderError,
+    _anchor_token,
+    _normalize_pdf_search_text,
+    _pdf_text_contains,
     _render_tex,
     _render_tex_prose,
 )
@@ -407,7 +414,8 @@ def test_accepted_book_codec_is_canonical_strict_and_immutable(
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
-    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v4"
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v5"
+    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v4"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
         == r"first line\newline{} second line\par third paragraph"
@@ -451,7 +459,10 @@ def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
         ),
     )
 
-    tex = _render_tex(book, source_paths={})
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
 
     assert (
         r"Guide line one\newline{} Guide line two\par Guide paragraph two"
@@ -633,6 +644,170 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
         assert forbidden not in html.casefold()
 
 
+def test_source_fragment_links_resolve_to_release_anchors(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    intro = chapter.source_anchors[0]
+    equation = chapter.source_anchors[1]
+    intro_payload = dict(intro.payload)
+    intro_payload["links"] = (
+        {"text": "source note", "target": "#equation-source"},
+    )
+    intro_payload["inline_spans"] = tuple(
+        (
+            {**dict(span), "target": "#equation-source"}
+            if span["kind"] == "link"
+            else dict(span)
+        )
+        for span in intro.payload["inline_spans"]
+    )
+    exact_chapter = replace(
+        chapter,
+        source_anchors=(
+            replace(intro, payload=intro_payload),
+            replace(
+                equation,
+                locator={
+                    **dict(equation.locator),
+                    "source_id": "equation-source",
+                },
+            ),
+            *chapter.source_anchors[2:],
+        ),
+    )
+    book = replace(accepted_book, chapters=(exact_chapter,))
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+
+    html = renderer.render_web(book, tmp_path / "fragment-reader").read_text(
+        encoding="utf-8"
+    )
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
+    anchor = _anchor_token("b-equation")
+
+    assert f'href="#anchor-{anchor}">source note</a>' in html
+    assert rf"\hyperlink{{anchor-{anchor}}}{{source note}}" in tex
+    assert "#equation-source" not in html
+    assert "#equation-source" not in tex
+    assert _anchor_token("a_b") != _anchor_token("a-b")
+    assert re.fullmatch(r"[0-9a-f]{64}", _anchor_token("a_b"))
+
+
+@pytest.mark.parametrize("target", ["#missing", "appendix.html", "../notes.md"])
+def test_unresolved_or_relative_source_links_fail_before_render(
+    accepted_book: AcceptedBook, tmp_path: Path, target: str
+) -> None:
+    chapter = accepted_book.chapters[0]
+    intro = chapter.source_anchors[0]
+    payload = dict(intro.payload)
+    payload["links"] = ({"text": "source note", "target": target},)
+    payload["inline_spans"] = tuple(
+        (
+            {**dict(span), "target": target}
+            if span["kind"] == "link"
+            else dict(span)
+        )
+        for span in intro.payload["inline_spans"]
+    )
+    book = replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                source_anchors=(
+                    replace(intro, payload=payload),
+                    *chapter.source_anchors[1:],
+                ),
+            ),
+        ),
+    )
+    reader = tmp_path / "rejected-reader"
+
+    with pytest.raises(
+        CompanionRenderError,
+        match="does not resolve|not included in the release",
+    ):
+        CompanionRenderer().render_web(book, reader)
+
+    assert not reader.exists()
+
+
+def test_bibliography_uses_canonical_paper_landing_links(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    first = replace(
+        accepted_book.bibliography[0],
+        source="arXiv:0911.3380v2",
+    )
+    book = replace(
+        accepted_book,
+        bibliography=(first, *accepted_book.bibliography[1:]),
+    )
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+
+    html = renderer.render_web(book, tmp_path / "bibliography-reader").read_text(
+        encoding="utf-8"
+    )
+    parsed = BeautifulSoup(html, "html.parser")
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
+
+    canonical = "https://arxiv.org/abs/0911.3380"
+    assert f'<a href="{canonical}"><strong>A reference paper</strong></a>' in html
+    assert (
+        rf"\href{{{canonical}}}{{\textbf{{A reference paper}}}}" in tex
+    )
+    rows = parsed.select("section.bibliography > ol > li")
+    assert len(rows) == len(book.bibliography)
+    assert all(row.find("li") is None for row in rows)
+
+
+def test_pdf_search_normalization_matches_unicode_and_line_wrapping() -> None:
+    extracted = (
+        "A \N{LATIN SMALL LIGATURE FI}nite decomposition at "
+        "https://example.test/very/\nlong/path "
+        "with soft\u00adhyphen."
+    )
+
+    assert _pdf_text_contains(extracted, "A finite decomposition")
+    assert _pdf_text_contains(
+        extracted, "https://example.test/very/long/path"
+    )
+    assert _pdf_text_contains(extracted, "with softhyphen")
+    assert not _pdf_text_contains(extracted, "different searchable prose")
+
+
+def test_pdf_search_normalization_preserves_word_and_hyphen_boundaries() -> None:
+    assert _pdf_text_contains("foo\nbar", "foo bar")
+    assert not _pdf_text_contains("foo\nbar", "foobar")
+    assert not _pdf_text_contains("foobar", "foo bar")
+    assert not _pdf_text_contains("foo bar", "foobar")
+    assert _pdf_text_contains(
+        "https://example.test/foo/\nbar",
+        "https://example.test/foo/bar",
+    )
+
+    assert _pdf_text_contains("decompo-\nsition", "decomposition")
+    assert _pdf_text_contains(
+        "pre-check decompo-\nsition",
+        "pre-check decomposition",
+    )
+    assert _pdf_text_contains("equa-\ntion", "equation")
+    assert _pdf_text_contains("repre-\nsent", "represent")
+    assert _pdf_text_contains("well-\ndefined", "well-defined")
+    assert not _pdf_text_contains("welldefined", "well-defined")
+    assert not _pdf_text_contains("well defined", "well-defined")
+
+
 def test_headerless_table_uses_row_width_and_omits_empty_web_header(
     accepted_book: AcceptedBook, tmp_path: Path
 ) -> None:
@@ -720,6 +895,67 @@ def test_pdf_is_searchable_complete_and_anchor_interleaved(
     assert hashlib.sha256(second.read_bytes()).digest() == hashlib.sha256(
         output.read_bytes()
     ).digest()
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in _PDF_TOOLS),
+    reason="offline PDF toolchain is unavailable",
+)
+def test_pdf_validator_accepts_wrapped_searchable_prose(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    long_title = (
+        "A deterministic companion title whose many ordinary words must wrap "
+        "across multiple lines while remaining searchable in extracted text"
+    )
+    long_evidence_title = (
+        "A deliberately long bibliography title covering deterministic "
+        "normalization source identity and reproducible rendering behavior "
+        "across ordinary page boundaries"
+    )
+    book = replace(
+        accepted_book,
+        title=long_title,
+        bibliography=(
+            replace(
+                accepted_book.bibliography[0],
+                title=long_evidence_title,
+                source="doi:10.1234/A%20_&B",
+            ),
+            *accepted_book.bibliography[1:],
+        ),
+    )
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
+
+    output = renderer.render_pdf(book, tmp_path / "wrapped-searchable.pdf")
+    extracted = subprocess.run(
+        ["pdftotext", str(output), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    assert _pdf_text_contains(extracted, long_title)
+    assert _pdf_text_contains(extracted, long_evidence_title)
+    assert _pdf_text_contains(extracted, "doi:10.1234/A%20_&B")
+    assert (
+        r"\href{https://doi.org/10.1234/a\%20\_\&b}"
+        r"{\textbf{A deliberately long bibliography title"
+        in tex
+    )
+    urls = subprocess.run(
+        ["pdfinfo", "-url", str(output)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "https://doi.org/10.1234/a%20_&b" in urls
 
 
 @pytest.mark.skipif(

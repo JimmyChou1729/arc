@@ -25,7 +25,7 @@ from .renderer import (
 
 RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v1"
 DELIVERY_RECIPE = "arc.companion.delivery.v1"
-RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v2"
+RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v3"
 _WINDOWS = os.name == "nt"
 
 
