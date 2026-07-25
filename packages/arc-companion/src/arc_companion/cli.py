@@ -248,7 +248,10 @@ def _status(args: argparse.Namespace) -> CommandResult:
         run=base.run,
         data=data,
         artifacts=base.artifacts,
-        warnings=_source_warnings(paths, run_id),
+        warnings=(
+            *_source_warnings(paths, run_id),
+            *_release_pointer_warnings(paths, current),
+        ),
         error=base.error,
         resume=base.resume,
     )
@@ -435,6 +438,33 @@ def _source_warnings(
         CommandWarning("source_diagnostic", item)
         for item in paths.source_diagnostics(run_id)
     )
+
+
+def _release_pointer_warnings(
+    paths: CompanionProjectPaths,
+    current: Mapping[str, Any] | None,
+) -> tuple[CommandWarning, ...]:
+    if current is None:
+        return ()
+    expected_manifest = (
+        paths.releases_root / str(current["release_id"]) / "manifest.json"
+    )
+    expected_relative = expected_manifest.relative_to(paths.root).as_posix()
+    if current["manifest"] != expected_relative:
+        return (
+            CommandWarning(
+                "release_pointer_invalid",
+                "active release manifest does not match its release ID",
+            ),
+        )
+    if not expected_manifest.is_file():
+        return (
+            CommandWarning(
+                "release_pointer_stale",
+                "active release is missing; rerun render for the selected run",
+            ),
+        )
+    return ()
 
 
 def _json_input(value: str) -> Mapping[str, Any]:

@@ -240,6 +240,15 @@ def test_status_does_not_attribute_an_old_release_to_the_selected_run(
     assert data["active_release"] == data["release"]
     assert data["active_release"]["run_id"] == "companion-old"
     assert data["release_matches_selected_run"] is False
+    assert status["warnings"] == [
+        {
+            "code": "release_pointer_stale",
+            "details": {},
+            "message": (
+                "active release is missing; rerun render for the selected run"
+            ),
+        }
+    ]
 
     project.publish_current(
         release_id="release-selected",
