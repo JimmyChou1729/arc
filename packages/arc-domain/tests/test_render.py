@@ -41,3 +41,7 @@ def test_render_network_html_is_pure_and_orders_domain_before_common_reference()
     assert rendered.startswith("<!doctype html>")
     assert rendered.index("Domain Paper") < rendered.index("Common Reference")
     assert "arc.domain_graph.v1" not in rendered
+
+
+def test_render_contract_does_not_claim_the_cdn_document_is_self_contained():
+    assert "self-contained" not in (render_network_html.__doc__ or "")

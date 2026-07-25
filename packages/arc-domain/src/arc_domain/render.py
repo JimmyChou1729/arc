@@ -25,7 +25,7 @@ ROLE_LABELS = {
 
 
 def render_network_html(graph: Mapping[str, Any]) -> str:
-    """Render a domain graph as a self-contained interactive HTML document."""
+    """Render a domain graph as HTML with CDN-backed interactive assets."""
 
     return _render(graph)
 
