@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 import httpx
@@ -79,7 +81,31 @@ class ArxivHtmlProvider:
                 honor_cached_not_found=not refresh,
             ),
         )
-        return artifact
+        return self._with_resolved_revision(artifact, aid, url)
+
+    def _with_resolved_revision(
+        self,
+        artifact: SourceArtifact,
+        aid: str,
+        url: str,
+    ) -> SourceArtifact:
+        revision = _arxiv_html_revision(
+            self.cache.source_repository.read_bytes(artifact), aid
+        )
+        if revision is None:
+            return artifact
+        return SourceArtifact(
+            source_format=artifact.source_format,
+            artifact_digest=artifact.artifact_digest,
+            size=artifact.size,
+            media_type=artifact.media_type,
+            origin=SourceOrigin(
+                kind=SourceOriginKind.REMOTE_PROVIDER,
+                provider="arxiv-html",
+                locator=url,
+                metadata={"arxiv_id": aid, "arxiv_version": revision},
+            ),
+        )
 
     def _is_known_not_found(self, aid: str) -> bool:
         try:
@@ -137,6 +163,41 @@ def _not_found_error(paper_id: str) -> ProviderError:
     return ProviderError(
         "arxiv_html_not_found", f"arXiv HTML not found for {paper_id}"
     )
+
+
+class _BaseHrefParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.href: str | None = None
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag.casefold() != "base" or self.href is not None:
+            return
+        self.href = next(
+            (value for name, value in attrs if name.casefold() == "href"),
+            None,
+        )
+
+
+def _arxiv_html_revision(payload: bytes, aid: str) -> str | None:
+    """Read an official conversion revision without changing the canonical ID."""
+
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    parser = _BaseHrefParser()
+    try:
+        parser.feed(text)
+        parser.close()
+    except ValueError:
+        return None
+    if parser.href is None:
+        return None
+    match = re.fullmatch(rf"/html/{re.escape(aid)}(v[1-9][0-9]*)/", parser.href)
+    return match.group(1) if match is not None else None
 
 
 __all__ = [

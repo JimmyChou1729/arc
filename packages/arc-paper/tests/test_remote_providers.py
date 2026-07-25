@@ -85,7 +85,14 @@ def test_official_arxiv_html_fetches_directly_and_replays_from_cache(tmp_path):
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(str(request.url))
-        return _response(request, content=b"<html>paper</html>", media_type="text/html")
+        return _response(
+            request,
+            content=(
+                b'<html><head><base href="/html/0911.3380v3/"></head>'
+                b"<body>paper</body></html>"
+            ),
+            media_type="text/html",
+        )
 
     provider = ArxivHtmlProvider(
         cache_root=tmp_path,
@@ -93,14 +100,56 @@ def test_official_arxiv_html_fetches_directly_and_replays_from_cache(tmp_path):
         request_gate=HostRequestGate(minimum_interval=0),
     )
     first = provider.fetch("arXiv:0911.3380v2")
-    replay = provider.fetch("0911.3380")
+    replay = ArxivHtmlProvider(
+        cache_root=tmp_path,
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: (_ for _ in ()).throw(
+                    AssertionError("cache hit must not access the network")
+                )
+            )
+        ),
+        request_gate=HostRequestGate(minimum_interval=0),
+    ).fetch("0911.3380")
 
     assert arxiv_html_url("arXiv:0911.3380v2") == (
         "https://arxiv.org/html/0911.3380"
     )
     assert first.content_identity == replay.content_identity
     assert replay.origin.provider == "arxiv-html"
+    assert first.origin.metadata == {
+        "arxiv_id": "0911.3380",
+        "arxiv_version": "v3",
+    }
+    assert replay.origin.metadata == first.origin.metadata
     assert calls == ["https://arxiv.org/html/0911.3380"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        b"<html><head></head><body>no base</body></html>",
+        b'<html><head><base href="/html/0911.3380/"></head></html>',
+        b'<html><head><base href="/html/9999.9999v2/"></head></html>',
+        b'<html><head><base href="/html/0911.3380v0/"></head></html>',
+    ),
+)
+def test_official_html_ignores_absent_or_malformed_revision_base(tmp_path, payload):
+    provider = ArxivHtmlProvider(
+        cache_root=tmp_path,
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: _response(
+                    request, content=payload, media_type="text/html"
+                )
+            )
+        ),
+        request_gate=HostRequestGate(minimum_interval=0),
+    )
+
+    artifact = provider.fetch("0911.3380")
+
+    assert artifact.origin.metadata == {"arxiv_id": "0911.3380"}
 
 
 def test_official_arxiv_html_caches_404_and_refresh_rechecks_it(tmp_path):
