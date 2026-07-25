@@ -220,6 +220,34 @@ sectionless document); equation results cover both inline and display
 is a typed projection of `ParsedDocument.sections`; `select_section()` selects
 by ordinal, exact ID/title, or a unique title fragment.
 
+### Step 6: Extract approximate keywords
+
+Create or reuse the lazy term inventory for a local source or paper ID:
+
+```bash
+arc-paper extract-keywords SOURCE \
+  --project-dir ./local/keywords/example \
+  --approx-count 50
+```
+
+`--approx-count` defaults to 50 and accepts 1–200. It is an estimate: chapter
+extraction asks for roughly 150 percent of that amount so deterministic
+deduplication may reduce the result without triggering padding or retries.
+Explicit keyword or index fields are fully model-reviewed before use; accepted
+entries are all cached, and chapter extraction supplements them only when
+needed. If any reviewed index window is not a usable term list, the run pauses:
+resume with `discard_index_and_continue` to ignore that field and extract by
+chapter, or `abort` to finish with `explicit_term_list_unusable`. No partial
+index enters the inventory. Normal acquisition and parsing never create a term
+inventory.
+
+Terms are extracted for scientific relevance while each chapter is read;
+occurrence frequency is calculated afterward and used only to order the
+returned view. `matched_sentences` are literal source-search results for
+grounding, never definitions. Resume a supervised extraction by repeating
+`extract-keywords` with the same project/run identity and `--resume-input`;
+generic status, stop, and validation use the owning `arc-jobs` controls.
+
 ## Phase 3: Durable Summary And Reference Workflows
 
 Paper summaries and free-text reference inference are typed Python workflows,
@@ -265,6 +293,10 @@ Controlled read-only full-text search is allowed through
 `search-cached-full-text`; it follows current catalog locators and does not
 enumerate unrelated cache data. Cache administration is explicit and excluded
 from the default resolver projection.
+
+The optional `term-inventory` component is created only by
+`extract-keywords`. Cache list and exact removal include it; cache update never
+starts keyword model work.
 
 List paper, local-source, and opaque legacy entries:
 

@@ -20,6 +20,7 @@ ARC_PACKAGE_MODULES = (
     ("arc-proposer-reviewer", "arc_proposer_reviewer"),
     ("arc-paper", "arc_paper"),
     ("arc-domain", "arc_domain"),
+    ("arc-translate", "arc_translate"),
     ("arc-companion", "arc_companion"),
 )
 ARC_PACKAGES = tuple(package for package, _module in ARC_PACKAGE_MODULES)

@@ -1,6 +1,6 @@
 ---
 name: arc
-description: Use for ARC research workflows involving paper metadata, arXiv full text, INSPIRE references and citers, paper section lookup, equation context, LLM paper summaries, research-domain construction from seed papers, and checking Markdown/PDF research notes.
+description: Use for ARC research workflows involving paper metadata, arXiv full text, INSPIRE references and citers, paper section lookup, equation context, LLM paper summaries, standalone translation, Companion readers, research-domain construction from seed papers, and checking Markdown/PDF research notes.
 ---
 
 # Agent Research Copilot  (ARC)
@@ -86,6 +86,8 @@ not optional.
   `manuals/arc-jobs.md`.
 - Host LLM/provider detection, model choice, direct prompt tests, or provider
   troubleshooting: read `manuals/arc-llm.md`.
+- Standalone language detection, bilingual glossary generation, or block
+  translation: read `manuals/arc-translate.md`.
 - Typed proposer-reviewer batch construction, resume, or safe observation of
   committed rounds: read `manuals/arc-llm.md`.
 - Companion-reading PDF generation: read `workflows/companion.md` and
@@ -96,8 +98,8 @@ not optional.
 
 ## CLI Resolution
 
-Use `arc-paper`, `arc-domain`, `arc-llm`, `arc-companion`, and `arc-jobs`
-directly when the host plugin exposes them on `PATH`. The core-only
+Use `arc-paper`, `arc-domain`, `arc-llm`, `arc-translate`, `arc-companion`, and
+`arc-jobs` directly when the host plugin exposes them on `PATH`. The core-only
 `arc-proposer-reviewer` tool deliberately has no plugin-bin wrapper; invoke it
 through the runtime launcher. For a standalone Skill install, or when a bare
 command is unavailable, invoke the same command through:

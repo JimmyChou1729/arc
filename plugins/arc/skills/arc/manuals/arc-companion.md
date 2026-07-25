@@ -26,15 +26,23 @@ Options:
   `zh-CN`.
 - `--user-intent TEXT`: optional reading goal; empty uses the fixed neutral
   textbook intent.
+- `--approx-term-count N`: approximate glossary size; default 50, range 1–200.
 - `--provider NAME`, `--model NAME`: explicit generation recipe. An exact
   model requires an explicit provider.
 - `--workers N`: bounded chapter concurrency, 1 through 24.
 - `--refresh`: refresh remote source acquisition.
 
-The build performs one language task, concurrent chapter plans, one book
-glossary task, one draft task and one reviewer task per chapter. Translation,
-when enabled, covers every block exactly once. Learning units are selective
-and anchored to source block IDs.
+The build delegates language detection, bilingual glossary generation, and
+translation review to `arc-translate`. After the glossary/evidence barrier,
+each chapter's translation and Companion guide run in parallel. Only glossary
+entries whose source term occurs in the chapter are included in that chapter's
+prompts. Translation, when enabled, covers every block exactly once. Learning
+units are selective and anchored to source block IDs.
+
+The term count is approximate. Chapter extraction deliberately has headroom,
+and deduplicated underfill is accepted without padding or count-based retries.
+Literal matched sentences used to ground glossary generation are search
+results, not definitions.
 
 ## Durable control
 

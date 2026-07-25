@@ -33,6 +33,7 @@ is used only for validation and page mapping. Preserve the user's exact
 arc-companion build <source-path-or-paper-id> \
   --project-dir <project-dir> \
   --target-language <language-tag> \
+  --approx-term-count <estimate> \
   --user-intent '<intent>' \
   --provider <provider> \
   --workers <workers> \
@@ -45,7 +46,11 @@ Use `--refresh` only when fresh remote source bytes were requested.
 Companion detects source language once. It skips translation only for a known
 matching primary language; mixed or unknown source is translated. Chapters are
 derived from headings and cover every source block exactly once. Textbook
-notes are selective rather than one expansion per paragraph.
+notes are selective rather than one expansion per paragraph. When translation
+is enabled, `arc-translate` builds the bilingual glossary after chapter
+planning and evidence. The glossary is a barrier; translation and guide
+generation then run in parallel for each chapter using only locally occurring
+glossary entries.
 
 ### Step 2: Resolve a pause
 
