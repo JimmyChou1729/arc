@@ -1121,10 +1121,15 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     assert "match in both directions" in compact_domain
     assert "scans every copied `*_paper_json_pack.json`" in compact_domain
     assert "rejects any pack with no matching domain summary" in compact_domain
-    assert "legacy project with no `domain_records`" in compact_domain
-    assert "unrelated orphan packs are ignored" in compact_domain
-    assert "summary must declare schema v4 or v5" in compact_domain
-    assert "only a consistency assertion" in compact_domain
+    assert "`domain_records` to be a non-empty array" in compact_domain
+    assert "package-owned typed domain view" in compact_domain
+    assert "only the current closed v5 summary contract" in compact_domain
+    assert "Legacy v4 summaries" in compact_domain
+    assert "`domain/field-groupings/`" in compact_domain
+    assert "publishes `domain-manifest.json` last" in compact_domain
+    assert "manifest output must remain inside the project" in compact_domain
+    assert "Input/package validation errors" in compact_domain
+    assert "leave existing published artifacts unchanged" in compact_domain
 
 
 def test_single_domain_ideas_document_optional_interdisciplinary_discovery() -> None:

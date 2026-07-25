@@ -186,20 +186,27 @@ That workflow writes `arc.workflow.domain_manifest.v2` only after a completed
 domain export and validates its referenced artifacts before any ideas workflow.
 The project-local paper JSON pack's v1 `domain_id` is the authoritative
 `domain_package_id`; the closed v5 summary deliberately has no identity field.
-When `context.json.domain_records` is nonempty, the helper requires exact
-bidirectional coverage between those records and copied paper packs, scans
-every copied `*_paper_json_pack.json`, rejects a pack with no matching summary,
-and uses the records' actual build seeds. A legacy project without records
-includes only complete summary/Markdown/paper-pack artifact sets and ignores
-unrelated orphan packs; it retains its foundation/prefix seed fallback, but the
-pack remains the package-identity source. Summaries must declare schema v4 or
-v5. A legacy summary ID is checked only for consistency.
+The helper requires `context.json.domain_records` to be a non-empty array and
+requires exact bidirectional coverage between those records and copied paper
+packs. It scans every copied `*_paper_json_pack.json`, rejects a pack with no
+matching summary, and uses the records' actual build seeds. Each complete
+summary/Markdown/paper-pack set is decoded through the package-owned typed
+domain view, and only the current closed v5 summary contract is accepted.
+Legacy v4 summaries and missing-record seed fallback are rejected.
 For multiple exported packages, its `write-domain-manifest.py` helper uses one
 typed `LLMClient.generate` pair-classification request with a deterministic task
 ID and a project-local `domain/field-grouping-llm` run root. Invalid grouping
 content degrades conservatively to one field with a warning; a typed pause,
 failure, or stop pauses the handoff instead. The helper has no legacy
-runner, controller, or private-artifact reading surface.
+runner, controller, or private-artifact reading surface. It holds a project
+lease across validation, grouping, and publication preparation, verifies or
+writes a content-addressed immutable grouping under
+`domain/field-groupings/`, and publishes `domain-manifest.json` last.
+The manifest output remains inside the project and cannot replace the grouping,
+`context.json`, or a referenced summary, Markdown report, or paper pack.
+Input/package validation errors and incomplete typed LLM outcomes publish
+nothing new and leave existing published manifest and grouping artifacts
+unchanged.
 
 ## MCP Status
 

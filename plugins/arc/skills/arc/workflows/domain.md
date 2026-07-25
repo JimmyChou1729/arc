@@ -302,17 +302,13 @@ builder-selected foundation.
 
 The copied paper JSON pack's `domain_id` is the authoritative
 `domain_package_id`; a domain summary is research content and v5 does not carry
-that identity field. When `domain_records` is nonempty, the helper requires its
-domain IDs and the copied paper-pack domain IDs to match in both directions,
-scans every copied `*_paper_json_pack.json`, rejects any pack with no matching
-domain summary, and uses each record's actual build seed. For a legacy project
-with no `domain_records`, only complete summary/Markdown/paper-pack artifact
-sets become manifest packages; unrelated orphan packs are ignored. The helper
-still derives each legacy seed from the summary foundation paper, then the safe
-file prefix, while retaining the paper-pack domain ID as the package identity.
-A summary must declare schema v4 or v5. A legacy pre-v5 summary `domain_id`,
-when present, is only a consistency assertion against the paper pack and is
-never the identity source.
+that identity field. The helper requires `domain_records` to be a non-empty
+array, requires its domain IDs and the copied paper-pack domain IDs to match in
+both directions, scans every copied `*_paper_json_pack.json`, rejects any pack
+with no matching domain summary, and uses each record's actual build seed. It
+decodes each complete summary/Markdown/paper-pack set through the package-owned
+typed domain view and accepts only the current closed v5 summary contract.
+Legacy v4 summaries and the missing-record seed fallback are rejected.
 
 ```bash
 python3 <skill-dir>/scripts/write-domain-manifest.py \
@@ -324,23 +320,31 @@ The command must complete successfully before a requested ideas workflow
 starts. It writes `arc.workflow.domain_manifest.v2`, preserving each
 seed-specific package while semantically grouping packages into stable field
 cards. Only `distinct_field` with confidence at least `0.80` creates hard
-separation; uncertain, low-confidence, or failed grouping conservatively
-merges packages with a warning. Ideas routing uses `field_count` and `field_id`,
-never package count. Print a `WARNING:` and stop before ideas if the manifest
-cannot be written or any referenced artifact is missing.
+separation; uncertain, low-confidence, or invalid completed grouping
+conservatively merges packages with a warning. Ideas routing uses `field_count`
+and `field_id`, never package count. Print a `WARNING:` and stop before ideas
+if the manifest cannot be written or any referenced artifact is missing.
 
 For one domain package, the helper writes the single field without an LLM call.
 For two or more packages, it makes one typed `LLMClient.generate` request with
 a deterministic field-grouping task ID, the complete pair-classification schema,
 and an isolated `<project-dir>/domain/field-grouping-llm` run root. It does not
 accept an agent-provided runner, cache root, or artifact path. The generated
-manifest records `domain/field-grouping.json` as its grouping artifact.
+manifest records a content-addressed immutable grouping under
+`domain/field-groupings/` as its grouping artifact.
 
 An invalid grouping payload or inconsistent pair classification is a
 conservative single-field fallback with a warning. A typed LLM pause, failure,
 or stop is not a fallback: print `WARNING:` and stop before ideas so
 the caller can resolve the provider state or rerun the manifest helper. Do not
-invent a grouping result or inspect private LLM artifacts.
+invent a grouping result or inspect private LLM artifacts. The helper holds one
+project lease while it validates inputs, runs grouping, and prepares
+publication. It verifies or writes the immutable grouping first and publishes
+`domain-manifest.json` last. The manifest output must remain inside the project
+and cannot replace the grouping artifact, `context.json`, or a referenced
+summary, Markdown report, or paper pack. Input/package validation errors and
+incomplete typed LLM outcomes publish no new grouping or manifest and leave
+existing published artifacts unchanged.
 
 ### Phase 4: Scope Boundary and Interactive Review
 

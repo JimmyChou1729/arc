@@ -50,7 +50,7 @@ def _write_domain(
     domain_id: str,
     seed: str,
     *,
-    schema_version: str = "arc.domain_summary.v4",
+    schema_version: str = "arc.domain_summary.v5",
 ) -> None:
     domain = project / "domain"
     domain.mkdir(parents=True, exist_ok=True)
@@ -66,10 +66,39 @@ def _write_domain(
     summary = {
         "schema_version": schema_version,
         "domain_title": f"Domain {domain_id}",
-        "foundation_paper": {"paper_id": seed},
+        "brief_introduction": f"Overview of {domain_id}",
+        "task_focus": {
+            "user_intent": "test intent",
+            "research_scope": "test scope",
+            "priority_rules": [],
+        },
+        "foundation_paper": {
+            "paper_id": seed,
+            "title": f"Foundation {seed}",
+            "reason": "test fixture",
+        },
+        "best_reference_paper": {
+            "paper_id": seed,
+            "title": f"Reference {seed}",
+            "reason": "test fixture",
+        },
+        "methodology": [],
+        "mathematical_opportunities": {
+            "well_defined_problems": []
+        },
+        "known_solved_cases": [],
+        "open_axes_for_new_work": [],
+        "warnings": [],
     }
     if schema_version == "arc.domain_summary.v4":
-        summary["domain_id"] = domain_id
+        summary.update(
+            {
+                "domain_id": domain_id,
+                "summary_method": "legacy fixture",
+                "created_at": "2026-07-25T00:00:00+00:00",
+            }
+        )
+        summary.pop("mathematical_opportunities")
     (domain / f"{prefix}_domain_summary.json").write_text(
         json.dumps(summary),
         encoding="utf-8",
@@ -81,8 +110,17 @@ def _write_domain(
                 "schema_version": "arc.domain_paper_json_pack.v1",
                 "domain_id": domain_id,
                 "foundation_paper": seed,
-                "paper_count": 0,
-                "papers": [],
+                "paper_count": 1,
+                "papers": [
+                    {
+                        "paper_id": seed,
+                        "role": "foundation",
+                        "metadata": {},
+                        "references": [],
+                        "toc": [],
+                        "warnings": [],
+                    }
+                ],
                 "warnings": [],
                 "created_at": "2026-07-25T00:00:00+00:00",
             }
@@ -259,41 +297,19 @@ def test_manifest_preserves_requested_seed_order(tmp_path: Path) -> None:
     assert [item["seed_paper"] for item in payload["domain_packages"]] == ["seed:z", "seed:a"]
 
 
-def test_manifest_indexes_mixed_v4_v5_summaries_without_rewriting_them(tmp_path: Path) -> None:
+def test_manifest_rejects_legacy_v4_summary(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(
-        json.dumps({"seed_paper_list": ["seed:a", "seed:b"]}),
+        json.dumps({"seed_paper_list": ["seed:a"]}),
         encoding="utf-8",
     )
     _write_domain(project, "a", "domain-a", "seed:a", schema_version="arc.domain_summary.v4")
-    _write_domain(project, "b", "domain-b", "seed:b", schema_version="arc.domain_summary.v5")
 
-    payload = publish.build_domain_manifest(project)
-
-    assert [item["domain_package_id"] for item in payload["domain_packages"]] == ["domain-a", "domain-b"]
-    assert json.loads((project / "domain/a_domain_summary.json").read_text())["schema_version"] == (
-        "arc.domain_summary.v4"
-    )
-    assert json.loads((project / "domain/b_domain_summary.json").read_text())["schema_version"] == (
-        "arc.domain_summary.v5"
-    )
-    assert "domain_id" not in json.loads(
-        (project / "domain/b_domain_summary.json").read_text()
-    )
-
-
-def test_manifest_rejects_legacy_summary_identity_mismatch(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "context.json").write_text("{}\n", encoding="utf-8")
-    _write_domain(project, "a", "domain-a", "seed:a")
-    summary_path = project / "domain/a_domain_summary.json"
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary["domain_id"] = "wrong-domain"
-    summary_path.write_text(json.dumps(summary), encoding="utf-8")
-
-    with pytest.raises(inputs.ManifestError, match="does not match paper-pack"):
+    with pytest.raises(
+        inputs.ManifestError,
+        match="schema_version must be arc.domain_summary.v5",
+    ):
         publish.build_domain_manifest(project)
 
 
@@ -315,7 +331,7 @@ def test_manifest_rejects_domain_id_in_closed_v5_summary(tmp_path: Path) -> None
 
     with pytest.raises(
         inputs.ManifestError,
-        match="arc.domain_summary.v5 must not contain domain_id",
+        match="invalid domain package",
     ):
         publish.build_domain_manifest(project)
 
@@ -323,10 +339,10 @@ def test_manifest_rejects_domain_id_in_closed_v5_summary(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     ("schema_version", "message"),
     [
-        (None, "missing required string field schema_version"),
+        (None, "summary.schema_version must be a non-empty string"),
         (
             "arc.domain_summary.v99",
-            "schema_version must be arc.domain_summary.v4 or arc.domain_summary.v5",
+            "summary.schema_version must be arc.domain_summary.v4 or arc.domain_summary.v5",
         ),
     ],
 )
@@ -354,8 +370,8 @@ def test_manifest_rejects_missing_or_unknown_summary_schema(
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        ({"schema_version": "wrong"}, "schema_version must be"),
-        ({"domain_id": None}, "missing required string field domain_id"),
+        ({"schema_version": "wrong"}, "paper_pack.schema_version must be"),
+        ({"domain_id": None}, "paper_pack.domain_id must be a non-empty string"),
     ],
 )
 def test_manifest_rejects_invalid_paper_pack_identity_contract(
@@ -376,7 +392,7 @@ def test_manifest_rejects_invalid_paper_pack_identity_contract(
         publish.build_domain_manifest(project)
 
 
-def test_manifest_without_domain_records_uses_legacy_seed_fallback(
+def test_manifest_requires_nonempty_domain_records(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
@@ -388,10 +404,11 @@ def test_manifest_without_domain_records_uses_legacy_seed_fallback(
     context["domain_records"] = []
     context_path.write_text(json.dumps(context), encoding="utf-8")
 
-    payload = publish.build_domain_manifest(project)
-
-    assert payload["domain_packages"][0]["domain_package_id"] == "domain-a"
-    assert payload["domain_packages"][0]["seed_paper"] == "seed:a"
+    with pytest.raises(
+        inputs.ManifestError,
+        match="domain_records must be a non-empty array",
+    ):
+        publish.build_domain_manifest(project)
 
 
 def test_manifest_nonempty_domain_records_must_cover_every_paper_pack(
@@ -441,26 +458,6 @@ def test_manifest_rejects_orphan_pack_even_when_domain_records_cover_its_id(
         ),
     ):
         publish.build_domain_manifest(project)
-
-
-def test_manifest_without_domain_records_ignores_orphan_pack(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    context_path = project / "context.json"
-    context_path.write_text("{}\n", encoding="utf-8")
-    _write_domain(project, "a", "domain-a", "seed:a")
-    _write_orphan_pack(project, "orphan", "domain-orphan", "seed:orphan")
-    context = json.loads(context_path.read_text(encoding="utf-8"))
-    context["domain_records"] = []
-    context_path.write_text(json.dumps(context), encoding="utf-8")
-
-    payload = publish.build_domain_manifest(project)
-
-    assert [
-        package["domain_package_id"] for package in payload["domain_packages"]
-    ] == ["domain-a"]
 
 
 def test_manifest_rejects_domain_records_without_copied_packs(
@@ -539,6 +536,37 @@ def test_manifest_low_confidence_or_failed_grouping_merges_conservatively(tmp_pa
     assert failed["grouping_warnings"]
 
 
+def test_field_grouping_ignores_non_object_mathematical_opportunities() -> None:
+    package = {
+        "domain_package_id": "domain-a",
+        "seed_paper": "seed:a",
+        "title": "Alpha",
+        "overview": "Overview",
+        "task_focus": {},
+        "methodology": [],
+        "known_solved_cases": [],
+        "open_axes_for_new_work": [],
+        "mathematical_opportunities": None,
+        "summary_schema_version": "arc.domain_summary.v5",
+        "summary_json_path": "domain/a_domain_summary.json",
+        "summary_markdown_path": "domain/a_domain_summary.md",
+        "paper_json_pack_path": "domain/a_paper_json_pack.json",
+        "paper_ids": ["seed:a"],
+        "citation_edges": [],
+    }
+
+    groups = grouping._build_field_groups(
+        [package],
+        [],
+        intent="",
+        force_single=False,
+    )
+
+    assert groups[0]["field_card"]["mathematical_opportunities"] == {
+        "well_defined_problems": []
+    }
+
+
 def test_manifest_three_package_grouping_is_deterministic_and_evidence_backed(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -580,14 +608,23 @@ def test_manifest_falls_back_on_nontransitive_grouping_across_hard_distinct_pair
     assert payload["research_scope"] == "single_domain"
     assert payload["grouping_method"] == "conservative_fallback"
     assert "non-transitive" in payload["grouping_warnings"][0]
-    grouping = json.loads((project / payload["grouping_artifact"]).read_text(encoding="utf-8"))
-    assert grouping["warnings"] == payload["grouping_warnings"]
+    assert not (project / payload["grouping_artifact"]).exists()
+    assert not (project / "domain/domain-manifest.json").exists()
 
 
 def test_manifest_requires_companion_artifacts(tmp_path: Path) -> None:
     project = tmp_path / "project"
     (project / "domain").mkdir(parents=True)
-    (project / "context.json").write_text("{}\n", encoding="utf-8")
+    (project / "context.json").write_text(
+        json.dumps(
+            {
+                "domain_records": [
+                    {"domain_id": "x", "seed_paper": "seed:x"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
     (project / "domain/x_domain_summary.json").write_text(
         json.dumps(
             {
@@ -676,9 +713,171 @@ def test_write_manifest_single_package_does_not_call_llm_runner(tmp_path: Path) 
     assert payload["grouping_method"] == "llm_semantic_pair_classification"
 
 
-def test_write_manifest_stops_for_typed_llm_pause(tmp_path: Path) -> None:
+def test_write_manifest_holds_lease_and_publishes_manifest_last(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text(
+        json.dumps({"user_intent": "one field"}),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", "seed:a")
+    events: list[tuple[str, object]] = []
+
+    class RecordingLease:
+        def __init__(self, path: Path):
+            events.append(("lease-created", path))
+
+        def acquire(self, *, blocking: bool = False):
+            events.append(("lease-acquired", blocking))
+            return self
+
+        def release(self) -> None:
+            events.append(("lease-released", None))
+
+    real_writer = publish.write_json_object
+
+    def recording_writer(path, payload, **kwargs):
+        events.append(("write", Path(path)))
+        return real_writer(path, payload, **kwargs)
+
+    monkeypatch.setattr(publish, "FileLease", RecordingLease)
+    monkeypatch.setattr(publish, "write_json_object", recording_writer)
+
+    destination = publish.write_domain_manifest(project)
+    manifest = json.loads(destination.read_text(encoding="utf-8"))
+    grouping_path = project / manifest["grouping_artifact"]
+
+    assert events == [
+        (
+            "lease-created",
+            project / "domain" / ".domain-manifest.lock",
+        ),
+        ("lease-acquired", True),
+        ("write", grouping_path),
+        ("write", destination),
+        ("lease-released", None),
+    ]
+
+    grouping_bytes = grouping_path.read_bytes()
+    events.clear()
+    second_destination = publish.write_domain_manifest(project)
+
+    assert second_destination == destination
+    assert grouping_path.read_bytes() == grouping_bytes
+    assert events == [
+        (
+            "lease-created",
+            project / "domain" / ".domain-manifest.lock",
+        ),
+        ("lease-acquired", True),
+        ("write", destination),
+        ("lease-released", None),
+    ]
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "context.json",
+        "domain/a_domain_summary.json",
+        "domain/a_domain_summary.md",
+        "domain/a_paper_json_pack.json",
+    ],
+)
+def test_write_manifest_refuses_to_overwrite_referenced_inputs(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text(
+        json.dumps({"user_intent": "one field"}),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", "seed:a")
+    protected_path = project / relative_path
+    original = protected_path.read_bytes()
+    preview = publish.build_domain_manifest(project)
+    grouping_path = project / preview["grouping_artifact"]
+
+    with pytest.raises(
+        inputs.ManifestError,
+        match="must not overwrite a referenced input artifact",
+    ):
+        publish.write_domain_manifest(
+            project,
+            output=protected_path,
+        )
+
+    assert protected_path.read_bytes() == original
+    assert not grouping_path.exists()
+
+
+def test_write_manifest_refuses_grouping_path_as_output(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text(
+        json.dumps({"user_intent": "one field"}),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", "seed:a")
+    preview = publish.build_domain_manifest(project)
+    grouping_path = project / preview["grouping_artifact"]
+
+    with pytest.raises(
+        inputs.ManifestError,
+        match="must not be the immutable grouping artifact",
+    ):
+        publish.write_domain_manifest(
+            project,
+            output=grouping_path,
+        )
+
+    assert not grouping_path.exists()
+
+
+def test_write_manifest_refuses_output_outside_project(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text(
+        json.dumps({"user_intent": "one field"}),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", "seed:a")
+    preview = publish.build_domain_manifest(project)
+    grouping_path = project / preview["grouping_artifact"]
+    outside = tmp_path / "outside-manifest.json"
+
+    with pytest.raises(
+        inputs.ManifestError,
+        match="must be inside the project directory",
+    ):
+        publish.write_domain_manifest(
+            project,
+            output=outside,
+        )
+
+    assert not outside.exists()
+    assert not grouping_path.exists()
+
+
+def test_write_manifest_stops_for_incomplete_typed_llm_outcomes(
+    tmp_path: Path,
+) -> None:
     from arc_jobs import ResumeReason
-    from arc_llm import LLMPaused
+    from arc_llm import (
+        InvalidRequestError,
+        LLMFailed,
+        LLMPaused,
+        LLMStopped,
+    )
 
     project = tmp_path / "project"
     project.mkdir()
@@ -688,14 +887,132 @@ def test_write_manifest_stops_for_typed_llm_pause(tmp_path: Path) -> None:
     )
     _write_domain(project, "a", "domain-a", "seed:a")
     _write_domain(project, "b", "domain-b", "seed:b")
+    old_manifest = project / "domain/domain-manifest.json"
+    old_grouping = project / "domain/field-grouping.json"
+    old_manifest.write_bytes(b'{"old":"manifest"}\n')
+    old_grouping.write_bytes(b'{"old":"grouping"}\n')
 
-    def paused_runner(*_args):
-        return SimpleNamespace(
-            outcome=LLMPaused(
+    outcomes = [
+        (
+            LLMPaused(
                 ResumeReason.EXTERNAL_CONDITION,
                 "provider-unavailable",
+            ),
+            "paused",
+        ),
+        (
+            LLMFailed(InvalidRequestError("invalid grouping request")),
+            "failed",
+        ),
+        (LLMStopped(), "stopped"),
+    ]
+    for outcome, message in outcomes:
+        def incomplete_runner(*_args, outcome=outcome):
+            return SimpleNamespace(outcome=outcome)
+
+        with pytest.raises(
+            grouping.GroupingLLMRunError,
+            match=message,
+        ):
+            publish.write_domain_manifest(
+                project,
+                grouping_runner=incomplete_runner,
             )
+
+    assert old_manifest.read_bytes() == b'{"old":"manifest"}\n'
+    assert old_grouping.read_bytes() == b'{"old":"grouping"}\n'
+    assert not (project / "domain/field-groupings").exists()
+
+
+def test_write_manifest_runner_exception_publishes_nothing(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text(
+        json.dumps({"user_intent": "bridge"}),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", "seed:a")
+    _write_domain(project, "b", "domain-b", "seed:b")
+    old_manifest = project / "domain/domain-manifest.json"
+    old_grouping = project / "domain/field-grouping.json"
+    old_manifest.write_bytes(b'{"old":"manifest"}\n')
+    old_grouping.write_bytes(b'{"old":"grouping"}\n')
+
+    def failed_runner(*_args):
+        raise RuntimeError("runner failed before typed completion")
+
+    with pytest.raises(RuntimeError, match="runner failed"):
+        publish.write_domain_manifest(
+            project,
+            grouping_runner=failed_runner,
         )
 
-    with pytest.raises(grouping.GroupingLLMRunError, match="paused"):
-        publish.write_domain_manifest(project, grouping_runner=paused_runner)
+    assert old_manifest.read_bytes() == b'{"old":"manifest"}\n'
+    assert old_grouping.read_bytes() == b'{"old":"grouping"}\n'
+    assert not (project / "domain/field-groupings").exists()
+
+
+def test_immutable_grouping_conflict_preserves_existing_manifest(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text(
+        json.dumps({"user_intent": "one field"}),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", "seed:a")
+    preview = publish.build_domain_manifest(project)
+    grouping_path = project / preview["grouping_artifact"]
+    grouping_path.parent.mkdir(parents=True)
+    grouping_path.write_text('{"conflict":true}\n', encoding="utf-8")
+    manifest_path = project / "domain/domain-manifest.json"
+    manifest_path.write_bytes(b'{"old":"manifest"}\n')
+
+    with pytest.raises(
+        inputs.ManifestError,
+        match="immutable field grouping conflicts",
+    ):
+        publish.write_domain_manifest(project)
+
+    assert manifest_path.read_bytes() == b'{"old":"manifest"}\n'
+    assert grouping_path.read_text(encoding="utf-8") == (
+        '{"conflict":true}\n'
+    )
+
+
+def test_manifest_publication_failure_preserves_existing_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text(
+        json.dumps({"user_intent": "one field"}),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", "seed:a")
+    preview = publish.build_domain_manifest(project)
+    grouping_path = project / preview["grouping_artifact"]
+    manifest_path = project / "domain/domain-manifest.json"
+    manifest_path.write_bytes(b'{"old":"manifest"}\n')
+    real_writer = publish.write_json_object
+
+    def failing_manifest_writer(path, payload, **kwargs):
+        if Path(path) == manifest_path:
+            raise OSError("manifest write failed")
+        return real_writer(path, payload, **kwargs)
+
+    monkeypatch.setattr(
+        publish,
+        "write_json_object",
+        failing_manifest_writer,
+    )
+
+    with pytest.raises(OSError, match="manifest write failed"):
+        publish.write_domain_manifest(project)
+
+    assert manifest_path.read_bytes() == b'{"old":"manifest"}\n'
+    assert grouping_path.is_file()
