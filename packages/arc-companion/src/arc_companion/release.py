@@ -26,6 +26,7 @@ from .renderer import (
 RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v1"
 DELIVERY_RECIPE = "arc.companion.delivery.v1"
 RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v2"
+_WINDOWS = os.name == "nt"
 
 
 class CompanionReleaseError(RuntimeError):
@@ -316,6 +317,8 @@ def _fsync_tree(root: Path) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
+    if _WINDOWS:  # pragma: no cover - exercised through platform simulation
+        return
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(descriptor)

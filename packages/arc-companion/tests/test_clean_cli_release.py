@@ -319,19 +319,19 @@ def test_release_is_immutable_reused_and_current_updates_last(
     book = _book()
     events: list[tuple[str, Path, bool]] = []
     original_release_fsync = release_module._fsync_directory
-    original_project_fsync = project_module._fsync_directory
+    original_project_write = project_module.atomic_write_json
 
     def record_release_fsync(path: Path) -> None:
         release_path = path / release_module.release_id_for(book)
         events.append(("release", path, release_path.is_dir()))
         original_release_fsync(path)
 
-    def record_project_fsync(path: Path) -> None:
-        events.append(("project", path, project.current.is_file()))
-        original_project_fsync(path)
+    def record_project_write(path: Path, value) -> None:
+        original_project_write(path, value)
+        events.append(("project", path.parent, project.current.is_file()))
 
     monkeypatch.setattr(release_module, "_fsync_directory", record_release_fsync)
-    monkeypatch.setattr(project_module, "_fsync_directory", record_project_fsync)
+    monkeypatch.setattr(project_module, "atomic_write_json", record_project_write)
 
     first = publisher.publish(book, run_id="run-one")
     second = publisher.publish(book, run_id="run-two")
@@ -364,6 +364,21 @@ def test_release_is_immutable_reused_and_current_updates_last(
     assert events.index(release_parent_syncs[-1]) < events.index(
         current_parent_syncs[0]
     )
+
+
+def test_release_directory_fsync_is_skipped_on_windows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(release_module, "_WINDOWS", True)
+    monkeypatch.setattr(
+        release_module.os,
+        "open",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("Windows must not open directories for fsync")
+        ),
+    )
+
+    release_module._fsync_directory(tmp_path)
 
 
 @pytest.mark.parametrize("race_errno", [errno.EEXIST, errno.ENOTEMPTY])
