@@ -617,11 +617,14 @@ class DomainBuildHandler:
                 raise RuntimeError("unknown intent-ranking outcome")
         context.artifacts.publish_json("network/intent-ranking", ranking)
 
-        parent_choices = [
-            dict(item)
-            for item in selection.get("parent_foundations", [])
-            if isinstance(item, Mapping)
-        ]
+        parent_choices = _unique_paper_records(
+            [
+                item
+                for item in selection.get("parent_foundations", [])
+                if isinstance(item, Mapping)
+            ],
+            excluded_ids={foundation_id},
+        )
         parent_capacity = max(0, policy.graph_node_limit - 1)
         if len(parent_choices) > parent_capacity:
             omitted = len(parent_choices) - parent_capacity
@@ -633,10 +636,13 @@ class DomainBuildHandler:
                     "network",
                 )
             )
-        fixed_count = 1 + len(_unique_paper_ids(parent_choices))
+        parent_ids = _unique_paper_ids(parent_choices)
+        parent_id_set = set(parent_ids)
+        fixed_count = 1 + len(parent_ids)
         selected = _select_domain_papers(
             citer_pool,
             foundation_id=foundation_id,
+            excluded_ids=parent_id_set,
             intent_ranking=ranking,
             intent=self.request.intent,
             selected_count=policy.ranked_paper_limit,
@@ -666,12 +672,13 @@ class DomainBuildHandler:
             0,
             policy.graph_node_limit
             - 1
-            - len(_unique_paper_ids(parent_choices))
+            - len(parent_ids)
             - len(selected),
         )
         preliminary_common = _common_references(
             foundation_id=foundation_id,
             selected_ids=selected_ids,
+            excluded_ids=parent_id_set,
             refs_by_selected=refs_by_selected,
             max_extra=remaining,
             metadata_by_id={},
@@ -693,11 +700,11 @@ class DomainBuildHandler:
         common = _common_references(
             foundation_id=foundation_id,
             selected_ids=selected_ids,
+            excluded_ids=parent_id_set,
             refs_by_selected=refs_by_selected,
             max_extra=remaining,
             metadata_by_id=common_metadata,
         )
-        parent_ids = _unique_paper_ids(parent_choices)
         parent_metadata, parent_metadata_errors = self._group_values(
             context,
             "network-parent-metadata",
@@ -1100,6 +1107,28 @@ def _unique_paper_ids(items: list[Mapping[str, Any]]) -> list[str]:
         if paper_id and paper_id not in values:
             values.append(paper_id)
     return values
+
+
+def _unique_paper_records(
+    items: list[Mapping[str, Any]],
+    *,
+    excluded_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    excluded = {
+        normalize_paper_id(paper_id)
+        for paper_id in (excluded_ids or set())
+        if normalize_paper_id(paper_id)
+    }
+    records: list[dict[str, Any]] = []
+    for item in items:
+        paper_id = normalize_paper_id(paper_key(dict(item)))
+        if not paper_id or paper_id in excluded:
+            continue
+        record = dict(item)
+        record["paper_id"] = paper_id
+        records.append(record)
+        excluded.add(paper_id)
+    return records
 
 
 def _dedupe_warnings(

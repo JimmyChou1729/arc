@@ -281,6 +281,7 @@ def _select_domain_papers(
     citer_pool: list[dict[str, Any]],
     *,
     foundation_id: str,
+    excluded_ids: set[str] | None = None,
     intent_ranking: dict[str, Any],
     intent: str,
     selected_count: int,
@@ -292,15 +293,26 @@ def _select_domain_papers(
     current = as_of_date or datetime.now(timezone.utc).date()
     now = datetime.combine(current, datetime.min.time(), tzinfo=timezone.utc)
     current_year = now.year
+    excluded = {
+        normalize_paper_id(paper_id)
+        for paper_id in (excluded_ids or set())
+        if normalize_paper_id(paper_id)
+    }
+    normalized_foundation = normalize_paper_id(foundation_id)
+    if normalized_foundation:
+        excluded.add(normalized_foundation)
     intent_rank = {
-        paper_id: index
+        normalize_paper_id(paper_id): index
         for index, paper_id in enumerate(intent_ranking.get("ranked_paper_ids") or [], start=1)
+        if normalize_paper_id(paper_id)
     }
     scored = []
+    seen_paper_ids: set[str] = set()
     for item in citer_pool:
         paper_id = normalize_paper_id(item.get("paper_id") or paper_key(item))
-        if not paper_id or paper_id == foundation_id:
+        if not paper_id or paper_id in excluded or paper_id in seen_paper_ids:
             continue
+        seen_paper_ids.add(paper_id)
         record = dict(item)
         record["paper_id"] = paper_id
         cpy = citation_per_year(record, current_year)
@@ -509,12 +521,19 @@ def _common_references(
     *,
     foundation_id: str,
     selected_ids: list[str],
+    excluded_ids: set[str] | None = None,
     refs_by_selected: dict[str, Any],
     max_extra: int,
     metadata_by_id: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    selected_set = {normalize_paper_id(item) for item in selected_ids}
-    selected_set.add(normalize_paper_id(foundation_id))
+    capacity = max(0, max_extra)
+    if capacity == 0:
+        return []
+    excluded = {
+        normalize_paper_id(item)
+        for item in [*selected_ids, *(excluded_ids or set()), foundation_id]
+        if normalize_paper_id(item)
+    }
     counts = Counter()
     support: dict[str, list[str]] = defaultdict(list)
     embedded: dict[str, dict[str, Any]] = {}
@@ -524,7 +543,7 @@ def _common_references(
         seen = set()
         for ref in refs:
             ref_id = normalize_paper_id(paper_key(ref))
-            if not ref_id or ref_id in selected_set or ref_id in seen:
+            if not ref_id or ref_id in excluded or ref_id in seen:
                 continue
             seen.add(ref_id)
             counts[ref_id] += 1
@@ -534,15 +553,18 @@ def _common_references(
         ref_id
         for ref_id, count in sorted(counts.items(), key=lambda item: (item[1], item[0]), reverse=True)
         if count >= 2
-    ][:max_extra]
+    ]
     common = []
     for ref_id in top_ids:
         meta = metadata_by_id.get(ref_id)
         if not isinstance(meta, dict) or meta.get("error"):
             meta = embedded.get(ref_id, {})
+        paper_id = normalize_paper_id(meta.get("paper_id") or ref_id)
+        if not paper_id or paper_id in excluded:
+            continue
         common.append(
             {
-                "paper_id": normalize_paper_id(meta.get("paper_id") or ref_id),
+                "paper_id": paper_id,
                 "title": meta.get("title") or embedded.get(ref_id, {}).get("title", ""),
                 "abstract": meta.get("abstract", ""),
                 "authors": meta.get("authors", []),
@@ -553,6 +575,9 @@ def _common_references(
                 "identifiers": meta.get("identifiers") or {},
             }
         )
+        excluded.add(paper_id)
+        if len(common) >= capacity:
+            break
     return common
 
 
@@ -594,16 +619,22 @@ def _build_graph(
 ) -> dict[str, Any]:
     nodes: dict[str, dict[str, Any]] = {}
     foundation_id = normalize_paper_id(foundation.get("paper_id") or "")
-    nodes[foundation_id] = _node(foundation, role="selected_foundation")
+    if foundation_id:
+        nodes[foundation_id] = _node(foundation, role="selected_foundation")
     for item in parent_foundations:
         parent_id = normalize_paper_id(item.get("paper_id") or item.get("upi") or "")
-        if parent_id:
+        if parent_id and parent_id not in nodes:
             nodes[parent_id] = _node(item, role="parent_foundation")
+    accepted_selected: list[dict[str, Any]] = []
     for item in selected_papers:
-        nodes[item["paper_id"]] = _node(item, role="domain_paper")
+        paper_id = normalize_paper_id(item.get("paper_id") or item.get("upi") or "")
+        if paper_id and paper_id not in nodes:
+            nodes[paper_id] = _node(item, role="domain_paper")
+            accepted_selected.append(item)
     for item in common_references:
-        if item["paper_id"] not in nodes:
-            nodes[item["paper_id"]] = _node(item, role="common_reference")
+        paper_id = normalize_paper_id(item.get("paper_id") or item.get("upi") or "")
+        if paper_id and paper_id not in nodes:
+            nodes[paper_id] = _node(item, role="common_reference")
 
     edges = []
     seen_edges = set()
@@ -621,14 +652,14 @@ def _build_graph(
             if target_id in node_ids and target_id != source_id:
                 _add_edge(edges, seen_edges, source_id, target_id, relation="cites")
     current = as_of_date or datetime.now(timezone.utc).date()
-    included = sum(bool(item.get("recent_arxiv")) for item in selected_papers)
+    included = sum(bool(item.get("recent_arxiv")) for item in accepted_selected)
     recency: dict[str, Any] = {
         "window_days": recent_window_days,
         "start_date": (current - timedelta(days=recent_window_days)).isoformat(),
         "end_date": current.isoformat(),
-        "recency_basis": dict(sorted(Counter(str(item.get("recency_basis") or "unavailable") for item in selected_papers).items())),
+        "recency_basis": dict(sorted(Counter(str(item.get("recency_basis") or "unavailable") for item in accepted_selected).items())),
         "included_count": included,
-        "excluded_count": len(selected_papers) - included,
+        "excluded_count": len(accepted_selected) - included,
     }
     return {
         "schema_version": "arc.domain_graph.v1",

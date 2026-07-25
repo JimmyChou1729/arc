@@ -107,6 +107,72 @@ def test_recent_candidates_only_fill_the_remaining_graph_capacity() -> None:
     assert sum(bool(item["recent_arxiv"]) for item in selected) == 1
 
 
+def test_domain_selection_excludes_fixed_roles_and_refills_after_duplicates() -> None:
+    selected = network._select_domain_papers(
+        [
+            _paper(COMMON_A, year=2020, citations=100_000),
+            _paper(PAPER_A, year=2025, citations=20),
+            _paper(
+                "https://arxiv.org/abs/2501.00001v2",
+                year=2025,
+                citations=10,
+            ),
+            _paper(PAPER_B, year=2025, citations=5),
+        ],
+        foundation_id=FOUNDATION,
+        excluded_ids={COMMON_A},
+        intent_ranking={
+            "ranked_paper_ids": [COMMON_A, PAPER_A, PAPER_B],
+        },
+        intent="",
+        selected_count=2,
+        max_total=2,
+        as_of_date=date(2026, 7, 24),
+        strict_window=True,
+    )
+
+    assert [item["paper_id"] for item in selected] == [PAPER_A, PAPER_B]
+
+
+def test_common_references_exclude_parent_roles_and_refill_capacity() -> None:
+    refs = {
+        PAPER_A: [_paper(COMMON_A), _paper(COMMON_B)],
+        PAPER_B: [_paper(COMMON_A), _paper(COMMON_B)],
+    }
+
+    common = network._common_references(
+        foundation_id=FOUNDATION,
+        selected_ids=[PAPER_A, PAPER_B],
+        excluded_ids={COMMON_B},
+        refs_by_selected=refs,
+        max_extra=1,
+        metadata_by_id={},
+    )
+
+    assert [item["paper_id"] for item in common] == [COMMON_A]
+
+
+def test_common_references_refill_after_metadata_resolves_to_an_existing_role() -> None:
+    refs = {
+        PAPER_A: [_paper(COMMON_A), _paper(COMMON_B)],
+        PAPER_B: [_paper(COMMON_A), _paper(COMMON_B)],
+    }
+
+    common = network._common_references(
+        foundation_id=FOUNDATION,
+        selected_ids=[PAPER_A, PAPER_B],
+        refs_by_selected=refs,
+        max_extra=1,
+        metadata_by_id={
+            # COMMON_B ranks first on the deterministic ID tie-break, but its
+            # authoritative metadata resolves to an already-selected paper.
+            COMMON_B: _paper(PAPER_A),
+        },
+    )
+
+    assert [item["paper_id"] for item in common] == [COMMON_A]
+
+
 def test_strict_window_filters_unique_citers_before_merge_and_accepts_dated_non_arxiv() -> None:
     old = _paper("arXiv:2001.00002", year=2020, citations=1000, published="2020-01-02")
     boundary = _paper("arXiv:2407.00001", year=2024, citations=1, published="2024-07-24")
@@ -256,3 +322,54 @@ def test_network_scores_recompute_across_initial_citer_and_reference_stages() ->
             reference_edge_count=item["reference_edge_count"],
         )
         assert item["domain_score"] == pytest.approx(round(expected, 4))
+
+
+def test_graph_role_precedence_is_defensive_and_globally_unique() -> None:
+    selected = _paper(
+        PAPER_A,
+        published="2025-01-01",
+        recent_arxiv=True,
+        recency_basis="published",
+    )
+    duplicate_selected = _paper(
+        "https://arxiv.org/abs/2501.00001v3",
+        published="2020-01-01",
+        recent_arxiv=False,
+        recency_basis="published",
+    )
+
+    graph = network._build_graph(
+        domain_id="domain-role-precedence",
+        foundation=_paper(FOUNDATION),
+        parent_foundations=[
+            _paper("https://arxiv.org/abs/2001.00001v2"),
+            _paper(COMMON_A),
+        ],
+        selected_papers=[
+            _paper(COMMON_A),
+            selected,
+            duplicate_selected,
+        ],
+        common_references=[
+            _paper(PAPER_A),
+            _paper(COMMON_B),
+            _paper(COMMON_B),
+        ],
+        refs_by_selected={},
+        intent="role precedence",
+        created_at="2026-07-24T00:00:00+00:00",
+        recent_window_days=365,
+        as_of_date=date(2026, 7, 24),
+    )
+
+    roles = {node["paper_id"]: node["role"] for node in graph["nodes"]}
+    assert roles == {
+        FOUNDATION: "selected_foundation",
+        COMMON_A: "parent_foundation",
+        PAPER_A: "domain_paper",
+        COMMON_B: "common_reference",
+    }
+    assert len(graph["nodes"]) == len(roles)
+    assert graph["recency"]["included_count"] == 1
+    assert graph["recency"]["excluded_count"] == 0
+    assert graph["recency"]["recency_basis"] == {"published": 1}

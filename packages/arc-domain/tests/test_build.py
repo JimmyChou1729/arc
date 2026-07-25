@@ -273,6 +273,34 @@ class ParentSelectionTaskService(FakeTaskService):
         return super().execute_or_resume(context, request, **kwargs)
 
 
+class OverlappingParentPaperAccess(ParentPaperAccess):
+    def citers(self, paper_id: str, *, limit: int, sort: str) -> list[dict]:
+        self.calls.append(("citers", paper_id, limit, sort))
+        if paper_id == SEED:
+            return [
+                dict(self.metadata_by_id[FOUNDATION]),
+                dict(self.metadata_by_id[DOMAIN_PAPER]),
+            ]
+        return []
+
+
+class OverlappingParentTaskService(ParentSelectionTaskService):
+    def execute_or_resume(self, context, request, **kwargs):
+        if request.task_id.startswith("network-rank-"):
+            self.task_ids.append(request.task_id)
+            return LLMCompleted(
+                {
+                    "ranked_paper_ids": [FOUNDATION, DOMAIN_PAPER],
+                    "reasoning": "parent appears first in the citer ranking",
+                },
+                None,
+                None,
+                None,
+                None,
+            )
+        return super().execute_or_resume(context, request, **kwargs)
+
+
 def _request() -> DomainBuildRequest:
     return DomainBuildRequest(
         SEED,
@@ -479,6 +507,44 @@ def test_parent_foundations_are_truncated_to_the_graph_capacity(
     )
     graph = json.loads(store.read_bytes(result.graph).decode("utf-8"))
     assert len(graph["nodes"]) == 2
+
+
+def test_parent_overlap_is_excluded_before_domain_selection_and_capacity_fill(
+    tmp_path: Path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs-root")
+    request = DomainBuildRequest(
+        SEED,
+        "recent methods",
+        DomainBuildPolicy(
+            as_of_date="2026-07-24",
+            citer_pool_limit=10,
+            ranked_paper_limit=1,
+            graph_node_limit=4,
+        ),
+    )
+
+    snapshot = DomainBuildRunner(repository).execute(
+        request,
+        paper_access=OverlappingParentPaperAccess(),
+        task_service=OverlappingParentTaskService(),
+        reference_service=NoReferenceInference(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    result = _decode_result(repository, snapshot.run_id)
+    store = ImmutableArtifactStore(
+        repository.run_directory(snapshot.run_id), repository_root=repository.root
+    )
+    graph = json.loads(store.read_bytes(result.graph).decode("utf-8"))
+    roles = {node["paper_id"]: node["role"] for node in graph["nodes"]}
+    assert roles == {
+        SEED: "selected_foundation",
+        FOUNDATION: "parent_foundation",
+        EXTRA_PARENT: "parent_foundation",
+        DOMAIN_PAPER: "domain_paper",
+    }
+    assert len(graph["nodes"]) == request.policy.graph_node_limit
 
 
 def test_network_schema_failure_fails_the_outer_run(tmp_path: Path) -> None:

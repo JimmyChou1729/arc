@@ -180,3 +180,99 @@ def test_acquire_pack_record_preserves_parse_warnings_with_paper_context():
             "paper_id": PAPER_ID,
         }
     ]
+
+
+def test_conclusion_selection_prefers_later_top_level_candidate_at_same_priority():
+    service = FakePaperService()
+    service.document.sections = (
+        SimpleNamespace(
+            section_id="notation",
+            title="Summary of notation",
+            level=1,
+            ordinal=0,
+            page_start=1,
+            page_end=1,
+            text="Notation.",
+        ),
+        SimpleNamespace(
+            section_id="summary",
+            title="Summary",
+            level=1,
+            ordinal=1,
+            page_start=2,
+            page_end=2,
+            text="Summary.",
+        ),
+        SimpleNamespace(
+            section_id="final",
+            title="Conclusions and Outlook",
+            level=1,
+            ordinal=2,
+            page_start=3,
+            page_end=3,
+            text="Final.",
+        ),
+        SimpleNamespace(
+            section_id="nested",
+            title="Conclusion",
+            level=2,
+            ordinal=3,
+            page_start=3,
+            page_end=3,
+            text="Nested.",
+        ),
+    )
+
+    record = DomainPaperAccess(service).acquire_pack_record(PAPER_ID)
+
+    assert record["conclusion"] == {
+        "section_id": "final",
+        "title": "Conclusions and Outlook",
+        "text": "Final.",
+    }
+    assert service.calls[-1] == (
+        "select",
+        {"document": service.document, "selector": "final"},
+    )
+
+
+def test_conclusion_selection_rejects_substrings_and_qualified_summary_headings():
+    service = FakePaperService()
+    service.document.sections = (
+        SimpleNamespace(
+            section_id="preconclusion",
+            title="Preconclusion notes",
+            level=1,
+            ordinal=0,
+            page_start=1,
+            page_end=1,
+            text="Notes.",
+        ),
+        SimpleNamespace(
+            section_id="notation",
+            title="Summary of notation",
+            level=1,
+            ordinal=1,
+            page_start=2,
+            page_end=2,
+            text="Notation.",
+        ),
+    )
+
+    record = DomainPaperAccess(service).acquire_pack_record(PAPER_ID)
+
+    assert record["conclusion"] is None
+    assert record["warnings"] == [
+        {
+            "code": "conclusion_section_unavailable",
+            "message": "No conclusion, summary, discussion, or outlook section was found.",
+            "stage": "paper_acquisition",
+            "paper_id": PAPER_ID,
+        }
+    ]
+    assert [name for name, _ in service.calls] == [
+        "metadata",
+        "references",
+        "parse",
+        "toc",
+    ]

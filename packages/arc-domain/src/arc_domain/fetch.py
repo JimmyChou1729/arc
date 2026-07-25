@@ -7,6 +7,7 @@ its own paper cache.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -16,6 +17,7 @@ from arc_paper import ArcPaperService
 CONCLUSION_TEXT_LIMIT = 5_000
 _CONCLUSION_TITLES = ("conclusion", "conclusions", "summary")
 _FALLBACK_TITLES = ("discussion", "outlook")
+_CONCLUSION_TITLE_GROUPS = (_CONCLUSION_TITLES, _FALLBACK_TITLES)
 
 
 class DomainPaperAccess:
@@ -136,11 +138,41 @@ def _toc_json(entries: Iterable[Any]) -> list[dict[str, Any]]:
 
 def _first_conclusion_entry(entries: Sequence[Any] | Iterable[Any]) -> Any | None:
     values = tuple(entries)
-    for title in (*_CONCLUSION_TITLES, *_FALLBACK_TITLES):
-        for section in values:
-            section_title = getattr(section, "title", "")
-            if title in _normalized_title(section_title):
-                return section
+    if not values:
+        return None
+
+    top_level = min(int(getattr(section, "level")) for section in values)
+    candidates: list[tuple[tuple[int, int, int, int], Any]] = []
+    for position, section in enumerate(values):
+        priority = _conclusion_title_priority(getattr(section, "title", ""))
+        if priority is None:
+            continue
+        level = int(getattr(section, "level"))
+        ordinal = int(getattr(section, "ordinal"))
+        rank = (
+            priority,
+            0 if level == top_level else 1,
+            -ordinal,
+            -position,
+        )
+        candidates.append((rank, section))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda candidate: candidate[0])[1]
+
+
+def _conclusion_title_priority(value: Any) -> int | None:
+    normalized = _normalized_title(value)
+    for priority, titles in enumerate(_CONCLUSION_TITLE_GROUPS):
+        if normalized in titles:
+            return priority
+        for title in titles:
+            # "Summary" is useful as an exact final-section title but too
+            # ambiguous inside headings such as "Summary of notation".
+            if title != "summary" and re.search(
+                rf"(?<!\w){re.escape(title)}(?!\w)", normalized
+            ):
+                return priority
     return None
 
 
