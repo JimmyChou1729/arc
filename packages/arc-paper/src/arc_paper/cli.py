@@ -78,7 +78,9 @@ def _parser() -> _Parser:
 
     section = commands.add_parser("get-arxiv-section", add_help=False)
     _arxiv_arguments(section)
-    section.add_argument("selector")
+    section_selector = section.add_mutually_exclusive_group(required=True)
+    section_selector.add_argument("selector", nargs="?")
+    section_selector.add_argument("--ordinal", type=_section_ordinal)
 
     full_text = commands.add_parser("search-arxiv-full-text", add_help=False)
     _arxiv_arguments(full_text)
@@ -158,6 +160,20 @@ def _cache_selector_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cache-root")
 
 
+def _section_ordinal(value: str) -> int:
+    try:
+        ordinal = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--ordinal must be a non-negative integer"
+        ) from exc
+    if ordinal < 0:
+        raise argparse.ArgumentTypeError(
+            "--ordinal must be a non-negative integer"
+        )
+    return ordinal
+
+
 def _parameters(args: argparse.Namespace) -> dict[str, Any]:
     command = args.command
     if command == "extract-paper-ids":
@@ -199,7 +215,9 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
     if command == "get-arxiv-section":
         return {
             "arxiv_id": args.arxiv_id,
-            "selector": args.selector,
+            "selector": (
+                args.ordinal if args.ordinal is not None else args.selector
+            ),
             "refresh": args.refresh,
         }
     if command == "search-arxiv-full-text":

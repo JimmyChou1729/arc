@@ -186,6 +186,24 @@ def test_cli_stdout_is_exactly_one_command_result(
             },
         ),
         (
+            ["get-arxiv-section", "0911.3380", "0"],
+            "get-arxiv-section",
+            {
+                "arxiv_id": "0911.3380",
+                "selector": "0",
+                "refresh": False,
+            },
+        ),
+        (
+            ["get-arxiv-section", "0911.3380", "--ordinal", "0"],
+            "get-arxiv-section",
+            {
+                "arxiv_id": "0911.3380",
+                "selector": 0,
+                "refresh": False,
+            },
+        ),
+        (
             [
                 "search-arxiv-full-text",
                 "0911.3380",
@@ -306,6 +324,30 @@ def test_cli_routes_supported_provider_and_source_commands(
     assert observed == [(operation, parameters)]
     assert value["status"] == "completed"
     assert value["data"] == {"operation": operation}
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["get-arxiv-section", "0911.3380"],
+        ["get-arxiv-section", "0911.3380", "--ordinal", "-1"],
+        [
+            "get-arxiv-section",
+            "0911.3380",
+            "Introduction",
+            "--ordinal",
+            "0",
+        ],
+    ],
+)
+def test_cli_requires_one_unambiguous_section_selector(
+    argv: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(argv) == 2
+    value = json.loads(capsys.readouterr().out)
+    assert value["status"] == "failed"
+    assert value["error"]["code"] == "invalid_request"
 
 
 def test_cli_preserves_nonfatal_domain_warnings_in_shared_envelope(
