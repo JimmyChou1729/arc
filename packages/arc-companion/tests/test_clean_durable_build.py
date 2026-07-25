@@ -5,6 +5,8 @@ from collections import Counter
 from pathlib import Path
 from threading import Lock
 
+import pytest
+
 from arc_jobs import (
     ResumeReason,
     RunRepository,
@@ -25,6 +27,10 @@ from arc_companion.request_contracts import (
     CompanionBuildRequest,
     CompanionExecutionOptions,
     CompanionGenerationRecipe,
+)
+from arc_companion.build import (
+    CompanionContentError,
+    _validate_translation_text,
 )
 from arc_companion.contracts import CompanionContentCodec
 from arc_companion.prompts_v1 import (
@@ -1104,3 +1110,35 @@ def test_translation_source_identity_is_checked_before_draft(
     assert failed.error is not None
     assert failed.error.code == "translation_source_identity_invalid"
     assert tasks.counts[CHAPTER_DRAFT_PROMPT_VERSION] == 0
+
+
+def test_translation_text_preserves_duplicate_formula_and_link_occurrences() -> None:
+    source = {
+        "block_id": "duplicate-identity",
+        "kind": "paragraph",
+        "payload": {
+            "inline_math": [{"tex": "x=1"}, {"tex": "x=1"}],
+            "links": [
+                {"target": "https://example.test/repeated"},
+                {"target": "https://example.test/repeated"},
+            ],
+        },
+    }
+
+    with pytest.raises(
+        CompanionContentError,
+        match="omitted a formula or link occurrence",
+    ):
+        _validate_translation_text(
+            "x=1 https://example.test/repeated",
+            source,
+        )
+
+    _validate_translation_text(
+        (
+            "x=1 x=1 "
+            "https://example.test/repeated "
+            "https://example.test/repeated"
+        ),
+        source,
+    )

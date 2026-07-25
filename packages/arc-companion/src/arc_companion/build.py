@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -1128,17 +1129,17 @@ def _validate_translation_text(
             "translation_source_identity_invalid",
             f"translation changed code text for {source['block_id']}",
         )
+    required_occurrences = Counter(
+        [*identity["equations"], *identity["link_targets"]]
+    )
     if any(
-        token not in text
-        for token in [
-            *identity["equations"],
-            *identity["link_targets"],
-        ]
+        text.count(token) < count
+        for token, count in required_occurrences.items()
     ):
         raise CompanionContentError(
             "translation_source_identity_invalid",
             (
-                "translation text omitted a formula or link target for "
+                "translation text omitted a formula or link occurrence for "
                 f"{source['block_id']}"
             ),
         )
