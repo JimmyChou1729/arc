@@ -25,7 +25,10 @@ Runtime artifacts:
 <project-dir>/calculate/<run-id>/execute/<calculate-run-id>/state.json
 ```
 
-The first file is the workflow input. The runner copies the normalized input and result state to the calculation-owned run directory. Do not discover proposal, review, transcript, session, task, or group files by walking that directory.
+The first file is the workflow input. Under one project-local lease, the runner
+binds the run ID and result to the normalized config semantic key. A conflicting
+binding is invalid; this guard is not a second durable workflow. Do not discover
+proposal, review, transcript, session, task, or group files by walking the directory.
 
 Copy `workflows/json/calculate.config.template.json` to:
 
@@ -34,7 +37,9 @@ Copy `workflows/json/calculate.config.template.json` to:
 ```
 
 Replace `<calculate-run-id>`, `<project-dir>`, `<run-id>`, and
-`<skill-workflow-json-dir>`. Use `skill_dir` from context as `<skill-dir>` in commands below. Keep `"proposer_count": 2`, `"max_recalculations": 1`, and `artifact_options.save_prompts` enabled unless the user asks otherwise.
+`<skill-workflow-json-dir>`. Use `skill_dir` from context as `<skill-dir>` in commands below. Keep `"proposer_count": 2` and `"max_recalculations": 1`.
+Prompts are part of the durable semantic input and are always retained by the
+owned proposer-reviewer batch; there is no prompt-omission option.
 The default template uses high reasoning effort and medium verbosity because these tasks are mathematical derivations, not lightweight summaries. Lower effort only for cheap exploratory runs.
 
 The runner reads worker prompt/schema templates from `workflows/json/calculate-proposer.template.json`, `workflows/json/calculate-reviewer.template.json`, and `workflows/json/calculate-reviewer-output.schema.json`.

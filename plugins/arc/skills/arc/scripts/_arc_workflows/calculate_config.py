@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from _arc_workflows.source_checkout import validate_strict_checkout_path
 from _arc_workflows.workflow_io import (
     NonObjectJsonError,
     read_json_object,
@@ -62,19 +63,28 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
         raise ConfigError(f"schema_version must be {CALCULATE_CONFIG_SCHEMA}")
 
     run_id = _safe_id(_required_text(data, "run_id"), "run_id")
-    run_dir = Path(_required_text(data, "run_dir")).expanduser()
-    workflow_json_dir = Path(str(data.get("workflow_json_dir") or _default_workflow_json_dir())).expanduser()
+    run_dir = Path(_required_text(data, "run_dir")).expanduser().resolve()
+    workflow_json_dir = Path(
+        str(data.get("workflow_json_dir") or _default_workflow_json_dir())
+    ).expanduser().resolve()
+    validate_strict_checkout_path(
+        workflow_json_dir,
+        expected_relative_path="plugins/arc/skills/arc/workflows/json",
+        field_name="workflow_json_dir",
+        error_type=ConfigError,
+    )
     proposer_count = _positive_int(data.get("proposer_count", 2), "proposer_count")
     max_recalculations = _nonnegative_int(data.get("max_recalculations", 1), "max_recalculations")
     human_gate = _parse_human_gate(data.get("human_gate", {}))
     defaults = _dict(data.get("defaults", {}), "defaults")
     if defaults.get("model") is not None and str(defaults.get("provider", "auto") or "auto") == "auto":
         raise ConfigError("defaults.model requires explicit provider")
-    artifact_options = _dict(data.get("artifact_options", {"save_prompts": True}), "artifact_options")
-    artifact_options["save_prompts"] = _bool(
-        artifact_options.get("save_prompts", True),
-        "artifact_options.save_prompts",
-    )
+    _validate_strict_integrity_reference(defaults.get("integrity_reference_path"))
+    artifact_options = _dict(data.get("artifact_options", {}), "artifact_options")
+    if "save_prompts" in artifact_options:
+        if artifact_options["save_prompts"] is not True:
+            raise ConfigError("artifact_options.save_prompts only supports true")
+        artifact_options.pop("save_prompts")
 
     raw_steps = data.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
@@ -149,6 +159,25 @@ def _resolve_integrity_path(path_value: Any = None) -> Path | None:
         return None
     path = Path(__file__).resolve().parents[2] / "rules/integrity.md"
     return path if path.exists() else None
+
+
+def _validate_strict_integrity_reference(path_value: Any = None) -> None:
+    path = _resolve_integrity_path(path_value)
+    candidate = (
+        path
+        if path is not None
+        else (
+            Path(str(path_value)).expanduser()
+            if path_value
+            else Path(__file__).resolve().parents[2] / "rules/integrity.md"
+        )
+    )
+    validate_strict_checkout_path(
+        candidate,
+        expected_relative_path="plugins/arc/skills/arc/rules/integrity.md",
+        field_name="integrity_reference_path",
+        error_type=ConfigError,
+    )
 
 
 def _read_template(path: Path) -> dict[str, Any]:

@@ -1019,15 +1019,190 @@ def test_config_parsing_and_model_selection_errors_are_typed(tmp_path: Path) -> 
         minimal_config(
             tmp_path,
             human_gate={"enabled": "false"},
-            artifact_options={"save_prompts": "false"},
+            artifact_options={"save_prompts": True},
         )
     )
 
     assert config.human_gate["enabled"] is False
-    assert config.artifact_options["save_prompts"] is False
+    assert config.artifact_options == {}
+    with pytest.raises(
+        modules.config.ConfigError,
+        match="artifact_options.save_prompts only supports true",
+    ):
+        modules.config.load_calculation_config(
+            minimal_config(
+                tmp_path,
+                artifact_options={"save_prompts": False},
+            )
+        )
     with pytest.raises(modules.config.ConfigError, match="explicit provider"):
         modules.config.load_calculation_config(
             minimal_config(tmp_path, defaults={"model": "exact-model"})
+        )
+
+
+def test_calculate_strict_source_mode_binds_workflow_and_integrity_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    modules = load_calculate_modules()
+    other_workflow = tmp_path / "other-workflow"
+    other_workflow.mkdir()
+    other_integrity = tmp_path / "integrity.md"
+    other_integrity.write_text("other", encoding="utf-8")
+    monkeypatch.setenv("ARC_REQUIRE_REPO_ROOT", str(ROOT))
+
+    config = modules.config.load_calculation_config(minimal_config(tmp_path))
+    assert config.workflow_json_dir == WORKFLOW_JSON
+
+    with pytest.raises(
+        modules.config.ConfigError,
+        match="strict ARC source mode requires workflow_json_dir",
+    ):
+        modules.config.load_calculation_config(
+            minimal_config(
+                tmp_path,
+                workflow_json_dir=str(other_workflow),
+            )
+        )
+    with pytest.raises(
+        modules.config.ConfigError,
+        match="strict ARC source mode requires integrity_reference_path",
+    ):
+        modules.config.load_calculation_config(
+            minimal_config(
+                tmp_path,
+                defaults={"integrity_reference_path": str(other_integrity)},
+            )
+        )
+    with pytest.raises(
+        modules.config.ConfigError,
+        match="strict ARC source mode cannot resolve integrity_reference_path",
+    ):
+        modules.config.load_calculation_config(
+            minimal_config(
+                tmp_path,
+                defaults={
+                    "integrity_reference_path": str(
+                        tmp_path / "missing-integrity.md"
+                    )
+                },
+            )
+        )
+
+
+def test_calculate_config_canonicalizes_owned_paths(tmp_path: Path) -> None:
+    modules = load_calculate_modules()
+    aliased_run_dir = tmp_path / "outer" / ".." / "execute"
+    aliased_workflow = WORKFLOW_JSON / ".." / "json"
+
+    config = modules.config.load_calculation_config(
+        minimal_config(
+            tmp_path,
+            run_dir=str(aliased_run_dir),
+            workflow_json_dir=str(aliased_workflow),
+        )
+    )
+
+    assert config.run_dir == (tmp_path / "execute").resolve()
+    assert config.workflow_json_dir == WORKFLOW_JSON.resolve()
+
+
+def test_calculate_template_and_docs_do_not_offer_prompt_omission() -> None:
+    template = json.loads(
+        (WORKFLOW_JSON / "calculate.config.template.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    workflow = (SKILL / "workflows/calculate.md").read_text(encoding="utf-8")
+
+    assert "artifact_options" not in template
+    assert "save_prompts" not in workflow
+
+
+def test_proposer_runtime_has_no_unreachable_non_calculation_branch() -> None:
+    source = (
+        CALCULATE_MODULES / "calculate_prompts.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'elif step.kind == "new_calculation"' not in source
+    assert "else:\n        runtime = {\n            \"allow_internet\": False" not in source
+
+
+def test_outer_run_binds_config_and_state_under_project_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    modules = load_calculate_modules()
+    fake = FakeBatchExecutor(
+        modules.runner,
+        [review("all_agree", agreed=["proposer_001", "proposer_002"])],
+    )
+    lease_calls: list[tuple[Path, bool]] = []
+
+    class FakeLease:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+
+        def acquire(self, *, blocking: bool = False) -> "FakeLease":
+            lease_calls.append((self.path, blocking))
+            return self
+
+        def __enter__(self) -> "FakeLease":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+    monkeypatch.setattr(modules.runner, "FileLease", FakeLease)
+
+    result = modules.runner.run_calculation(
+        minimal_config(tmp_path),
+        batch_executor=fake,
+    )
+
+    run_root = tmp_path / "execute" / "calc_001"
+    saved_config = json.loads(
+        (run_root / "config.json").read_text(encoding="utf-8")
+    )
+    saved_state = json.loads(
+        (run_root / "state.json").read_text(encoding="utf-8")
+    )
+    digest = result["config_semantic_key_sha256"]
+    assert len(digest) == 64
+    assert saved_config["semantic_key_sha256"] == digest
+    assert saved_state["config_semantic_key_sha256"] == digest
+    assert lease_calls == [
+        (run_root / ".calculate.lock", True)
+    ]
+
+    state_before = (run_root / "state.json").read_bytes()
+    changed = minimal_config(
+        tmp_path,
+        steps=[{"step_id": "step_001", "prompt": "different calculation"}],
+    )
+    with pytest.raises(
+        modules.config.ConfigError,
+        match="run_id is already bound to a different calculation config",
+    ):
+        modules.runner.run_calculation(
+            changed,
+            batch_executor=FakeBatchExecutor(modules.runner, []),
+        )
+    assert (run_root / "state.json").read_bytes() == state_before
+
+    saved_state["config_semantic_key_sha256"] = "0" * 64
+    (run_root / "state.json").write_text(
+        json.dumps(saved_state),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        modules.config.ConfigError,
+        match="state is bound to a different config",
+    ):
+        modules.runner.run_calculation(
+            minimal_config(tmp_path),
+            batch_executor=FakeBatchExecutor(modules.runner, []),
         )
 
 

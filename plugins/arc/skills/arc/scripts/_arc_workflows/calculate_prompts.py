@@ -194,16 +194,9 @@ def _proposer_runtime(config: CalculateConfig, step: CalculateStep) -> dict[str,
             "evidence_access": "none",
             "inherit_host_tools": False,
         }
-    elif step.kind == "new_calculation":
-        runtime = {
-            "allow_internet": True,
-            "codex_sandbox": "read-only",
-            "evidence_access": "context_only",
-            "inherit_host_tools": False,
-        }
     else:
         runtime = {
-            "allow_internet": False,
+            "allow_internet": True,
             "codex_sandbox": "read-only",
             "evidence_access": "context_only",
             "inherit_host_tools": False,

@@ -6,7 +6,7 @@ import copy
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from arc_jobs import RunStatus
+from arc_jobs import FileLease, RunStatus, semantic_key
 from arc_proposer_reviewer import (
     BatchRunner,
     BatchRequest,
@@ -17,7 +17,9 @@ from _arc_workflows.calculate_config import (
     CALCULATE_RESULT_SCHEMA,
     CalculateConfig,
     CalculateStep,
+    ConfigError,
     _jsonable,
+    _read_json,
     _write_json,
     load_calculation_config,
 )
@@ -59,11 +61,61 @@ def run_calculation(
 ) -> dict[str, Any]:
     calculation = config if isinstance(config, CalculateConfig) else load_calculation_config(config)
     run_root = calculation.run_dir / calculation.run_id
+    normalized_config = _jsonable(calculation)
+    config_semantic_key_sha256 = semantic_key(normalized_config).sha256
     if dry_run:
-        return _dry_run_result(calculation, run_root)
+        return _dry_run_result(
+            calculation,
+            run_root,
+            config_semantic_key_sha256=config_semantic_key_sha256,
+        )
 
+    with FileLease(run_root / ".calculate.lock").acquire(
+        blocking=True
+    ):
+        return _run_calculation_locked(
+            calculation,
+            run_root=run_root,
+            normalized_config=normalized_config,
+            config_semantic_key_sha256=config_semantic_key_sha256,
+            batch_executor=batch_executor,
+        )
+
+
+def _run_calculation_locked(
+    calculation: CalculateConfig,
+    *,
+    run_root: Path,
+    normalized_config: dict[str, Any],
+    config_semantic_key_sha256: str,
+    batch_executor: BatchExecutor | None,
+) -> dict[str, Any]:
     run_root.mkdir(parents=True, exist_ok=True)
-    _write_json(run_root / "config.json", _jsonable(calculation))
+    config_record = {
+        **normalized_config,
+        "semantic_key_sha256": config_semantic_key_sha256,
+    }
+    config_path = run_root / "config.json"
+    state_path = run_root / "state.json"
+    if state_path.exists() and not config_path.exists():
+        raise ConfigError(
+            "existing calculation state has no bound config record"
+        )
+    if config_path.exists():
+        _require_outer_record(
+            config_path,
+            config_record,
+            mismatch_message=(
+                "run_id is already bound to a different calculation config"
+            ),
+        )
+    if state_path.exists():
+        _require_bound_state(
+            state_path,
+            config_semantic_key_sha256=config_semantic_key_sha256,
+        )
+    if not config_path.exists():
+        _write_json(config_path, config_record)
 
     executor = batch_executor or _execute_public_batch
     step_results: list[dict[str, Any]] = []
@@ -92,14 +144,49 @@ def run_calculation(
         "status": overall_status,
         "run_id": calculation.run_id,
         "run_root": str(run_root),
+        "config_semantic_key_sha256": config_semantic_key_sha256,
         "proposer_count": calculation.proposer_count,
         "max_recalculations": calculation.max_recalculations,
         "human_gate": copy.deepcopy(calculation.human_gate),
         "steps": step_results,
         "warnings_summary": _aggregate_warnings_summary(step_results),
     }
-    _write_json(run_root / "state.json", result)
+    _write_json(state_path, result)
     return result
+
+
+def _require_outer_record(
+    path: Path,
+    expected: dict[str, Any],
+    *,
+    mismatch_message: str,
+) -> None:
+    try:
+        existing = _read_json(path)
+    except (OSError, ValueError) as exc:
+        raise ConfigError(f"{mismatch_message}: existing record is invalid") from exc
+    if existing != expected:
+        raise ConfigError(mismatch_message)
+
+
+def _require_bound_state(
+    path: Path,
+    *,
+    config_semantic_key_sha256: str,
+) -> None:
+    try:
+        state = _read_json(path)
+    except (OSError, ValueError) as exc:
+        raise ConfigError(
+            "existing calculation state is invalid"
+        ) from exc
+    if (
+        state.get("config_semantic_key_sha256")
+        != config_semantic_key_sha256
+    ):
+        raise ConfigError(
+            "existing calculation state is bound to a different config"
+        )
 
 
 def _run_calculation_step(
@@ -418,12 +505,18 @@ def _review_from_committed_round(committed_round: CommittedRound) -> Mapping[str
     return committed_round.review
 
 
-def _dry_run_result(config: CalculateConfig, run_root: Path) -> dict[str, Any]:
+def _dry_run_result(
+    config: CalculateConfig,
+    run_root: Path,
+    *,
+    config_semantic_key_sha256: str,
+) -> dict[str, Any]:
     return {
         "schema_version": CALCULATE_RESULT_SCHEMA,
         "status": "dry_run",
         "run_id": config.run_id,
         "run_root": str(run_root),
+        "config_semantic_key_sha256": config_semantic_key_sha256,
         "proposer_count": config.proposer_count,
         "max_recalculations": config.max_recalculations,
         "human_gate": copy.deepcopy(config.human_gate),
