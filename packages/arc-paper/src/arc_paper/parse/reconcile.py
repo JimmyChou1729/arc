@@ -362,36 +362,54 @@ def _pages_for_exact_section_title(pages: list[str], title: str) -> list[int]:
 
 
 _PDF_CONVENTIONAL_SECTION_PREFIX = re.compile(
-    r"^\s*(?:\d{1,2}(?:\s*\.\s*\d{1,2})+|\d{1,2}\s*[.)]|[IVXLCDM]+\s*[.)])\s+(?=\S)"
+    r"^\s*(?:"
+    r"\d{1,2}(?:\s*\.\s*\d{1,2})+(?:\s*[.)])?"
+    r"|\d{1,2}\s*[.)]"
+    r"|\d{1,2}"
+    r"|[IVXLCDM]+\s*[.)]"
+    r"|[IVXLCDM]+"
+    r")\s+(?=\S)"
 )
-_PDF_NUMERIC_PREFIX = re.compile(
-    r"^\s*\d+(?:\s*\.\s*\d+)*\s*[.)]?\s+(?=\S)"
+_PDF_SECTION_LIKE_PREFIX = re.compile(
+    r"^\s*(?:\d+(?:\s*\.\s*\d+)*|[IVXLCDM]+)\s*[.)]?\s+(?=\S)"
 )
 
 
 def _pages_for_section_title_substrings(pages: list[str], title: str) -> list[int]:
-    """Find page-level title evidence without accepting an ambiguous numeric line."""
+    """Find line-level prose evidence without accepting title-like prefixes."""
 
     if not title:
         return []
     return [
         page_number
         for page_number, page in enumerate(pages, 1)
-        if title in _fingerprint(page)
-        and not _contains_ambiguous_numeric_title_prefix(page, title)
+        if any(
+            _line_has_section_title_substring(line, title)
+            for line in page.splitlines()
+        )
     ]
 
 
-def _contains_ambiguous_numeric_title_prefix(page: str, title: str) -> bool:
-    """Reject a bare numeric prefix that could be a title rather than a label."""
+def _line_has_section_title_substring(line: str, title: str) -> bool:
+    """Return whether one non-heading line provides page-level title evidence."""
 
-    for line in page.splitlines():
-        if _PDF_CONVENTIONAL_SECTION_PREFIX.match(line):
-            continue
-        remainder = _PDF_NUMERIC_PREFIX.sub("", line, count=1)
-        if remainder != line and _fingerprint(remainder) == title:
-            return True
-    return False
+    normalized = _fingerprint(line)
+    if f" {title} " not in f" {normalized} ":
+        return False
+    if _title_with_only_trailing_page_number(normalized, title):
+        return False
+    remainder = _PDF_SECTION_LIKE_PREFIX.sub("", line, count=1)
+    if remainder != line:
+        normalized_remainder = _fingerprint(remainder)
+        if normalized_remainder == title or _title_with_only_trailing_page_number(
+            normalized_remainder, title
+        ):
+            return False
+    return True
+
+
+def _title_with_only_trailing_page_number(value: str, title: str) -> bool:
+    return re.fullmatch(rf"{re.escape(title)} \d+", value) is not None
 
 
 def _without_conventional_pdf_section_prefix(value: str) -> str:

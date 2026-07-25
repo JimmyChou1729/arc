@@ -899,14 +899,25 @@ def test_pdf_section_title_exact_duplicate_remains_ambiguous(tmp_path):
     assert entry.provenance["matching_method"] == "normalized_exact_line"
 
 
-@pytest.mark.parametrize("pdf_heading", ("1.2 Model", "II. Model"))
+@pytest.mark.parametrize(
+    ("source_title", "pdf_heading"),
+    (
+        ("Model", "1 Model"),
+        ("Model", "12 Model"),
+        ("Model", "1.2 Model"),
+        ("Introduction", "1. Introduction"),
+        ("Model", "I Model"),
+        ("Model", "II Model"),
+        ("Model", "II. Model"),
+    ),
+)
 def test_pdf_section_title_accepts_conventional_pdf_only_section_prefix(
-    tmp_path, pdf_heading
+    tmp_path, source_title, pdf_heading
 ):
     repository = SourceRepository(tmp_path / "cache")
     primary = _store(
         repository,
-        b"# Model\nText.\n",
+        f"# {source_title}\nText.\n".encode(),
         SourceFormat.MARKDOWN,
     )
     pdf = _store(repository, b"%PDF numbered heading", SourceFormat.PDF)
@@ -960,7 +971,10 @@ def test_pdf_section_title_preserves_genuine_numeric_source_title(tmp_path):
     assert entry.provenance["matching_method"] == "normalized_exact_line"
 
 
-def test_pdf_section_title_rejects_ambiguous_numeric_title_prefix(tmp_path):
+@pytest.mark.parametrize("pdf_line", ("2024 Results", "2024 Results .... 7"))
+def test_pdf_section_title_rejects_ambiguous_numeric_title_prefix(
+    tmp_path, pdf_line
+):
     repository = SourceRepository(tmp_path / "cache")
     primary = _store(
         repository,
@@ -969,7 +983,7 @@ def test_pdf_section_title_rejects_ambiguous_numeric_title_prefix(tmp_path):
     )
     pdf = _store(repository, b"%PDF ambiguous numeric prefix", SourceFormat.PDF)
     extractor = FakePDFTextExtractor(
-        {b"%PDF ambiguous numeric prefix": PDFTextLayer(("2024 Results\nText.",))}
+        {b"%PDF ambiguous numeric prefix": PDFTextLayer((f"{pdf_line}\nText.",))}
     )
 
     outcome = PaperParserService(
@@ -985,6 +999,56 @@ def test_pdf_section_title_rejects_ambiguous_numeric_title_prefix(tmp_path):
     assert entry.status is ReconciliationStatus.MISSING
     assert entry.provenance["page_candidates"] == []
     assert entry.provenance["matching_method"] == "none"
+
+
+def test_pdf_section_title_rejects_prefixed_toc_line(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(repository, b"# Model\nText.\n", SourceFormat.MARKDOWN)
+    pdf = _store(repository, b"%PDF prefixed toc", SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {b"%PDF prefixed toc": PDFTextLayer(("II Model .... 5",))}
+    )
+
+    outcome = PaperParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+    section_id = outcome.document.sections[0].section_id
+    entry = next(
+        item
+        for item in outcome.report.entries
+        if item.subject_id == f"section:{section_id}"
+    )
+
+    assert entry.status is ReconciliationStatus.MISSING
+    assert entry.provenance["page_candidates"] == []
+    assert entry.provenance["matching_method"] == "none"
+
+
+def test_pdf_section_title_uses_independent_prose_beside_ambiguous_line(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(repository, b"# Results\nText.\n", SourceFormat.MARKDOWN)
+    pdf = _store(repository, b"%PDF ambiguous and prose", SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            b"%PDF ambiguous and prose": PDFTextLayer(
+                ("2024 Results .... 7\nThe results are discussed in this paragraph.",)
+            )
+        }
+    )
+
+    outcome = PaperParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+    section_id = outcome.document.sections[0].section_id
+    entry = next(
+        item
+        for item in outcome.report.entries
+        if item.subject_id == f"section:{section_id}"
+    )
+
+    assert entry.status is ReconciliationStatus.VERIFIED
+    assert entry.provenance["page_candidates"] == [1]
+    assert entry.provenance["matching_method"] == "normalized_page_substring"
 
 
 def test_pdf_section_title_falls_back_to_page_substring_or_reports_missing(tmp_path):
