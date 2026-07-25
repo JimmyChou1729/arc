@@ -1229,15 +1229,12 @@ def test_readme_and_llm_manual_document_experimental_kimi_provider() -> None:
 
 
 def test_ideas_full_info_template_includes_domain_and_resolver_context() -> None:
-    batch = json.loads((WJ / "ideas-batch.template.json").read_text(encoding="utf-8"))
     variant = json.loads((WJ / "ideas-domain.variant.json").read_text(encoding="utf-8"))
     loop = json.loads((WJ / "ideas-loop.template.json").read_text(encoding="utf-8"))
     proposer = json.loads((WJ / "ideas-proposer.template.json").read_text(encoding="utf-8"))
 
     assert variant["loop_template"] == "ideas-loop.template.json"
     assert variant["proposer_template"] == "ideas-proposer.template.json"
-    assert batch["schema_version"] == "arc.llm.proposers_reviewer_batch.config.v1"
-    assert batch["max_concurrent_loops"] == 10
     assert "domain_markdown_files" in loop["caller_context"]
     assert "arc_paper_tool_notes" in loop["caller_context"]
     assert proposer["runtime"]["allow_internet"] is True

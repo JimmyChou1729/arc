@@ -54,21 +54,6 @@ def marks_schema(scheme: Mapping[str, Any] | None = None) -> dict[str, Any]:
     }
 
 
-def render_marking_instructions(scheme: Mapping[str, Any] | None = None) -> str:
-    data = scheme or load_marking_scheme()
-    lines = [
-        "Use caller_context.marking_scheme as the sole scoring source of truth.",
-        "Apply every mark on its listed numeric range and return every required field in marks.",
-    ]
-    for item in data["marks"]:
-        lines.append(
-            f"- {item['field']} ({item['minimum']}-{item['maximum']}): {item['guidance']}"
-        )
-    total = data["total_score"]
-    lines.append(f"- {total['field']} ({total['minimum']}-{total['maximum']}): {total['guidance']}")
-    return "\n".join(lines)
-
-
 def normalized_marks(raw_marks: Any, scheme: Mapping[str, Any] | None = None) -> dict[str, Any]:
     marks = raw_marks if isinstance(raw_marks, Mapping) else {}
     return {field: marks.get(field) for field in score_fields(scheme)}
