@@ -1407,6 +1407,23 @@ def test_readme_and_llm_manual_keep_provider_entrypoints_concise() -> None:
         assert retired not in manual
 
 
+def test_readme_preserves_arc_token_warning_and_citation() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "As measured using Claude + DeepSeek" in readme
+    assert "1M uncached input tokens" in readme
+    assert "0.5M output tokens" in readme
+    assert "in about an hour's running time" in readme
+    assert "Be aware of token usage and costs." in readme
+    assert "please consider citing the ARC manual" in readme
+    assert "ChinaXiv:202606.00234" in readme
+    assert "https://chinaxiv.org/abs/202606.00234" in readme
+    assert "```bibtex" in readme
+    assert "@misc{ma2026arc," in readme
+    assert "archivePrefix = {ChinaXiv}" in readme
+    assert "note          = {Version 1}" in readme
+
+
 def test_ideas_full_info_template_includes_domain_and_resolver_context() -> None:
     variant = json.loads((WJ / "ideas-domain.variant.json").read_text(encoding="utf-8"))
     loop = json.loads((WJ / "ideas-loop.template.json").read_text(encoding="utf-8"))
