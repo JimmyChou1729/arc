@@ -95,6 +95,10 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
             assert release_id == "release-fake"
             return self.publish(_book, run_id="companion-fake")
 
+        def validate_current(self, pointer, _book):
+            assert pointer == paths.current_release()
+            return self.validate(pointer["release_id"], _book)
+
     def fake_snapshot_result(_paths, snapshot, **_kwargs):
         operation = "build" if snapshot is snapshots[0] else "resume"
         return CommandResult(

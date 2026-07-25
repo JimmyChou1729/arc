@@ -311,7 +311,7 @@ def _validate(args: argparse.Namespace) -> CommandResult:
         return _failed("release_not_found", "project has no current release")
     run_id = current["run_id"]
     book = CompanionService(paths.jobs_root).accepted_book(run_id)
-    release = _publisher(paths).validate(current["release_id"], book)
+    release = _publisher(paths).validate_current(current, book)
     return CommandResult(
         CommandStatus.COMPLETED,
         data={"release_id": release.release_id, "valid": True},

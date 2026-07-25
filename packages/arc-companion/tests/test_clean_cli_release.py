@@ -441,6 +441,33 @@ def test_release_identity_covers_delivery_contract_and_rejects_extra_files(
         publisher.publish(book, run_id="run-two")
 
 
+def test_current_release_manifest_must_match_its_release_id(
+    tmp_path: Path,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    book = _book()
+    release = publisher.publish(book, run_id="run-one")
+    current = project.current_release()
+    assert current is not None
+
+    validated = publisher.validate_current(current, book)
+    assert validated.release_id == release.release_id
+
+    project.publish_current(
+        release_id=release.release_id,
+        manifest=project.root / "releases/wrong/manifest.json",
+        run_id="run-one",
+    )
+    malformed = project.current_release()
+    assert malformed is not None
+    with pytest.raises(
+        CompanionReleaseError,
+        match="manifest does not match",
+    ):
+        publisher.validate_current(malformed, book)
+
+
 @pytest.mark.parametrize(
     "argv",
     [

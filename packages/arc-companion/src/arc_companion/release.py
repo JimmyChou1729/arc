@@ -134,6 +134,22 @@ class CompanionReleasePublisher:
         self.renderer.validate_web(book, release.web_index)
         return release
 
+    def validate_current(
+        self,
+        pointer: dict[str, Any],
+        book: AcceptedBook,
+    ) -> CompanionRelease:
+        release_id = pointer["release_id"]
+        expected_manifest = (
+            self.project.releases_root / release_id / "manifest.json"
+        ).relative_to(self.project.root).as_posix()
+        if pointer["manifest"] != expected_manifest:
+            raise CompanionReleaseError(
+                "release_pointer_invalid",
+                "current release manifest does not match its release ID",
+            )
+        return self.validate(release_id, book)
+
     def _verify_existing(
         self,
         target: Path,
