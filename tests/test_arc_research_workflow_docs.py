@@ -152,7 +152,7 @@ def test_shared_docs_describe_public_proposer_reviewer_projection() -> None:
     llm = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-    for text in (skill, manual, readme):
+    for text in (skill, manual):
         assert "arc-proposer-reviewer" in text
     for text in (skill, manual):
         assert "inspect" in text
@@ -167,6 +167,7 @@ def test_shared_docs_describe_public_proposer_reviewer_projection() -> None:
     assert "public expansion" in manual
     assert "physical durable-state paths" in manual
     assert "arc-proposer-reviewer inspect" not in llm
+    assert "arc-proposer-reviewer" not in readme
     assert "arc-llm run-text" not in readme
     assert "arc-llm run-json" not in readme
 
@@ -267,7 +268,7 @@ def test_arc_skill_resolves_generated_project_dir_under_launch_cwd() -> None:
 def test_readme_keeps_generated_runs_in_the_ignored_local_tree() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "below the git-ignored `local/` tree" in text
-    assert "quick-start manuals are self-contained" in text
+    assert "0_ref/" not in text
 
 
 def test_workflow_script_commands_use_skill_dir_placeholder() -> None:
@@ -1413,28 +1414,25 @@ def test_readme_preserves_arc_token_warning_and_citation() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     citation_start = readme.index("## Citation\n")
     install_start = readme.index("## Install\n")
-    start_with_arc = readme.index("## Start with an agent or CLI\n")
-    development = readme.split("## Development and release\n", 1)[1]
+    citation = readme[citation_start:install_start]
+    install = readme[install_start:readme.index("## Start with ARC\n")]
 
-    assert "As measured using Claude + DeepSeek" in readme
-    assert "1M uncached input tokens" in readme
-    assert "0.5M output tokens" in readme
-    assert "in about an hour's running time" in readme
-    assert "Be aware of token usage and costs." in readme
-    assert "please consider citing the ARC manual" in readme
-    assert "ChinaXiv:202606.00234" in readme
-    assert "https://chinaxiv.org/abs/202606.00234" in readme
-    assert "```bibtex" in readme
-    assert "@misc{ma2026arc," in readme
-    assert "archivePrefix = {ChinaXiv}" in readme
-    assert "note          = {Version 1}" in readme
+    assert "As measured using Claude + DeepSeek" in install
+    assert "1M uncached input tokens" in install
+    assert "0.5M output tokens" in install
+    assert "in about an hour's running time" in install
+    assert "Be aware of token usage and costs." in install
+    assert "ARC will need permissions to run Python scripts" in install
+    assert "be aware of risk to your data and system" in install
+    assert "please consider citing the ARC manual" in citation
+    assert "ChinaXiv:202606.00234" in citation
+    assert "https://chinaxiv.org/abs/202606.00234" in citation
+    assert "```bibtex" in citation
+    assert "@misc{ma2026arc," in citation
+    assert "archivePrefix = {ChinaXiv}" in citation
+    assert "note          = {Version 1}" in citation
     assert citation_start < install_start
     assert "### Citation" not in readme
-    assert "### Source checkout" not in readme[install_start:start_with_arc]
-    assert "### Source checkout" in development
-    assert development.index("### Source checkout") < development.index(
-        "Run focused package tests"
-    )
 
 
 def test_ideas_full_info_template_includes_domain_and_resolver_context() -> None:
@@ -1474,11 +1472,12 @@ def test_ideas_no_info_description_mentions_shared_marking_scheme() -> None:
     assert "no inherited host-tool access" in description
 
 
-def test_readme_routes_idea_details_to_the_skill_layer() -> None:
+def test_readme_keeps_idea_capability_without_package_details() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
 
-    assert "typed proposer-reviewer idea or calculation loops" in text
-    assert "The Skill selects package commands" in text
+    assert "proposer-reviewer idea or calculation loops" in text
+    assert "typed proposer-reviewer" not in text
+    assert "The Skill selects package commands" not in text
     assert "release idea workflow" not in text
     assert "no-info variant" not in text
 
@@ -1800,19 +1799,49 @@ def test_generated_python_caches_are_ignored_for_release_artifacts() -> None:
         assert pattern in text
 
 
-def test_readme_documents_marketplace_first_install() -> None:
+def test_readme_limits_install_recipes_to_supported_marketplaces() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
+    user_text, development = text.split("## Development and release\n", 1)
 
-    assert "plugins/arc/bin/arc-runtime setup --profile core" in text
-    assert "ARC_MCP_INSTALL_RETRY=1" not in text
-    assert "Python `venv` plus `pip`" in text
     assert "codex plugin marketplace add tririver/arc --ref stable" in text
     assert "codex plugin add arc@arc" in text
     assert "/plugin marketplace add tririver/arc@stable" in text
     assert "/plugin install arc" in text
-    assert "/path/to/arc/packages/arc-paper/.venv/bin/arc-mcp" not in text
-    assert "packaging/codex/arc" not in text
-    assert "packaging/claude/arc" not in text
+    assert "### Other coding agents" in text
+    assert "Give your coding agent this repository" in text
+    for contributor_detail in (
+        "plugins/arc/",
+        "packages/",
+        "arc-runtime",
+        "typed JSON",
+        "`uv`",
+        "`pip`",
+        "Standalone Skill",
+        "| Package |",
+    ):
+        assert contributor_detail not in user_text
+    assert "Python 3.11 or newer" in development
+    assert "--import-mode=importlib" in development
+    assert "scripts/check-packages.sh" in development
+
+
+def test_readme_preserves_agent_examples_and_human_release_flow() -> None:
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    development = text.split("## Development and release\n", 1)[1]
+
+    for example in (
+        "Use ARC to summarize a paper.",
+        "Use ARC to build a domain from arXiv:0911.3380 with new papers since 2024.",
+        "Use ARC to develop and review ideas from the resulting domain.",
+        "Use ARC to check this calculation.",
+    ):
+        assert example in text
+    assert "### Source checkout" not in text
+    assert "pip install -e" not in text
+    assert "explicit human operations" in development
+    assert "scripts/release-arc.sh <version>" in development
+    assert "pauses before its mutating Git steps" in development
+    assert "See `AGENTS.md`" in development
 
 
 def test_readme_examples_use_the_ignored_run_tree_not_reference_material() -> None:
