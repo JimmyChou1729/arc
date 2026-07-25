@@ -1374,17 +1374,19 @@ def test_max_model_tier_requires_an_explicit_user_request() -> None:
     assert "`max`" not in manual
 
 
-def test_readme_and_llm_manual_keep_provider_entrypoints_concise() -> None:
+def test_readme_defers_provider_details_to_llm_manual_and_help() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    package_readme = (ROOT / "packages/arc-llm/README.md").read_text(
+        encoding="utf-8"
+    )
     manual = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
 
-    assert "Codex, Claude Code, and\nKimi Code" in readme
-    assert "Kimi Code\nsupport is experimental" in readme
-    assert "arc-llm doctor --provider auto" in readme
-    assert "arc-llm doctor --provider kimi" in readme
+    assert "## LLM providers" not in readme
+    assert "arc-llm doctor --provider" not in readme
+    assert "Kimi Code\nsupport is experimental" not in readme
+    assert "arc-llm --help" in package_readme
     assert "arc-llm doctor --provider auto" in manual
     assert "without printing\ncredentials" in manual
-    assert "arc-llm doctor --provider kimi" in readme
     for obsolete in (
         "arc-llm doctor host",
         "arc-llm doctor provider",
@@ -1409,6 +1411,10 @@ def test_readme_and_llm_manual_keep_provider_entrypoints_concise() -> None:
 
 def test_readme_preserves_arc_token_warning_and_citation() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    citation_start = readme.index("## Citation\n")
+    install_start = readme.index("## Install\n")
+    start_with_arc = readme.index("## Start with an agent or CLI\n")
+    development = readme.split("## Development and release\n", 1)[1]
 
     assert "As measured using Claude + DeepSeek" in readme
     assert "1M uncached input tokens" in readme
@@ -1422,6 +1428,13 @@ def test_readme_preserves_arc_token_warning_and_citation() -> None:
     assert "@misc{ma2026arc," in readme
     assert "archivePrefix = {ChinaXiv}" in readme
     assert "note          = {Version 1}" in readme
+    assert citation_start < install_start
+    assert "### Citation" not in readme
+    assert "### Source checkout" not in readme[install_start:start_with_arc]
+    assert "### Source checkout" in development
+    assert development.index("### Source checkout") < development.index(
+        "Run focused package tests"
+    )
 
 
 def test_ideas_full_info_template_includes_domain_and_resolver_context() -> None:
