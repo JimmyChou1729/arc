@@ -73,6 +73,10 @@ def __getattr__(name: str) -> Any:
         from . import service
 
         return getattr(service, name)
+    if name == "CompanionTranslationRuntimeError":
+        from .translation_adapter import CompanionTranslationRuntimeError
+
+        return CompanionTranslationRuntimeError
     raise AttributeError(name)
 
 __all__ = [
@@ -97,6 +101,7 @@ __all__ = [
     "CompanionRenderer",
     "CompanionService",
     "CompanionServiceError",
+    "CompanionTranslationRuntimeError",
     "EvidenceRequest",
     "EvidenceSource",
     "GlossaryEntry",

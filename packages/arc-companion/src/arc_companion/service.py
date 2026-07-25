@@ -30,7 +30,10 @@ from .request_contracts import (
     decode_handler_semantic_input,
     encode_handler_semantic_input,
 )
-from .translation_adapter import CompanionTranslationAdapter
+from .translation_adapter import (
+    CompanionTranslationAdapter,
+    require_translation_runtime,
+)
 
 
 class CompanionServiceError(RuntimeError):
@@ -60,6 +63,8 @@ class CompanionService:
         task_service: LLMTaskService | None = None,
         translation_adapter: CompanionTranslationAdapter | None = None,
     ) -> RunSnapshot:
+        if translation_adapter is None:
+            require_translation_runtime()
         prepared = self.prepare(request, recipe=recipe, run_id=run_id)
         return self.execute(
             prepared.run_id,
@@ -96,6 +101,8 @@ class CompanionService:
     ) -> RunSnapshot:
         """Execute or replay one already prepared Companion build."""
 
+        if translation_adapter is None:
+            require_translation_runtime()
         spec = self.repository.read_spec(run_id)
         handler = self._handler(
             spec,
@@ -114,6 +121,8 @@ class CompanionService:
         task_service: LLMTaskService | None = None,
         translation_adapter: CompanionTranslationAdapter | None = None,
     ) -> RunSnapshot:
+        if translation_adapter is None:
+            require_translation_runtime()
         spec = self.repository.read_spec(run_id)
         handler = self._handler(
             spec,

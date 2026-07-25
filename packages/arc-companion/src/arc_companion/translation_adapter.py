@@ -19,6 +19,36 @@ from arc_paper import RichDocument
 TranslationStep = Mapping[str, Any] | Paused | RunError
 
 
+class CompanionTranslationRuntimeError(RuntimeError):
+    """The default translation adapter cannot load its public dependency."""
+
+    code = "runtime_dependency_missing"
+
+
+def require_translation_runtime() -> None:
+    """Verify the complete public arc-translate facade without creating state."""
+
+    try:
+        from arc_translate import (
+            GlossaryResult,
+            LanguageResult,
+            TranslationSource,
+            TranslationWorkflowService,
+        )
+    except ImportError as exc:
+        raise CompanionTranslationRuntimeError(
+            "arc-companion requires a complete compatible arc-translate "
+            "runtime; install arc-companion with its declared dependencies"
+        ) from exc
+    # Keep the import check explicit and resistant to import optimizers.
+    _ = (
+        GlossaryResult,
+        LanguageResult,
+        TranslationSource,
+        TranslationWorkflowService,
+    )
+
+
 class CompanionTranslationAdapter(Protocol):
     """Only the translation capabilities Companion's v2 handler consumes."""
 
@@ -189,6 +219,8 @@ def _normalized_outcome(value: Any) -> TranslationStep:
 
 __all__ = [
     "ArcTranslateAdapter",
+    "CompanionTranslationRuntimeError",
     "CompanionTranslationAdapter",
     "TranslationStep",
+    "require_translation_runtime",
 ]

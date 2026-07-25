@@ -18,6 +18,9 @@ import arc_companion.cli as cli_module
 from arc_companion.cli import main
 from arc_companion.project import CompanionProjectPaths
 from arc_companion.service import CompanionServiceError
+from arc_companion.translation_adapter import (
+    CompanionTranslationRuntimeError,
+)
 
 
 def _document(tmp_path: Path):
@@ -247,6 +250,69 @@ def test_main_model_provider_errors_use_invalid_request_envelope(
     assert not (tmp_path / "model-project").exists()
     assert not (tmp_path / "provider-project").exists()
     assert not (tmp_path / "language-project").exists()
+
+
+def test_build_preflights_translation_before_creating_project(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("# Source\n\nBody.\n", encoding="utf-8")
+    project = tmp_path / "project"
+
+    def missing_runtime() -> None:
+        raise CompanionTranslationRuntimeError("missing translation runtime")
+
+    monkeypatch.setattr(
+        cli_module,
+        "require_translation_runtime",
+        missing_runtime,
+    )
+
+    assert main(
+        ["build", str(source), "--project-dir", str(project)]
+    ) == 1
+
+    result = _result(capsys)
+    assert result["error"]["code"] == "runtime_dependency_missing"
+    assert not project.exists()
+
+
+def test_resume_preflights_translation_without_mutating_project(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    project.select_run("companion-existing")
+    before = {
+        path.relative_to(project.root): path.read_bytes()
+        for path in project.root.rglob("*")
+        if path.is_file()
+    }
+
+    def missing_runtime() -> None:
+        raise CompanionTranslationRuntimeError("missing translation runtime")
+
+    monkeypatch.setattr(
+        cli_module,
+        "require_translation_runtime",
+        missing_runtime,
+    )
+
+    assert main(
+        ["resume", "--project-dir", str(project.root)]
+    ) == 1
+
+    result = _result(capsys)
+    assert result["error"]["code"] == "runtime_dependency_missing"
+    after = {
+        path.relative_to(project.root): path.read_bytes()
+        for path in project.root.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
 
 
 @pytest.mark.parametrize(

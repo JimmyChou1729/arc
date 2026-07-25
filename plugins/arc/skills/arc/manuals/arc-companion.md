@@ -4,6 +4,12 @@
 chapter guides, a searchable PDF, and a static Web reader. Use the Companion
 workflow for a complete managed run; use this manual for its package commands.
 
+Build and resume require a complete Companion runtime, including the public
+`arc-translate` facade and the declared paper, LLM, and jobs dependencies. A
+missing or incomplete translation installation returns the typed
+`runtime_dependency_missing` error before a new project is created or a
+resumed run is changed.
+
 ## Build from a Local Rich Source
 
 Use Markdown, HTML, or flattened single-file TeX as the authoritative source.
@@ -15,6 +21,12 @@ arc-companion build <source.md> \
   --project-dir <project-dir> \
   --target-language <language-tag>
 ```
+
+For the first command, redirect the JSON result outside `<project-dir>`.
+For example, use `> local/companion-build-result.json`, not
+`> <project-dir>/result.json`: the shell creates a redirection target before
+Companion can establish its project marker, and unknown nonempty directories
+are deliberately refused.
 
 For a remote arXiv paper, let ARC fetch the PDF validator:
 
@@ -49,7 +61,11 @@ arc-companion render --project-dir <project-dir> --format all
 ```
 
 Validation checks the accepted source-anchored book and release. Rendering is
-model-free and consumes only accepted artifacts.
+model-free and consumes only accepted artifacts. Successful build and resume
+commands already perform the formal publication of a complete immutable
+PDF/Web release. Use `render` manually to republish that accepted book after a
+renderer, font, style, or validator change; `--format` filters only the
+artifacts reported to the caller, not what is validated and published.
 
 ## Help
 

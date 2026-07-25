@@ -19,6 +19,11 @@ Do not point the CLI at a nonempty directory containing unrelated project
 state. Existing files stay untouched, but runtime state requires a new or
 recognized Companion project directory.
 
+Ensure the installed environment contains the complete Companion runtime,
+including the public `arc-translate` facade. Build checks this before creating
+the project and returns `runtime_dependency_missing` for an incomplete
+installation.
+
 ### Step 2: Resolve source and intent
 
 Choose a rich Markdown, HTML, or flattened single-file TeX source, or a paper
@@ -42,6 +47,9 @@ arc-companion build <source-path-or-paper-id> \
 
 Add `--pdf <path>` for a local validator or `--pdf fetch` for a remote paper.
 Use `--refresh` only when fresh remote source bytes were requested.
+If command JSON is redirected, place the redirection target outside a new
+`<project-dir>`; the shell creates that file before Companion starts and would
+otherwise make the directory an unrecognized nonempty project.
 
 Companion detects source language once. It skips translation only for a known
 matching primary language; mixed or unknown source is translated. Chapters are
@@ -79,6 +87,8 @@ arc-companion validate --project-dir <project-dir>
 
 The current release changes only after both PDF and Web validate. Technical
 diagnostics remain in command results and run events, never in reader content.
+Successful build and resume commands perform this formal publication
+automatically.
 
 ### Step 2: Render without model calls
 
@@ -91,3 +101,5 @@ arc-companion render --project-dir <project-dir> \
 
 `--format pdf` and `--format web` limit returned delivery artifacts; publication
 still validates one complete immutable release from the same `AcceptedBook`.
+This is the manual model-free republication path, not an additional generation
+stage.

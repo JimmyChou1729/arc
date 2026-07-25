@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 from collections import Counter
 from pathlib import Path
@@ -32,7 +33,11 @@ from arc_companion.request_contracts import (
     CompanionGenerationRecipe,
 )
 from arc_companion.service import CompanionService
-from arc_companion.translation_adapter import ArcTranslateAdapter
+from arc_companion.translation_adapter import (
+    ArcTranslateAdapter,
+    CompanionTranslationRuntimeError,
+    require_translation_runtime,
+)
 
 
 class FakeGuideTasks:
@@ -253,11 +258,18 @@ def test_translation_and_guide_share_post_glossary_group(
 
 def test_same_language_skips_all_translation_owned_steps(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     document = _document(tmp_path)
     tasks = FakeGuideTasks()
     translation = FakeTranslationAdapter(mode="skipped")
     service = CompanionService(tmp_path / "jobs")
+    monkeypatch.setattr(
+        "arc_companion.service.require_translation_runtime",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("injected adapter must skip runtime preflight")
+        ),
+    )
 
     completed = service.build(
         CompanionBuildRequest(document, target_language="en-US"),
@@ -317,3 +329,23 @@ def test_default_adapter_wires_keyword_provider_to_companion_cache(
     assert service.keyword_provider.store.root == tmp_path / "paper-cache"
     assert source.rich is not None
     assert source.parsed is None
+
+
+def test_default_adapter_preflight_requires_public_translate_facade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_import = builtins.__import__
+
+    def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "arc_translate":
+            raise ImportError("incomplete arc-translate facade")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    with pytest.raises(
+        CompanionTranslationRuntimeError,
+        match="complete compatible arc-translate runtime",
+    ) as exc_info:
+        require_translation_runtime()
+    assert exc_info.value.code == "runtime_dependency_missing"

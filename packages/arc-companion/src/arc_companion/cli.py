@@ -46,6 +46,10 @@ from .service import (
     CompanionServiceError,
     companion_run_id,
 )
+from .translation_adapter import (
+    CompanionTranslationRuntimeError,
+    require_translation_runtime,
+)
 
 
 class _UsageError(ValueError):
@@ -181,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         CompanionReleaseError,
         CompanionRenderError,
         CompanionServiceError,
+        CompanionTranslationRuntimeError,
         RichDocumentValidationError,
     ) as exc:
         code = str(exc.code)
@@ -237,6 +242,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
         and not Path(args.pdf).is_file()
     ):
         raise _UsageError("--pdf must be an existing path or 'fetch'")
+    require_translation_runtime()
     # Unknown project state is refused before source/cache writes.
     paths = CompanionProjectPaths.open(args.project_dir)
     paper = ArcPaperService(cache_root=paths.paper_cache_root)
@@ -279,6 +285,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
 
 def _resume(args: argparse.Namespace) -> CommandResult:
     _validate_workers(args.workers)
+    require_translation_runtime()
     paths = CompanionProjectPaths.load(args.project_dir)
     run_id = _current_run(paths)
     value = _json_input(args.input) if args.input is not None else None
