@@ -6,10 +6,19 @@ execution belongs to :mod:`arc_jobs`; LLM work belongs to :mod:`arc_llm`.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
+from ._cache_admin import (
+    CacheAdministrator,
+    CacheListResult,
+    CacheRemoveResult,
+    CacheUpdateRecord,
+    CacheUpdateResult,
+    PaperCacheIndex,
+)
 from ._cache_root import resolve_cache_root
 from .arxiv_document import (
     ArxivDocumentProvenance,
@@ -31,8 +40,8 @@ from .document_search import (
     select_section as _select_section,
     table_of_contents as _table_of_contents,
 )
+from .ids import arxiv_path_id, normalize_paper_id
 from .ids import extract_paper_ids as _extract_paper_ids
-from .ids import arxiv_path_id
 from .ids import paper_ids_safe_dir_name as _paper_ids_safe_dir_name
 from .parse import (
     PDFTextExtractor,
@@ -86,6 +95,9 @@ class ArcPaperService:
                 "cache_root must match the injected SourceRepository root"
             ) from exc
         self.repository = repository or SourceRepository(root)
+        self.cache_root = root
+        self.cache_index = PaperCacheIndex(root)
+        self.cache_administrator = CacheAdministrator(root)
         self.inspire = inspire or InspireProvider(cache_root=root)
         self.ar5iv = ar5iv or Ar5ivProvider(
             cache_root=root, source_repository=self.repository
@@ -107,6 +119,7 @@ class ArcPaperService:
     ) -> SourceArtifact:
         source = self.repository.import_path(path, source_format=source_format)
         self.parser.parse_source(source)
+        self._record_local_source(source)
         return source
 
     def fetch_arxiv_auto(
@@ -124,6 +137,14 @@ class ArcPaperService:
     ) -> SourceArtifact:
         source = self.arxiv_pdf.fetch(paper_id, refresh=refresh)
         self.parser.parse_source(source)
+        self._record_remote_component(
+            paper_id,
+            "arxiv-pdf",
+            cache=getattr(self.arxiv_pdf, "cache", None),
+            kind="source",
+            namespace="arxiv-pdf",
+            request_key=arxiv_path_id(paper_id),
+        )
         return source
 
     def parse_bundle(
@@ -160,10 +181,14 @@ class ArcPaperService:
             self.repository.import_path(path, source_format=source_format)
             for path, source_format in zip(validator_paths, formats, strict=True)
         )
-        return self.parse_bundle(
+        outcome = self.parse_bundle(
             SourceBundle(primary=primary, validators=validators),
             policy=policy,
         )
+        self._record_local_source(primary)
+        for validator in validators:
+            self._record_local_source(validator)
+        return outcome
 
     def parse_arxiv_auto(
         self,
@@ -172,7 +197,16 @@ class ArcPaperService:
         refresh: bool = False,
     ) -> ParseOutcome:
         primary = self.ar5iv.fetch(paper_id, refresh=refresh)
-        return self.parse_bundle(SourceBundle(primary=primary))
+        outcome = self.parse_bundle(SourceBundle(primary=primary))
+        self._record_remote_component(
+            paper_id,
+            "ar5iv-html",
+            cache=getattr(self.ar5iv, "cache", None),
+            kind="source",
+            namespace="ar5iv-html",
+            request_key=arxiv_path_id(paper_id),
+        )
+        return outcome
 
     def parse_arxiv_pdf(
         self,
@@ -181,10 +215,29 @@ class ArcPaperService:
         refresh: bool = False,
     ) -> ParseOutcome:
         primary = self.arxiv_pdf.fetch(paper_id, refresh=refresh)
-        return self.parse_bundle(SourceBundle(primary=primary))
+        outcome = self.parse_bundle(SourceBundle(primary=primary))
+        self._record_remote_component(
+            paper_id,
+            "arxiv-pdf",
+            cache=getattr(self.arxiv_pdf, "cache", None),
+            kind="source",
+            namespace="arxiv-pdf",
+            request_key=arxiv_path_id(paper_id),
+        )
+        return outcome
 
     def get_metadata(self, paper_id: str, *, refresh: bool = False) -> dict[str, Any]:
-        return self.inspire.get_metadata(_require_paper_id(paper_id), refresh=refresh)
+        required = _require_paper_id(paper_id)
+        value = self.inspire.get_metadata(required, refresh=refresh)
+        self._record_remote_component(
+            required,
+            "inspire-record",
+            cache=getattr(self.inspire, "cache", None),
+            kind="json",
+            namespace="inspire-record",
+            request_key=normalize_paper_id(required),
+        )
+        return value
 
     def get_title(self, paper_id: str, *, refresh: bool = False) -> str:
         return str(self.get_metadata(paper_id, refresh=refresh).get("title") or "")
@@ -203,9 +256,19 @@ class ArcPaperService:
         refresh: bool = False,
         enrich: bool = False,
     ) -> list[dict[str, Any]]:
-        return self.inspire.get_references(
-            _require_paper_id(paper_id), refresh=refresh, enrich=enrich
+        required = _require_paper_id(paper_id)
+        value = self.inspire.get_references(
+            required, refresh=refresh, enrich=enrich
         )
+        self._record_remote_component(
+            required,
+            "inspire-record",
+            cache=getattr(self.inspire, "cache", None),
+            kind="json",
+            namespace="inspire-record",
+            request_key=normalize_paper_id(required),
+        )
+        return value
 
     def get_citers(
         self,
@@ -215,12 +278,34 @@ class ArcPaperService:
         limit: int = 1000,
         sort: str = "mostrecent",
     ) -> list[dict[str, Any]]:
-        return self.inspire.get_citers(
-            _require_paper_id(paper_id),
+        required = _require_paper_id(paper_id)
+        value = self.inspire.get_citers(
+            required,
             refresh=refresh,
             limit=limit,
             sort=sort,
         )
+        try:
+            metadata = self.inspire.get_metadata(required, refresh=False)
+            recid = str(metadata.get("inspire_recid") or "")
+            if recid:
+                request_key = json.dumps(
+                    {"recid": recid, "sort": sort, "limit": limit},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                self._record_remote_component(
+                    required,
+                    f"inspire-citers:{sort}:{limit}",
+                    cache=getattr(self.inspire, "cache", None),
+                    kind="json",
+                    namespace="inspire-citers",
+                    request_key=request_key,
+                )
+        except Exception:
+            # The citer result remains valid even if optional admin indexing fails.
+            pass
+        return value
 
     def get_citer_count(self, paper_id: str, *, refresh: bool = False) -> int:
         return self.inspire.get_citer_count(
@@ -229,6 +314,167 @@ class ArcPaperService:
 
     def search_metadata(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
         return self.inspire.search_metadata(query, limit=limit)
+
+    def list_cache(
+        self,
+        *,
+        paper_ids: Sequence[str] = (),
+        entry_ids: Sequence[str] = (),
+        since_seconds: int | None = None,
+    ) -> CacheListResult:
+        return self.cache_administrator.list(
+            paper_ids=paper_ids,
+            entry_ids=entry_ids,
+            since_seconds=since_seconds,
+        )
+
+    def remove_cache(
+        self,
+        *,
+        paper_ids: Sequence[str] = (),
+        entry_ids: Sequence[str] = (),
+        dry_run: bool = True,
+    ) -> CacheRemoveResult:
+        if not paper_ids and not entry_ids:
+            raise PaperInputError(
+                "cache remove requires at least one exact paper or entry id"
+            )
+        selected = self.cache_administrator.list(
+            paper_ids=paper_ids,
+            entry_ids=entry_ids,
+        ).entries
+        if dry_run:
+            return CacheRemoveResult(True, selected, ())
+
+        removed: list[str] = []
+        warnings: list[str] = []
+        for entry in selected:
+            changed = False
+            if entry.kind == "opaque":
+                changed = self.cache_administrator.remote.remove_admin_entry(
+                    entry.entry_id
+                )
+            else:
+                for component in entry.components:
+                    for storage_entry_id in component.storage_entry_ids:
+                        if storage_entry_id.startswith("remote:"):
+                            changed = (
+                                self.cache_administrator.remote.remove_admin_entry(
+                                    storage_entry_id
+                                )
+                                or changed
+                            )
+                changed = (
+                    self.cache_administrator.catalog.remove_admin_entry(entry.entry_id)
+                    or changed
+                )
+                changed = self.cache_index.remove(entry.entry_id) or changed
+            if changed:
+                removed.append(entry.entry_id)
+            else:
+                warnings.append(f"cache_entry_already_absent:{entry.entry_id}")
+        return CacheRemoveResult(
+            False,
+            selected,
+            tuple(removed),
+            warnings=tuple(warnings),
+        )
+
+    def update_cache(
+        self,
+        *,
+        paper_ids: Sequence[str] = (),
+        entry_ids: Sequence[str] = (),
+    ) -> CacheUpdateResult:
+        if not paper_ids and not entry_ids:
+            raise PaperInputError(
+                "cache update requires at least one exact paper or entry id"
+            )
+        selected = self.cache_administrator.list(
+            paper_ids=paper_ids,
+            entry_ids=entry_ids,
+        ).entries
+        records: list[CacheUpdateRecord] = []
+        warnings: list[str] = []
+        for entry in selected:
+            if entry.kind != "paper" or entry.paper_id is None:
+                records.append(
+                    CacheUpdateRecord(
+                        entry.entry_id,
+                        "all",
+                        "skipped",
+                        "only paper cache entries can be refreshed",
+                    )
+                )
+                continue
+            paper_id = entry.paper_id
+            metadata: dict[str, Any] | None = None
+            try:
+                metadata = self.get_metadata(paper_id, refresh=True)
+                records.append(
+                    CacheUpdateRecord(entry.entry_id, "inspire-record", "updated")
+                )
+            except Exception as exc:
+                records.append(
+                    CacheUpdateRecord(
+                        entry.entry_id,
+                        "inspire-record",
+                        "failed",
+                        _cache_error_message(exc),
+                    )
+                )
+            for sort in ("mostrecent", "mostcited"):
+                component = f"inspire-citers:{sort}:1000"
+                try:
+                    self.get_citers(
+                        paper_id,
+                        refresh=True,
+                        limit=1000,
+                        sort=sort,
+                    )
+                    records.append(
+                        CacheUpdateRecord(entry.entry_id, component, "updated")
+                    )
+                except Exception as exc:
+                    records.append(
+                        CacheUpdateRecord(
+                            entry.entry_id,
+                            component,
+                            "failed",
+                            _cache_error_message(exc),
+                        )
+                    )
+            arxiv_id = (
+                str((metadata or {}).get("arxiv_id") or "")
+                or arxiv_path_id(paper_id)
+            )
+            arxiv_paper = f"arXiv:{arxiv_id}" if arxiv_id else paper_id
+            for component, action in (
+                ("ar5iv-html", self.parse_arxiv_auto),
+                ("arxiv-pdf", self.parse_arxiv_pdf),
+            ):
+                try:
+                    action(arxiv_paper, refresh=True)
+                    records.append(
+                        CacheUpdateRecord(entry.entry_id, component, "updated")
+                    )
+                except Exception as exc:
+                    records.append(
+                        CacheUpdateRecord(
+                            entry.entry_id,
+                            component,
+                            "failed",
+                            _cache_error_message(exc),
+                        )
+                    )
+        if not selected:
+            warnings.append("cache_entry_not_found")
+        warnings.extend(
+            f"cache_update_failed:{item.entry_id}:{item.component}"
+            for item in records
+            if item.status == "failed"
+        )
+        return CacheUpdateResult(tuple(records), tuple(warnings))
 
     def search_cached_full_text(
         self,
@@ -422,7 +668,61 @@ class ArcPaperService:
     ]:
         source = self.ar5iv.fetch(paper_id, refresh=refresh)
         document, warnings = self.parser.materialize_source(source)
+        self._record_remote_component(
+            paper_id,
+            "ar5iv-html",
+            cache=getattr(self.ar5iv, "cache", None),
+            kind="source",
+            namespace="ar5iv-html",
+            request_key=arxiv_path_id(paper_id),
+        )
         return source, document, warnings
+
+    def _record_remote_component(
+        self,
+        paper_id: str,
+        component: str,
+        *,
+        cache: Any,
+        kind: str,
+        namespace: str,
+        request_key: str,
+    ) -> None:
+        if not request_key or not hasattr(cache, "admin_entry"):
+            return
+        try:
+            entry = cache.admin_entry(kind, namespace, request_key)
+            if entry is None:
+                return
+            self.cache_index.record_paper_component(
+                paper_id,
+                component,
+                cached_at=entry.cached_at,
+                time_basis=entry.time_basis,
+                storage_entry_ids=(entry.entry_id,),
+            )
+        except (OSError, TypeError, ValueError):
+            return
+
+    def _record_local_source(self, source: SourceArtifact) -> None:
+        from ._full_text_catalog import FullTextCatalog
+
+        entry_id = (
+            f"local:{source.source_format.value}:{source.artifact_digest}"
+        )
+        try:
+            entry = next(
+                item
+                for item in FullTextCatalog(self.cache_root).admin_entries()
+                if item.entry_id == entry_id
+            )
+            self.cache_index.record_local(
+                source,
+                cached_at=entry.cached_at,
+                time_basis=entry.time_basis,
+            )
+        except (OSError, StopIteration, TypeError, ValueError):
+            return
 
 
 def extract_paper_ids(text: str) -> list[str]:
@@ -442,6 +742,52 @@ def _require_paper_id(value: str) -> str:
     if not normalized:
         raise PaperInputError("paper_id is required")
     return normalized
+
+
+def _cache_error_message(exc: Exception) -> str:
+    code = str(getattr(exc, "code", type(exc).__name__))
+    message = str(getattr(exc, "message", str(exc)))
+    return f"{code}: {message}"[:500]
+
+
+def list_cache(
+    *,
+    paper_ids: Sequence[str] = (),
+    entry_ids: Sequence[str] = (),
+    since_seconds: int | None = None,
+    cache_root: str | Path | None = None,
+) -> CacheListResult:
+    return ArcPaperService(cache_root=cache_root).list_cache(
+        paper_ids=paper_ids,
+        entry_ids=entry_ids,
+        since_seconds=since_seconds,
+    )
+
+
+def remove_cache(
+    *,
+    paper_ids: Sequence[str] = (),
+    entry_ids: Sequence[str] = (),
+    dry_run: bool = True,
+    cache_root: str | Path | None = None,
+) -> CacheRemoveResult:
+    return ArcPaperService(cache_root=cache_root).remove_cache(
+        paper_ids=paper_ids,
+        entry_ids=entry_ids,
+        dry_run=dry_run,
+    )
+
+
+def update_cache(
+    *,
+    paper_ids: Sequence[str] = (),
+    entry_ids: Sequence[str] = (),
+    cache_root: str | Path | None = None,
+) -> CacheUpdateResult:
+    return ArcPaperService(cache_root=cache_root).update_cache(
+        paper_ids=paper_ids,
+        entry_ids=entry_ids,
+    )
 
 
 def get_metadata(paper_id: str, *, refresh: bool = False) -> dict[str, Any]:
@@ -657,6 +1003,10 @@ def parse_local(
 
 __all__ = [
     "ArcPaperService",
+    "CacheListResult",
+    "CacheRemoveResult",
+    "CacheUpdateRecord",
+    "CacheUpdateResult",
     "PaperInputError",
     "default_cache_root",
     "extract_paper_ids",
@@ -672,8 +1022,10 @@ __all__ = [
     "get_references",
     "get_title",
     "import_source",
+    "list_cache",
     "paper_ids_safe_dir_name",
     "parse_local",
+    "remove_cache",
     "select_section",
     "search_equations",
     "search_arxiv_equations",
@@ -682,4 +1034,5 @@ __all__ = [
     "search_full_text",
     "search_metadata",
     "table_of_contents",
+    "update_cache",
 ]

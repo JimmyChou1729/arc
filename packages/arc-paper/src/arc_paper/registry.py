@@ -547,6 +547,60 @@ _EQUATION_MATCH_SCHEMA = _object(
         "matched_in",
     ),
 )
+_CACHE_LOCAL_IDENTITY_SCHEMA = _object(
+    {
+        "source_format": {"enum": ["html", "markdown", "tex", "pdf"]},
+        "media_type": _NONEMPTY_STRING,
+        "artifact_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size": {"type": "integer", "minimum": 0},
+    },
+    required=("source_format", "media_type", "artifact_digest", "size"),
+)
+_CACHE_COMPONENT_SCHEMA = _object(
+    {
+        "name": _NONEMPTY_STRING,
+        "cached_at": _NONEMPTY_STRING,
+        "time_basis": {
+            "enum": ["recorded_utc", "legacy_file_mtime", "unreadable"]
+        },
+        "storage_entry_ids": {"type": "array", "items": _NONEMPTY_STRING},
+    },
+    required=("name", "cached_at", "time_basis", "storage_entry_ids"),
+)
+_CACHE_ENTRY_SCHEMA = _object(
+    {
+        "entry_id": _NONEMPTY_STRING,
+        "kind": {"enum": ["paper", "local", "opaque"]},
+        "paper_id": {"type": ["string", "null"]},
+        "local_source_identity": {
+            "anyOf": [_CACHE_LOCAL_IDENTITY_SCHEMA, {"type": "null"}]
+        },
+        "components": {
+            "type": "array",
+            "items": _CACHE_COMPONENT_SCHEMA,
+            "minItems": 1,
+        },
+        "cached_at": _NONEMPTY_STRING,
+        "updateable": {"type": "boolean"},
+    },
+    required=(
+        "entry_id",
+        "kind",
+        "paper_id",
+        "local_source_identity",
+        "components",
+        "cached_at",
+        "updateable",
+    ),
+)
+_CACHE_FILTER_INPUT = _object(
+    {
+        "paper_ids": {"type": "array", "items": _NONEMPTY_STRING},
+        "entry_ids": {"type": "array", "items": _NONEMPTY_STRING},
+        "since_seconds": {"type": ["integer", "null"], "minimum": 1},
+        "cache_root": {"type": ["string", "null"]},
+    }
+)
 
 _OPERATIONS = (
     _spec(
@@ -945,6 +999,101 @@ _OPERATIONS = (
         output_schema=_PARSE_OUTCOME_SCHEMA,
         effects=frozenset(
             {OperationEffect.CACHE_WRITE, OperationEffect.ARBITRARY_LOCAL_PATH}
+        ),
+    ),
+    _spec(
+        "cache-list",
+        _CACHE_FILTER_INPUT,
+        service.list_cache,
+        output_schema=_object(
+            {
+                "as_of": _NONEMPTY_STRING,
+                "since_seconds": {"type": ["integer", "null"], "minimum": 1},
+                "threshold_at": {"type": ["string", "null"]},
+                "entries": {"type": "array", "items": _CACHE_ENTRY_SCHEMA},
+                "warnings": _STRING_ARRAY,
+            },
+            required=(
+                "as_of",
+                "since_seconds",
+                "threshold_at",
+                "entries",
+                "warnings",
+            ),
+        ),
+        effects=frozenset({OperationEffect.CACHE_ADMIN}),
+    ),
+    _spec(
+        "cache-remove",
+        _object(
+            {
+                "paper_ids": {"type": "array", "items": _NONEMPTY_STRING},
+                "entry_ids": {"type": "array", "items": _NONEMPTY_STRING},
+                "dry_run": {"type": "boolean", "default": True},
+                "cache_root": {"type": ["string", "null"]},
+            }
+        ),
+        service.remove_cache,
+        output_schema=_object(
+            {
+                "dry_run": {"type": "boolean"},
+                "selected": {"type": "array", "items": _CACHE_ENTRY_SCHEMA},
+                "removed_entry_ids": {
+                    "type": "array",
+                    "items": _NONEMPTY_STRING,
+                },
+                "warnings": _STRING_ARRAY,
+            },
+            required=(
+                "dry_run",
+                "selected",
+                "removed_entry_ids",
+                "warnings",
+            ),
+        ),
+        effects=frozenset(
+            {OperationEffect.CACHE_ADMIN, OperationEffect.DESTRUCTIVE}
+        ),
+    ),
+    _spec(
+        "cache-update",
+        _object(
+            {
+                "paper_ids": {"type": "array", "items": _NONEMPTY_STRING},
+                "entry_ids": {"type": "array", "items": _NONEMPTY_STRING},
+                "cache_root": {"type": ["string", "null"]},
+            }
+        ),
+        service.update_cache,
+        output_schema=_object(
+            {
+                "records": {
+                    "type": "array",
+                    "items": _object(
+                        {
+                            "entry_id": _NONEMPTY_STRING,
+                            "component": _NONEMPTY_STRING,
+                            "status": {"enum": ["updated", "failed", "skipped"]},
+                            "message": _STRING,
+                        },
+                        required=(
+                            "entry_id",
+                            "component",
+                            "status",
+                            "message",
+                        ),
+                    ),
+                },
+                "warnings": _STRING_ARRAY,
+            },
+            required=("records", "warnings"),
+        ),
+        effects=frozenset(
+            {
+                OperationEffect.CACHE_ADMIN,
+                OperationEffect.NETWORK,
+                OperationEffect.CACHE_WRITE,
+            }
         ),
     ),
 )

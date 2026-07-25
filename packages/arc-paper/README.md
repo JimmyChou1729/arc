@@ -48,8 +48,53 @@ the top 50 matching paper titles in `top_paper_titles`, with no occurrences,
 abstracts, summaries, or context. It never returns abstracts or summaries.
 Cached display titles use deterministic section, page-line,
 canonical-arXiv-ID, or local-digest fallbacks and are resolved without network
-access. There is no cache list, delete, or administration command;
-`search-cached-full-text` is the controlled read-only search surface.
+access. `search-cached-full-text` remains the controlled read-only search
+surface and is separate from the explicit administration commands below.
+
+## Cache administration
+
+Inspect paper, local-source, and opaque legacy entries without modifying their
+read timestamps:
+
+```bash
+arc-paper cache list
+arc-paper cache list --since 1d
+arc-paper cache list --id arXiv:0911.3380
+```
+
+`--since` is a rolling UTC window from the last successful write or refresh. It
+accepts one positive integer followed by `s`, `m`, `h`, `d`, or `w`; `1d` is
+exactly 86,400 seconds. Results are newest first. Ordinary cache reads do not
+change this time. Legacy entries use file modification time when possible and
+may be listed under an exact opaque entry ID.
+
+Removal always requires an exact paper or entry ID. Without `--yes`, the
+command only previews the selected entries:
+
+```bash
+arc-paper cache remove --id arXiv:0911.3380
+arc-paper cache remove --id arXiv:0911.3380 --yes
+arc-paper cache remove --entry-id local:markdown:<sha256> --yes
+```
+
+`--yes` physically deletes the selected request mappings, full-text locators,
+source objects, and parsed-document objects. It does not perform a reference
+scan or general garbage collection, so deleting a shared content-addressed
+source may temporarily invalidate another request mapping. A later remote read
+repairs that mapping by fetching the source again. ARC cannot reacquire a local
+source automatically; keep the original local file before deleting its cache
+entry, or the cached copy is not recoverable.
+
+Update is paper-only and uses a fixed refresh set:
+
+```bash
+arc-paper cache update --id arXiv:0911.3380
+```
+
+It independently refreshes the INSPIRE record, the `mostrecent` and
+`mostcited` citer sets at limit 1000, ar5iv HTML plus parsing, and arXiv PDF
+plus parsing. A failed component is reported while the remaining components
+continue; previously published mappings are not proactively removed.
 
 ## PDF extraction
 

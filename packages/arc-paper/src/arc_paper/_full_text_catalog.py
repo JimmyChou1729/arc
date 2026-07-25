@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Iterator
@@ -27,6 +29,7 @@ if TYPE_CHECKING:
 
 
 FULL_TEXT_CATALOG_SCHEMA = "arc.paper.full_text_catalog.v1"
+FULL_TEXT_CATALOG_ADMIN_SCHEMA = "arc.paper.full_text_catalog_admin.v1"
 _ENTRY_FIELDS = {
     "schema_version",
     "kind",
@@ -45,6 +48,10 @@ _SOURCE_IDENTITY_FIELDS = {
     "media_type",
     "artifact_digest",
     "size",
+}
+_ADMIN_FIELDS = {
+    "schema_version",
+    "cached_at",
 }
 
 
@@ -123,6 +130,14 @@ class FullTextCatalogEntry:
         object.__setattr__(self, "representations", representations)
 
 
+@dataclass(frozen=True)
+class FullTextCatalogAdminEntry:
+    entry_id: str
+    entry: FullTextCatalogEntry
+    cached_at: str
+    time_basis: str = "legacy_file_mtime"
+
+
 class FullTextCatalog:
     """Atomic per-entry locator index for materialized full text."""
 
@@ -176,7 +191,22 @@ class FullTextCatalog:
                     local_source_identity=locator_identity,
                     representations=tuple(by_format.values()),
                 )
-            atomic_write_bytes(path, _canonical_json_bytes(_entry_document(entry)))
+            payload = _canonical_json_bytes(_entry_document(entry))
+            try:
+                unchanged = path.read_bytes() == payload
+            except OSError:
+                unchanged = False
+            if not unchanged:
+                atomic_write_bytes(path, payload)
+                atomic_write_bytes(
+                    path.parent / "admin.json",
+                    _canonical_json_bytes(
+                        {
+                            "schema_version": FULL_TEXT_CATALOG_ADMIN_SCHEMA,
+                            "cached_at": _utc_now(),
+                        }
+                    ),
+                )
             return entry
 
     def current_entries(self) -> tuple[FullTextCatalogEntry, ...]:
@@ -191,6 +221,94 @@ class FullTextCatalog:
             if (entry := self._read_path(path)) is not None
         )
         return tuple(sorted(entries, key=_entry_sort_key))
+
+    def admin_entries(self) -> tuple[FullTextCatalogAdminEntry, ...]:
+        """Return current locators with their last successful publication time."""
+
+        entries_root = self.root / "full-text-catalog" / "v1" / "entries"
+        if not entries_root.is_dir():
+            return ()
+        entries: list[FullTextCatalogAdminEntry] = []
+        for path in entries_root.glob("*/*/locator.json"):
+            entry = self._read_path(path)
+            if entry is None:
+                continue
+            try:
+                value = json.loads(
+                    (path.parent / "admin.json").read_text(encoding="utf-8")
+                )
+                if (
+                    not isinstance(value, dict)
+                    or set(value) != _ADMIN_FIELDS
+                    or value.get("schema_version")
+                    != FULL_TEXT_CATALOG_ADMIN_SCHEMA
+                    or not isinstance(value.get("cached_at"), str)
+                    or not value["cached_at"]
+                    or not _is_utc_timestamp(value["cached_at"])
+                ):
+                    raise ValueError("invalid full-text catalog admin metadata")
+                cached_at = value["cached_at"]
+                time_basis = "recorded_utc"
+            except (
+                OSError,
+                UnicodeError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ):
+                try:
+                    cached_at = _timestamp_from_mtime(path)
+                    time_basis = "legacy_file_mtime"
+                except OSError:
+                    cached_at = "1970-01-01T00:00:00Z"
+                    time_basis = "unreadable"
+            entries.append(
+                FullTextCatalogAdminEntry(
+                    entry_id=_admin_entry_id(entry),
+                    entry=entry,
+                    cached_at=cached_at,
+                    time_basis=time_basis,
+                )
+            )
+        return tuple(sorted(entries, key=lambda item: item.entry_id))
+
+    def remove_admin_entry(self, entry_id: str) -> bool:
+        """Physically remove one locator and its selected source/parsed objects."""
+
+        selected = next(
+            (item for item in self.admin_entries() if item.entry_id == entry_id),
+            None,
+        )
+        if selected is None:
+            return False
+        removed = False
+        for locator_key in sorted(_locator_keys(selected.entry)):
+            path = self._entry_path(locator_key)
+            with self._entry_lock(locator_key):
+                if path.parent.exists():
+                    shutil.rmtree(path.parent)
+                    removed = True
+        from ._parsed_document_cache import ParsedDocumentCache
+        from .source_repository import SourceRepository
+
+        repository = SourceRepository(self.root)
+        for representation in selected.entry.representations:
+            cache = ParsedDocumentCache(
+                self.root,
+                repository=repository,
+                parser_contract=representation.parser_contract,
+            )
+            removed = (
+                cache.remove_by_key(representation.parsed_cache_key) or removed
+            )
+            removed = (
+                repository.remove(
+                    representation.source_identity["source_format"],
+                    representation.source_identity["artifact_digest"],
+                )
+                or removed
+            )
+        return removed
 
     def _read_path(self, path: Path) -> FullTextCatalogEntry | None:
         try:
@@ -368,6 +486,34 @@ def _entry_sort_key(entry: FullTextCatalogEntry) -> tuple[str, str]:
     )
 
 
+def _admin_entry_id(entry: FullTextCatalogEntry) -> str:
+    if entry.kind == "arxiv":
+        return f"paper:{entry.paper_ids[0]}"
+    identity = entry.local_source_identity or {}
+    return (
+        f"local:{identity.get('source_format', '')}:"
+        f"{identity.get('artifact_digest', '')}"
+    )
+
+
+def _timestamp_from_mtime(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _is_utc_timestamp(value: str) -> bool:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
 def _canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
@@ -386,8 +532,10 @@ def _is_sha256(value: object) -> bool:
 
 
 __all__ = [
+    "FULL_TEXT_CATALOG_ADMIN_SCHEMA",
     "FULL_TEXT_CATALOG_SCHEMA",
     "FullTextCatalog",
+    "FullTextCatalogAdminEntry",
     "FullTextCatalogEntry",
     "FullTextRepresentation",
 ]

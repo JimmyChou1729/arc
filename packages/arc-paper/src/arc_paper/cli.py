@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections.abc import Mapping
 from typing import Any
@@ -126,6 +127,17 @@ def _parser() -> _Parser:
     )
     parsed.add_argument("--cache-root")
 
+    cache = commands.add_parser("cache", add_help=False)
+    cache_commands = cache.add_subparsers(dest="cache_command", required=True)
+    cache_list = cache_commands.add_parser("list", add_help=False)
+    _cache_selector_arguments(cache_list)
+    cache_list.add_argument("--since")
+    cache_remove = cache_commands.add_parser("remove", add_help=False)
+    _cache_selector_arguments(cache_remove)
+    cache_remove.add_argument("--yes", action="store_true")
+    cache_update = cache_commands.add_parser("update", add_help=False)
+    _cache_selector_arguments(cache_update)
+
     commands.add_parser("operations", add_help=False)
     return parser
 
@@ -138,6 +150,12 @@ def _paper_arguments(parser: argparse.ArgumentParser) -> None:
 def _arxiv_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("arxiv_id")
     parser.add_argument("--refresh", action="store_true")
+
+
+def _cache_selector_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--id", dest="paper_ids", action="append", default=[])
+    parser.add_argument("--entry-id", dest="entry_ids", action="append", default=[])
+    parser.add_argument("--cache-root")
 
 
 def _parameters(args: argparse.Namespace) -> dict[str, Any]:
@@ -222,7 +240,33 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "policy": args.policy,
             "cache_root": args.cache_root,
         }
+    if command == "cache":
+        values: dict[str, Any] = {
+            "paper_ids": args.paper_ids,
+            "entry_ids": args.entry_ids,
+            "cache_root": args.cache_root,
+        }
+        if args.cache_command == "list":
+            values["since_seconds"] = _duration_seconds(args.since)
+        elif args.cache_command == "remove":
+            values["dry_run"] = not args.yes
+        return values
     raise _UsageError(f"unsupported command: {command}")
+
+
+def _duration_seconds(value: str | None) -> int | None:
+    if value is None:
+        return None
+    match = re.fullmatch(r"([1-9][0-9]*)([smhdw])", value)
+    if match is None:
+        raise _UsageError(
+            "--since must be a positive integer followed by s, m, h, d, or w"
+        )
+    factors = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    seconds = int(match.group(1)) * factors[match.group(2)]
+    if seconds > 36500 * 86400:
+        raise _UsageError("--since cannot exceed 36500d")
+    return seconds
 
 
 def _help_data() -> dict[str, Any]:
@@ -248,6 +292,9 @@ def _help_data() -> dict[str, Any]:
             "fetch-arxiv-pdf",
             "import-source",
             "parse-local",
+            "cache list",
+            "cache remove",
+            "cache update",
             "operations",
             "status (arc-jobs)",
             "stop (arc-jobs)",
@@ -295,7 +342,12 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 exit_code=0,
             )
-        value = dispatch_operation(args.command, _parameters(args))
+        operation = (
+            f"cache-{args.cache_command}"
+            if args.command == "cache"
+            else args.command
+        )
+        value = dispatch_operation(operation, _parameters(args))
         warnings: tuple[CommandWarning, ...] = ()
         raw_warnings = (
             value.get("warnings", ())

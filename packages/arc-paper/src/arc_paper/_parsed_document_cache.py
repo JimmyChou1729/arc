@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -192,6 +193,18 @@ class ParsedDocumentCache:
         if self._key(source) != key:
             raise ValueError("parsed cache key does not match its logical identity")
         return self._entry_dir(key) / "document.json"
+
+    def remove_by_key(self, key: str) -> bool:
+        """Physically delete one exact parsed-document object."""
+
+        if not _is_sha256(key):
+            raise ValueError("parsed cache key must be a SHA-256 digest")
+        entry_dir = self._entry_dir(key)
+        with self._key_lock(key):
+            if not entry_dir.exists():
+                return False
+            shutil.rmtree(entry_dir)
+            return True
 
     def _read(self, source: SourceArtifact) -> ParsedDocument | None:
         entry_dir = self._entry_dir(self._key(source))

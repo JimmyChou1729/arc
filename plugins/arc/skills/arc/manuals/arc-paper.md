@@ -261,6 +261,53 @@ keyed by source content identity and its format-specific parser contract; PDF
 keys also include the stable extractor contract. A parser-contract change
 naturally uses a new entry.
 
-There is no cache list, delete, or administration command. Controlled read-only
-full-text search is allowed only through `search-cached-full-text`; it follows
-the current catalog locators and does not enumerate unrelated cache data.
+Controlled read-only full-text search is allowed through
+`search-cached-full-text`; it follows current catalog locators and does not
+enumerate unrelated cache data. Cache administration is explicit and excluded
+from the default resolver projection.
+
+List paper, local-source, and opaque legacy entries:
+
+```bash
+arc-paper cache list
+arc-paper cache list --since 1d
+arc-paper cache list --id arXiv:0911.3380
+arc-paper cache list --entry-id remote:json:inspire-search:<request-digest>
+```
+
+The corresponding registry operation is `arc-paper.cache-list.v1`. `--since`
+is a rolling UTC window measured from the last successful write or refresh. It
+accepts one positive integer followed by `s`, `m`, `h`, `d`, or `w`; `1d`
+means exactly 86,400 seconds. Ordinary reads never touch that time. Results are
+newest first. Legacy entries fall back to file modification time when possible;
+entries whose original request key is unavailable remain addressable by their
+exact opaque entry ID.
+
+Remove requires at least one exact paper or entry ID. Without `--yes`, it is a
+non-destructive preview:
+
+```bash
+arc-paper cache remove --id arXiv:0911.3380
+arc-paper cache remove --id arXiv:0911.3380 --yes
+arc-paper cache remove --entry-id local:markdown:<sha256> --yes
+```
+
+The registry operation is `arc-paper.cache-remove.v1`. `--yes` physically
+deletes the selected remote mappings, logical locators, source objects, and
+parsed-document objects. It does not scan references or run general garbage
+collection, so deleting a shared content-addressed source may temporarily
+invalidate another request mapping. A later remote read repairs that mapping
+by fetching the source again. Local imports cannot be reacquired by ARC:
+retain the original local file before removal of a local source entry, or the
+cached source is not recoverable.
+
+Update accepts exact paper entries only:
+
+```bash
+arc-paper cache update --id arXiv:0911.3380
+```
+
+`arc-paper.cache-update.v1` independently refreshes the INSPIRE record,
+`mostrecent` citers at limit 1000, `mostcited` citers at limit 1000, ar5iv HTML
+plus parsing, and arXiv PDF plus parsing. One failed component is reported
+without stopping the others, and existing mappings are not proactively deleted.

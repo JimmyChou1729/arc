@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -275,6 +276,27 @@ class SourceRepository:
         return (self._object_dir(
             artifact.source_format, artifact.artifact_digest
         ) / "source").read_bytes()
+
+    def remove(
+        self,
+        source_format: SourceFormat | str,
+        artifact_digest: str,
+    ) -> bool:
+        """Physically delete one exact source object owned by the repository."""
+
+        resolved_format = SourceFormat(source_format)
+        digest = str(artifact_digest).casefold()
+        if _SHA256_RE.fullmatch(digest) is None:
+            raise SourceRepositoryError(
+                "invalid_artifact_digest",
+                "artifact digest must be a SHA-256 digest",
+            )
+        object_dir = self._object_dir(resolved_format, digest)
+        with self._content_lock(resolved_format, digest):
+            if not object_dir.exists():
+                return False
+            shutil.rmtree(object_dir)
+            return True
 
     def _read_verified(
         self,

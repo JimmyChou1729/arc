@@ -95,12 +95,19 @@ from .parse import (  # noqa: E402
 )
 from .service import (  # noqa: E402
     ArcPaperService,
+    CacheListResult,
+    CacheRemoveResult,
+    CacheUpdateRecord,
+    CacheUpdateResult,
     PaperInputError,
     get_arxiv_section,
     get_arxiv_table_of_contents,
+    list_cache,
+    remove_cache,
     search_arxiv_equations,
     search_arxiv_full_text,
     search_cached_full_text,
+    update_cache,
 )
 from .rich_document import (  # noqa: E402
     AssetImporter,
@@ -153,6 +160,10 @@ from .workflows import (  # noqa: E402
 
 __all__ = [
     "ArcPaperService",
+    "CacheListResult",
+    "CacheRemoveResult",
+    "CacheUpdateRecord",
+    "CacheUpdateResult",
     "ArxivDocumentProvenance",
     "ArxivEquationSearch",
     "ArxivFullTextSearch",
@@ -185,6 +196,8 @@ __all__ = [
     "get_operation",
     "get_arxiv_section",
     "get_arxiv_table_of_contents",
+    "list_cache",
+    "remove_cache",
     "registry_document",
     "resolve_operations",
     "ParseOutcome",
@@ -257,6 +270,7 @@ __all__ = [
     "search_arxiv_equations",
     "search_arxiv_full_text",
     "search_cached_full_text",
+    "update_cache",
     "search_full_text",
     "table_of_contents",
     "parse_outcome_to_document",
