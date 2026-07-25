@@ -334,7 +334,7 @@ class DomainBuildHandler:
                     == DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2
                 ),
             ),
-            JsonOutput(FOUNDATION_CANDIDATE_AUDIT_SCHEMA, repair="local"),
+            JsonOutput(FOUNDATION_CANDIDATE_AUDIT_SCHEMA, repair="format"),
             self.request.model,
         )
         audit_outcome = execute_routed(
@@ -429,7 +429,7 @@ class DomainBuildHandler:
                 ),
                 fixed_seed=self.request.policy.foundation_mode == "fixed_seed",
             ),
-            JsonOutput(FOUNDATION_SELECTION_SCHEMA, repair="local"),
+            JsonOutput(FOUNDATION_SELECTION_SCHEMA, repair="format"),
             self.request.model,
         )
         selection_outcome = execute_routed(
@@ -583,7 +583,7 @@ class DomainBuildHandler:
             ranking_request = LLMRequest(
                 _task_id("network-rank", foundation_id, self.request.intent),
                 intent_ranking_prompt(citer_pool, intent=self.request.intent),
-                JsonOutput(INTENT_RANKING_SCHEMA, repair="local"),
+                JsonOutput(INTENT_RANKING_SCHEMA, repair="format"),
                 self.request.model,
             )
             ranking_outcome = execute_routed(
@@ -846,7 +846,7 @@ class DomainBuildHandler:
                 self.request.intent,
             ),
             summary_prompt(graph, evidence, selection),
-            JsonOutput(DOMAIN_SUMMARY_SCHEMA, repair="local"),
+            JsonOutput(DOMAIN_SUMMARY_SCHEMA, repair="format"),
             self.request.model,
         )
         outcome = execute_routed(

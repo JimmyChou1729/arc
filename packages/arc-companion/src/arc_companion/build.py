@@ -243,7 +243,7 @@ class CompanionBuildHandler:
                 },
             ),
             language_prompt(deterministic_language_samples(self.request.source)),
-            JsonOutput(LANGUAGE_SCHEMA, repair="local"),
+            JsonOutput(LANGUAGE_SCHEMA, repair="format"),
             self.recipe.model,
         )
         outcome = execute_task(
@@ -306,7 +306,7 @@ class CompanionBuildHandler:
                     target_language=self.request.target_language,
                     intent=self.request.effective_intent,
                 ),
-                JsonOutput(CHAPTER_PLAN_SCHEMA, repair="local"),
+                JsonOutput(CHAPTER_PLAN_SCHEMA, repair="format"),
                 self.recipe.model,
             )
             outcome = execute_task(
@@ -489,7 +489,7 @@ class CompanionBuildHandler:
                 target_language=self.request.target_language,
                 evidence=evidence,
             ),
-            JsonOutput(GLOSSARY_SCHEMA, repair="local"),
+            JsonOutput(GLOSSARY_SCHEMA, repair="format"),
             self.recipe.model,
         )
         outcome = execute_task(
@@ -626,7 +626,7 @@ class CompanionBuildHandler:
                     language_result=language_result,
                     evidence=chapter_evidence,
                 ),
-                JsonOutput(CHAPTER_DRAFT_SCHEMA, repair="local"),
+                JsonOutput(CHAPTER_DRAFT_SCHEMA, repair="format"),
                 self.recipe.model,
             )
             outcome = execute_task(
@@ -674,7 +674,7 @@ class CompanionBuildHandler:
                     blocks=planned_source_documents,
                     glossary=glossary,
                 ),
-                JsonOutput(CHAPTER_REVIEW_SCHEMA, repair="local"),
+                JsonOutput(CHAPTER_REVIEW_SCHEMA, repair="format"),
                 self.recipe.model,
             )
             review_outcome = execute_task(
@@ -867,7 +867,7 @@ class CompanionBuildHandler:
                     target_language=self.request.target_language,
                     language_result=language_result,
                 ),
-                JsonOutput(TRANSLATION_SCHEMA, repair="local"),
+                JsonOutput(TRANSLATION_SCHEMA, repair="format"),
                 self.recipe.model,
             )
             outcome = execute_task(

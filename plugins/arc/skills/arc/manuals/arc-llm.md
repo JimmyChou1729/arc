@@ -72,7 +72,8 @@ response supplies it.
 `generate` accepts one closed `arc.llm.request.v2` document. It has a stable
 `task_id`, non-empty `prompt`, `model`, `session`, `capabilities`, `inputs`, and
 an `output` contract. For JSON output, use `kind: "json"`, a Draft 2020-12
-schema, and `repair: "local"` unless the caller requires strict rejection.
+schema, and `repair: "format"` unless the caller requires local-only repair or
+strict rejection.
 
 ```json
 {
@@ -87,7 +88,7 @@ schema, and `repair: "local"` unless the caller requires strict rejection.
       "required": ["answer"],
       "properties": {"answer": {"type": "string"}}
     },
-    "repair": "local"
+    "repair": "format"
   },
   "model": {"provider": "auto", "model": null, "tier": "medium"},
   "session": null,
@@ -102,6 +103,12 @@ schema, and `repair: "local"` unless the caller requires strict rejection.
 
 Validate all schema-required fields locally before calling the provider. A
 request with an exact model needs an explicit provider and the default tier.
+`format` first performs deterministic local JSON repair. If substantive content
+still does not satisfy the schema, ARC makes one isolated formatting call with
+the same provider/model, no tools or internet, and no original-worker replay.
+Use `local` to prohibit that extra call, or `strict` to prohibit all repair.
+Formatter usage is recorded in the generation's formatting artifact; transient
+formatter availability pauses remain resumable without input.
 
 ### Step 2: Generate and inspect
 

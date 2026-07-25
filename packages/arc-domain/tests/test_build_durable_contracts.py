@@ -275,7 +275,7 @@ def _warning_codes(repository: RunRepository, snapshot) -> set[str]:
     return {warning.code for warning in result.warnings}
 
 
-def test_all_domain_llm_requests_use_local_json_repair(tmp_path: Path) -> None:
+def test_all_domain_llm_requests_use_formatter_json_repair(tmp_path: Path) -> None:
     repository = RunRepository(tmp_path / "runs")
     service = DomainTaskService()
 
@@ -294,7 +294,7 @@ def test_all_domain_llm_requests_use_local_json_repair(tmp_path: Path) -> None:
         "summary",
     }
     assert all(isinstance(request.output, JsonOutput) for request in service.requests)
-    assert {request.output.repair for request in service.requests} == {"local"}
+    assert {request.output.repair for request in service.requests} == {"format"}
 
 
 def test_verified_reference_inference_candidate_is_available_to_selection(
