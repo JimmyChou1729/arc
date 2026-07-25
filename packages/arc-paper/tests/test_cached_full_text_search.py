@@ -621,6 +621,62 @@ def test_missing_candidate_and_unreferenced_old_cache_are_not_sent_to_rg(
     assert missing.warnings
 
 
+def test_stale_parser_contract_cache_is_skipped_without_reparsing(
+    tmp_path: Path,
+) -> None:
+    repository = SourceRepository(tmp_path / "cache")
+    source = _store(repository, b"# Old projection\nstale-only phrase\n")
+    legacy = ParsedDocumentCache(
+        repository=repository,
+        parser_contract="arc.paper.parser.v2",
+    )
+    document, _ = legacy.get_or_parse(
+        source,
+        lambda artifact: parse_artifact_bytes(
+            artifact, repository.read_bytes(artifact)
+        ),
+    )
+    legacy_key = legacy.cache_key(source)
+    legacy_path = legacy._entry_dir(legacy_key) / "document.json"
+    legacy_bytes = legacy_path.read_bytes()
+    catalog = FullTextCatalog(repository.root)
+    catalog.record(
+        source,
+        document,
+        parser_contract=legacy.parser_contract,
+        parsed_cache_key=legacy_key,
+    )
+
+    result = CachedFullTextSearcher(
+        repository.root, candidate_selector=NoCandidatesExpected()
+    ).search(("stale-only phrase",))
+
+    assert result.total_occurrences == 0
+    assert result.matched_document_count == 0
+    assert any("stale parser contract" in warning for warning in result.warnings)
+    assert legacy_path.read_bytes() == legacy_bytes
+    assert (
+        catalog.current_entries()[0].representations[0].parser_contract
+        == "arc.paper.parser.v2"
+    )
+
+
+def test_current_pdf_parser_contract_remains_searchable(tmp_path: Path) -> None:
+    repository = SourceRepository(tmp_path / "cache")
+    _materialize(
+        repository,
+        b"%PDF current projection",
+        source_format=SourceFormat.PDF,
+        pdf_pages=("PDF title\ncurrent PDF phrase",),
+    )
+
+    result = _searcher(repository).search(("current PDF phrase",))
+
+    assert result.total_occurrences == 1
+    assert result.occurrences[0].source_format == "pdf"
+    assert not result.warnings
+
+
 def test_registry_contract_is_safe_path_free_and_titles_are_strings_only() -> None:
     spec = get_operation("search-cached-full-text")
     assert spec is not None

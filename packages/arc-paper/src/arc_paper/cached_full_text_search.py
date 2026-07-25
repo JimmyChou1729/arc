@@ -17,7 +17,7 @@ from ._full_text_catalog import (
     FullTextCatalogEntry,
     FullTextRepresentation,
 )
-from ._parsed_document_cache import ParsedDocumentCache
+from ._parsed_document_cache import PARSER_CONTRACT, ParsedDocumentCache
 from ._ripgrep import RipgrepCandidateSelector
 from .parse import ParsedDocument
 from .source_repository import SourceRepositoryError
@@ -136,6 +136,9 @@ class _SearchLocation:
 
 _CORRUPT_CANDIDATE_WARNING = (
     "a catalog-selected cached full-text document failed verification and was skipped"
+)
+_STALE_PARSER_CONTRACT_WARNING = (
+    "a catalog-selected cached full-text document uses a stale parser contract and was skipped"
 )
 _JSON_WHITESPACE_PATTERN = (
     r"(?:\p{White_Space}|\\[nrtf]|\\u(?:000[bB]|001[c-fC-F]))+"
@@ -317,6 +320,9 @@ class CachedFullTextSearcher:
         warnings: list[str] = []
         for entry in self.catalog.current_entries():
             representation = _preferred_representation(entry)
+            if not _has_current_parser_contract(representation):
+                warnings.append(_STALE_PARSER_CONTRACT_WARNING)
+                continue
             try:
                 cache = ParsedDocumentCache(
                     self.root,
@@ -400,6 +406,16 @@ def _preferred_representation(
         if "pdf" in by_format:
             return by_format["pdf"]
     return entry.representations[0]
+
+
+def _has_current_parser_contract(representation: FullTextRepresentation) -> bool:
+    """Keep cache-wide search read-only across parsed-cache generations."""
+
+    if representation.source_format == SourceFormat.PDF.value:
+        return representation.parser_contract.startswith(
+            f"{PARSER_CONTRACT}+pdf-extractor:"
+        )
+    return representation.parser_contract == PARSER_CONTRACT
 
 
 def _document_occurrences(
