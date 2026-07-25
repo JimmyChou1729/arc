@@ -109,7 +109,6 @@ def test_registry_output_codec_validates_encoded_values() -> None:
         (["extract-paper-ids", "See", "0911.3380"], "completed", 0),
         (["safe-dir-name", "0911.3380", "hep-th/0601001"], "completed", 0),
         (["unknown"], "failed", 2),
-        (["--help"], "completed", 0),
     ],
 )
 def test_cli_stdout_is_exactly_one_command_result(
@@ -417,16 +416,92 @@ def test_cli_preserves_nonfatal_domain_warnings_in_shared_envelope(
     ]
 
 
-def test_cli_help_guides_specific_multi_term_cached_search(
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--help"],
+        ["extract-paper-ids", "--help"],
+        ["safe-dir-name", "--help"],
+        ["get-title", "--help"],
+        ["get-abstract", "--help"],
+        ["get-authors", "--help"],
+        ["get-metadata", "--help"],
+        ["get-citer-count", "--help"],
+        ["get-references", "--help"],
+        ["get-citers", "--help"],
+        ["search-metadata", "--help"],
+        ["search-cached-full-text", "--help"],
+        ["get-arxiv-table-of-contents", "--help"],
+        ["get-arxiv-section", "--help"],
+        ["search-arxiv-full-text", "--help"],
+        ["search-arxiv-equations", "--help"],
+        ["fetch-arxiv-auto", "--help"],
+        ["fetch-arxiv-pdf", "--help"],
+        ["import-source", "--help"],
+        ["parse-local", "--help"],
+        ["extract-keywords", "--help"],
+        ["cache", "--help"],
+        ["cache", "list", "--help"],
+        ["cache", "remove", "--help"],
+        ["cache", "update", "--help"],
+        ["status", "--help"],
+        ["stop", "--help"],
+        ["validate", "--help"],
+    ],
+)
+def test_cli_root_subcommand_and_nested_cache_help_is_human_readable(
+    argv: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(argv) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.startswith("usage: arc-")
+    assert "arc.command_result.v2" not in captured.out
+
+
+def test_cached_search_help_guides_specific_multi_term_queries(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["search-cached-full-text", "--help"]) == 0
+    output = " ".join(capsys.readouterr().out.split())
+    assert "specific multi-word synonyms" in output
+    assert "alternate spellings" in output
+
+
+def test_operations_cli_is_removed_but_registry_introspection_remains_public(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     assert main(["--help"]) == 0
-    value = json.loads(capsys.readouterr().out)
+    root_help = capsys.readouterr().out
+    assert "  operations" not in root_help
 
-    guidance = value["data"]["guidance"]["search-cached-full-text"]
-    assert "specific multi-word --term values" in guidance
-    assert "synonyms" in guidance
-    assert "refinement" in guidance
+    assert main(["operations"]) == 2
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    lines = captured.out.splitlines()
+    assert len(lines) == 1
+    value = json.loads(lines[0])
+    assert value["error"]["code"] == "invalid_request"
+    assert value["error"]["details"] == {
+        "help_command": "arc-paper --help"
+    }
+    assert registry_document()["schema_version"] == "arc.paper.operation_registry.v1"
+
+
+def test_nested_cache_usage_error_points_to_contextual_help(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["cache", "list", "--since", "not-a-duration"]) == 2
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    lines = captured.out.splitlines()
+    assert len(lines) == 1
+    value = json.loads(lines[0])
+    assert value["error"]["code"] == "invalid_request"
+    assert value["error"]["details"] == {
+        "help_command": "arc-paper cache list --help"
+    }
 
 
 def test_cli_import_and_parse_local_use_content_addressed_repository(

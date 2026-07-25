@@ -38,73 +38,158 @@ class _UsageError(ValueError):
     pass
 
 
+class _HelpRequested(Exception):
+    pass
+
+
 class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         raise _UsageError(message)
 
+    def exit(self, status: int = 0, message: str | None = None) -> None:
+        if status == 0:
+            raise _HelpRequested
+        super().exit(status, message)
+
 
 def _parser() -> _Parser:
-    parser = _Parser(prog="arc-translate")
+    parser = _Parser(
+        prog="arc-translate",
+        description=(
+            "Run source-bound language detection, glossary, and block "
+            "translation steps. Results are always JSON; --json is retained "
+            "for compatibility."
+        ),
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    language = commands.add_parser("detect-language")
-    language.add_argument("source")
-    language.add_argument("--target-language", required=True)
+    language = commands.add_parser(
+        "detect-language",
+        help="detect source language and bind a target language",
+        description="Detect a verified source language and record the target language.",
+    )
+    language.add_argument("source", help="paper identifier or local source")
+    language.add_argument("--target-language", required=True, help="requested target language")
     _project_argument(language)
     _generation_arguments(language)
 
-    glossary = commands.add_parser("build-glossary")
-    glossary.add_argument("source")
-    glossary.add_argument("--approx-term-count", type=int, default=50)
+    glossary = commands.add_parser(
+        "build-glossary",
+        help="build a bilingual glossary",
+        description="Build a reviewed bilingual glossary for the verified source.",
+    )
+    glossary.add_argument("source", help="same paper identifier or source used for detection")
+    glossary.add_argument(
+        "--approx-term-count", type=int, default=50, help="target term count (default: 50)"
+    )
     _project_argument(glossary)
     _generation_arguments(glossary)
 
-    blocks = commands.add_parser("translate-blocks")
-    blocks.add_argument("source")
+    blocks = commands.add_parser(
+        "translate-blocks",
+        help="translate source blocks with the selected glossary",
+        description="Translate verified source blocks using the selected language and glossary.",
+    )
+    blocks.add_argument("source", help="same paper identifier or source used for detection")
     _project_argument(blocks)
     _generation_arguments(blocks)
 
-    for name in ("status", "stop", "validate"):
-        command = commands.add_parser(name)
+    control_summaries = {
+        "status": "inspect selected translation steps",
+        "stop": "request a cooperative stop",
+        "validate": "validate the selected translation run",
+    }
+    for name, summary in control_summaries.items():
+        command = commands.add_parser(name, help=summary, description=summary.capitalize() + ".")
         _project_argument(command)
         if name == "stop":
-            command.add_argument("--reason")
+            command.add_argument("--reason", help="human-readable stop reason")
 
-    resume = commands.add_parser("resume")
+    resume = commands.add_parser(
+        "resume",
+        help="resume the selected translation step",
+        description="Resume the currently selected paused or interrupted translation step.",
+    )
     _project_argument(resume)
     resume.add_argument("--input", help="JSON object or a path to one")
     return parser
 
 
 def _project_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--project-dir", required=True)
-    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--project-dir", required=True, help="translation project directory")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="compatibility flag; command results are always JSON",
+    )
 
 
 def _generation_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--provider", default="auto")
-    parser.add_argument("--model")
-    parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--provider", default="auto", help="LLM provider (default: auto)")
+    parser.add_argument("--model", help="provider-specific model name")
+    parser.add_argument("--refresh", action="store_true", help="refresh cached source data")
+
+
+def _help_command(arguments: list[str]) -> str:
+    command = (
+        arguments[0]
+        if arguments
+        and arguments[0]
+        in {
+            "detect-language",
+            "build-glossary",
+            "translate-blocks",
+            "status",
+            "resume",
+            "stop",
+            "validate",
+        }
+        else None
+    )
+    return " ".join(
+        part for part in ("arc-translate", command, "--help") if part is not None
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
     try:
-        args = _parser().parse_args(argv)
+        args = _parser().parse_args(arguments)
         result = _dispatch(args)
+    except _HelpRequested:
+        return 0
     except _UsageError as exc:
-        result = _failed("invalid_request", str(exc))
+        result = _failed(
+            "invalid_request",
+            str(exc),
+            details={"help_command": _help_command(arguments)},
+        )
     except (
         TranslationProjectError,
         TranslationServiceError,
         TranslationSourceError,
     ) as exc:
-        result = _failed(exc.code, str(exc))
+        result = _failed(
+            exc.code,
+            str(exc),
+            details=(
+                {"help_command": _help_command(arguments)}
+                if exc.code == "invalid_request"
+                else None
+            ),
+        )
     except OSError as exc:
         result = _failed("local_io_error", str(exc))
     except Exception as exc:
+        code = str(getattr(exc, "code", "internal_error"))
         result = _failed(
-            str(getattr(exc, "code", "internal_error")),
+            code,
             str(exc),
+            details=(
+                {"help_command": _help_command(arguments)}
+                if code == "invalid_request"
+                else None
+            ),
         )
     sys.stdout.write(command_result_json(result) + "\n")
     return 0 if result.status is CommandStatus.COMPLETED else 1

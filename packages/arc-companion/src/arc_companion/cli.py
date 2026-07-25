@@ -52,68 +52,144 @@ class _UsageError(ValueError):
     pass
 
 
+class _HelpRequested(Exception):
+    pass
+
+
 class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         raise _UsageError(message)
 
+    def exit(self, status: int = 0, message: str | None = None) -> None:
+        if status == 0:
+            raise _HelpRequested
+        super().exit(status, message)
+
 
 def _parser() -> _Parser:
-    parser = _Parser(prog="arc-companion")
+    parser = _Parser(
+        prog="arc-companion",
+        description=(
+            "Build, resume, render, and validate source-anchored Companion "
+            "releases. Results are always JSON; --json is retained for "
+            "compatibility."
+        ),
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    build = commands.add_parser("build")
-    build.add_argument("source")
-    build.add_argument("--project-dir", required=True)
+    build = commands.add_parser(
+        "build",
+        help="build a source-anchored Companion",
+        description="Build a durable Companion from a verified paper or local source.",
+    )
+    build.add_argument("source", help="paper identifier or local source")
+    build.add_argument("--project-dir", required=True, help="Companion project directory")
     build.add_argument(
         "--pdf",
         help="local PDF validator path, or 'fetch' for a remote paper source",
     )
-    build.add_argument("--target-language", default="zh-CN")
-    build.add_argument("--user-intent", default="")
-    build.add_argument("--provider", default="auto")
-    build.add_argument("--model")
-    build.add_argument("--workers", type=int, default=4)
-    build.add_argument("--approx-term-count", type=int, default=50)
-    build.add_argument("--refresh", action="store_true")
-    build.add_argument("--json", action="store_true")
+    build.add_argument(
+        "--target-language",
+        default="zh-CN",
+        help="target language (default: zh-CN)",
+    )
+    build.add_argument("--user-intent", default="", help="reader intent used to focus the guide")
+    build.add_argument("--provider", default="auto", help="LLM provider (default: auto)")
+    build.add_argument("--model", help="provider-specific model name")
+    build.add_argument("--workers", type=int, default=4, help="parallel workers (default: 4)")
+    build.add_argument(
+        "--approx-term-count", type=int, default=50, help="target glossary size (default: 50)"
+    )
+    build.add_argument("--refresh", action="store_true", help="refresh cached source data")
+    _json_argument(build)
 
-    status = commands.add_parser("status")
-    status.add_argument("--project-dir", required=True)
-    status.add_argument("--json", action="store_true")
+    status = commands.add_parser(
+        "status",
+        help="inspect the selected build and active release",
+        description="Inspect the selected Companion build and active release.",
+    )
+    status.add_argument("--project-dir", required=True, help="Companion project directory")
+    _json_argument(status)
 
-    resume = commands.add_parser("resume")
-    resume.add_argument("--project-dir", required=True)
+    resume = commands.add_parser(
+        "resume",
+        help="resume the selected Companion build",
+        description="Resume the selected paused or interrupted Companion build.",
+    )
+    resume.add_argument("--project-dir", required=True, help="Companion project directory")
     resume.add_argument(
         "--input",
         help="JSON object or path containing the current pause response",
     )
-    resume.add_argument("--workers", type=int, default=4)
-    resume.add_argument("--json", action="store_true")
+    resume.add_argument("--workers", type=int, default=4, help="parallel workers (default: 4)")
+    _json_argument(resume)
 
-    stop = commands.add_parser("stop")
-    stop.add_argument("--project-dir", required=True)
-    stop.add_argument("--reason")
-    stop.add_argument("--json", action="store_true")
-
-    render = commands.add_parser("render")
-    render.add_argument("--project-dir", required=True)
-    render.add_argument(
-        "--format", choices=("all", "pdf", "web"), default="all"
+    stop = commands.add_parser(
+        "stop",
+        help="request a cooperative build stop",
+        description="Request a cooperative stop for the selected Companion build.",
     )
-    render.add_argument("--json", action="store_true")
+    stop.add_argument("--project-dir", required=True, help="Companion project directory")
+    stop.add_argument("--reason", help="human-readable stop reason")
+    _json_argument(stop)
 
-    validate = commands.add_parser("validate")
-    validate.add_argument("--project-dir", required=True)
-    validate.add_argument("--json", action="store_true")
+    render = commands.add_parser(
+        "render",
+        help="publish PDF and web release artifacts",
+        description="Publish release artifacts from the accepted Companion book.",
+    )
+    render.add_argument("--project-dir", required=True, help="Companion project directory")
+    render.add_argument(
+        "--format",
+        choices=("all", "pdf", "web"),
+        default="all",
+        help="artifact formats to report (default: all)",
+    )
+    _json_argument(render)
+
+    validate = commands.add_parser(
+        "validate",
+        help="validate the active Companion release",
+        description="Validate the active release manifest and rendered artifacts.",
+    )
+    validate.add_argument("--project-dir", required=True, help="Companion project directory")
+    _json_argument(validate)
     return parser
 
 
+def _json_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="compatibility flag; command results are always JSON",
+    )
+
+
+def _help_command(arguments: list[str]) -> str:
+    command = (
+        arguments[0]
+        if arguments
+        and arguments[0] in {"build", "status", "resume", "stop", "render", "validate"}
+        else None
+    )
+    return " ".join(
+        part for part in ("arc-companion", command, "--help") if part is not None
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
     try:
-        args = _parser().parse_args(argv)
+        args = _parser().parse_args(arguments)
         result = _dispatch(args)
+    except _HelpRequested:
+        return 0
     except _UsageError as exc:
-        result = _failed("invalid_request", str(exc))
+        result = _failed(
+            "invalid_request",
+            str(exc),
+            details={"help_command": _help_command(arguments)},
+        )
     except (
         ArcJobsError,
         CompanionProjectError,
@@ -122,9 +198,15 @@ def main(argv: list[str] | None = None) -> int:
         CompanionServiceError,
         RichDocumentValidationError,
     ) as exc:
+        code = str(exc.code)
         result = _failed(
-            str(exc.code),
+            code,
             str(exc),
+            details=(
+                {"help_command": _help_command(arguments)}
+                if code == "invalid_request"
+                else None
+            ),
         )
     except OSError as exc:
         result = _failed("local_io_error", str(exc))
@@ -488,10 +570,15 @@ def _json_input(value: str) -> Mapping[str, Any]:
     return dict(document)
 
 
-def _failed(code: str, message: str) -> CommandResult:
+def _failed(
+    code: str,
+    message: str,
+    *,
+    details: Mapping[str, Any] | None = None,
+) -> CommandResult:
     return CommandResult(
         CommandStatus.FAILED,
-        error=CommandError(code, message),
+        error=CommandError(code, message, dict(details or {})),
     )
 
 

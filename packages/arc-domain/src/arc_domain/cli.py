@@ -43,65 +43,109 @@ class _UsageError(ValueError):
     """An invalid invocation that should use the command's usage exit code."""
 
 
+class _HelpRequested(Exception):
+    pass
+
+
 class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         raise _UsageError(message)
 
+    def exit(self, status: int = 0, message: str | None = None) -> None:
+        if status == 0:
+            raise _HelpRequested
+        super().exit(status, message)
+
 
 def _parser() -> _Parser:
-    parser = _Parser(prog="arc-domain")
+    parser = _Parser(
+        prog="arc-domain",
+        description=(
+            "Build, inspect, and publish durable research-domain evidence "
+            "from a seed paper."
+        ),
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    build = commands.add_parser("build")
-    build.add_argument("seed_paper")
-    build.add_argument("--intent", default="")
-    build.add_argument("--policy")
-    build.add_argument("--recent-window-days", type=int)
-    build.add_argument("--citer-pool-limit", type=int)
-    build.add_argument("--ranked-paper-limit", type=int)
-    build.add_argument("--graph-node-limit", type=int)
+    build = commands.add_parser(
+        "build",
+        help="build a domain from a seed paper",
+        description="Build and publish a durable research domain from one seed paper.",
+    )
+    build.add_argument("seed_paper", help="seed paper identifier")
+    build.add_argument("--intent", default="", help="research intent used to focus the build")
+    build.add_argument("--policy", help="path to a domain-build policy JSON document")
+    build.add_argument("--recent-window-days", type=int, help="override the recent-paper window")
+    build.add_argument("--citer-pool-limit", type=int, help="override the citer candidate limit")
+    build.add_argument("--ranked-paper-limit", type=int, help="override the ranked-paper limit")
+    build.add_argument("--graph-node-limit", type=int, help="override the graph node limit")
     build.add_argument(
         "--foundation-mode",
         choices=("infer-from-seed", "fixed-seed"),
+        help="foundation-paper selection strategy",
     )
     build.add_argument(
         "--citer-selection-mode",
         choices=("representative-plus-recent", "strict-window"),
+        help="citer selection strategy",
     )
-    build.add_argument("--llm-provider", default="auto")
-    build.add_argument("--model")
+    build.add_argument("--llm-provider", default="auto", help="LLM provider (default: auto)")
+    build.add_argument("--model", help="provider-specific model name")
     build.add_argument(
-        "--model-tier", choices=("low", "medium", "high", "xhigh"), default="medium"
+        "--model-tier",
+        choices=("low", "medium", "high", "xhigh"),
+        default="medium",
+        help="model reasoning tier (default: medium)",
     )
-    build.add_argument("--workers", type=int, default=8)
-    build.add_argument("--cache-root")
-    build.add_argument("--run-id")
+    build.add_argument("--workers", type=int, default=8, help="parallel workers (default: 8)")
+    build.add_argument("--cache-root", help="override the domain cache directory")
+    build.add_argument("--run-id", help="explicit durable run identifier")
 
-    resume = commands.add_parser("resume")
-    resume.add_argument("run_id")
-    resume.add_argument("--input")
-    resume.add_argument("--workers", type=int, default=8)
-    resume.add_argument("--cache-root")
+    resume = commands.add_parser(
+        "resume",
+        help="resume a paused or interrupted domain build",
+        description="Resume a paused or interrupted domain build.",
+    )
+    resume.add_argument("run_id", help="durable run identifier")
+    resume.add_argument("--input", help="ResumeInput JSON object")
+    resume.add_argument("--workers", type=int, default=8, help="parallel workers (default: 8)")
+    resume.add_argument("--cache-root", help="override the domain cache directory")
 
-    status = commands.add_parser("status")
+    status = commands.add_parser(
+        "status",
+        help="inspect a build by run or domain ID",
+        description="Inspect the latest state of a domain build.",
+    )
     selectors = status.add_mutually_exclusive_group(required=True)
-    selectors.add_argument("--run-id")
-    selectors.add_argument("--domain-id")
-    status.add_argument("--cache-root")
+    selectors.add_argument("--run-id", help="durable run identifier")
+    selectors.add_argument("--domain-id", help="published domain identifier")
+    status.add_argument("--cache-root", help="override the domain cache directory")
 
-    for name in ("get-summary", "get-graph"):
-        command = commands.add_parser(name)
-        command.add_argument("--domain-id", required=True)
-        command.add_argument("--cache-root")
+    query_commands = {
+        "get-summary": "read the active published domain summary",
+        "get-graph": "read the active published domain graph",
+    }
+    for name, summary in query_commands.items():
+        command = commands.add_parser(name, help=summary, description=summary.capitalize() + ".")
+        command.add_argument("--domain-id", required=True, help="published domain identifier")
+        command.add_argument("--cache-root", help="override the domain cache directory")
 
-    stop = commands.add_parser("stop")
-    stop.add_argument("run_id")
-    stop.add_argument("--cache-root")
-    stop.add_argument("--reason")
+    stop = commands.add_parser(
+        "stop",
+        help="request a durable build stop",
+        description="Request a cooperative stop for a durable domain build.",
+    )
+    stop.add_argument("run_id", help="durable run identifier")
+    stop.add_argument("--cache-root", help="override the domain cache directory")
+    stop.add_argument("--reason", help="human-readable stop reason")
 
-    validate = commands.add_parser("validate")
-    validate.add_argument("run_id")
-    validate.add_argument("--cache-root")
+    validate = commands.add_parser(
+        "validate",
+        help="validate durable build state",
+        description="Validate the stored artifacts and state for a domain build.",
+    )
+    validate.add_argument("run_id", help="durable run identifier")
+    validate.add_argument("--cache-root", help="override the domain cache directory")
     return parser
 
 
@@ -410,19 +454,43 @@ def _dispatch(args: argparse.Namespace) -> tuple[CommandResult, int] | int:
     raise AssertionError(args.command)
 
 
+def _help_command(arguments: list[str]) -> str:
+    commands = {
+        "build",
+        "resume",
+        "status",
+        "get-summary",
+        "get-graph",
+        "stop",
+        "validate",
+    }
+    command = arguments[0] if arguments and arguments[0] in commands else None
+    return " ".join(
+        part for part in ("arc-domain", command, "--help") if part is not None
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    parser = _parser()
     try:
-        args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
+        args = parser.parse_args(arguments)
         dispatched = _dispatch(args)
         if isinstance(dispatched, int):
             return dispatched
         result, exit_code = dispatched
         return _emit(result, exit_code=exit_code)
+    except _HelpRequested:
+        return 0
     except _UsageError as exc:
         return _emit(
             CommandResult(
                 CommandStatus.FAILED,
-                error=CommandError("invalid_request", str(exc)),
+                error=CommandError(
+                    "invalid_request",
+                    str(exc),
+                    {"help_command": _help_command(arguments)},
+                ),
             ),
             exit_code=2,
         )
