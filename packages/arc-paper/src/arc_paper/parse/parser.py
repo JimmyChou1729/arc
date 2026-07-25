@@ -67,7 +67,6 @@ class _PDFEquationUnit:
     """One math-like PDF text line recognized by the shared PDF parser rule."""
 
     raw: str
-    normalized_tex: str
     source_label: str
 
 
@@ -1134,9 +1133,8 @@ def _looks_like_pdf_math(value: str) -> bool:
 def _pdf_equation_unit(value: str) -> _PDFEquationUnit | None:
     """Recognize one logical displayed-equation line in extracted PDF text.
 
-    Reconciliation reuses this exact extraction rule to associate parsed
-    equation units with pages, avoiding a second heuristic that could drift
-    from the parser.
+    The PDF parser retains this narrow rule for generic math extraction and
+    printed-label capture. It does not infer canonical labels from text layout.
     """
 
     if not _looks_like_pdf_math(value):
@@ -1149,7 +1147,6 @@ def _pdf_equation_unit(value: str) -> _PDFEquationUnit | None:
         return None
     return _PDFEquationUnit(
         raw=raw,
-        normalized_tex=tex,
         source_label=_pdf_printed_equation_label(value),
     )
 
