@@ -5,6 +5,7 @@ from arc_paper.ids import (
     inspire_recid,
     normalize_paper_id,
     paper_ids_safe_dir_name,
+    paper_landing_url,
 )
 
 
@@ -45,6 +46,23 @@ def test_normalize_doi():
     assert normalize_paper_id("doi:10.1088/1475-7516/2010/04/027") == "doi:10.1088/1475-7516/2010/04/027"
     assert normalize_paper_id("https://doi.org/10.1007/JHEP01(2010)117.") == "doi:10.1007/jhep01(2010)117"
     assert doi_value("doi:10.1088/1475-7516/2010/04/027") == "10.1088/1475-7516/2010/04/027"
+
+
+def test_paper_landing_url_uses_normalized_supported_identifiers():
+    assert paper_landing_url("0911.3380v2") == (
+        "https://arxiv.org/abs/0911.3380"
+    )
+    assert paper_landing_url("arXiv:hep-th/0601001") == (
+        "https://arxiv.org/abs/hep-th/0601001"
+    )
+    assert paper_landing_url(
+        "https://doi.org/10.1007/JHEP01(2010)117."
+    ) == "https://doi.org/10.1007/jhep01(2010)117"
+    assert paper_landing_url("recid:154280") == (
+        "https://inspirehep.net/literature/154280"
+    )
+    assert paper_landing_url("local-paper") is None
+    assert paper_landing_url("") is None
 
 
 def test_extract_paper_ids_from_natural_language():

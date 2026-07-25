@@ -135,6 +135,7 @@ from .ids import (  # noqa: E402
     arxiv_path_id,
     extract_paper_ids,
     normalize_paper_id,
+    paper_landing_url,
 )
 from .workflows import (  # noqa: E402
     MARKDOWN_PDF_VISUAL_HANDLER,
@@ -251,6 +252,7 @@ __all__ = [
     "MarkdownPDFVisualParseHandler",
     "MarkdownPDFVisualParseRunner",
     "normalize_paper_id",
+    "paper_landing_url",
     "ReferenceInferenceCompleted",
     "ReferenceInferenceHandler",
     "ReferenceInferenceResult",

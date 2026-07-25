@@ -82,6 +82,22 @@ def doi_value(identifier: str) -> str:
     return normalized.split(":", 1)[1]
 
 
+def paper_landing_url(identifier: str) -> str | None:
+    """Return the canonical public landing page for a supported paper ID."""
+
+    normalized = normalize_paper_id(identifier)
+    if normalized.startswith("arXiv:"):
+        return f"https://arxiv.org/abs/{normalized.removeprefix('arXiv:')}"
+    if normalized.startswith("doi:"):
+        return f"https://doi.org/{normalized.removeprefix('doi:')}"
+    if normalized.startswith("inspire:"):
+        return (
+            "https://inspirehep.net/literature/"
+            f"{normalized.removeprefix('inspire:')}"
+        )
+    return None
+
+
 def paper_ids_safe_dir_name(identifiers: Iterable[str] | str) -> str:
     values = [identifiers] if isinstance(identifiers, str) else identifiers
     normalized_ids = _dedupe_ids([normalize_paper_id(str(identifier)) for identifier in values if str(identifier)])
