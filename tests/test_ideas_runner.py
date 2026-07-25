@@ -8,6 +8,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from arc_llm import InteractionRequest, InteractionResponse, LLMCompleted
 
 
@@ -383,6 +385,90 @@ def test_no_info_disables_evidence_and_cross_domain_keeps_structured_context(tmp
     assert cross_loop["context"]["exploration_profile"]["profile_id"] == "forward"
     assert set(cross_loop["proposers"][0]["interaction_operations"]) == set(runner.EVIDENCE_OPERATION_NAMES)
     assert "review_payload" not in cross_loop["reviewer"]["output_schema"]["properties"]
+
+
+def test_cross_domain_cards_accept_v5_summaries_without_domain_id(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    project = tmp_path / "cross-project"
+    _write_cross_domain_manifest(project)
+    for domain_id in ("a", "b"):
+        (project / f"domain/{domain_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "arc.domain_summary.v5",
+                    "mathematical_opportunities": {
+                        "well_defined_problems": []
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    result = runner.run_ideas(
+        {
+            "schema_version": "arc.workflow.ideas.config.v1",
+            "run_id": "cross-v5",
+            "run_dir": str(project / "ideas"),
+            "project_dir": str(project),
+            "user_intent": "Transfer a useful method.",
+            "variant_config_dir": str(WORKFLOW_JSON),
+            "variant_glob": "ideas-cross-domain.variant.json",
+            "loops_per_variant": 1,
+            "exploration_profiles": [
+                {"profile_id": "forward", "mission": "Transfer A to B."}
+            ],
+        },
+        dry_run=True,
+    )
+
+    cards = result["batch_request"]["loops"][0]["context"]["domain_cards"]
+    assert all(
+        card["summary_capabilities"]["mathematical_opportunities"]
+        for card in cards
+    )
+
+
+def test_cross_domain_cards_reject_domain_id_in_closed_v5_summary(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    project = tmp_path / "cross-project"
+    _write_cross_domain_manifest(project)
+    (project / "domain/a.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "arc.domain_summary.v5",
+                "domain_id": "a",
+                "mathematical_opportunities": {
+                    "well_defined_problems": []
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        runner.ConfigError,
+        match="arc.domain_summary.v5 must not contain domain_id",
+    ):
+        runner.run_ideas(
+            {
+                "schema_version": "arc.workflow.ideas.config.v1",
+                "run_id": "cross-invalid-v5",
+                "run_dir": str(project / "ideas"),
+                "project_dir": str(project),
+                "user_intent": "Transfer a useful method.",
+                "variant_config_dir": str(WORKFLOW_JSON),
+                "variant_glob": "ideas-cross-domain.variant.json",
+                "loops_per_variant": 1,
+                "exploration_profiles": [
+                    {"profile_id": "forward", "mission": "Transfer A to B."}
+                ],
+            },
+            dry_run=True,
+        )
 
 
 def test_one_shared_evidence_resolver_enforces_allowlist_budget_and_cache_reuse(tmp_path: Path) -> None:

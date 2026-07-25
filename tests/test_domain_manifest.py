@@ -39,19 +39,63 @@ def _write_domain(
 ) -> None:
     domain = project / "domain"
     domain.mkdir(parents=True, exist_ok=True)
+    context_path = project / "context.json"
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    records = context.setdefault("domain_records", [])
+    if not any(
+        isinstance(item, dict) and item.get("domain_id") == domain_id
+        for item in records
+    ):
+        records.append({"domain_id": domain_id, "seed_paper": seed})
+        context_path.write_text(json.dumps(context), encoding="utf-8")
+    summary = {
+        "schema_version": schema_version,
+        "domain_title": f"Domain {domain_id}",
+        "foundation_paper": {"paper_id": seed},
+    }
+    if schema_version == "arc.domain_summary.v4":
+        summary["domain_id"] = domain_id
     (domain / f"{prefix}_domain_summary.json").write_text(
+        json.dumps(summary),
+        encoding="utf-8",
+    )
+    (domain / f"{prefix}_domain_summary.md").write_text("# Domain\n", encoding="utf-8")
+    (domain / f"{prefix}_paper_json_pack.json").write_text(
         json.dumps(
             {
-                "schema_version": schema_version,
+                "schema_version": "arc.domain_paper_json_pack.v1",
                 "domain_id": domain_id,
-                "domain_title": f"Domain {domain_id}",
-                "foundation_paper": {"paper_id": seed},
+                "foundation_paper": seed,
+                "paper_count": 0,
+                "papers": [],
+                "warnings": [],
+                "created_at": "2026-07-25T00:00:00+00:00",
             }
         ),
         encoding="utf-8",
     )
-    (domain / f"{prefix}_domain_summary.md").write_text("# Domain\n", encoding="utf-8")
-    (domain / f"{prefix}_paper_json_pack.json").write_text("{}\n", encoding="utf-8")
+
+
+def _write_orphan_pack(
+    project: Path,
+    prefix: str,
+    domain_id: str,
+    seed: str,
+) -> None:
+    (project / "domain" / f"{prefix}_paper_json_pack.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "arc.domain_paper_json_pack.v1",
+                "domain_id": domain_id,
+                "foundation_paper": seed,
+                "paper_count": 0,
+                "papers": [],
+                "warnings": [],
+                "created_at": "2026-07-25T00:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_manifest_helper_uses_source_bootstrap_and_typed_llm_contract() -> None:
@@ -129,6 +173,219 @@ def test_manifest_indexes_mixed_v4_v5_summaries_without_rewriting_them(tmp_path:
     assert json.loads((project / "domain/b_domain_summary.json").read_text())["schema_version"] == (
         "arc.domain_summary.v5"
     )
+    assert "domain_id" not in json.loads(
+        (project / "domain/b_domain_summary.json").read_text()
+    )
+
+
+def test_manifest_rejects_legacy_summary_identity_mismatch(tmp_path: Path) -> None:
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text("{}\n", encoding="utf-8")
+    _write_domain(project, "a", "domain-a", "seed:a")
+    summary_path = project / "domain/a_domain_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["domain_id"] = "wrong-domain"
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(module.ManifestError, match="does not match paper-pack"):
+        module.build_domain_manifest(project)
+
+
+def test_manifest_rejects_domain_id_in_closed_v5_summary(tmp_path: Path) -> None:
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text("{}\n", encoding="utf-8")
+    _write_domain(
+        project,
+        "a",
+        "domain-a",
+        "seed:a",
+        schema_version="arc.domain_summary.v5",
+    )
+    summary_path = project / "domain/a_domain_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["domain_id"] = "domain-a"
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(
+        module.ManifestError,
+        match="arc.domain_summary.v5 must not contain domain_id",
+    ):
+        module.build_domain_manifest(project)
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "message"),
+    [
+        (None, "missing required string field schema_version"),
+        (
+            "arc.domain_summary.v99",
+            "schema_version must be arc.domain_summary.v4 or arc.domain_summary.v5",
+        ),
+    ],
+)
+def test_manifest_rejects_missing_or_unknown_summary_schema(
+    tmp_path: Path,
+    schema_version: str | None,
+    message: str,
+) -> None:
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text("{}\n", encoding="utf-8")
+    _write_domain(project, "a", "domain-a", "seed:a")
+    summary_path = project / "domain/a_domain_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if schema_version is None:
+        summary.pop("schema_version")
+    else:
+        summary["schema_version"] = schema_version
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(module.ManifestError, match=message):
+        module.build_domain_manifest(project)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"schema_version": "wrong"}, "schema_version must be"),
+        ({"domain_id": None}, "missing required string field domain_id"),
+    ],
+)
+def test_manifest_rejects_invalid_paper_pack_identity_contract(
+    tmp_path: Path,
+    mutation: dict[str, object],
+    message: str,
+) -> None:
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text("{}\n", encoding="utf-8")
+    _write_domain(project, "a", "domain-a", "seed:a")
+    pack_path = project / "domain/a_paper_json_pack.json"
+    pack = json.loads(pack_path.read_text(encoding="utf-8"))
+    pack.update(mutation)
+    pack_path.write_text(json.dumps(pack), encoding="utf-8")
+
+    with pytest.raises(module.ManifestError, match=message):
+        module.build_domain_manifest(project)
+
+
+def test_manifest_without_domain_records_uses_legacy_seed_fallback(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    context_path = project / "context.json"
+    context_path.write_text("{}\n", encoding="utf-8")
+    _write_domain(project, "a", "domain-a", "seed:a")
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    context["domain_records"] = []
+    context_path.write_text(json.dumps(context), encoding="utf-8")
+
+    payload = module.build_domain_manifest(project)
+
+    assert payload["domain_packages"][0]["domain_package_id"] == "domain-a"
+    assert payload["domain_packages"][0]["seed_paper"] == "seed:a"
+
+
+def test_manifest_nonempty_domain_records_must_cover_every_paper_pack(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    context_path = project / "context.json"
+    context_path.write_text("{}\n", encoding="utf-8")
+    _write_domain(project, "a", "domain-a", "seed:a")
+    _write_domain(project, "b", "domain-b", "seed:b")
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    context["domain_records"] = [
+        item
+        for item in context["domain_records"]
+        if item["domain_id"] == "domain-a"
+    ]
+    context_path.write_text(json.dumps(context), encoding="utf-8")
+
+    with pytest.raises(
+        module.ManifestError,
+        match="is missing copied paper-pack domain IDs: domain-b",
+    ):
+        module.build_domain_manifest(project)
+
+
+def test_manifest_rejects_orphan_pack_even_when_domain_records_cover_its_id(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    context_path = project / "context.json"
+    context_path.write_text("{}\n", encoding="utf-8")
+    _write_domain(project, "a", "domain-a", "seed:a")
+    _write_orphan_pack(project, "orphan", "domain-orphan", "seed:orphan")
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    context["domain_records"].append(
+        {"domain_id": "domain-orphan", "seed_paper": "seed:orphan"}
+    )
+    context_path.write_text(json.dumps(context), encoding="utf-8")
+
+    with pytest.raises(
+        module.ManifestError,
+        match=(
+            "copied paper pack has no matching domain summary: "
+            "domain/orphan_paper_json_pack.json"
+        ),
+    ):
+        module.build_domain_manifest(project)
+
+
+def test_manifest_without_domain_records_ignores_orphan_pack(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    context_path = project / "context.json"
+    context_path.write_text("{}\n", encoding="utf-8")
+    _write_domain(project, "a", "domain-a", "seed:a")
+    _write_orphan_pack(project, "orphan", "domain-orphan", "seed:orphan")
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    context["domain_records"] = []
+    context_path.write_text(json.dumps(context), encoding="utf-8")
+
+    payload = module.build_domain_manifest(project)
+
+    assert [
+        package["domain_package_id"] for package in payload["domain_packages"]
+    ] == ["domain-a"]
+
+
+def test_manifest_rejects_domain_records_without_copied_packs(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    context_path = project / "context.json"
+    context_path.write_text("{}\n", encoding="utf-8")
+    _write_domain(project, "a", "domain-a", "seed:a")
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    context["domain_records"].append(
+        {"domain_id": "domain-extra", "seed_paper": "seed:extra"}
+    )
+    context_path.write_text(json.dumps(context), encoding="utf-8")
+
+    with pytest.raises(
+        module.ManifestError,
+        match="domain IDs with no copied paper pack: domain-extra",
+    ):
+        module.build_domain_manifest(project)
 
 
 def test_manifest_prefers_requested_seed_domain_records_over_foundation(tmp_path: Path) -> None:
@@ -242,7 +499,13 @@ def test_manifest_requires_companion_artifacts(tmp_path: Path) -> None:
     (project / "domain").mkdir(parents=True)
     (project / "context.json").write_text("{}\n", encoding="utf-8")
     (project / "domain/x_domain_summary.json").write_text(
-        json.dumps({"domain_id": "x", "domain_title": "X"}),
+        json.dumps(
+            {
+                "schema_version": "arc.domain_summary.v4",
+                "domain_id": "x",
+                "domain_title": "X",
+            }
+        ),
         encoding="utf-8",
     )
 

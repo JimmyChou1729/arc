@@ -813,8 +813,20 @@ def _domain_cards(config: IdeasConfig) -> list[dict[str, Any]]:
             version = str(summary.get("schema_version", "")).strip()
             if version not in {"arc.domain_summary.v4", "arc.domain_summary.v5"}:
                 raise ConfigError(f"{summary_path}.schema_version must be arc.domain_summary.v4 or arc.domain_summary.v5")
-            if str(summary.get("domain_id", "")).strip() != str(package_id):
-                raise ConfigError(f"package {package_id!r} points to summary for another package: {summary_path}")
+            legacy_domain_id = str(summary.get("domain_id", "")).strip()
+            if version == "arc.domain_summary.v5" and "domain_id" in summary:
+                raise ConfigError(
+                    f"{summary_path} arc.domain_summary.v5 must not contain domain_id"
+                )
+            if (
+                version == "arc.domain_summary.v4"
+                and legacy_domain_id
+                and legacy_domain_id != str(package_id)
+            ):
+                raise ConfigError(
+                    f"package {package_id!r} points to legacy summary for "
+                    f"another package: {summary_path}"
+                )
             versions.append(version)
             if version == "arc.domain_summary.v5":
                 raw = summary.get("mathematical_opportunities")

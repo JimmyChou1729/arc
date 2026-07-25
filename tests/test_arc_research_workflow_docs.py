@@ -1115,6 +1115,12 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     assert "domain_manifest_path" in ideas
     assert "two or more fields use cross-domain prompts" in ideas
     assert "source domain may contribute a mature method" in ideas
+    compact_domain = " ".join(domain.split())
+    assert "paper JSON pack's `domain_id` is the authoritative" in compact_domain
+    assert "v5 does not carry that identity field" in compact_domain
+    assert "match in both directions" in compact_domain
+    assert "legacy project with no `domain_records`" in compact_domain
+    assert "only a consistency assertion" in compact_domain
 
 
 def test_single_domain_ideas_document_optional_interdisciplinary_discovery() -> None:

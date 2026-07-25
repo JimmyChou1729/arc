@@ -184,6 +184,13 @@ The owning domain workflow prints and records summary warnings to project `self-
 
 That workflow writes `arc.workflow.domain_manifest.v2` only after a completed
 domain export and validates its referenced artifacts before any ideas workflow.
+The project-local paper JSON pack's v1 `domain_id` is the authoritative
+`domain_package_id`; the closed v5 summary deliberately has no identity field.
+When `context.json.domain_records` is nonempty, the helper requires exact
+bidirectional coverage between those records and copied paper packs and uses
+the records' actual build seeds. A legacy project without records retains its
+foundation/prefix seed fallback, but the pack remains the package-identity
+source. A legacy summary ID is checked only for consistency.
 For multiple exported packages, its `write-domain-manifest.py` helper uses one
 typed `LLMClient.generate` pair-classification request with a deterministic task
 ID and a project-local `domain/field-grouping-llm` run root. Invalid grouping

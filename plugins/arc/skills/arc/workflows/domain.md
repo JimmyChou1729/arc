@@ -300,6 +300,16 @@ For a resolved origin, retain its source candidate/evidence in
 candidate. A v1 build may still distinguish its requested seed from the
 builder-selected foundation.
 
+The copied paper JSON pack's `domain_id` is the authoritative
+`domain_package_id`; a domain summary is research content and v5 does not carry
+that identity field. When `domain_records` is nonempty, the helper requires its
+domain IDs and the copied paper-pack domain IDs to match in both directions and
+uses each record's actual build seed. For a legacy project with no
+`domain_records`, it still derives the seed from the summary foundation paper,
+then the safe file prefix, while retaining the paper-pack domain ID as the
+package identity. A legacy pre-v5 summary `domain_id`, when present, is only a
+consistency assertion against the paper pack and is never the identity source.
+
 ```bash
 python3 <skill-dir>/scripts/write-domain-manifest.py \
   --project-dir <project-dir> \
