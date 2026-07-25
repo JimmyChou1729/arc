@@ -37,8 +37,7 @@ arc-companion build <source-path-or-paper-id> \
   --approx-term-count <estimate> \
   --user-intent '<intent>' \
   --provider <provider> \
-  --workers <workers> \
-  --json
+  --workers <workers>
 ```
 
 Add `--pdf <path>` for a local validator or `--pdf fetch` for a remote paper.
@@ -62,7 +61,7 @@ resume key:
 
 ```bash
 arc-companion resume --project-dir <project-dir> \
-  --input '<resume-input-json>' --json
+  --input '<resume-input-json>'
 ```
 
 For an unsafe reviewer patch, the supervision request permits discarding that
@@ -74,8 +73,8 @@ arbitration or conflict graph.
 ### Step 1: Inspect and validate
 
 ```bash
-arc-companion status --project-dir <project-dir> --json
-arc-companion validate --project-dir <project-dir> --json
+arc-companion status --project-dir <project-dir>
+arc-companion validate --project-dir <project-dir>
 ```
 
 The current release changes only after both PDF and Web validate. Technical
@@ -87,7 +86,7 @@ Use render after a style, font, renderer, or validator change:
 
 ```bash
 arc-companion render --project-dir <project-dir> \
-  --format all --json
+  --format all
 ```
 
 `--format pdf` and `--format web` limit returned delivery artifacts; publication

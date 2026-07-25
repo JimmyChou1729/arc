@@ -253,7 +253,7 @@ def _summary_table(payload: dict[str, Any]) -> str:
     ]
     for warning in payload.get("warnings", []):
         lines.extend(["", str(warning)])
-    for entry in payload.get("summary_order", payload.get("ranking", [])):
+    for entry in payload.get("ranking", []):
         lines.extend(["", *_round_marks_summary_section(entry)])
     if lines and lines[-1] == "":
         lines.pop()
@@ -304,7 +304,7 @@ def _cross_summary_table(payload: dict[str, Any]) -> str:
     ]
     for warning in payload.get("warnings", []):
         lines.extend(["", str(warning)])
-    for entry in payload.get("summary_order", payload.get("ranking", [])):
+    for entry in payload.get("ranking", []):
         lines.extend(["", *_round_marks_summary_section_cross(entry)])
     return "\n".join(lines)
 

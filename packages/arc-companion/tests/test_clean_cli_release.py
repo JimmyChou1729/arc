@@ -124,7 +124,7 @@ def test_unknown_nonempty_project_is_rejected_without_modification(
     before = unknown.read_bytes()
 
     assert main(
-        ["build", str(source), "--project-dir", str(project), "--json"]
+        ["build", str(source), "--project-dir", str(project)]
     ) == 1
 
     result = json.loads(capsys.readouterr().out)
@@ -159,7 +159,7 @@ def test_status_persists_source_diagnostics_and_stop_uses_same_run(
     )
 
     assert main(
-        ["status", "--project-dir", str(project.root), "--json"]
+        ["status", "--project-dir", str(project.root)]
     ) == 2
     status = json.loads(capsys.readouterr().out)
     assert status["schema_version"] == "arc.command_result.v2"
@@ -191,7 +191,6 @@ def test_status_persists_source_diagnostics_and_stop_uses_same_run(
             str(project.root),
             "--reason",
             "user requested",
-            "--json",
         ]
     ) == 0
     stopped_result = json.loads(capsys.readouterr().out)
@@ -230,7 +229,7 @@ def test_status_does_not_attribute_an_old_release_to_the_selected_run(
     )
 
     assert main(
-        ["status", "--project-dir", str(project.root), "--json"]
+        ["status", "--project-dir", str(project.root)]
     ) == 2
     status = json.loads(capsys.readouterr().out)
     data = status["data"]
@@ -257,7 +256,7 @@ def test_status_does_not_attribute_an_old_release_to_the_selected_run(
         run_id=selected_run_id,
     )
     assert main(
-        ["status", "--project-dir", str(project.root), "--json"]
+        ["status", "--project-dir", str(project.root)]
     ) == 2
     matched = json.loads(capsys.readouterr().out)["data"]
     assert matched["active_release"]["run_id"] == selected_run_id
@@ -543,7 +542,6 @@ def test_cli_rejects_missing_pdf_before_source_or_project_import(
             str(project),
             "--pdf",
             str(missing_pdf),
-            "--json",
         ]
     ) == 1
 

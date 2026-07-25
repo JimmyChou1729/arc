@@ -548,7 +548,7 @@ def test_manifest_rejects_domain_id_in_closed_v5_summary(tmp_path: Path) -> None
         (None, "summary.schema_version must be a non-empty string"),
         (
             "arc.domain_summary.v99",
-            "summary.schema_version must be arc.domain_summary.v4 or arc.domain_summary.v5",
+            "summary.schema_version must be arc.domain_summary.v5",
         ),
     ],
 )

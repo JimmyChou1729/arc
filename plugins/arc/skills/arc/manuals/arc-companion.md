@@ -49,8 +49,7 @@ arc-companion render --project-dir <project-dir> --format all
 ```
 
 Validation checks the accepted source-anchored book and release. Rendering is
-model-free and consumes only accepted artifacts. The accepted
-compatibility-only `--json` flag does not change typed JSON output.
+model-free and consumes only accepted artifacts.
 
 ## Help
 

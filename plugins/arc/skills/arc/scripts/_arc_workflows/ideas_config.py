@@ -23,7 +23,7 @@ from _arc_workflows.workflow_io import (
 from _arc_workflows.source_checkout import validate_strict_checkout_path
 
 
-IDEAS_CONFIG_SCHEMA = "arc.workflow.ideas.config.v1"
+IDEAS_CONFIG_SCHEMA = "arc.workflow.ideas.config.v2"
 IDEAS_VARIANT_SCHEMA = "arc.workflow.ideas.variant.v1"
 DOMAIN_MANIFEST_SCHEMA = "arc.workflow.domain_manifest.v3"
 RESEARCH_SCOPES = {"single_domain", "cross_domain"}
@@ -75,6 +75,22 @@ class IdeasConfig:
 
 def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
     data = copy.deepcopy(dict(payload))
+    _reject_unknown_fields(
+        data,
+        {
+            "schema_version",
+            "run_id",
+            "run_dir",
+            "project_dir",
+            "user_intent",
+            "variant_config_dir",
+            "variant_glob",
+            "loops_per_variant",
+            "domain_manifest_path",
+            "exploration_profiles",
+        },
+        "ideas config",
+    )
     schema_version = _required_text(data, "schema_version")
     if schema_version != IDEAS_CONFIG_SCHEMA:
         raise ConfigError(f"schema_version must be {IDEAS_CONFIG_SCHEMA}")
@@ -89,8 +105,6 @@ def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
     if not variant_glob:
         raise ConfigError("variant_glob is required")
     loops_per_variant = _positive_int(data.get("loops_per_variant", 5), "loops_per_variant")
-    if "artifact_options" in data:
-        raise ConfigError("artifact_options is not supported")
     domain_manifest_path = _configured_manifest_path(
         data, project_dir=project_dir
     )
@@ -133,6 +147,18 @@ def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
         exploration_profiles=exploration_profiles,
         routing_warnings=routing_warnings,
     )
+
+
+def _reject_unknown_fields(
+    payload: Mapping[str, Any],
+    allowed: set[str],
+    field_name: str,
+) -> None:
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ConfigError(
+            f"{field_name} contains unsupported fields: {', '.join(unknown)}"
+        )
 
 
 def _discover_variants(root: Path, pattern: str) -> list[VariantConfig]:

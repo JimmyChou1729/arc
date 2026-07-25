@@ -1,5 +1,5 @@
 {
-  "schema_version": "arc.workflow.calculate.config.v1",
+  "schema_version": "arc.workflow.calculate.config.v2",
   "run_id": "<calculate-run-id>",
   "run_dir": "<project-dir>/calculate/<run-id>/execute",
   "workflow_json_dir": "<skill-workflow-json-dir>",
@@ -9,12 +9,7 @@
     "enabled": false
   },
   "defaults": {
-    "model_tier": "high",
-    "runtime": {
-      "codex_reasoning_effort": "high",
-      "codex_model_verbosity": "medium",
-      "claude_effort": "high"
-    }
+    "model_tier": "high"
   },
   "steps": []
 }

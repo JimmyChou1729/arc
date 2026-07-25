@@ -1,5 +1,5 @@
 {
-  "schema_version": "arc.workflow.ideas.config.v1",
+  "schema_version": "arc.workflow.ideas.config.v2",
   "run_id": "<run-id>",
   "run_dir": "<project-dir>/ideas",
   "project_dir": "<project-dir>",

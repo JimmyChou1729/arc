@@ -78,7 +78,7 @@ def _single_domain_config(tmp_path: Path, *, loops: int = 1) -> dict[str, Any]:
     (project / "domain" / "brief.md").write_text("# Brief\n", encoding="utf-8")
     _write_single_domain_manifest(project)
     return {
-        "schema_version": "arc.workflow.ideas.config.v1",
+        "schema_version": "arc.workflow.ideas.config.v2",
         "run_id": "ideas-test",
         "run_dir": str(project / "ideas"),
         "project_dir": str(project),
@@ -483,7 +483,7 @@ def test_no_info_disables_evidence_and_cross_domain_keeps_structured_context(tmp
     _write_cross_domain_manifest(cross_project)
     cross_result = runner.run_ideas(
         {
-            "schema_version": "arc.workflow.ideas.config.v1",
+            "schema_version": "arc.workflow.ideas.config.v2",
             "run_id": "cross",
             "run_dir": str(cross_project / "ideas"),
             "project_dir": str(cross_project),
@@ -511,7 +511,7 @@ def test_ideas_requires_current_manifest_and_bound_seed_provenance(
     project = tmp_path / "cross-project"
     _write_cross_domain_manifest(project)
     config = {
-        "schema_version": "arc.workflow.ideas.config.v1",
+        "schema_version": "arc.workflow.ideas.config.v2",
         "run_id": "current-provenance",
         "run_dir": str(project / "ideas"),
         "project_dir": str(project),
@@ -636,7 +636,7 @@ def test_ideas_binds_package_seed_to_provenance_build_origin(
     ):
         load_ideas_config(
             {
-                "schema_version": "arc.workflow.ideas.config.v1",
+                "schema_version": "arc.workflow.ideas.config.v2",
                 "run_id": "seed-mismatch",
                 "run_dir": str(project / "ideas"),
                 "project_dir": str(project),
@@ -675,7 +675,7 @@ def test_cross_domain_cards_accept_v5_summaries_without_domain_id(
 
     result = runner.run_ideas(
         {
-            "schema_version": "arc.workflow.ideas.config.v1",
+            "schema_version": "arc.workflow.ideas.config.v2",
             "run_id": "cross-v5",
             "run_dir": str(project / "ideas"),
             "project_dir": str(project),
@@ -719,7 +719,7 @@ def test_cross_domain_cards_reject_v4_summaries(
     ):
         runner.run_ideas(
             {
-                "schema_version": "arc.workflow.ideas.config.v1",
+                "schema_version": "arc.workflow.ideas.config.v2",
                 "run_id": "cross-v4",
                 "run_dir": str(project / "ideas"),
                 "project_dir": str(project),
@@ -763,7 +763,7 @@ def test_cross_domain_cards_reject_domain_id_in_closed_v5_summary(
     ):
         runner.run_ideas(
             {
-                "schema_version": "arc.workflow.ideas.config.v1",
+                "schema_version": "arc.workflow.ideas.config.v2",
                 "run_id": "cross-invalid-v5",
                 "run_dir": str(project / "ideas"),
                 "project_dir": str(project),
@@ -889,7 +889,7 @@ def test_artifact_options_is_rejected(
 
     with pytest.raises(
         IdeasConfigError,
-        match="artifact_options is not supported",
+        match="ideas config contains unsupported fields: artifact_options",
     ):
         runner.run_ideas(
             {

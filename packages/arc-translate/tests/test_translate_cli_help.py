@@ -31,12 +31,12 @@ def test_root_and_subcommand_help_is_human_readable(
     assert "arc.command_result.v2" not in captured.out
 
 
-def test_json_flag_help_explains_compatibility(
+def test_help_has_no_obsolete_json_flag(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     assert main(["status", "--help"]) == 0
     output = capsys.readouterr().out
-    assert "compatibility flag; command results are always JSON" in output
+    assert "--json" not in output
 
 
 def test_usage_error_points_to_contextual_help(

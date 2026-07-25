@@ -16,7 +16,7 @@ from _arc_workflows.workflow_io import (
 )
 
 
-CALCULATE_CONFIG_SCHEMA = "arc.workflow.calculate.config.v1"
+CALCULATE_CONFIG_SCHEMA = "arc.workflow.calculate.config.v2"
 CALCULATE_RESULT_SCHEMA = "arc.workflow.calculate.result.v1"
 DEFAULT_HUMAN_GATE_PAUSE_STATUSES = (
     "reference_disagrees",
@@ -54,6 +54,21 @@ class CalculateConfig:
 
 def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
     data = copy.deepcopy(dict(payload))
+    _reject_unknown_fields(
+        data,
+        {
+            "schema_version",
+            "run_id",
+            "run_dir",
+            "workflow_json_dir",
+            "proposer_count",
+            "max_recalculations",
+            "human_gate",
+            "defaults",
+            "steps",
+        },
+        "calculate config",
+    )
     schema_version = _required_text(data, "schema_version")
     if schema_version != CALCULATE_CONFIG_SCHEMA:
         raise ConfigError(f"schema_version must be {CALCULATE_CONFIG_SCHEMA}")
@@ -73,11 +88,21 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
     max_recalculations = _nonnegative_int(data.get("max_recalculations", 1), "max_recalculations")
     human_gate = _parse_human_gate(data.get("human_gate", {}))
     defaults = _dict(data.get("defaults", {}), "defaults")
+    _reject_unknown_fields(
+        defaults,
+        {
+            "provider",
+            "model",
+            "model_tier",
+            "integrity_reference_path",
+            "reviewer_allow_internet",
+            "proposer_runtime",
+        },
+        "defaults",
+    )
     if defaults.get("model") is not None and str(defaults.get("provider", "auto") or "auto") == "auto":
         raise ConfigError("defaults.model requires explicit provider")
     _validate_strict_integrity_reference(defaults.get("integrity_reference_path"))
-    if "artifact_options" in data:
-        raise ConfigError("artifact_options is not supported")
 
     raw_steps = data.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
@@ -127,6 +152,18 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
         defaults=defaults,
         steps=steps,
     )
+
+
+def _reject_unknown_fields(
+    payload: Mapping[str, Any],
+    allowed: set[str],
+    field_name: str,
+) -> None:
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ConfigError(
+            f"{field_name} contains unsupported fields: {', '.join(unknown)}"
+        )
 
 
 def _integrity_reference(path_value: Any = None) -> dict[str, str]:

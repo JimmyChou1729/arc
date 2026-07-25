@@ -413,7 +413,7 @@ def test_ranker_preserves_cross_domain_qualification_before_score(tmp_path: Path
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v2"
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v4"
     assert [entry["title"] for entry in payload["ranking"]] == ["Genuine lower score"]
     assert payload["unqualified"][0]["title"] == "Decorative high score"
     assert "transfer_status_must_be_genuine" in payload["unqualified"][0][
@@ -450,7 +450,7 @@ def test_ranker_preserves_single_domain_feasibility_gate(tmp_path: Path) -> None
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v3"
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v4"
     assert payload["ranking"][0]["title"] == "Feasible lower-score idea"
     blocked = next(
         entry
@@ -461,7 +461,7 @@ def test_ranker_preserves_single_domain_feasibility_gate(tmp_path: Path) -> None
     assert "bounded_first_calculation_is_not_ready" in blocked["qualification_reasons"]
 
 
-def test_no_assessment_summary_order_follows_ranking(tmp_path: Path) -> None:
+def test_no_assessment_report_uses_canonical_ranking(tmp_path: Path) -> None:
     ranker = _load_rank_module()
     lower = _single_loop("lower", max_rounds=1, requires_assessment=False)
     higher = _single_loop("higher", max_rounds=1, requires_assessment=False)
@@ -486,7 +486,7 @@ def test_no_assessment_summary_order_follows_ranking(tmp_path: Path) -> None:
         "Higher no-assessment idea",
         "Lower no-assessment idea",
     ]
-    assert payload["summary_order"] == payload["ranking"]
+    assert "summary_order" not in payload
     assert "no_assessment policy" in payload["warnings"][0]
 
 

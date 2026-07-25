@@ -17,7 +17,6 @@ def main(argv: list[str] | None = None) -> int:
         description="ARC calculate workflow runner"
     )
     parser.add_argument("--config", required=True)
-    parser.add_argument("--json", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 

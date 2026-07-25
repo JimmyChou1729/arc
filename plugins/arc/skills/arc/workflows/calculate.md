@@ -87,8 +87,7 @@ Run:
 
 ```bash
 python3 <skill-dir>/scripts/run-calculate.py \
-  --config <project-dir>/calculate/<run-id>/execute/calculate.config.json \
-  --json
+  --config <project-dir>/calculate/<run-id>/execute/calculate.config.json
 ```
 
 The command exits `0` for `completed`, `dry_run`, `blocked_for_user`, and

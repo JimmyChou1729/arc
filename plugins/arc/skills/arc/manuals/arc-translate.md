@@ -43,8 +43,7 @@ arc-translate stop --project-dir <project-dir> --reason "<reason>"
 
 Use the same project directory for every step. Resume input must match the
 current typed pause descriptor; completed and verified work is reused in the
-same run lineage. The accepted compatibility-only `--json` flag does not
-change the typed JSON output.
+same run lineage.
 
 ## Help
 

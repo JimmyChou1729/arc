@@ -71,8 +71,7 @@ def _parser() -> _Parser:
         prog="arc-companion",
         description=(
             "Build, resume, render, and validate source-anchored Companion "
-            "releases. Results are always JSON; --json is retained for "
-            "compatibility."
+            "releases. Results are always JSON."
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -101,7 +100,6 @@ def _parser() -> _Parser:
         "--approx-term-count", type=int, default=50, help="target glossary size (default: 50)"
     )
     build.add_argument("--refresh", action="store_true", help="refresh cached source data")
-    _json_argument(build)
 
     status = commands.add_parser(
         "status",
@@ -109,7 +107,6 @@ def _parser() -> _Parser:
         description="Inspect the selected Companion build and active release.",
     )
     status.add_argument("--project-dir", required=True, help="Companion project directory")
-    _json_argument(status)
 
     resume = commands.add_parser(
         "resume",
@@ -122,7 +119,6 @@ def _parser() -> _Parser:
         help="JSON object or path containing the current pause response",
     )
     resume.add_argument("--workers", type=int, default=4, help="parallel workers (default: 4)")
-    _json_argument(resume)
 
     stop = commands.add_parser(
         "stop",
@@ -131,7 +127,6 @@ def _parser() -> _Parser:
     )
     stop.add_argument("--project-dir", required=True, help="Companion project directory")
     stop.add_argument("--reason", help="human-readable stop reason")
-    _json_argument(stop)
 
     render = commands.add_parser(
         "render",
@@ -145,7 +140,6 @@ def _parser() -> _Parser:
         default="all",
         help="artifact formats to report (default: all)",
     )
-    _json_argument(render)
 
     validate = commands.add_parser(
         "validate",
@@ -153,16 +147,7 @@ def _parser() -> _Parser:
         description="Validate the active release manifest and rendered artifacts.",
     )
     validate.add_argument("--project-dir", required=True, help="Companion project directory")
-    _json_argument(validate)
     return parser
-
-
-def _json_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="compatibility flag; command results are always JSON",
-    )
 
 
 def _help_command(arguments: list[str]) -> str:

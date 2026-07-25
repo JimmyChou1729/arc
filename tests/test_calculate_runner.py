@@ -46,7 +46,7 @@ def load_calculate_modules():
 
 def minimal_config(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "schema_version": "arc.workflow.calculate.config.v1",
+        "schema_version": "arc.workflow.calculate.config.v2",
         "run_id": "calc_001",
         "run_dir": str(tmp_path / "execute"),
         "workflow_json_dir": str(WORKFLOW_JSON),
@@ -581,7 +581,7 @@ def test_dry_run_does_not_invoke_batch_executor(tmp_path: Path) -> None:
     assert fake.calls == []
 
 
-def test_cli_adapter_preserves_arguments_and_json_envelope(
+def test_cli_adapter_preserves_arguments_and_emits_json(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -608,9 +608,7 @@ def test_cli_adapter_preserves_arguments_and_json_envelope(
     monkeypatch.setattr(modules.entry, "_read_json", fake_read)
     monkeypatch.setattr(modules.entry, "run_calculation", fake_run)
 
-    status = modules.entry.main(
-        ["--config", str(config_path), "--json", "--dry-run"]
-    )
+    status = modules.entry.main(["--config", str(config_path), "--dry-run"])
 
     assert status == 0
     assert calls == {
@@ -619,6 +617,15 @@ def test_cli_adapter_preserves_arguments_and_json_envelope(
         "dry_run": True,
     }
     assert json.loads(capsys.readouterr().out) == expected
+
+
+def test_cli_rejects_obsolete_json_flag() -> None:
+    modules = load_calculate_modules()
+
+    with pytest.raises(SystemExit) as caught:
+        modules.entry.main(["--config", "unused.json", "--json"])
+
+    assert caught.value.code == 2
 
 
 def test_default_executor_uses_public_engine_and_committed_round(
@@ -984,7 +991,7 @@ def test_cli_exit_status_contract(
         lambda config, *, dry_run: {"status": result_status},
     )
 
-    assert modules.entry.main(["--config", str(config_path), "--json"]) == expected_exit
+    assert modules.entry.main(["--config", str(config_path)]) == expected_exit
     assert json.loads(capsys.readouterr().out)["status"] == result_status
 
 
@@ -1001,7 +1008,7 @@ def test_cli_config_error_uses_usage_exit_two(
     )
 
     with pytest.raises(SystemExit) as caught:
-        modules.entry.main(["--config", str(config_path), "--json"])
+        modules.entry.main(["--config", str(config_path)])
 
     assert caught.value.code == 2
 
@@ -1023,7 +1030,7 @@ def test_config_parsing_and_model_selection_errors_are_typed(tmp_path: Path) -> 
     assert config.human_gate["enabled"] is False
     with pytest.raises(
         modules.config.ConfigError,
-        match="artifact_options is not supported",
+        match="calculate config contains unsupported fields: artifact_options",
     ):
         modules.config.load_calculation_config(
             minimal_config(
@@ -1034,6 +1041,13 @@ def test_config_parsing_and_model_selection_errors_are_typed(tmp_path: Path) -> 
     with pytest.raises(modules.config.ConfigError, match="explicit provider"):
         modules.config.load_calculation_config(
             minimal_config(tmp_path, defaults={"model": "exact-model"})
+        )
+    with pytest.raises(
+        modules.config.ConfigError,
+        match="defaults contains unsupported fields: tier",
+    ):
+        modules.config.load_calculation_config(
+            minimal_config(tmp_path, defaults={"tier": "high"})
         )
 
 
@@ -1104,7 +1118,7 @@ def test_calculate_config_canonicalizes_owned_paths(tmp_path: Path) -> None:
     assert config.workflow_json_dir == WORKFLOW_JSON.resolve()
 
 
-def test_calculate_template_and_docs_do_not_offer_prompt_omission() -> None:
+def test_calculate_template_and_docs_do_not_offer_retired_options() -> None:
     template = json.loads(
         (WORKFLOW_JSON / "calculate.config.template.json").read_text(
             encoding="utf-8"
@@ -1113,7 +1127,9 @@ def test_calculate_template_and_docs_do_not_offer_prompt_omission() -> None:
     workflow = (SKILL / "workflows/calculate.md").read_text(encoding="utf-8")
 
     assert "artifact_options" not in template
+    assert "runtime" not in template["defaults"]
     assert "save_prompts" not in workflow
+    assert "--json" not in workflow
 
 
 def test_proposer_runtime_has_no_unreachable_non_calculation_branch() -> None:

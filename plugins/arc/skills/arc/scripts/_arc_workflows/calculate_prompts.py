@@ -434,7 +434,7 @@ def _worker_model(defaults: Mapping[str, Any]) -> ModelSelection:
     provider = str(defaults.get("provider", "auto") or "auto")
     model_value = defaults.get("model")
     model = None if model_value is None else str(model_value)
-    tier = str(defaults.get("model_tier", defaults.get("tier", "high")) or "high")
+    tier = str(defaults.get("model_tier", "high") or "high")
     try:
         return ModelSelection(provider=provider, model=model, tier=tier)  # type: ignore[arg-type]
     except ValueError as exc:

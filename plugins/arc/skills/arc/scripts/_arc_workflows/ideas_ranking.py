@@ -33,6 +33,8 @@ from _arc_workflows.ideas_report import (
     single_domain_diagnostics,
 )
 
+SELECTED_ROUNDS_SCHEMA = "arc.ideas.selected_rounds.v4"
+
 
 def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
     """Rank verified committed rounds without exposing run-directory layout."""
@@ -217,13 +219,12 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
     for index, entry in enumerate(ranking, start=1):
         entry["rank"] = index
     payload = {
-        "schema_version": "arc.ideas.selected_rounds.v1",
+        "schema_version": SELECTED_ROUNDS_SCHEMA,
         "run_id": run_id,
         "run_lifecycle": inspection.run_lifecycle,
         "run_revision": inspection.run_revision,
         "loop_revisions": dict(trace.loop_revisions),
         "user_intent": _run_user_intent(contexts),
-        "summary_order": ranking,
         "ranking": ranking,
         "excluded_loops": excluded_loops,
         "warnings": warnings,
@@ -231,7 +232,6 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
     if cross_domain:
         payload.update(
             {
-                "schema_version": "arc.ideas.selected_rounds.v2",
                 "cross_domain": True,
                 "top_three": top_three,
                 "unqualified": unqualified,
@@ -249,9 +249,7 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
     elif single_domain_qualification_enabled:
         payload.update(
             {
-                "schema_version": "arc.ideas.selected_rounds.v3",
                 "single_domain_qualification": True,
-                "summary_order": ranking,
                 "top_three": top_three,
                 "unqualified": unqualified,
                 "diagnostics": single_domain_diagnostics(
@@ -392,7 +390,7 @@ def _round_entry(
                 {
                     "qualified": qualified,
                     "qualification_policy": (
-                        "single_domain_feasibility_gate_v1"
+                        "single_domain_feasibility_gate"
                     ),
                     "qualification_reasons": reasons,
                     "idea_assessment": (

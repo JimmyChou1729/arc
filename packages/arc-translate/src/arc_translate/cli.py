@@ -57,8 +57,7 @@ def _parser() -> _Parser:
         prog="arc-translate",
         description=(
             "Run source-bound language detection, glossary, and block "
-            "translation steps. Results are always JSON; --json is retained "
-            "for compatibility."
+            "translation steps. Results are always JSON."
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -117,11 +116,6 @@ def _parser() -> _Parser:
 
 def _project_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-dir", required=True, help="translation project directory")
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="compatibility flag; command results are always JSON",
-    )
 
 
 def _generation_arguments(parser: argparse.ArgumentParser) -> None:

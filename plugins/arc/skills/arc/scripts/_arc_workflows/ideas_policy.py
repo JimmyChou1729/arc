@@ -180,7 +180,7 @@ def single_domain_qualification(
         not reasons,
         reasons,
         {
-            "policy": "explicit_blocking_and_manageable_v1",
+            "policy": "single_domain_explicit_blocking_and_manageable",
             "feasibility_status": feasibility_status,
             "well_definedness": well_definedness,
             "bounded_first_calculation_ready": (
@@ -299,7 +299,7 @@ def compatibility_classification(
             "and manageable_compatibility_risks"
         )
     return {
-        "policy": "explicit_blocking_and_manageable_v2",
+        "policy": "cross_domain_explicit_blocking_and_manageable",
         "blocking_failures": _string_list(
             assessment.get("blocking_compatibility_failures")
         ),
