@@ -53,7 +53,13 @@ from .parse import (
     ParsedDocument,
     ParsedSection,
 )
-from .providers import Ar5ivProvider, ArxivPdfProvider, InspireProvider
+from .providers import (
+    Ar5ivProvider,
+    ArxivHtmlProvider,
+    ArxivPdfProvider,
+    InspireProvider,
+)
+from .providers.base import ProviderError
 from .source_repository import SourceRepository
 from .sources import (
     ParseOutcome,
@@ -92,6 +98,7 @@ class ArcPaperService:
         cache_root: str | Path | None = None,
         repository: SourceRepository | None = None,
         inspire: InspireProvider | None = None,
+        arxiv_html: ArxivHtmlProvider | None = None,
         ar5iv: Ar5ivProvider | None = None,
         arxiv_pdf: ArxivPdfProvider | None = None,
         pdf_text_extractor: PDFTextExtractor | None = None,
@@ -108,6 +115,9 @@ class ArcPaperService:
         self.cache_index = PaperCacheIndex(root)
         self.cache_administrator = CacheAdministrator(root)
         self.inspire = inspire or InspireProvider(cache_root=root)
+        self.arxiv_html = arxiv_html or ArxivHtmlProvider(
+            cache_root=root, source_repository=self.repository
+        )
         self.ar5iv = ar5iv or Ar5ivProvider(
             cache_root=root, source_repository=self.repository
         )
@@ -136,7 +146,7 @@ class ArcPaperService:
     def fetch_arxiv_auto(
         self, paper_id: str, *, refresh: bool = False
     ) -> SourceArtifact:
-        """Fetch only the ar5iv primary; auto never downloads a PDF."""
+        """Fetch official arXiv HTML, falling back to ar5iv only on a 404."""
 
         source, _, _ = self._fetch_arxiv_auto_materialized(
             paper_id, refresh=refresh
@@ -207,16 +217,9 @@ class ArcPaperService:
         *,
         refresh: bool = False,
     ) -> ParseOutcome:
-        primary = self.ar5iv.fetch(paper_id, refresh=refresh)
+        primary = self._fetch_arxiv_auto_source(paper_id, refresh=refresh)
         outcome = self.parse_bundle(SourceBundle(primary=primary))
-        self._record_remote_component(
-            paper_id,
-            "ar5iv-html",
-            cache=getattr(self.ar5iv, "cache", None),
-            kind="source",
-            namespace="ar5iv-html",
-            request_key=arxiv_path_id(paper_id),
-        )
+        self._record_arxiv_auto_component(paper_id, primary)
         return outcome
 
     def parse_arxiv_pdf(
@@ -462,11 +465,13 @@ class ArcPaperService:
             )
             arxiv_paper = f"arXiv:{arxiv_id}" if arxiv_id else paper_id
             for component, action in (
-                ("ar5iv-html", self.parse_arxiv_auto),
+                ("arxiv-auto", self.parse_arxiv_auto),
                 ("arxiv-pdf", self.parse_arxiv_pdf),
             ):
                 try:
-                    action(arxiv_paper, refresh=True)
+                    result = action(arxiv_paper, refresh=True)
+                    if component == "arxiv-auto":
+                        component = _auto_html_component(result.report.primary)
                     records.append(
                         CacheUpdateRecord(entry.entry_id, component, "updated")
                     )
@@ -735,7 +740,7 @@ class ArcPaperService:
         )
         provenance = ArxivDocumentProvenance(
             canonical_arxiv_id=canonical_id,
-            provider="ar5iv",
+            provider=source.origin.provider,
             source_format=source.source_format.value,
             source_digest=source.artifact_digest,
             document_digest=document.document_digest,
@@ -749,17 +754,36 @@ class ArcPaperService:
         ParsedDocument,
         tuple[str, ...],
     ]:
-        source = self.ar5iv.fetch(paper_id, refresh=refresh)
+        source = self._fetch_arxiv_auto_source(paper_id, refresh=refresh)
         document, warnings = self.parser.materialize_source(source)
+        self._record_arxiv_auto_component(paper_id, source)
+        return source, document, warnings
+
+    def _fetch_arxiv_auto_source(
+        self, paper_id: str, *, refresh: bool
+    ) -> SourceArtifact:
+        """Choose the official source, falling back only for an HTML 404."""
+
+        try:
+            return self.arxiv_html.fetch(paper_id, refresh=refresh)
+        except ProviderError as exc:
+            if exc.code != "arxiv_html_not_found":
+                raise
+        return self.ar5iv.fetch(paper_id, refresh=refresh)
+
+    def _record_arxiv_auto_component(
+        self, paper_id: str, source: SourceArtifact
+    ) -> None:
+        component = _auto_html_component(source)
+        provider = self.arxiv_html if component == "arxiv-html" else self.ar5iv
         self._record_remote_component(
             paper_id,
-            "ar5iv-html",
-            cache=getattr(self.ar5iv, "cache", None),
+            component,
+            cache=getattr(provider, "cache", None),
             kind="source",
-            namespace="ar5iv-html",
+            namespace=component,
             request_key=arxiv_path_id(paper_id),
         )
-        return source, document, warnings
 
     def _record_remote_component(
         self,
@@ -823,6 +847,16 @@ def _require_paper_id(value: str) -> str:
     if not normalized:
         raise PaperInputError("paper_id is required")
     return normalized
+
+
+def _auto_html_component(source: SourceArtifact) -> str:
+    provider = source.origin.provider
+    if provider in {"arxiv-html", "ar5iv"}:
+        return "arxiv-html" if provider == "arxiv-html" else "ar5iv-html"
+    raise ProviderError(
+        "arxiv_auto_provider_invalid",
+        "automatic arXiv HTML source has an unsupported provider",
+    )
 
 
 def _cache_error_message(exc: Exception) -> str:

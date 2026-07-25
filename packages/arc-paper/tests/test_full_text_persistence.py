@@ -26,6 +26,7 @@ from arc_paper._parsed_document_cache import PARSER_CONTRACT, ParsedDocumentCach
 from arc_paper.parse import service as parser_service_module
 from arc_paper.parse.parser import ParseError, parse_artifact_bytes
 from arc_paper.providers import Ar5ivProvider
+from arc_paper.providers.base import ProviderError
 from arc_paper.rich_document import RichDocumentParserService
 
 
@@ -532,7 +533,15 @@ def test_public_fetch_failure_retains_source_and_remote_mapping(
         source_repository=repository,
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
-    service = ArcPaperService(repository=repository, ar5iv=provider)
+    class MissingOfficial:
+        def fetch(self, paper_id: str, *, refresh: bool = False):
+            raise ProviderError("arxiv_html_not_found", "fixture")
+
+    service = ArcPaperService(
+        repository=repository,
+        arxiv_html=MissingOfficial(),  # type: ignore[arg-type]
+        ar5iv=provider,
+    )
 
     for _ in range(2):
         with pytest.raises(ParseError) as error:

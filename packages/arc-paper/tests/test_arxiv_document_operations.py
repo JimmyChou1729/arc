@@ -30,22 +30,38 @@ HTML = b"""
 """
 
 
-class FakeAr5iv:
-    def __init__(self, repository: SourceRepository, payloads: tuple[bytes, ...] = (HTML,)):
+class FakeHtmlProvider:
+    def __init__(
+        self,
+        repository: SourceRepository,
+        *,
+        provider: str,
+        payloads: tuple[bytes, ...] = (HTML,),
+        missing: bool = False,
+    ):
         self.repository = repository
+        self.provider = provider
         self.payloads = payloads
+        self.missing = missing
         self.calls: list[tuple[str, bool]] = []
 
     def fetch(self, paper_id: str, *, refresh: bool = False):
         self.calls.append((paper_id, refresh))
+        if self.missing:
+            code = (
+                "arxiv_html_not_found"
+                if self.provider == "arxiv-html"
+                else "ar5iv_not_found"
+            )
+            raise ProviderError(code, "missing")
         index = min(len(self.calls) - 1, len(self.payloads) - 1)
         return self.repository.store_bytes(
             self.payloads[index],
             source_format=SourceFormat.HTML,
             origin=SourceOrigin(
                 SourceOriginKind.REMOTE_PROVIDER,
-                provider="ar5iv",
-                locator=f"https://ar5iv.labs.arxiv.org/html/{paper_id}",
+                provider=self.provider,
+                locator=f"https://fixture.invalid/html/{paper_id}",
             ),
         )
 
@@ -55,15 +71,33 @@ class ForbiddenPDF:
         raise AssertionError("deep arXiv document operations must not fetch PDF")
 
 
-def _service(tmp_path: Path, *, payloads: tuple[bytes, ...] = (HTML,)):
+def _service(
+    tmp_path: Path,
+    *,
+    official_payloads: tuple[bytes, ...] = (HTML,),
+    fallback_payloads: tuple[bytes, ...] = (HTML,),
+    official_missing: bool = False,
+):
     repository = SourceRepository(tmp_path / "cache")
-    ar5iv = FakeAr5iv(repository, payloads)
+    official = FakeHtmlProvider(
+        repository,
+        provider="arxiv-html",
+        payloads=official_payloads,
+        missing=official_missing,
+    )
+    ar5iv = FakeHtmlProvider(
+        repository,
+        provider="ar5iv",
+        payloads=fallback_payloads,
+    )
     return (
         ArcPaperService(
             repository=repository,
+            arxiv_html=official,  # type: ignore[arg-type]
             ar5iv=ar5iv,
             arxiv_pdf=ForbiddenPDF(),
         ),
+        official,
         ar5iv,
     )
 
@@ -80,22 +114,23 @@ def _service(tmp_path: Path, *, payloads: tuple[bytes, ...] = (HTML,)):
 def test_arxiv_toc_normalizes_ids_and_returns_path_free_provenance(
     tmp_path: Path, identifier: str
 ) -> None:
-    service, ar5iv = _service(tmp_path)
+    service, official, ar5iv = _service(tmp_path)
 
     result = service.get_arxiv_table_of_contents(identifier)
 
     assert result.provenance.canonical_arxiv_id == "arXiv:0911.3380"
-    assert result.provenance.provider == "ar5iv"
+    assert result.provenance.provider == "arxiv-html"
     assert result.provenance.source_format == "html"
     assert len(result.provenance.source_digest) == 64
     assert len(result.provenance.document_digest) == 64
     assert [item.title for item in result.entries] == ["Introduction", "Dynamics"]
-    assert ar5iv.calls == [("arXiv:0911.3380", False)]
+    assert official.calls == [("arXiv:0911.3380", False)]
+    assert ar5iv.calls == []
     assert "path" not in repr(result).casefold()
 
 
 def test_arxiv_section_and_search_return_locations_and_digests(tmp_path: Path) -> None:
-    service, _ = _service(tmp_path)
+    service, _, _ = _service(tmp_path)
 
     section = service.get_arxiv_section("0911.3380", "dynamics")
     text = service.search_arxiv_full_text(
@@ -118,7 +153,9 @@ def test_arxiv_document_operations_reuse_service_memo_and_refresh_by_content(
     tmp_path: Path,
 ) -> None:
     changed = HTML.replace(b"fixes expansion", b"determines expansion")
-    service, ar5iv = _service(tmp_path, payloads=(HTML, HTML, changed))
+    service, official, ar5iv = _service(
+        tmp_path, official_payloads=(HTML, HTML, changed)
+    )
 
     first = service.get_arxiv_table_of_contents("0911.3380")
     same = service.get_arxiv_table_of_contents("0911.3380", refresh=True)
@@ -128,29 +165,73 @@ def test_arxiv_document_operations_reuse_service_memo_and_refresh_by_content(
 
     assert first.provenance.document_digest == same.provenance.document_digest
     assert first.provenance.document_digest != changed_result.provenance.document_digest
-    assert ar5iv.calls == [
+    assert official.calls == [
         ("arXiv:0911.3380", False),
         ("arXiv:0911.3380", True),
         ("arXiv:0911.3380", True),
     ]
+    assert ar5iv.calls == []
+
+
+def test_arxiv_document_operations_fall_back_only_after_official_not_found(
+    tmp_path: Path,
+) -> None:
+    service, official, ar5iv = _service(tmp_path, official_missing=True)
+
+    result = service.get_arxiv_table_of_contents("0911.3380")
+
+    assert result.provenance.provider == "ar5iv"
+    assert official.calls == [("arXiv:0911.3380", False)]
+    assert ar5iv.calls == [("arXiv:0911.3380", False)]
+
+
+def test_arxiv_document_operations_do_not_fall_back_after_official_failure(
+    tmp_path: Path,
+) -> None:
+    repository = SourceRepository(tmp_path / "cache")
+
+    class TransientOfficial:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, bool]] = []
+
+        def fetch(self, paper_id: str, *, refresh: bool = False):
+            self.calls.append((paper_id, refresh))
+            raise ProviderError("arxiv_html_fetch_failed", "temporary", status_code=503)
+
+    official = TransientOfficial()
+    fallback = FakeHtmlProvider(repository, provider="ar5iv")
+    service = ArcPaperService(
+        repository=repository,
+        arxiv_html=official,  # type: ignore[arg-type]
+        ar5iv=fallback,  # type: ignore[arg-type]
+        arxiv_pdf=ForbiddenPDF(),
+    )
+
+    with pytest.raises(ProviderError) as error:
+        service.get_arxiv_table_of_contents("0911.3380")
+
+    assert error.value.code == "arxiv_html_fetch_failed"
+    assert official.calls == [("arXiv:0911.3380", False)]
+    assert fallback.calls == []
 
 
 def test_arxiv_document_errors_are_typed_and_never_fall_back_to_pdf(
     tmp_path: Path,
 ) -> None:
-    service, _ = _service(tmp_path)
+    service, _, _ = _service(tmp_path)
     with pytest.raises(PaperInputError) as invalid:
         service.get_arxiv_table_of_contents("doi:10.1000/example")
     assert invalid.value.code == "not_arxiv_id"
 
-    class MissingAr5iv:
-        def fetch(self, paper_id: str, *, refresh: bool = False):
-            raise ProviderError("ar5iv_not_found", "missing")
-
     repository = SourceRepository(tmp_path / "missing")
+    missing_html = FakeHtmlProvider(
+        repository, provider="arxiv-html", missing=True
+    )
+    missing_ar5iv = FakeHtmlProvider(repository, provider="ar5iv", missing=True)
     missing = ArcPaperService(
         repository=repository,
-        ar5iv=MissingAr5iv(),
+        arxiv_html=missing_html,  # type: ignore[arg-type]
+        ar5iv=missing_ar5iv,  # type: ignore[arg-type]
         arxiv_pdf=ForbiddenPDF(),
     )
     with pytest.raises(ProviderError) as error:

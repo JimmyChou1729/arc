@@ -363,11 +363,11 @@ def _paper_component_from_remote(
     if entry.namespace == "inspire-record":
         paper_id = normalize_paper_id(entry.request_key)
         return (paper_id or None), "inspire-record"
-    if entry.namespace in {"ar5iv-html", "arxiv-pdf"}:
+    if entry.namespace in {"arxiv-html", "ar5iv-html", "arxiv-pdf"}:
         paper_id = normalize_paper_id(f"arXiv:{entry.request_key}")
         return (
             paper_id or None,
-            "ar5iv-html" if entry.namespace == "ar5iv-html" else "arxiv-pdf",
+            entry.namespace,
         )
     return None, ""
 

@@ -8,6 +8,7 @@ from ..ids import arxiv_path_id
 from ..source_repository import SourceRepository
 from ..sources import SourceArtifact, SourceFormat, SourceOrigin, SourceOriginKind
 from ._http import require_https_host, response_media_type, validate_response_size
+from ._request_gate import HostRequestGate, shared_host_gate
 from .base import ProviderError
 from .remote_cache import RemoteRequestCache
 
@@ -41,11 +42,15 @@ class ArxivPdfProvider:
         cache_root: str | Path | None = None,
         source_repository: SourceRepository | None = None,
         request_cache: RemoteRequestCache | None = None,
+        request_gate: HostRequestGate | None = None,
     ):
         self.client = client or httpx.Client(timeout=timeout, follow_redirects=True)
         self.timeout = timeout
         self.cache = request_cache or RemoteRequestCache(
             cache_root, source_repository=source_repository
+        )
+        self.request_gate = request_gate or shared_host_gate(
+            self.cache.root, ARXIV_HOST
         )
 
     def fetch(self, paper_id: str, *, refresh: bool = False) -> SourceArtifact:
@@ -69,7 +74,9 @@ class ArxivPdfProvider:
 
     def _fetch_pdf_bytes(self, url: str, paper_id: str) -> bytes:
         require_https_host(url, ARXIV_HOST)
-        response = self.client.get(url, timeout=self.timeout)
+        response = self.request_gate.request(
+            lambda: self.client.get(url, timeout=self.timeout)
+        )
         if response.status_code == 404:
             raise ProviderError(
                 "arxiv_pdf_not_found", f"arXiv PDF not found for {paper_id}"

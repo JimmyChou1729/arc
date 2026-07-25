@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -177,6 +178,32 @@ def test_remote_remove_deletes_mapping_and_source_object(tmp_path: Path) -> None
     assert exc_info.value.code == "source_not_found"
 
 
+def test_official_html_remote_component_is_listed_and_removed(tmp_path: Path) -> None:
+    cache = RemoteRequestCache(tmp_path)
+    origin = SourceOrigin(
+        SourceOriginKind.REMOTE_PROVIDER,
+        provider="arxiv-html",
+        locator="https://arxiv.org/html/0911.3380",
+    )
+    cache.fetch_source(
+        "arxiv-html",
+        "0911.3380",
+        source_format=SourceFormat.HTML,
+        media_type="text/html",
+        origin=origin,
+        fetch=lambda: b"<html>official</html>",
+    )
+    service = ArcPaperService(cache_root=tmp_path)
+
+    entry = service.list_cache(paper_ids=("arXiv:0911.3380",)).entries[0]
+    assert entry.paper_id == "arXiv:0911.3380"
+    assert [component.name for component in entry.components] == ["arxiv-html"]
+
+    removed = service.remove_cache(entry_ids=(entry.entry_id,), dry_run=False)
+    assert removed.removed_entry_ids == (entry.entry_id,)
+    assert service.list_cache(entry_ids=(entry.entry_id,)).entries == ()
+
+
 def test_shared_source_mapping_refetches_after_other_entry_deletes_object(
     tmp_path: Path,
 ) -> None:
@@ -324,9 +351,15 @@ def test_update_runs_all_fixed_components_and_collects_failure(
             raise RuntimeError("temporary")
         return []
 
-    def ar5iv(paper_id: str, *, refresh: bool = False):
-        calls.append(("ar5iv", refresh))
-        return object()
+    def arxiv_auto(paper_id: str, *, refresh: bool = False):
+        calls.append(("arxiv-auto", refresh))
+        return SimpleNamespace(
+            report=SimpleNamespace(
+                primary=SimpleNamespace(
+                    origin=SimpleNamespace(provider="arxiv-html")
+                )
+            )
+        )
 
     def pdf(paper_id: str, *, refresh: bool = False):
         calls.append(("pdf", refresh))
@@ -334,7 +367,7 @@ def test_update_runs_all_fixed_components_and_collects_failure(
 
     monkeypatch.setattr(service, "get_metadata", metadata)
     monkeypatch.setattr(service, "get_citers", citers)
-    monkeypatch.setattr(service, "parse_arxiv_auto", ar5iv)
+    monkeypatch.setattr(service, "parse_arxiv_auto", arxiv_auto)
     monkeypatch.setattr(service, "parse_arxiv_pdf", pdf)
 
     result = service.update_cache(paper_ids=("0911.3380",))
@@ -343,14 +376,14 @@ def test_update_runs_all_fixed_components_and_collects_failure(
         ("inspire-record", "updated"),
         ("inspire-citers:mostrecent:1000", "updated"),
         ("inspire-citers:mostcited:1000", "failed"),
-        ("ar5iv-html", "updated"),
+        ("arxiv-html", "updated"),
         ("arxiv-pdf", "updated"),
     ]
     assert calls == [
         ("metadata", True),
         ("mostrecent", (True, 1000)),
         ("mostcited", (True, 1000)),
-        ("ar5iv", True),
+        ("arxiv-auto", True),
         ("pdf", True),
     ]
 

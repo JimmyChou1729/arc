@@ -12,12 +12,15 @@ import pytest
 
 from arc_paper.providers import (
     Ar5ivProvider,
+    ArxivHtmlProvider,
     ArxivPdfProvider,
     InspireProvider,
     RemoteCacheError,
     RemoteRequestCache,
 )
 from arc_paper.providers.ar5iv import MAX_HTML_BYTES
+from arc_paper.providers._request_gate import HostRequestGate
+from arc_paper.providers.arxiv_html import arxiv_html_url
 from arc_paper.providers.arxiv_pdf import arxiv_pdf_url
 from arc_paper.source_repository import SourceRepository
 from arc_paper.sources import SourceFormat, SourceOrigin, SourceOriginKind
@@ -72,6 +75,170 @@ def test_ar5iv_fetches_html_into_source_repository_and_replays_without_network(
     assert all("/pdf/" not in url for url in calls)
 
 
+def test_official_arxiv_html_fetches_directly_and_replays_from_cache(tmp_path):
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return _response(request, content=b"<html>paper</html>", media_type="text/html")
+
+    provider = ArxivHtmlProvider(
+        cache_root=tmp_path,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        request_gate=HostRequestGate(minimum_interval=0),
+    )
+    first = provider.fetch("arXiv:0911.3380v2")
+    replay = provider.fetch("0911.3380")
+
+    assert arxiv_html_url("arXiv:0911.3380v2") == (
+        "https://arxiv.org/html/0911.3380"
+    )
+    assert first.content_identity == replay.content_identity
+    assert replay.origin.provider == "arxiv-html"
+    assert calls == ["https://arxiv.org/html/0911.3380"]
+
+
+def test_official_arxiv_html_caches_404_and_refresh_rechecks_it(tmp_path):
+    responses = iter((404, 200))
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        status_code = next(responses)
+        return _response(
+            request,
+            content=b"" if status_code == 404 else b"<html>converted</html>",
+            media_type="text/html",
+            status_code=status_code,
+        )
+
+    provider = ArxivHtmlProvider(
+        cache_root=tmp_path,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        request_gate=HostRequestGate(minimum_interval=0),
+    )
+    with pytest.raises(Exception) as first:
+        provider.fetch("0911.3380")
+    with pytest.raises(Exception) as cached:
+        provider.fetch("0911.3380")
+    refreshed = provider.fetch("0911.3380", refresh=True)
+    replay = provider.fetch("0911.3380")
+
+    assert getattr(first.value, "code", "") == "arxiv_html_not_found"
+    assert getattr(cached.value, "code", "") == "arxiv_html_not_found"
+    assert refreshed.content_identity == replay.content_identity
+    assert calls == [
+        "https://arxiv.org/html/0911.3380",
+        "https://arxiv.org/html/0911.3380",
+    ]
+
+
+def test_official_html_and_pdf_share_arxiv_gate_but_ar5iv_does_not(tmp_path):
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: _response(
+                request,
+                content=(b"%PDF-1.7\n" if "/pdf/" in str(request.url) else b"<html>ok</html>"),
+                media_type=(
+                    "application/pdf" if "/pdf/" in str(request.url) else "text/html"
+                ),
+            )
+        )
+    )
+    official = ArxivHtmlProvider(cache_root=tmp_path, client=client)
+    pdf = ArxivPdfProvider(cache_root=tmp_path, client=client)
+    fallback = Ar5ivProvider(cache_root=tmp_path, client=client)
+
+    assert official.request_gate is pdf.request_gate
+    assert official.request_gate is not fallback.request_gate
+
+
+def test_arxiv_gate_uses_fake_clock_for_interval_and_retry_after(tmp_path):
+    class FakeClock:
+        def __init__(self):
+            self.value = 0.0
+            self.sleeps: list[float] = []
+
+        def now(self) -> float:
+            return self.value
+
+        def sleep(self, seconds: float) -> None:
+            self.sleeps.append(seconds)
+            self.value += seconds
+
+    clock = FakeClock()
+    gate = HostRequestGate(
+        minimum_interval=15,
+        clock=clock.now,
+        sleeper=clock.sleep,
+    )
+    starts: list[tuple[str, float]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        starts.append((str(request.url), clock.now()))
+        response = _response(
+            request,
+            content=(b"%PDF-1.7\n" if "/pdf/" in str(request.url) else b"<html>ok</html>"),
+            media_type=(
+                "application/pdf" if "/pdf/" in str(request.url) else "text/html"
+            ),
+        )
+        if "/html/" in str(request.url):
+            response.headers["retry-after"] = "30"
+        return response
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    official = ArxivHtmlProvider(
+        cache_root=tmp_path, client=client, request_gate=gate
+    )
+    pdf = ArxivPdfProvider(cache_root=tmp_path, client=client, request_gate=gate)
+
+    official.fetch("0911.3380")
+    pdf.fetch("0911.3380")
+
+    assert starts == [
+        ("https://arxiv.org/html/0911.3380", 0.0),
+        ("https://arxiv.org/pdf/0911.3380", 30.0),
+    ]
+    assert clock.sleeps == [30.0]
+
+
+def test_shared_arxiv_gate_serializes_html_and_pdf_connections(tmp_path):
+    active = 0
+    maximum_active = 0
+    state_lock = threading.Lock()
+    gate = HostRequestGate(minimum_interval=0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active, maximum_active
+        with state_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        time.sleep(0.02)
+        with state_lock:
+            active -= 1
+        is_pdf = "/pdf/" in str(request.url)
+        return _response(
+            request,
+            content=b"%PDF-1.7\n" if is_pdf else b"<html>ok</html>",
+            media_type="application/pdf" if is_pdf else "text/html",
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    official = ArxivHtmlProvider(
+        cache_root=tmp_path, client=client, request_gate=gate
+    )
+    pdf = ArxivPdfProvider(cache_root=tmp_path, client=client, request_gate=gate)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = (
+            executor.submit(official.fetch, "0911.3380"),
+            executor.submit(pdf.fetch, "2402.00001"),
+        )
+        tuple(future.result() for future in futures)
+
+    assert maximum_active == 1
+
+
 def test_ar5iv_refresh_replaces_request_mapping_without_changing_content_identity(
     tmp_path,
 ):
@@ -89,6 +256,7 @@ def test_ar5iv_refresh_replaces_request_mapping_without_changing_content_identit
     provider = Ar5ivProvider(
         cache_root=tmp_path,
         client=httpx.Client(transport=httpx.MockTransport(handler)),
+        request_gate=HostRequestGate(minimum_interval=0),
     )
     stale = provider.fetch("0911.3380")
     fresh = provider.fetch("0911.3380", refresh=True)

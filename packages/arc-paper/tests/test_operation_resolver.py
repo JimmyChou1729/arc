@@ -6,12 +6,12 @@ from typing import Any
 
 import pytest
 
-from arc_paper import PaperOperationResolver
+from arc_paper import OPERATION_REGISTRY, PaperOperationResolver
 
 
 ARXIV_PROVENANCE = {
     "canonical_arxiv_id": "arXiv:0911.3380",
-    "provider": "ar5iv",
+    "provider": "arxiv-html",
     "source_format": "html",
     "source_digest": "a" * 64,
     "document_digest": "b" * 64,
@@ -76,7 +76,7 @@ def test_resolver_reuses_service_normalizes_ids_and_uses_registry_codecs() -> No
     assert service.parse_count == 1
     assert results[0].to_document() == {
         "ok": True,
-        "operation_id": "arc-paper.get-arxiv-section.v2",
+        "operation_id": "arc-paper.get-arxiv-section.v3",
         "parameters": {
             "arxiv_id": "arXiv:0911.3380",
             "selector": "Introduction",
@@ -94,7 +94,7 @@ def test_resolver_reuses_service_normalizes_ids_and_uses_registry_codecs() -> No
         },
         "provenance": {
             "source": "arc-paper",
-            "operation_id": "arc-paper.get-arxiv-section.v2",
+            "operation_id": "arc-paper.get-arxiv-section.v3",
             "parameters": {
                 "arxiv_id": "arXiv:0911.3380",
                 "selector": "Introduction",
@@ -109,6 +109,24 @@ def test_resolver_reuses_service_normalizes_ids_and_uses_registry_codecs() -> No
         "request-1",
         "request-2",
     ]
+
+
+def test_deep_arxiv_output_schema_accepts_ar5iv_fallback_provenance() -> None:
+    result = OPERATION_REGISTRY["get-arxiv-section"].output_codec.encode(
+        {
+            "provenance": {**ARXIV_PROVENANCE, "provider": "ar5iv"},
+            "section_id": "intro",
+            "title": "Introduction",
+            "text": "Body",
+            "level": 1,
+            "ordinal": 0,
+            "page_start": None,
+            "page_end": None,
+            "warnings": [],
+        }
+    )
+
+    assert result["provenance"]["provider"] == "ar5iv"
 
 
 def test_resolver_validates_configuration_without_workflow_policy() -> None:

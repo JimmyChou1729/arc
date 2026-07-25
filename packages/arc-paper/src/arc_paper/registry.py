@@ -486,7 +486,7 @@ _ARXIV_PROVENANCE_SCHEMA = _object(
             "type": "string",
             "pattern": "^arXiv:",
         },
-        "provider": {"const": "ar5iv"},
+        "provider": {"enum": ["arxiv-html", "ar5iv"]},
         "source_format": {"const": "html"},
         "source_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "document_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -840,7 +840,7 @@ _OPERATIONS = (
             required=("provenance", "entries", "warnings"),
         ),
         effects=_NETWORK_CACHE,
-        version=2,
+        version=3,
     ),
     _spec(
         "get-arxiv-section",
@@ -878,7 +878,7 @@ _OPERATIONS = (
             ),
         ),
         effects=_NETWORK_CACHE,
-        version=2,
+        version=3,
     ),
     _spec(
         "search-arxiv-full-text",
@@ -925,7 +925,7 @@ _OPERATIONS = (
             ),
         ),
         effects=_NETWORK_CACHE,
-        version=2,
+        version=3,
     ),
     _spec(
         "search-arxiv-equations",
@@ -961,7 +961,7 @@ _OPERATIONS = (
             ),
         ),
         effects=_NETWORK_CACHE,
-        version=2,
+        version=3,
     ),
     _spec(
         "fetch-arxiv-auto",
@@ -976,6 +976,7 @@ _OPERATIONS = (
         service.fetch_arxiv_auto,
         output_schema=_SOURCE_ARTIFACT_SCHEMA,
         effects=_NETWORK_CACHE,
+        version=2,
     ),
     _spec(
         "fetch-arxiv-pdf",

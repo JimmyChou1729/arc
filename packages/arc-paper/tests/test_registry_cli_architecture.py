@@ -43,23 +43,25 @@ def test_registry_has_one_typed_spec_per_operation_and_safe_default_projection()
         in OPERATION_REGISTRY["import-source"].effect_flags
     )
     assert {
-        "arc-paper.get-arxiv-table-of-contents.v2",
-        "arc-paper.get-arxiv-section.v2",
-        "arc-paper.search-arxiv-full-text.v2",
-        "arc-paper.search-arxiv-equations.v2",
+        "arc-paper.get-arxiv-table-of-contents.v3",
+        "arc-paper.get-arxiv-section.v3",
+        "arc-paper.search-arxiv-full-text.v3",
+        "arc-paper.search-arxiv-equations.v3",
+        "arc-paper.fetch-arxiv-auto.v2",
         "arc-paper.search-cached-full-text.v1",
     } <= set(OPERATION_REGISTRY)
     for name in (
-        "parse-local",
         "get-arxiv-table-of-contents",
         "get-arxiv-section",
         "search-arxiv-full-text",
         "search-arxiv-equations",
     ):
         spec = OPERATION_REGISTRY[name]
-        assert spec.version == 2
-        assert spec.input_codec.schema_id == f"arc.paper.{name}.parameters.v2"
-        assert spec.output_codec.schema_id == f"arc.paper.{name}.result.v2"
+        assert spec.version == 3
+        assert spec.input_codec.schema_id == f"arc.paper.{name}.parameters.v3"
+        assert spec.output_codec.schema_id == f"arc.paper.{name}.result.v3"
+    assert OPERATION_REGISTRY["fetch-arxiv-auto"].version == 2
+    assert OPERATION_REGISTRY["parse-local"].version == 2
     assert all(
         "cache_root"
         not in OPERATION_REGISTRY[name].input_codec.schema["properties"]
