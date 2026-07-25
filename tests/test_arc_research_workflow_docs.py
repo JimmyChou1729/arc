@@ -361,6 +361,37 @@ def test_arc_paper_docs_define_bounded_cached_full_text_search() -> None:
     assert "at most 400 characters" in manual
 
 
+def test_translate_docs_define_standalone_approximate_workflows() -> None:
+    translate = (SKILL / "manuals/arc-translate.md").read_text(encoding="utf-8")
+    paper = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    companion = (SKILL / "manuals/arc-companion.md").read_text(encoding="utf-8")
+
+    for command in (
+        "detect-language",
+        "build-glossary",
+        "translate-blocks",
+        "status",
+        "resume",
+        "stop",
+        "validate",
+    ):
+        assert f"arc-translate {command}" in translate
+    assert "runs only its named step" in translate
+    assert "--approx-term-count 50" in translate
+    assert "estimate, not an exact result size" in translate
+    assert "matched_sentences" in translate
+    assert "not definitions or\nexplanations" in translate
+
+    assert "arc-paper extract-keywords SOURCE" in paper
+    assert "--approx-count 50" in paper
+    assert "occurrence frequency" in paper
+    assert "never definitions" in paper
+
+    assert "`arc-translate`" in companion
+    assert "run in parallel" in companion
+    assert "--approx-term-count N" in companion
+
+
 def test_arc_paper_docs_define_cache_administration_contract() -> None:
     manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
     readme = (ROOT / "packages/arc-paper/README.md").read_text(encoding="utf-8")
