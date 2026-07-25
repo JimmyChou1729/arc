@@ -8,16 +8,19 @@ import pytest
 
 from arc_jobs import (
     ImmutableArtifactStore,
+    RevisionConflictError,
     RunEngine,
     RunRepository,
     RunSpec,
     RunStatus,
     RunView,
     Succeeded,
+    UnsupportedSchemaError,
 )
 from arc_domain.catalog import (
     DOMAIN_CATALOG_SCHEMA_VERSION,
     DOMAIN_EXPORT_MANIFEST_SCHEMA_VERSION,
+    DomainCatalog,
     DomainPublicationError,
     publish_domain_result,
     read_domain_catalog,
@@ -202,6 +205,219 @@ def test_run_id_breaks_creation_time_ties_for_catalog_pointers(
     catalog = register_domain_run(repository, paths, domain_id="domain-a", run_id="run-b")
 
     assert catalog.latest == "run-b"
+
+
+@pytest.mark.parametrize(
+    ("damage", "reason"),
+    [
+        ("missing", "run_not_found"),
+        ("corrupt", "corrupt_state"),
+    ],
+)
+def test_registration_repairs_an_unreadable_latest_pointer_with_typed_diagnostic(
+    damage: str,
+    reason: str,
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    paths = DomainPaths(repository.root)
+    _succeeded_run(repository, "old-run", domain_id="domain-a")
+    _succeeded_run(repository, "new-run", domain_id="domain-a")
+    register_domain_run(
+        repository,
+        paths,
+        domain_id="domain-a",
+        run_id="old-run",
+    )
+    old_snapshot = repository.run_directory("old-run") / "snapshot.json"
+    if damage == "missing":
+        old_snapshot.unlink()
+    else:
+        old_snapshot.write_text("{}\n", encoding="utf-8")
+
+    update = register_domain_run(
+        repository,
+        paths,
+        domain_id="domain-a",
+        run_id="new-run",
+    )
+
+    assert update.catalog.latest == "new-run"
+    assert update.catalog.active is None
+    assert len(update.diagnostics) == 1
+    diagnostic = update.diagnostics[0]
+    assert diagnostic.code == "domain_catalog_pointer_repaired"
+    assert diagnostic.pointer == "latest"
+    assert diagnostic.previous_run_id == "old-run"
+    assert diagnostic.replacement_run_id == "new-run"
+    assert diagnostic.reason == reason
+    persisted = read_domain_catalog(paths, domain_id="domain-a")
+    assert persisted == update.catalog
+    raw = json.loads(paths.catalog("domain-a").read_text(encoding="utf-8"))
+    assert set(raw["value"]) == {"revision", "latest", "active"}
+
+    replay = register_domain_run(
+        repository,
+        paths,
+        domain_id="domain-a",
+        run_id="new-run",
+    )
+    assert replay.catalog == update.catalog
+    assert replay.diagnostics == ()
+
+
+def test_publication_repairs_only_an_unreadable_active_pointer(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    paths = DomainPaths(repository.root)
+    old = _succeeded_run(repository, "old-run", domain_id="domain-a")
+    new = _succeeded_run(repository, "new-run", domain_id="domain-a")
+    publish_domain_result(repository, paths, run_id="old-run", result=old)
+    register_domain_run(
+        repository,
+        paths,
+        domain_id="domain-a",
+        run_id="new-run",
+    )
+    (repository.run_directory("old-run") / "snapshot.json").unlink()
+
+    publication = publish_domain_result(
+        repository,
+        paths,
+        run_id="new-run",
+        result=new,
+    )
+
+    assert publication.catalog.latest == "new-run"
+    assert publication.catalog.active == "new-run"
+    assert publication.active is True
+    assert publication.manifest_path.is_file()
+    assert len(publication.diagnostics) == 1
+    diagnostic = publication.diagnostics[0]
+    assert diagnostic.pointer == "active"
+    assert diagnostic.previous_run_id == "old-run"
+    assert diagnostic.replacement_run_id == "new-run"
+    assert diagnostic.reason == "run_not_found"
+
+
+def test_existing_pointer_io_and_unsupported_schema_errors_are_not_repaired(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    paths = DomainPaths(repository.root)
+    _succeeded_run(repository, "old-run", domain_id="domain-a")
+    _succeeded_run(repository, "new-run", domain_id="domain-a")
+    register_domain_run(
+        repository,
+        paths,
+        domain_id="domain-a",
+        run_id="old-run",
+    )
+    original_inspect = repository.inspect
+
+    def fail_existing_inspect(run_id: str):
+        if run_id == "old-run":
+            raise OSError("transient catalog comparison read")
+        return original_inspect(run_id)
+
+    monkeypatch.setattr(repository, "inspect", fail_existing_inspect)
+    with pytest.raises(OSError, match="transient catalog comparison read"):
+        register_domain_run(
+            repository,
+            paths,
+            domain_id="domain-a",
+            run_id="new-run",
+        )
+    assert read_domain_catalog(paths, domain_id="domain-a").latest == "old-run"
+
+    monkeypatch.setattr(repository, "inspect", original_inspect)
+    snapshot_path = repository.run_directory("old-run") / "snapshot.json"
+    document = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    document["schema_version"] = "arc.jobs.run_snapshot.v999"
+    snapshot_path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(UnsupportedSchemaError):
+        register_domain_run(
+            repository,
+            paths,
+            domain_id="domain-a",
+            run_id="new-run",
+        )
+    assert read_domain_catalog(paths, domain_id="domain-a").latest == "old-run"
+
+
+def test_catalog_repair_diagnostic_is_recomputed_after_a_cas_loss(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from arc_domain import catalog as catalog_module
+
+    repository = _repository(tmp_path)
+    paths = DomainPaths(repository.root)
+    for run_id in ("old-run", "candidate-run", "rival-run"):
+        _succeeded_run(repository, run_id, domain_id="domain-a")
+    _with_creation_times(
+        monkeypatch,
+        repository,
+        {
+            "old-run": "2026-07-24T10:00:00.000000Z",
+            "candidate-run": "2026-07-24T10:30:00.000000Z",
+            "rival-run": "2026-07-24T11:00:00.000000Z",
+        },
+    )
+    register_domain_run(
+        repository,
+        paths,
+        domain_id="domain-a",
+        run_id="old-run",
+    )
+    (repository.run_directory("old-run") / "snapshot.json").unlink()
+    real_store = catalog_module._catalog_store(paths, "domain-a")
+
+    class ConflictOnceStore:
+        def __init__(self) -> None:
+            self.injected = False
+
+        def read(self):
+            return real_store.read()
+
+        def create(self, value):
+            return real_store.create(value)
+
+        def compare_and_swap(self, expected_revision, value):
+            if not self.injected:
+                self.injected = True
+                current = real_store.read()
+                assert current is not None
+                real_store.compare_and_swap(
+                    expected_revision,
+                    DomainCatalog(
+                        revision=current.revision + 1,
+                        latest="rival-run",
+                        active=current.active,
+                    ),
+                )
+                raise RevisionConflictError("simulated cooperating winner")
+            return real_store.compare_and_swap(expected_revision, value)
+
+    conflict_store = ConflictOnceStore()
+    monkeypatch.setattr(
+        catalog_module,
+        "_catalog_store",
+        lambda _paths, _domain_id: conflict_store,
+    )
+
+    update = register_domain_run(
+        repository,
+        paths,
+        domain_id="domain-a",
+        run_id="candidate-run",
+    )
+
+    assert update.latest == "rival-run"
+    assert update.revision == 1
+    assert update.diagnostics == ()
 
 
 def test_failed_publication_keeps_active_and_same_run_can_repair(

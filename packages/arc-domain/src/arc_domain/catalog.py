@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -22,6 +22,7 @@ from arc_jobs import (
     InvalidRunIdError,
     JsonValue,
     RevisionConflictError,
+    RunNotFoundError,
     RunRepository,
     RunStatus,
     StateConflictError,
@@ -65,6 +66,56 @@ class DomainCatalog:
 
 
 @dataclass(frozen=True)
+class DomainCatalogRepairDiagnostic:
+    """One operation-scoped repair of an unreadable catalog pointer."""
+
+    pointer: str
+    previous_run_id: str
+    replacement_run_id: str
+    reason: str
+    code: str = field(init=False, default="domain_catalog_pointer_repaired")
+
+    def __post_init__(self) -> None:
+        if self.pointer not in {"latest", "active"}:
+            raise ValueError("catalog repair pointer must be latest or active")
+        if self.reason not in {"run_not_found", "corrupt_state"}:
+            raise ValueError("catalog repair reason is invalid")
+        _validate_run_id(self.previous_run_id, field_name="previous_run_id")
+        _validate_run_id(self.replacement_run_id, field_name="replacement_run_id")
+
+
+@dataclass(frozen=True)
+class DomainCatalogUpdate:
+    """A catalog mutation plus non-durable diagnostics from that mutation."""
+
+    catalog: DomainCatalog
+    diagnostics: tuple[DomainCatalogRepairDiagnostic, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.catalog, DomainCatalog):
+            raise TypeError("catalog update must contain a DomainCatalog")
+        if not isinstance(self.diagnostics, tuple) or any(
+            not isinstance(item, DomainCatalogRepairDiagnostic)
+            for item in self.diagnostics
+        ):
+            raise TypeError("catalog update diagnostics are invalid")
+
+    @property
+    def revision(self) -> int:
+        """Compatibility projection for callers that previously got a catalog."""
+
+        return self.catalog.revision
+
+    @property
+    def latest(self) -> str | None:
+        return self.catalog.latest
+
+    @property
+    def active(self) -> str | None:
+        return self.catalog.active
+
+
+@dataclass(frozen=True)
 class DomainPublication:
     """The result of materializing one run's public domain generation."""
 
@@ -73,6 +124,7 @@ class DomainPublication:
     manifest_path: Path
     active: bool
     catalog: DomainCatalog
+    diagnostics: tuple[DomainCatalogRepairDiagnostic, ...] = ()
 
 
 class _CatalogContract(StateContract[DomainCatalog]):
@@ -120,7 +172,7 @@ def register_domain_run(
     *,
     domain_id: str,
     run_id: str,
-) -> DomainCatalog:
+) -> DomainCatalogUpdate:
     """Record a newly created run as ``latest`` without changing ``active``.
 
     The caller should invoke this when the durable run is created.  Comparing
@@ -180,7 +232,12 @@ def publish_domain_result(
     # ``latest`` models run creation, independently of whether publication
     # succeeds.  A build handler normally makes this call at run creation; it
     # is repeated here to make standalone repair safe.
-    register_domain_run(repository, paths, domain_id=safe_id, run_id=snapshot.run_id)
+    latest_update = register_domain_run(
+        repository,
+        paths,
+        domain_id=safe_id,
+        run_id=snapshot.run_id,
+    )
 
     exported = _exported_artifacts(authoritative_result)
     source_bytes = {
@@ -205,7 +262,7 @@ def publish_domain_result(
     # This is intentionally the final write to a generation.
     _atomic_write_bytes(manifest_path, canonical_json_bytes(manifest) + b"\n")
 
-    catalog = _update_catalog(
+    active_update = _update_catalog(
         repository,
         paths,
         domain_id=safe_id,
@@ -216,12 +273,14 @@ def publish_domain_result(
             repository=repository,
         ),
     )
+    catalog = active_update.catalog
     return DomainPublication(
         domain_id=safe_id,
         run_id=snapshot.run_id,
         manifest_path=manifest_path,
         active=catalog.active == snapshot.run_id,
         catalog=catalog,
+        diagnostics=(*latest_update.diagnostics, *active_update.diagnostics),
     )
 
 
@@ -292,26 +351,29 @@ def _update_catalog(
     paths: DomainPaths,
     *,
     domain_id: str,
-    update: Callable[[DomainCatalog], DomainCatalog],
-) -> DomainCatalog:
+    update: Callable[[DomainCatalog], DomainCatalogUpdate],
+) -> DomainCatalogUpdate:
     store = _catalog_store(paths, domain_id)
     while True:
         current = store.read()
         if current is None:
-            next_value = update(DomainCatalog(revision=0, latest=None, active=None))
-            if not isinstance(next_value, DomainCatalog):
-                raise TypeError("catalog update must return DomainCatalog")
+            planned = update(DomainCatalog(revision=0, latest=None, active=None))
+            if not isinstance(planned, DomainCatalogUpdate):
+                raise TypeError("catalog update must return DomainCatalogUpdate")
             try:
-                return store.create(replace(next_value, revision=0))
+                created = store.create(replace(planned.catalog, revision=0))
+                return DomainCatalogUpdate(created, planned.diagnostics)
             except StateConflictError:
                 continue
-        next_value = update(current)
-        if not isinstance(next_value, DomainCatalog):
-            raise TypeError("catalog update must return DomainCatalog")
+        planned = update(current)
+        if not isinstance(planned, DomainCatalogUpdate):
+            raise TypeError("catalog update must return DomainCatalogUpdate")
+        next_value = planned.catalog
         if next_value == current:
-            return current
+            return DomainCatalogUpdate(current, planned.diagnostics)
         try:
-            return store.compare_and_swap(current.revision, next_value)
+            updated = store.compare_and_swap(current.revision, next_value)
+            return DomainCatalogUpdate(updated, planned.diagnostics)
         except RevisionConflictError:
             continue
 
@@ -322,18 +384,26 @@ def _with_latest_if_newer(
     candidate_run_id: str,
     candidate_created_at: str,
     repository: RunRepository,
-) -> DomainCatalog:
-    if current.latest is not None and not _is_newer_run(
-        candidate_run_id,
-        candidate_created_at,
-        current.latest,
-        repository,
-    ):
-        return current
-    return DomainCatalog(
-        revision=current.revision + (0 if current.latest == candidate_run_id else 1),
-        latest=candidate_run_id,
-        active=current.active,
+) -> DomainCatalogUpdate:
+    diagnostic = None
+    if current.latest is not None:
+        newer, diagnostic = _is_newer_run(
+            candidate_run_id,
+            candidate_created_at,
+            current.latest,
+            repository,
+            pointer="latest",
+        )
+        if not newer:
+            return DomainCatalogUpdate(current)
+    return DomainCatalogUpdate(
+        DomainCatalog(
+            revision=current.revision
+            + (0 if current.latest == candidate_run_id else 1),
+            latest=candidate_run_id,
+            active=current.active,
+        ),
+        () if diagnostic is None else (diagnostic,),
     )
 
 
@@ -343,18 +413,26 @@ def _with_active_if_newer(
     candidate_run_id: str,
     candidate_created_at: str,
     repository: RunRepository,
-) -> DomainCatalog:
-    if current.active is not None and not _is_newer_run(
-        candidate_run_id,
-        candidate_created_at,
-        current.active,
-        repository,
-    ):
-        return current
-    return DomainCatalog(
-        revision=current.revision + (0 if current.active == candidate_run_id else 1),
-        latest=current.latest,
-        active=candidate_run_id,
+) -> DomainCatalogUpdate:
+    diagnostic = None
+    if current.active is not None:
+        newer, diagnostic = _is_newer_run(
+            candidate_run_id,
+            candidate_created_at,
+            current.active,
+            repository,
+            pointer="active",
+        )
+        if not newer:
+            return DomainCatalogUpdate(current)
+    return DomainCatalogUpdate(
+        DomainCatalog(
+            revision=current.revision
+            + (0 if current.active == candidate_run_id else 1),
+            latest=current.latest,
+            active=candidate_run_id,
+        ),
+        () if diagnostic is None else (diagnostic,),
     )
 
 
@@ -363,11 +441,29 @@ def _is_newer_run(
     candidate_created_at: str,
     existing_run_id: str,
     repository: RunRepository,
-) -> bool:
-    existing = repository.inspect(existing_run_id).snapshot
-    return (candidate_created_at, candidate_run_id) > (
-        existing.created_at,
-        existing.run_id,
+    *,
+    pointer: str,
+) -> tuple[bool, DomainCatalogRepairDiagnostic | None]:
+    try:
+        existing = repository.inspect(existing_run_id).snapshot
+    except RunNotFoundError:
+        reason = "run_not_found"
+    except CorruptStateError:
+        reason = "corrupt_state"
+    else:
+        return (
+            (candidate_created_at, candidate_run_id)
+            > (existing.created_at, existing.run_id),
+            None,
+        )
+    return (
+        True,
+        DomainCatalogRepairDiagnostic(
+            pointer=pointer,
+            previous_run_id=existing_run_id,
+            replacement_run_id=candidate_run_id,
+            reason=reason,
+        ),
     )
 
 
@@ -417,6 +513,8 @@ __all__ = [
     "DOMAIN_CATALOG_SCHEMA_VERSION",
     "DOMAIN_EXPORT_MANIFEST_SCHEMA_VERSION",
     "DomainCatalog",
+    "DomainCatalogRepairDiagnostic",
+    "DomainCatalogUpdate",
     "DomainPublication",
     "DomainPublicationError",
     "publish_domain_result",
