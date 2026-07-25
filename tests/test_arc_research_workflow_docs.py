@@ -1123,8 +1123,27 @@ def test_ideas_config_template_has_no_global_reviewer() -> None:
     config = json.loads((WJ / "ideas.config.template.json").read_text(encoding="utf-8"))
 
     assert "reviewer" not in config
+    assert "artifact_options" not in config
     assert config["loops_per_variant"] == 5
     assert config["domain_manifest_path"] == "<project-dir>/domain/domain-manifest.json"
+
+
+def test_ideas_workflow_documents_global_evidence_accounting() -> None:
+    ideas = (WF / "ideas.md").read_text(encoding="utf-8")
+    compact = " ".join(ideas.split())
+
+    assert "`evidence.per_loop`" in ideas
+    for field in (
+        "`attempted`",
+        "`consumed`",
+        "`exhausted`",
+        "`repeated_request`",
+    ):
+        assert field in ideas
+    assert "does not report cache behavior" in compact
+    assert "can include rejected duplicate requests" in compact
+    assert "does not refund a request" in compact
+    assert "do not promise fair scheduling" in compact
 
 
 def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:

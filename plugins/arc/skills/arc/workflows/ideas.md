@@ -86,6 +86,9 @@ round references; `read_batch_round` is the only public expansion of a
 proposal and its review envelope. The scientific review is the envelope's
 `payload`, not a separate intermediary artifact. If committed-trace verification
 fails, print its `WARNING:` and do not rank or reconstruct output from files.
+If the executor raises after writing durable progress, the result status is
+`failed`, its typed `execution_error` identifies the boundary failure, and the
+loop and committed-round fields still report the verified durable frontier.
 
 Step 3: Print any returned `WARNING:` messages. Rank only loops whose public
 lifecycle is `succeeded`; failed, pending, running, paused, and
@@ -134,6 +137,16 @@ most two interaction rounds; a third interaction request pauses the durable
 batch for explicit resume handling. Resolver responses record the versioned
 operation ID, normalized parameters, canonical arXiv ID when available, source
 and document digests, and typed error provenance.
+
+The result's `evidence.per_loop` object reports `attempted`, `consumed`,
+`exhausted`, and `repeated_request` counts for each loop. `Attempted` counts
+all resolver calls, while `consumed` excludes calls rejected because the
+global budget was already exhausted. `Repeated_request` means only that the
+raw operation-and-arguments signature was observed earlier; it is a diagnostic,
+does not report cache behavior, and can include rejected duplicate requests.
+It does not refund a request. The 24-request cap remains global. Concurrent
+loops consume that cap in actual execution order: these counters do not promise
+fair scheduling and do not introduce a workflow scheduler.
 
 Workers cannot invoke shell commands, ARC CLIs, arbitrary paths, cache
 administration, recursive LLM calls, or MCP tools. Do not add a fallback for

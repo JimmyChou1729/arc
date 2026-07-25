@@ -7,8 +7,10 @@ from typing import Any
 
 from arc_llm import (
     InteractionRequest,
+    InteractionResolver,
     InteractionResponse,
     OperationContract,
+    ScopedInteractionLedger,
 )
 from arc_paper import (
     ArcPaperService,
@@ -117,6 +119,52 @@ class ArcPaperEvidenceResolver:
         )
 
 
+class IdeasEvidenceLedger:
+    """Observe per-loop use while preserving one shared global resolver cap."""
+
+    def __init__(self, resolver: Any, loop_ids: list[str]) -> None:
+        self.resolver = resolver
+        self._ledger = ScopedInteractionLedger(resolver, loop_ids)
+
+    @property
+    def request_limit(self) -> int:
+        return int(self.resolver.request_limit)
+
+    @property
+    def request_count(self) -> int:
+        return int(self.resolver.request_count)
+
+    @property
+    def records(self) -> list[dict[str, Any]]:
+        return [dict(item) for item in self.resolver.records]
+
+    def scoped(self, loop_id: str) -> InteractionResolver:
+        return self._ledger.scoped(loop_id)
+
+    def per_loop(self) -> dict[str, dict[str, int]]:
+        result: dict[str, dict[str, int]] = {}
+        for loop_id, counts in self._ledger.snapshot().items():
+            attempted = counts["request_count"]
+            exhausted = counts["error_counts"].get(
+                "evidence_budget_exhausted",
+                0,
+            )
+            result[loop_id] = {
+                "attempted": attempted,
+                "consumed": attempted - exhausted,
+                "exhausted": exhausted,
+                "repeated_request": counts["repeated_request_count"],
+            }
+        return result
+
+    def to_document(self) -> dict[str, Any]:
+        return {
+            "request_limit": self.request_limit,
+            "request_count": self.request_count,
+            "records": self.records,
+            "per_loop": self.per_loop(),
+        }
+
 def _ideas_error(
     result: PaperOperationResult,
     *,
@@ -196,5 +244,6 @@ __all__ = [
     "ArcPaperEvidenceResolver",
     "EVIDENCE_OPERATION_NAMES",
     "EVIDENCE_REQUEST_LIMIT",
+    "IdeasEvidenceLedger",
     "evidence_operation_contracts",
 ]

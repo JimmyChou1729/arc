@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
+import signal
+import subprocess
 import sys
+import textwrap
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -136,9 +141,8 @@ class _ThreeRoundLLM:
 
 
 class _CachingResolver:
-    request_limit = 24
-
-    def __init__(self) -> None:
+    def __init__(self, *, request_limit: int = 24) -> None:
+        self.request_limit = request_limit
         self.request_count = 0
         self.records: list[dict[str, Any]] = []
         self._cache: dict[tuple[str, str], dict[str, Any]] = {}
@@ -148,12 +152,21 @@ class _CachingResolver:
     def resolve(self, request: InteractionRequest) -> InteractionResponse:
         with self._lock:
             self.request_count += 1
+            request_number = self.request_count
             key = (request.operation, str(request.arguments["arxiv_id"]))
             if key not in self._cache:
                 self.fetch_count += 1
                 self._cache[key] = {"cached": True}
             self.records.append({"operation_id": request.operation, "parameters": dict(request.arguments)})
             result = self._cache[key]
+        if request_number > self.request_limit:
+            return InteractionResponse(
+                request.request_id,
+                error={
+                    "code": "evidence_budget_exhausted",
+                    "message": "test budget exhausted",
+                },
+            )
         return InteractionResponse(request.request_id, result=result)
 
 
@@ -498,6 +511,194 @@ def test_one_shared_evidence_resolver_enforces_allowlist_budget_and_cache_reuse(
     assert resolver.fetch_count == 1
     assert {record["operation_id"] for record in resolver.records} == {"get-arxiv-table-of-contents"}
     assert result["evidence"]["request_count"] == 6
+
+
+def test_evidence_accounting_is_per_loop_with_one_unchanged_global_cap(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    resolver = _CachingResolver(request_limit=2)
+
+    result = runner.run_ideas(
+        _single_domain_config(tmp_path, loops=2),
+        llm_service=_ThreeRoundLLM(interaction=True),  # type: ignore[arg-type]
+        evidence_resolver=resolver,  # type: ignore[arg-type]
+    )
+
+    per_loop = result["evidence"]["per_loop"]
+    assert result["evidence"]["request_limit"] == 2
+    assert result["evidence"]["request_count"] == 6
+    assert set(per_loop) == {"domain_idea_001", "domain_idea_002"}
+    assert all(
+        set(item)
+        == {"attempted", "consumed", "exhausted", "repeated_request"}
+        for item in per_loop.values()
+    )
+    assert sum(item["attempted"] for item in per_loop.values()) == 6
+    assert sum(item["consumed"] for item in per_loop.values()) == 2
+    assert sum(item["exhausted"] for item in per_loop.values()) == 4
+    assert sum(item["repeated_request"] for item in per_loop.values()) == 5
+    assert {item["attempted"] for item in per_loop.values()} == {3}
+
+
+def test_execution_exception_reports_committed_durable_progress(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+
+    def execute_then_raise(repository, spec, handler):
+        runner.RunEngine(repository).execute(spec, handler)
+        raise RuntimeError("fault after durable completion")
+
+    result = runner.run_ideas(
+        _single_domain_config(tmp_path),
+        executor=execute_then_raise,
+        llm_service=_ThreeRoundLLM(),  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failed"
+    assert result["execution_error"] == {
+        "code": "ideas_batch_execution_failed",
+        "exception_type": "RuntimeError",
+    }
+    assert result["batch"]["durable_lifecycle"] == "succeeded"
+    assert result["reviewer_call_count"] == 3
+    assert result["loops"][0]["committed_rounds"] == 3
+
+
+def test_duplicate_enabled_variant_ids_are_rejected(tmp_path: Path) -> None:
+    runner = _load_runner_module()
+    workflow = tmp_path / "workflow"
+    shutil.copytree(WORKFLOW_JSON, workflow)
+    source = json.loads(
+        (workflow / "ideas-domain.variant.json").read_text(encoding="utf-8")
+    )
+    (workflow / "duplicate-a.variant.json").write_text(
+        json.dumps(source),
+        encoding="utf-8",
+    )
+    (workflow / "duplicate-b.variant.json").write_text(
+        json.dumps(source),
+        encoding="utf-8",
+    )
+    config = {
+        **_single_domain_config(tmp_path),
+        "variant_config_dir": str(workflow),
+        "variant_glob": "duplicate-*.variant.json",
+    }
+
+    with pytest.raises(IdeasConfigError, match="duplicate enabled variant_id"):
+        runner.run_ideas(config, dry_run=True)
+
+
+def test_save_prompts_false_is_rejected_and_true_is_accepted(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    config = _single_domain_config(tmp_path)
+
+    with pytest.raises(
+        IdeasConfigError,
+        match="artifact_options.save_prompts must be true",
+    ):
+        runner.run_ideas(
+            {
+                **config,
+                "artifact_options": {"save_prompts": False},
+            },
+            dry_run=True,
+        )
+
+    result = runner.run_ideas(
+        {
+            **config,
+            "artifact_options": {"save_prompts": True},
+        },
+        dry_run=True,
+    )
+    assert result["status"] == "dry_run"
+
+
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+def test_process_signal_requests_durable_batch_stop(
+    tmp_path: Path,
+    signum: signal.Signals,
+) -> None:
+    config = _single_domain_config(tmp_path)
+    config_path = tmp_path / f"signal-{signum.name}.json"
+    ready_path = tmp_path / f"signal-{signum.name}.ready"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    child = textwrap.dedent(
+        """
+        import importlib.util
+        import sys
+        import time
+        from pathlib import Path
+
+        script, config_path, ready_path = map(Path, sys.argv[1:4])
+        sys.path.insert(0, str(script.parent))
+        spec = importlib.util.spec_from_file_location("run_ideas_signal", script)
+        module = importlib.util.module_from_spec(spec)
+        assert spec is not None and spec.loader is not None
+        spec.loader.exec_module(module)
+
+        def blocking_executor(repository, run_spec, _handler):
+            class BlockingHandler:
+                name = run_spec.handler
+
+                def execute(self, context):
+                    ready_path.write_text("ready", encoding="utf-8")
+                    deadline = time.monotonic() + 10
+                    while repository.inspect(run_spec.run_id).stop_request is None:
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError("stop request was not persisted")
+                        time.sleep(0.01)
+                    context.checkpoint()
+
+            return module.RunEngine(repository).execute(
+                run_spec,
+                BlockingHandler(),
+            )
+
+        module._execute_batch = blocking_executor
+        raise SystemExit(
+            module.main(["--config", str(config_path), "--json"])
+        )
+        """
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            child,
+            str(RUNNER),
+            str(config_path),
+            str(ready_path),
+        ],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    deadline = time.monotonic() + 10
+    while not ready_path.is_file() and process.poll() is None:
+        if time.monotonic() >= deadline:
+            process.kill()
+            pytest.fail("signal subprocess did not enter its durable executor")
+        time.sleep(0.01)
+    os.kill(process.pid, signum)
+    stdout, stderr = process.communicate(timeout=10)
+
+    assert process.returncode == 1, stderr
+    result = json.loads(stdout)
+    assert result["status"] == "paused"
+    assert result["batch"]["trace_verified"] is True
+    from arc_jobs import RunRepository
+
+    view = RunRepository(config["run_dir"]).inspect(config["run_id"])
+    assert view.stop_request is not None
+    assert view.stop_request.reason == "run-ideas received a process signal"
 
 
 def test_runner_has_no_retired_evidence_or_private_artifact_dependencies() -> None:

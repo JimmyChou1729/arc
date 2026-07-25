@@ -57,7 +57,6 @@ class IdeasConfig:
     variant_config_dir: Path
     variant_glob: str
     loops_per_variant: int
-    save_prompts: bool
     variants: list[VariantConfig]
     domain_manifest_path: Path
     domain_manifest: dict[str, Any] | None
@@ -83,6 +82,24 @@ def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
         raise ConfigError("variant_glob is required")
     loops_per_variant = _positive_int(data.get("loops_per_variant", 5), "loops_per_variant")
     artifact_options = _dict(data.get("artifact_options", {}), "artifact_options")
+    unknown_artifact_options = set(artifact_options) - {"save_prompts"}
+    if unknown_artifact_options:
+        raise ConfigError(
+            "artifact_options has unsupported fields: "
+            + ", ".join(sorted(unknown_artifact_options))
+        )
+    if (
+        "save_prompts" in artifact_options
+        and _bool(
+            artifact_options["save_prompts"],
+            "artifact_options.save_prompts",
+        )
+        is not True
+    ):
+        raise ConfigError(
+            "artifact_options.save_prompts must be true; durable ideas "
+            "execution always retains materialized prompts"
+        )
     domain_manifest_path, manifest_was_explicit = _configured_manifest_path(data, project_dir=project_dir)
     domain_manifest, research_scope, routing_warnings = _load_domain_manifest(
         domain_manifest_path,
@@ -116,7 +133,6 @@ def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
         variant_config_dir=variant_config_dir,
         variant_glob=variant_glob,
         loops_per_variant=loops_per_variant,
-        save_prompts=_bool(artifact_options.get("save_prompts", True), "artifact_options.save_prompts"),
         variants=variants,
         domain_manifest_path=domain_manifest_path,
         domain_manifest=domain_manifest,
@@ -130,6 +146,7 @@ def _discover_variants(root: Path, pattern: str) -> list[VariantConfig]:
     if not root.exists():
         raise ConfigError(f"variant_config_dir does not exist: {root}")
     variants: list[VariantConfig] = []
+    seen_variant_ids: dict[str, Path] = {}
     for path in sorted(root.glob(pattern)):
         if "_inactivated" in path.name or ".disabled." in path.name:
             continue
@@ -139,6 +156,13 @@ def _discover_variants(root: Path, pattern: str) -> list[VariantConfig]:
             raise ConfigError(f"variant config must be an object: {path}") from exc
         variant = _parse_variant(payload, path=path)
         if variant is not None:
+            previous = seen_variant_ids.get(variant.variant_id)
+            if previous is not None:
+                raise ConfigError(
+                    f"duplicate enabled variant_id {variant.variant_id!r}: "
+                    f"{previous} and {path}"
+                )
+            seen_variant_ids[variant.variant_id] = path
             variants.append(variant)
     return variants
 

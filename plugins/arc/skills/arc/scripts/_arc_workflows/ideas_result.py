@@ -15,7 +15,7 @@ from arc_proposer_reviewer import (
 )
 from arc_proposer_reviewer.protocol import encode_batch_request
 
-from _arc_workflows.evidence import ArcPaperEvidenceResolver
+from _arc_workflows.evidence import IdeasEvidenceLedger
 from _arc_workflows.ideas_config import IdeasConfig
 from _arc_workflows.ideas_marking import load_marking_scheme
 from _arc_workflows.ideas_ranking import (
@@ -35,7 +35,7 @@ def observed_result(
     max_concurrent: int,
     inspection: BatchInspection,
     trace: BatchTrace | None,
-    evidence_resolver: ArcPaperEvidenceResolver,
+    evidence_ledger: IdeasEvidenceLedger,
 ) -> dict[str, Any]:
     try:
         score_table = round_score_table(
@@ -96,11 +96,7 @@ def observed_result(
             "loop_revisions": dict(inspection.loop_revisions),
             "trace_verified": trace is not None,
         },
-        "evidence": {
-            "request_limit": evidence_resolver.request_limit,
-            "request_count": evidence_resolver.request_count,
-            "records": copy.deepcopy(evidence_resolver.records),
-        },
+        "evidence": copy.deepcopy(evidence_ledger.to_document()),
         "loops": loops,
         "round_score_table": score_table,
     }

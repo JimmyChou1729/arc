@@ -7,8 +7,5 @@
   "domain_manifest_path": "<project-dir>/domain/domain-manifest.json",
   "variant_config_dir": "<skill-workflow-json-dir>",
   "variant_glob": "ideas-*.variant.json",
-  "loops_per_variant": 5,
-  "artifact_options": {
-    "save_prompts": true
-  }
+  "loops_per_variant": 5
 }

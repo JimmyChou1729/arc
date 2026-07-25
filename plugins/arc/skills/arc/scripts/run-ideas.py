@@ -4,7 +4,6 @@ import argparse
 import json
 import signal
 import sys
-import threading
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
@@ -16,6 +15,7 @@ from arc_jobs import RunEngine, RunRepository, RunSnapshot, RunSpec
 from arc_llm import LLMTaskService
 from arc_proposer_reviewer import (
     BatchProjectionIntegrityError,
+    BatchRunner,
     ProposerReviewerHandler,
     ProposerReviewerService,
     ExecutionOptions,
@@ -24,7 +24,10 @@ from arc_proposer_reviewer import (
 )
 from arc_proposer_reviewer.protocol import encode_batch_request
 
-from _arc_workflows.evidence import ArcPaperEvidenceResolver
+from _arc_workflows.evidence import (
+    ArcPaperEvidenceResolver,
+    IdeasEvidenceLedger,
+)
 from _arc_workflows.ideas_config import (
     IdeasConfig,
     load_ideas_config,
@@ -38,6 +41,7 @@ from _arc_workflows.ideas_progress import (
     combined_progress_callback,
     emit_progress,
     foreground_progress_callback,
+    IdeasStopController,
     progress_sidechannel_callback,
 )
 from _arc_workflows.ideas_result import (
@@ -72,7 +76,7 @@ def run_ideas(
     evidence_resolver: ArcPaperEvidenceResolver | None = None,
     base_env: Mapping[str, str] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
-    stop_check: Callable[[], bool] | None = None,
+    stop_controller: IdeasStopController | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Materialize and run one typed proposer-reviewer ideas batch."""
@@ -95,6 +99,7 @@ def run_ideas(
         *caller_context_warnings(ideas),
     ]
     repository = RunRepository(ideas_config.run_dir)
+    controller = stop_controller or IdeasStopController()
 
     if dry_run:
         return dry_run_result(
@@ -104,7 +109,7 @@ def run_ideas(
             warnings=warnings,
             max_concurrent=max_concurrent,
         )
-    if stop_check is not None and stop_check():
+    if controller.is_requested():
         return not_started_result(
             ideas_config,
             request=request,
@@ -115,12 +120,19 @@ def run_ideas(
         )
 
     resolver = evidence_resolver or ArcPaperEvidenceResolver()
+    evidence_ledger = IdeasEvidenceLedger(
+        resolver,
+        [idea.loop_id for idea in ideas],
+    )
     handler = ProposerReviewerHandler(
         ProposerReviewerService(llm_service or LLMTaskService()),
         options=ExecutionOptions(
             max_concurrent_loops=max_concurrent,
             max_concurrent_workers=1,
-            interaction_resolver=resolver,
+            loop_interaction_resolvers={
+                idea.loop_id: evidence_ledger.scoped(idea.loop_id)
+                for idea in ideas
+            },
         ),
     )
     spec = RunSpec(
@@ -136,20 +148,44 @@ def run_ideas(
         effective_progress,
         {"event": "ideas_batch_started", "run_id": ideas_config.run_id},
     )
+    snapshot = None
+    execution_error: Exception | None = None
     try:
-        snapshot = (executor or _execute_batch)(repository, spec, handler)
+        repository.create(spec)
+        with controller.bridge(
+            lambda: BatchRunner().stop(
+                repository,
+                ideas_config.run_id,
+                reason="run-ideas received a process signal",
+            )
+        ):
+            try:
+                snapshot = (executor or _execute_batch)(
+                    repository,
+                    spec,
+                    handler,
+                )
+            except Exception as exc:
+                execution_error = exc
     except Exception as exc:
+        execution_error = exc
+    for error_type in controller.errors:
+        warnings.append(f"ideas_stop_request_failed: {error_type}")
+    if execution_error is not None:
         warnings.append(
-            f"ideas_batch_execution_failed: {type(exc).__name__}"
+            f"ideas_batch_execution_failed: {type(execution_error).__name__}"
         )
-        return not_started_result(
+        return _recover_execution_failure(
             ideas_config,
+            repository=repository,
             request=request,
             ideas=ideas,
             warnings=warnings,
             max_concurrent=max_concurrent,
-            status="failed",
+            evidence_ledger=evidence_ledger,
+            error=execution_error,
         )
+    assert snapshot is not None
 
     try:
         inspection = inspect_batch(repository, snapshot.run_id)
@@ -190,7 +226,7 @@ def run_ideas(
         max_concurrent=max_concurrent,
         inspection=inspection,
         trace=trace,
-        evidence_resolver=resolver,
+        evidence_ledger=evidence_ledger,
     )
 
 
@@ -200,6 +236,61 @@ def _execute_batch(
     handler: ProposerReviewerHandler,
 ) -> RunSnapshot:
     return RunEngine(repository).execute(spec, handler)
+
+
+def _recover_execution_failure(
+    config: IdeasConfig,
+    *,
+    repository: RunRepository,
+    request: Any,
+    ideas: list[Any],
+    warnings: list[str],
+    max_concurrent: int,
+    evidence_ledger: IdeasEvidenceLedger,
+    error: Exception,
+) -> dict[str, Any]:
+    try:
+        inspection = inspect_batch(repository, config.run_id)
+    except Exception as inspection_error:
+        warnings.append(
+            "ideas_batch_inspection_failed: "
+            f"{type(inspection_error).__name__}"
+        )
+        result = not_started_result(
+            config,
+            request=request,
+            ideas=ideas,
+            warnings=warnings,
+            max_concurrent=max_concurrent,
+            status="failed",
+        )
+        result["evidence"] = evidence_ledger.to_document()
+    else:
+        try:
+            trace = read_batch_trace(repository, config.run_id)
+        except BatchProjectionIntegrityError:
+            trace = None
+            warnings.append(
+                "committed_trace_unavailable: committed artifacts could not be verified"
+            )
+        result = observed_result(
+            config,
+            repository=repository,
+            request=request,
+            ideas=ideas,
+            warnings=warnings,
+            max_concurrent=max_concurrent,
+            inspection=inspection,
+            trace=trace,
+            evidence_ledger=evidence_ledger,
+        )
+        result["status"] = "failed"
+        result["batch"]["durable_lifecycle"] = inspection.run_lifecycle
+    result["execution_error"] = {
+        "code": "ideas_batch_execution_failed",
+        "exception_type": type(error).__name__,
+    }
+    return result
 
 
 def _read_config_file(path: str) -> dict[str, Any]:
@@ -216,11 +307,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    stop_event = threading.Event()
+    stop_controller = IdeasStopController()
     installed_handlers: dict[int, Any] = {}
 
     def request_stop(_signum: int, _frame: Any) -> None:
-        stop_event.set()
+        stop_controller.request()
 
     for signum in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -233,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
             _read_config_file(args.config),
             dry_run=args.dry_run,
             progress_callback=foreground_progress_callback(),
-            stop_check=stop_event.is_set,
+            stop_controller=stop_controller,
         )
     finally:
         for signum, handler in installed_handlers.items():

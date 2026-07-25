@@ -7,10 +7,90 @@ import os
 import sys
 import threading
 from pathlib import Path
+from types import TracebackType
 from typing import Any, Callable, Mapping
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+class IdeasStopController:
+    """Bridge process signals to one durable stop request."""
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._requested = False
+        self._closed = False
+        self._errors: list[str] = []
+
+    def request(self) -> None:
+        with self._condition:
+            self._requested = True
+            self._condition.notify_all()
+
+    def is_requested(self) -> bool:
+        with self._condition:
+            return self._requested
+
+    def bridge(self, stop: Callable[[], None]) -> "_StopBridge":
+        return _StopBridge(self, stop)
+
+    @property
+    def errors(self) -> tuple[str, ...]:
+        with self._condition:
+            return tuple(self._errors)
+
+    def _wait(self) -> bool:
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._requested or self._closed
+            )
+            return self._requested
+
+    def _close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+
+    def _record_error(self, error: Exception) -> None:
+        with self._condition:
+            self._errors.append(type(error).__name__)
+
+
+class _StopBridge:
+    def __init__(
+        self,
+        controller: IdeasStopController,
+        stop: Callable[[], None],
+    ) -> None:
+        self._controller = controller
+        self._stop = stop
+        self._thread = threading.Thread(
+            target=self._run,
+            name="arc-ideas-stop-bridge",
+            daemon=True,
+        )
+
+    def __enter__(self) -> "_StopBridge":
+        self._thread.start()
+        return self
+
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
+        self._controller._close()
+        self._thread.join()
+
+    def _run(self) -> None:
+        if not self._controller._wait():
+            return
+        try:
+            self._stop()
+        except Exception as exc:
+            self._controller._record_error(exc)
 
 
 def progress_sidechannel_callback(
