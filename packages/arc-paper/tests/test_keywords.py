@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from arc_llm import LLMCompleted, ModelSelection
 from arc_paper import (
     ArcPaperService,
     KeywordExtractionRunner,
+    KeywordTextUnit,
     ParsedDocument,
     ParsedSection,
     RichBlock,
@@ -35,6 +37,11 @@ from arc_paper import (
 )
 from arc_paper.cli import main
 from arc_paper.parse.parser import parse_artifact_bytes
+from arc_paper.workflows.keywords import (
+    KEYWORD_CHAPTER_PROMPT_CONTRACT,
+    _chapter_allocations,
+    _lineage as workflow_lineage,
+)
 
 
 class FakeKeywordTasks:
@@ -159,6 +166,74 @@ def _lineage(document: ParsedDocument, *, model: str = "fake") -> TermInventoryL
 def test_approx_count_is_closed(value: object) -> None:
     with pytest.raises(ValueError):
         validate_approx_count(value)
+
+
+def _allocation_counts(
+    lengths: tuple[int, ...], requested_total: int
+) -> tuple[int, ...]:
+    sections = tuple(
+        KeywordTextUnit(str(index), f"Chapter {index}", "x" * length)
+        for index, length in enumerate(lengths)
+    )
+    return tuple(
+        count
+        for _, count in _chapter_allocations(sections, requested_total)
+    )
+
+
+def test_chapter_quotas_weight_unequal_lengths() -> None:
+    assert _allocation_counts((1, 2, 3), 7) == (2, 2, 3)
+
+
+def test_chapter_quotas_honor_minimum_one_for_tiny_budget() -> None:
+    assert _allocation_counts((1, 2, 3), 1) == (1, 1, 1)
+
+
+def test_chapter_quota_equal_remainder_ties_prefer_source_order() -> None:
+    assert _allocation_counts((10, 10, 10), 5) == (2, 2, 1)
+
+
+def test_chapter_quota_total_and_order_are_exact_and_deterministic() -> None:
+    first = _chapter_allocations(
+        (
+            KeywordTextUnit("empty", "Empty", ""),
+            KeywordTextUnit("whitespace", "Whitespace", " \n"),
+            KeywordTextUnit("a", "A", "x" * 3),
+            KeywordTextUnit("b", "B", "x" * 5),
+            KeywordTextUnit("c", "C", "x" * 7),
+        ),
+        17,
+    )
+    second = _chapter_allocations(
+        (
+            KeywordTextUnit("empty", "Empty", ""),
+            KeywordTextUnit("whitespace", "Whitespace", " \n"),
+            KeywordTextUnit("a", "A", "x" * 3),
+            KeywordTextUnit("b", "B", "x" * 5),
+            KeywordTextUnit("c", "C", "x" * 7),
+        ),
+        17,
+    )
+    assert tuple(section.section_id for section, _ in first) == ("a", "b", "c")
+    assert tuple(count for _, count in first) == (4, 6, 7)
+    assert sum(count for _, count in first) == 17
+    assert first == second
+
+
+def test_weighted_chapter_recipe_uses_distinct_cache_lineage() -> None:
+    document = _parsed()
+    lineage = workflow_lineage(
+        document, ModelSelection(provider="fake", model="fake-model")
+    )
+    old_lineage = replace(
+        lineage,
+        discovery_contract="arc.paper.keyword_chapter_prompt.v1",
+    )
+    assert (
+        KEYWORD_CHAPTER_PROMPT_CONTRACT
+        == "arc.paper.keyword_chapter_prompt.v2"
+    )
+    assert lineage.key != old_lineage.key
 
 
 def test_explicit_windows_are_auditable_and_result_is_frequency_projection(

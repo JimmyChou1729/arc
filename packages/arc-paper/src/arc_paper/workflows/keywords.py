@@ -49,6 +49,7 @@ from ..rich_document import rich_document_to_document
 from ..terms import (
     KeywordDocument,
     KeywordResult,
+    KeywordTextUnit,
     TermCandidate,
     TermInventoryLineage,
     TermInventoryStore,
@@ -70,7 +71,7 @@ from ._llm import (
 
 KEYWORD_EXTRACTION_HANDLER = "arc.paper.keyword_extraction.v1"
 KEYWORD_REVIEW_PROMPT_CONTRACT = "arc.paper.keyword_review_prompt.v1"
-KEYWORD_CHAPTER_PROMPT_CONTRACT = "arc.paper.keyword_chapter_prompt.v1"
+KEYWORD_CHAPTER_PROMPT_CONTRACT = "arc.paper.keyword_chapter_prompt.v2"
 EXPLICIT_TERM_SUPERVISION_SCHEMA = (
     "arc.paper.explicit_term_supervision_response.v1"
 )
@@ -394,18 +395,19 @@ class KeywordInventoryService:
         resume_input: Mapping[str, JsonValue] | None,
         existing_terms: Sequence[str],
     ) -> list[TermCandidate] | Paused | Failed:
-        sections = keyword_chapters(document)
-        if not sections:
+        allocations = _chapter_allocations(
+            keyword_chapters(document), requested_total
+        )
+        if not allocations:
             return []
         artifact_input = _document_input(context, document)
-        per_chapter = max(1, math.ceil(requested_total / len(sections)))
         output: list[TermCandidate] = []
         known = set(existing_terms)
-        for section in sections:
+        for section, requested_count in allocations:
             request = _chapter_request(
                 document,
                 section,
-                requested_count=per_chapter,
+                requested_count=requested_count,
                 artifact_input=artifact_input,
                 model=model,
                 existing_terms=tuple(sorted(known)),
@@ -439,6 +441,35 @@ class KeywordInventoryService:
             except ValueError as exc:
                 return Failed(RunError("keyword_output_invalid", str(exc)))
         return output
+
+
+def _chapter_allocations(
+    sections: Sequence[KeywordTextUnit],
+    requested_total: int,
+) -> tuple[tuple[KeywordTextUnit, int], ...]:
+    """Allocate a deterministic, length-weighted quota to non-empty chapters."""
+
+    nonempty = tuple(section for section in sections if section.text.strip())
+    if not nonempty:
+        return ()
+    chapter_count = len(nonempty)
+    target = max(requested_total, chapter_count)
+    remaining = target - chapter_count
+    lengths = tuple(len(section.text) for section in nonempty)
+    total_length = sum(lengths)
+    numerators = tuple(remaining * length for length in lengths)
+    extras = [numerator // total_length for numerator in numerators]
+    unassigned = remaining - sum(extras)
+    remainder_order = sorted(
+        range(chapter_count),
+        key=lambda index: (-(numerators[index] % total_length), index),
+    )
+    for index in remainder_order[:unassigned]:
+        extras[index] += 1
+    return tuple(
+        (section, 1 + extras[index])
+        for index, section in enumerate(nonempty)
+    )
 
 
 KeywordExtractionService = KeywordInventoryService
