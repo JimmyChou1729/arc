@@ -460,6 +460,46 @@ def test_html_nested_math_in_equation_container_is_not_duplicated(tmp_path):
     assert document.math_spans[0].normalized_tex == "x = y"
 
 
+def test_html_equation_table_groups_fragments_into_logical_display_spans(tmp_path):
+    payload = b"""
+    <html><body><section id="S1"><h2>Model</h2>
+      <table class="ltx_equation">
+        <tr><td><math alttext="x"></math><math alttext="= y"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
+        <tr><td><math alttext="+ z"></math></td></tr>
+      </table>
+      <table class="ltx_equation">
+        <tr><td><math alttext="a"></math><math alttext="= b"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+        <tr><td><math alttext="c"></math><math alttext="= d"></math></td><td><span class="ltx_tag">(6)</span></td></tr>
+      </table>
+    </section></body></html>
+    """
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, SourceFormat.HTML)
+
+    document = PaperParserService(repository).parse(
+        SourceBundle(primary=artifact)
+    ).document
+
+    spans = [span for span in document.math_spans if span.kind is MathSpanKind.DISPLAY]
+    assert [span.normalized_tex for span in spans] == ["x = y + z", "a = b", "c = d"]
+    assert [span.source_label for span in spans] == ["4", "5", "6"]
+
+
+def test_html_ltx_math_wrapper_does_not_turn_inline_math_into_display_math(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        b"<article><h1>Model</h1><p><span class='ltx_Math'><math alttext='x = y'></math></span></p></article>",
+        SourceFormat.HTML,
+    )
+
+    document = PaperParserService(repository).parse(
+        SourceBundle(primary=artifact)
+    ).document
+
+    assert document.math_spans[0].kind is MathSpanKind.INLINE
+
+
 def test_tex_comment_environment_excludes_sections_and_math_but_keeps_lines(
     tmp_path,
 ):

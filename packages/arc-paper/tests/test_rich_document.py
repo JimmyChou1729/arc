@@ -14,6 +14,7 @@ from arc_paper import (
     RichDocumentValidationError,
     RichPageMapEntry,
     RichSection,
+    ReconciliationStatus,
     SourceBundle,
     SourceFormat,
     SourceOrigin,
@@ -1193,15 +1194,44 @@ def test_pdf_section_matches_wrapped_semantic_heading_with_different_labels(tmp_
     assert section.provenance["matching_method"] == "joined_heading_lines"
 
 
-def test_html_equation_table_preserves_each_visible_displayed_label(tmp_path):
+def test_pdf_section_matching_does_not_strip_article_a_from_a_title(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# A Model\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf_payload = b"%PDF article title false positive"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            pdf_payload: PDFTextLayer(
+                ("This paragraph discusses a model but contains no section heading.",)
+            )
+        }
+    )
+
+    with pytest.raises(RichDocumentValidationError) as error:
+        RichDocumentParserService(
+            repository, pdf_text_extractor=extractor
+        ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    assert error.value.code == "pdf_validator_mismatch"
+
+
+def test_html_equation_table_groups_fragments_by_visible_displayed_label(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     primary = _store(
         repository,
         b"""
         <article><h1>Overview</h1>
+        <table class="ltx_equation" id="S3.E22">
+          <tr><td><math alttext="x"></math><math alttext="= y"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
+          <tr><td><math alttext="+ z"></math></td></tr>
+        </table>
         <table class="ltx_equation" id="S3.E23">
-          <tr><td><math alttext="x = 1"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
-          <tr><td><math alttext="y = 2"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+          <tr><td><math alttext="a"></math><math alttext="= b"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+          <tr><td><math alttext="c"></math><math alttext="= d"></math></td><td><span class="ltx_tag">(6)</span></td></tr>
         </table></article>
         """,
         SourceFormat.HTML,
@@ -1212,8 +1242,12 @@ def test_html_equation_table_preserves_each_visible_displayed_label(tmp_path):
     equations = [
         block for block in document.blocks if block.kind is RichBlockKind.EQUATION
     ]
-    assert [block.payload["tex"] for block in equations] == ["x = 1", "y = 2"]
-    assert [block.payload["label"] for block in equations] == ["4", "5"]
+    assert [block.payload["tex"] for block in equations] == [
+        "x = y + z",
+        "a = b",
+        "c = d",
+    ]
+    assert [block.payload["label"] for block in equations] == ["4", "5", "6"]
     assert all(block.payload["label"] != "S3.E23" for block in equations)
 
 
@@ -1257,6 +1291,138 @@ def test_complete_pdf_equation_sequence_projects_canonical_labels(tmp_path):
         == "strict_complete_pdf_sequence"
         for block in equations
     )
+
+
+def test_pdf_equation_sequence_uses_formula_units_not_referenced_labels(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"""
+        <article><h1>Overview</h1>
+        <table class="ltx_equation">
+          <tr><td><math alttext="x = 1"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
+          <tr><td><math alttext="y = 2"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+        </table></article>
+        """,
+        SourceFormat.HTML,
+    )
+    pdf_payload = b"%PDF cited equation label"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            pdf_payload: PDFTextLayer(
+                (
+                    "Overview\nx = 1 (1)",
+                    "The derivation refers to Eq. (1).",
+                    "y = 2 (2)",
+                )
+            )
+        }
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    provenance = outcome.document.metadata["equation_label_reconciliation"]
+    assert [details["page_number"] for details in provenance.values()] == [1, 3]
+
+
+def test_pdf_equation_sequence_rejects_unlabelled_logical_display_unit(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"""
+        <article><h1>Overview</h1>
+        <table class="ltx_equation">
+          <tr><td><math alttext="x = 1"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
+          <tr><td><math alttext="y = 2"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+        </table></article>
+        """,
+        SourceFormat.HTML,
+    )
+    pdf_payload = b"%PDF unlabelled unit"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            pdf_payload: PDFTextLayer(
+                ("Overview\nx = 1 (1)\nz = 3\ny = 2 (2)",)
+            )
+        }
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    assert "equation_label_reconciliation" not in outcome.document.metadata
+    assert any(
+        "PDF display equations are not all uniquely numbered" in warning
+        for warning in outcome.warnings
+    )
+
+
+def test_pdf_equation_sequence_rejects_unlabelled_primary_display_unit(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"""
+        <article><h1>Overview</h1>
+        <table class="ltx_equation">
+          <tr><td><math alttext="x = 1"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
+        </table>
+        <table class="ltx_equation">
+          <tr><td><math alttext="z = 3"></math></td></tr>
+        </table>
+        <table class="ltx_equation">
+          <tr><td><math alttext="y = 2"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+        </table></article>
+        """,
+        SourceFormat.HTML,
+    )
+    pdf_payload = b"%PDF labelled sequence"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {pdf_payload: PDFTextLayer(("Overview\nx = 1 (1)\ny = 2 (2)",))}
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    assert "equation_label_reconciliation" not in outcome.document.metadata
+    assert any(
+        "primary display equations are not all uniquely numbered" in warning
+        for warning in outcome.warnings
+    )
+
+
+def test_ambiguous_pdf_math_evidence_is_diagnostic_not_a_rich_parse_failure(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# Overview\n\n$$ x = 1 $$\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf_payload = b"%PDF repeated short formula"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            pdf_payload: PDFTextLayer(
+                ("Overview\nx = 1", "The short formula x = 1 appears again.")
+            )
+        }
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    math_entry = next(
+        entry for entry in outcome.report.entries if entry.subject_id.startswith("math-")
+    )
+    assert math_entry.status is ReconciliationStatus.AMBIGUOUS
+    assert any("PDF math evidence ambiguous" in warning for warning in outcome.warnings)
 
 
 def test_pdf_number_alone_does_not_verify_math_content(tmp_path):

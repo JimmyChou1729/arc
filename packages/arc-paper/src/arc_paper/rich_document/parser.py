@@ -16,6 +16,10 @@ from .._parsing.html_source import (
     html_source_position,
     rich_html_selector,
 )
+from .._parsing.html_equations import (
+    html_displayed_equation_label as _html_displayed_equation_label,
+    html_equation_table_units,
+)
 from .._parsing.markdown_lex import (
     markdown_front_matter_end,
     markdown_indent_width,
@@ -1036,22 +1040,21 @@ def _append_html_equation_table_blocks(
     node: Tag,
     import_asset: AssetImporter,
 ) -> None:
-    """Emit one display block per MathML unit in an equation-table wrapper."""
+    """Emit one block per visibly numbered equation, not per MathML fragment."""
 
-    math_nodes = [
-        math
-        for math in node.find_all("math")
-        if isinstance(math, Tag) and math.find_parent("math") is None
-    ]
-    for math in math_nodes:
-        embedded = _html_embedded_block(
-            locator,
-            math,
-            import_asset,
-            equation_label=_html_displayed_equation_label(math),
+    for unit in html_equation_table_units(node):
+        tex = normalize_tex(
+            " ".join(_html_math_tex(math) for math in unit.math_nodes)
         )
-        if embedded is not None:
-            output.append(embedded)
+        if not tex:
+            continue
+        output.append(
+            _RawBlock(
+                RichBlockKind.EQUATION,
+                locator,
+                {"tex": tex, "display": True, "label": unit.label},
+            )
+        )
 
 
 def _append_html_table_blocks(
@@ -1221,28 +1224,6 @@ def _html_math_tex(node: Tag) -> str:
         if isinstance(annotation, Tag):
             tex = annotation.get_text(" ", strip=True)
     return normalize_tex(tex or node.get_text(" ", strip=True))
-
-
-def _html_displayed_equation_label(math: Tag) -> str:
-    """Use the rendered tag, never a structural HTML ID, as an equation label."""
-
-    row = math.find_parent("tr")
-    containers = (row, math.find_parent("table"), math.parent)
-    for container in containers:
-        if not isinstance(container, Tag):
-            continue
-        tag = container.find(
-            class_=re.compile(r"(?:^|\s)ltx_tag(?:\s|$)")
-        )
-        if isinstance(tag, Tag):
-            return _normalize_displayed_equation_label(tag.get_text(" ", strip=True))
-    return ""
-
-
-def _normalize_displayed_equation_label(value: str) -> str:
-    compact = re.sub(r"\s+", " ", value).strip()
-    match = re.fullmatch(r"\(\s*([^()]+?)\s*\)", compact)
-    return match.group(1).strip() if match else compact
 
 
 def _parse_tex(

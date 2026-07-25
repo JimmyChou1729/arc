@@ -130,14 +130,7 @@ class RichDocumentParserService:
             standard_primary, parsed_validator
         )
         conflicts = [
-            entry
-            for entry in entries
-            if entry.status
-            in {ReconciliationStatus.MISMATCH, ReconciliationStatus.AMBIGUOUS}
-            or (
-                entry.status is ReconciliationStatus.MISSING
-                and entry.subject_id.startswith("section:")
-            )
+            entry for entry in entries if _is_fatal_pdf_reconciliation_entry(entry)
         ]
         if conflicts:
             status = (
@@ -330,6 +323,25 @@ def _conflict_detail(entry: ReconciliationEntry) -> dict[str, object]:
         "message": entry.message,
         **dict(entry.provenance),
     }
+
+
+def _is_fatal_pdf_reconciliation_entry(entry: ReconciliationEntry) -> bool:
+    """Keep structure strict while treating weak PDF math evidence as diagnostic.
+
+    PDF text extraction cannot distinguish a short formula from each repeated
+    occurrence of that formula.  Missing or ambiguous math evidence therefore
+    is not a contradiction with the rich source.  A confirmed mathematical
+    mismatch remains fatal, as do all missing, ambiguous, and mismatched
+    section anchors.
+    """
+
+    if entry.subject_id.startswith("section:"):
+        return entry.status in {
+            ReconciliationStatus.MISSING,
+            ReconciliationStatus.MISMATCH,
+            ReconciliationStatus.AMBIGUOUS,
+        }
+    return entry.status is ReconciliationStatus.MISMATCH
 
 
 def _equation_label_provenance(

@@ -12,6 +12,7 @@ from ..sources import (
     SourceFormat,
 )
 from .models import MathSpan, ParsedDocument, VisualPageReviewInput
+from .parser import _pdf_equation_unit
 
 
 RICH_FORMATS = {SourceFormat.HTML, SourceFormat.MARKDOWN, SourceFormat.TEX}
@@ -420,7 +421,6 @@ _PDF_CONVENTIONAL_SECTION_PREFIX = re.compile(
     r"|[IVXLCDM]+\s*[.)]"
     r"|[IVXLCDM]+"
     r"|[A-Z]\s*[.)]"
-    r"|[A-Z]"
     r")\s+(?=\S)"
 )
 _PDF_SECTION_LIKE_PREFIX = re.compile(
@@ -507,6 +507,12 @@ def _contains_token_run(values: list[str], needle: list[str]) -> bool:
 def _line_has_section_title_substring(line: str, title: str) -> bool:
     """Return whether one non-heading line provides page-level title evidence."""
 
+    # A one-letter leading token is indistinguishable from prose (notably the
+    # article in ``A Model``) in a substring search.  Exact and conventional
+    # prefixed-heading matching have already run before this fallback, so do
+    # not let weak body prose establish a section page for such titles.
+    if re.match(r"^[A-Za-z]\s+", title):
+        return False
     normalized = _fingerprint(line)
     if f" {title} " not in f" {normalized} ":
         return False
@@ -562,13 +568,21 @@ def _strict_pdf_equation_label_mapping(
     it cannot prove the TeX extracted from a PDF is equivalent.
     """
 
+    all_primary_display_spans = [
+        span for span in primary.math_spans if span.kind.value == "display"
+    ]
+    if not all_primary_display_spans:
+        return None, ""
     primary_spans = [
         span
-        for span in primary.math_spans
-        if span.kind.value == "display" and _pure_equation_number(span.source_label)
+        for span in all_primary_display_spans
+        if _pure_equation_number(span.source_label)
     ]
-    if not primary_spans:
-        return None, ""
+    if len(primary_spans) != len(all_primary_display_spans):
+        return (
+            None,
+            "PDF equation labels were not canonically mapped: primary display equations are not all uniquely numbered",
+        )
     primary_labels = [
         _pure_equation_number(span.source_label) for span in primary_spans
     ]
@@ -577,11 +591,19 @@ def _strict_pdf_equation_label_mapping(
             None,
             "PDF equation labels were not canonically mapped: primary labels are not unique",
         )
+    all_pdf_display_spans = [
+        span for span in validator.math_spans if span.kind.value == "display"
+    ]
     pdf_spans = [
         span
-        for span in validator.math_spans
-        if span.kind.value == "display" and _pure_equation_number(span.source_label)
+        for span in all_pdf_display_spans
+        if _pure_equation_number(span.source_label)
     ]
+    if len(pdf_spans) != len(all_pdf_display_spans):
+        return (
+            None,
+            "PDF equation labels were not canonically mapped: PDF display equations are not all uniquely numbered",
+        )
     pdf_labels = [_pure_equation_number(span.source_label) for span in pdf_spans]
     expected = [str(index) for index in range(1, len(primary_spans) + 1)]
     if len(pdf_spans) != len(primary_spans) or pdf_labels != expected:
@@ -589,13 +611,12 @@ def _strict_pdf_equation_label_mapping(
             None,
             "PDF equation labels were not canonically mapped: complete numeric sequence is unavailable",
         )
-    pages = [_pages_for_printed_label(raw_pages, label) for label in pdf_labels]
-    if any(len(candidate) != 1 for candidate in pages):
+    page_numbers = _pdf_logical_equation_unit_pages(pdf_spans, raw_pages)
+    if page_numbers is None:
         return (
             None,
-            "PDF equation labels were not canonically mapped: printed labels are not page-unique",
+            "PDF equation labels were not canonically mapped: PDF logical equation units could not be located",
         )
-    page_numbers = [candidate[0] for candidate in pages]
     if page_numbers != sorted(page_numbers):
         return (
             None,
@@ -625,6 +646,37 @@ def _strict_pdf_equation_label_mapping(
         ),
         "",
     )
+
+
+def _pdf_logical_equation_unit_pages(
+    spans: list[MathSpan], raw_pages: list[str]
+) -> list[int] | None:
+    """Recover pages from the PDF parser's equation units, not label mentions.
+
+    A printed ``(22)`` may be cited in ordinary prose on several pages.  The
+    parser identifies logical PDF equations from math-like lines; replay that
+    narrow extraction here and require its full ordered sequence to agree with
+    the already parsed spans.  This keeps page provenance strict without
+    confusing citations for displayed equations.
+    """
+
+    observed: list[tuple[str, str, int]] = []
+    for page_number, page in enumerate(raw_pages, 1):
+        for line in page.splitlines():
+            unit = _pdf_equation_unit(line)
+            if unit is not None:
+                observed.append((unit.source_label, unit.normalized_tex, page_number))
+    if len(observed) != len(spans):
+        return None
+    page_numbers: list[int] = []
+    for span, (label, tex, page_number) in zip(spans, observed, strict=True):
+        if (
+            span.source_label != label
+            or _math_fingerprint(span.normalized_tex) != _math_fingerprint(tex)
+        ):
+            return None
+        page_numbers.append(page_number)
+    return page_numbers
 
 
 def _pages_for_math(pages: list[str], tex: str) -> list[int]:

@@ -5,7 +5,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -15,6 +15,10 @@ from .._parsing import ParseError, normalize_tex
 from .._parsing.html_source import (
     html_roots,
     html_source_position,
+)
+from .._parsing.html_equations import (
+    html_displayed_equation_label,
+    html_equation_table_units,
 )
 from .._parsing.markdown_lex import (
     markdown_column_width as _markdown_column_width,
@@ -56,6 +60,15 @@ class PDFTextExtractor(Protocol):
     contract_id: str
 
     def extract(self, payload: bytes) -> PDFTextLayer: ...
+
+
+@dataclass(frozen=True)
+class _PDFEquationUnit:
+    """One math-like PDF text line recognized by the shared PDF parser rule."""
+
+    raw: str
+    normalized_tex: str
+    source_label: str
 
 
 class PdftotextExtractor:
@@ -757,33 +770,24 @@ def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
         for node in root.find_all("math")
         if isinstance(node, Tag) and node.find_parent("math") is None
     ]
-    for ordinal, math in enumerate(math_nodes):
-        tex = str(math.get("alttext") or math.get("alt") or "")
+    processed_equation_tables: set[int] = set()
+    ordinal = 0
+
+    def append_span(
+        tex: str,
+        *,
+        node: Tag,
+        display: bool,
+        label: str = "",
+    ) -> None:
+        nonlocal ordinal
         if not tex:
-            annotation = math.find(
-                "annotation", attrs={"encoding": re.compile("tex", re.I)}
-            )
-            tex = (
-                annotation.get_text(" ", strip=True)
-                if isinstance(annotation, Tag)
-                else ""
-            )
-        tex = normalize_tex(tex or math.get_text(" ", strip=True))
-        if not tex:
-            continue
-        container = math.find_parent(
-            class_=re.compile(r"(?:^|\s)(?:ltx_equation|ltx_Math)(?:\s|$)")
-        )
-        display = isinstance(container, Tag) or (
-            str(math.get("display") or "").casefold() == "block"
-        )
-        line_start, column_start, line_end, column_end = (
-            html_source_position(math)
-        )
+            return
+        line_start, column_start, line_end, column_end = html_source_position(node)
         source_key = ":".join(
             str(value)
             for value in (
-                math.get("id") or "",
+                node.get("id") or "",
                 line_start,
                 column_start,
                 ordinal,
@@ -801,12 +805,41 @@ def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
                 source_line_end=line_end,
                 source_column_end=column_end,
                 normalized_tex=tex,
-                context_before=_html_neighbor_text(math, previous=True),
-                context_after=_html_neighbor_text(math, previous=False),
-                source_label=(
-                    _html_displayed_equation_label(math) if display else ""
-                ),
+                context_before=_html_neighbor_text(node, previous=True),
+                context_after=_html_neighbor_text(node, previous=False),
+                source_label=label if display else "",
             )
+        )
+        ordinal += 1
+
+    for math in math_nodes:
+        table = math.find_parent("table")
+        if isinstance(table, Tag) and _html_is_equation_table(table):
+            if id(table) in processed_equation_tables:
+                continue
+            processed_equation_tables.add(id(table))
+            for unit in html_equation_table_units(table):
+                append_span(
+                    normalize_tex(
+                        " ".join(_html_math_tex(fragment) for fragment in unit.math_nodes)
+                    ),
+                    node=unit.locator_node,
+                    display=True,
+                    label=unit.label,
+                )
+            continue
+        tex = _html_math_tex(math)
+        container = math.find_parent(
+            class_=re.compile(r"(?:^|\s)ltx_equation(?:\s|$)")
+        )
+        display = isinstance(container, Tag) or (
+            str(math.get("display") or "").casefold() == "block"
+        )
+        append_span(
+            tex,
+            node=math,
+            display=display,
+            label=html_displayed_equation_label(math) if display else "",
         )
     metadata: dict[str, object] = {"format": "html"}
     explicit_fields = _html_explicit_term_fields(soup)
@@ -833,26 +866,25 @@ def _html_neighbor_text(node: Tag, *, previous: bool) -> str:
     return candidate.get_text(" ", strip=True)
 
 
-def _html_displayed_equation_label(math: Tag) -> str:
-    """Return a visible equation tag, never an implementation DOM identifier."""
+def _html_is_equation_table(node: Tag) -> bool:
+    return any(
+        "equation" in str(class_name).casefold()
+        for class_name in node.get("class") or ()
+    )
 
-    row = math.find_parent("tr")
-    containers = (row, math.find_parent("table"), math.parent)
-    for container in containers:
-        if not isinstance(container, Tag):
-            continue
-        tag = container.find(
-            class_=re.compile(r"(?:^|\s)ltx_tag(?:\s|$)")
+
+def _html_math_tex(node: Tag) -> str:
+    tex = str(node.get("alttext") or node.get("alt") or "")
+    if not tex:
+        annotation = node.find(
+            "annotation", attrs={"encoding": re.compile("tex", re.I)}
         )
-        if isinstance(tag, Tag):
-            return _normalize_displayed_equation_label(tag.get_text(" ", strip=True))
-    return ""
-
-
-def _normalize_displayed_equation_label(value: str) -> str:
-    compact = re.sub(r"\s+", " ", value).strip()
-    match = re.fullmatch(r"\(\s*([^()]+?)\s*\)", compact)
-    return match.group(1).strip() if match else compact
+        tex = (
+            annotation.get_text(" ", strip=True)
+            if isinstance(annotation, Tag)
+            else ""
+        )
+    return normalize_tex(tex or node.get_text(" ", strip=True))
 
 
 def _markdown_explicit_term_fields(text: str) -> list[dict[str, object]]:
@@ -1051,10 +1083,8 @@ def _parse_pdf(
     for page_number, page in enumerate(result.pages, 1):
         page_lines = page.splitlines()
         for line_number, line in enumerate(page_lines, 1):
-            if not _looks_like_pdf_math(line):
-                continue
-            raw = re.sub(r"\s*\(([^()]*(?:\d|[ivxlcdm])[^()]*)\)\s*$", "", line).strip()
-            if not raw:
+            unit = _pdf_equation_unit(line)
+            if unit is None:
                 continue
             span = _make_span(
                 artifact,
@@ -1064,13 +1094,13 @@ def _parse_pdf(
                 start_column=1,
                 end_line=line_number,
                 end_column=max(1, len(line)),
-                raw=raw,
+                raw=unit.raw,
             )
             if span:
                 spans.append(
                     replace(
                         span,
-                        source_label=_pdf_printed_equation_label(line),
+                        source_label=unit.source_label,
                     )
                 )
     warnings = (result.warning,) if result.warning else ()
@@ -1099,6 +1129,29 @@ def _looks_like_pdf_math(value: str) -> bool:
     has_operator = bool(re.search(r"[=+\-*/^_≤≥∑∫√]", stripped))
     printed_number = bool(re.search(r"\([^()]*\d[^()]*\)\s*$", stripped))
     return has_operator and (printed_number or len(stripped.split()) <= 24)
+
+
+def _pdf_equation_unit(value: str) -> _PDFEquationUnit | None:
+    """Recognize one logical displayed-equation line in extracted PDF text.
+
+    Reconciliation reuses this exact extraction rule to associate parsed
+    equation units with pages, avoiding a second heuristic that could drift
+    from the parser.
+    """
+
+    if not _looks_like_pdf_math(value):
+        return None
+    raw = re.sub(
+        r"\s*\(([^()]*(?:\d|[ivxlcdm])[^()]*)\)\s*$", "", value
+    ).strip()
+    tex = normalize_tex(raw)
+    if not tex:
+        return None
+    return _PDFEquationUnit(
+        raw=raw,
+        normalized_tex=tex,
+        source_label=_pdf_printed_equation_label(value),
+    )
 
 
 def _pdf_printed_equation_label(value: str) -> str:
