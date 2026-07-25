@@ -215,6 +215,8 @@ def test_evidence_enabled_idea_prompts_describe_typed_resolver_boundary() -> Non
     assert "several concrete multiword synonyms" in text
     assert "repeated --term values in one call" in text
     assert "at most 50 paper titles, never summaries or abstracts" in text
+    assert "complementary discovery surfaces with no fixed order" in text
+    assert "after shortlisting an arc-resolvable paper" in text
     for name in (
         "ideas-loop.template.json",
         "ideas-cross-domain-loop.template.json",
@@ -226,6 +228,67 @@ def test_evidence_enabled_idea_prompts_describe_typed_resolver_boundary() -> Non
         assert "several concrete multiword synonyms" in notes
         assert "repeated --term values in one call" in notes
         assert "at most 50 paper titles, never summaries or abstracts" in notes
+        assert "complementary discovery surfaces with no fixed order" in notes
+        assert "after shortlisting an arc-resolvable paper" in notes
+        for operation in (
+            "get-metadata",
+            "get-arxiv-table-of-contents",
+            "get-arxiv-section",
+            "search-arxiv-full-text",
+            "search-arxiv-equations",
+            "get-references",
+            "get-citers",
+        ):
+            assert operation in notes
+
+
+def test_single_domain_ideas_make_interdisciplinary_transfer_optional() -> None:
+    proposer = json.loads(
+        (WORKFLOW_JSON / "ideas-proposer.template.json").read_text(
+            encoding="utf-8"
+        )
+    )["prompt"]["template"].lower()
+    reviewer = json.loads(
+        (WORKFLOW_JSON / "ideas-domain-reviewer.template.json").read_text(
+            encoding="utf-8"
+        )
+    )["prompt"]["template"].lower()
+    text = f"{proposer}\n{reviewer}"
+
+    assert "cross-disciplinary transfer is entirely optional" in proposer
+    assert "no proposal, loop, or batch is required to include one" in proposer
+    assert "there is no interdisciplinary quota" in proposer
+    assert "receives no preference or reward" in proposer
+    assert "a strong same-domain idea is equally eligible" in proposer
+    assert "only when the proposal actually imports a method" in reviewer
+    assert "set external_method_status to not_used" in reviewer
+    assert "do not request cross-disciplinary evidence" in reviewer
+    for forced_wording in (
+        "at least one interdisciplinary",
+        "must consider an interdisciplinary",
+        "must include an interdisciplinary",
+        "must propose an interdisciplinary",
+    ):
+        assert forced_wording not in text
+
+
+def test_multi_field_variant_remains_explicit_cross_domain_work() -> None:
+    proposer = json.loads(
+        (WORKFLOW_JSON / "ideas-cross-domain-proposer.template.json").read_text(
+            encoding="utf-8"
+        )
+    )["prompt"]["template"].lower()
+    reviewer = json.loads(
+        (WORKFLOW_JSON / "ideas-cross-domain-reviewer.template.json").read_text(
+            encoding="utf-8"
+        )
+    )["prompt"]["template"].lower()
+
+    assert "dedicated multi-field variant" in proposer
+    assert "cross-domain transfer is explicitly in scope" in proposer
+    assert "exactly one directed source-to-target idea" in proposer
+    assert "dedicated multi-field variant" in reviewer
+    assert "cross-domain transfer is explicitly in scope" in reviewer
 
 
 def test_execution_uses_public_projection_for_three_committed_rounds_and_scores(tmp_path: Path) -> None:

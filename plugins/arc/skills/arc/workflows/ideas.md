@@ -118,6 +118,16 @@ combined with OR. If the result requires refinement, narrow the phrases rather
 than requesting summaries: the response contains at most the top 50 matching
 paper titles and never abstracts or summaries.
 
+ARC and Web search are complementary discovery surfaces; neither has a fixed
+priority. Use ARC `search-metadata` or cached full-text search when they are
+likely to find the literature, and use Web search for open-world discovery,
+uncached or very recent work, and non-arXiv public sources. After shortlisting
+an ARC-resolvable paper, use the typed operations to inspect its metadata and,
+as useful, its table of contents, relevant sections, full text, equations,
+references, or citers. Spend deep-reading requests only on the strongest
+candidates so the shared budget remains useful, and record each query,
+operation, and result.
+
 The entire ideas batch shares one budget of 24 ARC-paper requests, rather than
 24 requests per worker or per round. Each worker may automatically complete at
 most two interaction rounds; a third interaction request pauses the durable
@@ -137,13 +147,21 @@ ranking. The source domain may contribute a mature method or mechanism without
 itself receiving a new result.
 
 In single-domain mode, prioritize an important target-domain problem that is
-mathematically well-defined and has an executable systematic route. A mature
-method from another field may be imported when its structure, required
-adaptation, applicability conditions, validation checks, and kill criterion are
-made concrete; only the target domain needs a substantive result. Feasibility
-is a qualification gate, while problem importance is scored strongly rather
-than used as a binary gate. Do not promote a convenient but low-value exercise,
-or an important problem without ready inputs and a bounded first calculation.
+mathematically well-defined and has an executable systematic route.
+Cross-disciplinary transfer is entirely optional: a proposer may consider or
+use a mature method from another field when it is scientifically useful, but no
+idea, loop, or batch is required to include one, there is no interdisciplinary
+quota, and interdisciplinary framing receives no ranking reward. Judge
+same-domain and cross-disciplinary candidates by the same scientific criteria.
+If a proposal does import an external method, make its structure, required
+adaptation, applicability conditions, validation checks, and kill criterion
+concrete; only then should the reviewer validate the source area, target
+domain, intersection, and shortlisted source papers. Otherwise record the
+external method as not used and do not request cross-disciplinary evidence.
+Feasibility is a qualification gate, while problem importance is scored
+strongly rather than used as a binary gate. Do not promote a convenient but
+low-value exercise, or an important problem without ready inputs and a bounded
+first calculation.
 
 ### Phase 3: Inspect Artifacts
 
