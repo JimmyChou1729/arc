@@ -26,7 +26,6 @@
             "accepted_result": {
               "type": [
                 "object",
-                "string",
                 "null"
               ],
               "required": [
@@ -39,16 +38,16 @@
                 "source_proposer_id"
               ],
               "properties": {
-                "summary": {"type": "string"},
-                "final_result": {"type": "string"},
-                "derivation": {"type": "string"},
-                "validity_scope": {"type": "string"},
-                "selected_proposer_id": {"type": "string"},
+                "summary": {"type": "string", "minLength": 1},
+                "final_result": {"type": "string", "minLength": 1},
+                "derivation": {"type": "string", "minLength": 1},
+                "validity_scope": {"type": "string", "minLength": 1},
+                "selected_proposer_id": {"type": "string", "minLength": 1},
                 "reference_claim_status": {
                   "type": "string",
                   "enum": ["agrees", "disagrees", "not_applicable"]
                 },
-                "source_proposer_id": {"type": "string"}
+                "source_proposer_id": {"type": "string", "minLength": 1}
               },
               "additionalProperties": false
             },

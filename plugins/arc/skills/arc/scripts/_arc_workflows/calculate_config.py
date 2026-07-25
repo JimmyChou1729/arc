@@ -111,6 +111,10 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
                 ),
             )
         )
+    if proposer_count < 2 and any(
+        step.reviewer_reference_claim is not None for step in steps
+    ):
+        raise ConfigError("blind reference checks require at least two proposers")
 
     return CalculateConfig(
         schema_version=schema_version,

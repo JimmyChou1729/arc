@@ -6,16 +6,12 @@ import copy
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from arc_jobs import RunEngine, RunRepository, RunSpec, RunStatus
-from arc_llm import LLMTaskService
+from arc_jobs import RunStatus
 from arc_proposer_reviewer import (
+    BatchRunner,
     BatchRequest,
     CommittedRound,
-    ProposerReviewerHandler,
-    ProposerReviewerService,
-    read_batch_round,
 )
-from arc_proposer_reviewer.protocol import encode_batch_request
 
 from _arc_workflows.calculate_config import (
     CALCULATE_RESULT_SCHEMA,
@@ -34,6 +30,7 @@ from _arc_workflows.calculate_consensus import (
     _review_consensus,
     _source_discrepancy_blocked_step_result,
     _valid_ids,
+    _workflow_action_blocked_step_result,
 )
 from _arc_workflows.calculate_prompts import (
     _attempt_batch_request,
@@ -44,6 +41,14 @@ from _arc_workflows.calculate_prompts import (
 
 RETRYABLE_CONSENSUS_STATUSES = {"reference_disagrees", "two_agree", "all_disagree", "unresolved"}
 BatchExecutor = Callable[[BatchRequest, Path, str], CommittedRound]
+
+
+class BatchExecutionError(RuntimeError):
+    """A batch exception annotated with its observed durable frontier."""
+
+    def __init__(self, message: str, *, durable_frontier: Mapping[str, Any]):
+        super().__init__(message)
+        self.durable_frontier = copy.deepcopy(dict(durable_frontier))
 
 
 def run_calculation(
@@ -130,16 +135,19 @@ def _run_calculation_step(
         try:
             committed_round = executor(request, run_root / "attempt-batches", batch_run_id)
         except Exception as exc:
-            attempts.append(
-                {
-                    "attempt_number": attempt_number,
-                    "active_proposer_ids": list(active_proposer_ids),
-                    "batch_run_id": batch_run_id,
-                    "batch_loop_id": attempt_id,
-                    "error": str(exc),
-                    "warnings_summary": _empty_warnings_summary(),
-                }
-            )
+            failed_attempt = {
+                "attempt_number": attempt_number,
+                "active_proposer_ids": list(active_proposer_ids),
+                "batch_run_id": batch_run_id,
+                "batch_loop_id": attempt_id,
+                "error": str(exc),
+                "warnings_summary": _empty_warnings_summary(),
+            }
+            if isinstance(exc, BatchExecutionError):
+                failed_attempt["durable_frontier"] = copy.deepcopy(
+                    exc.durable_frontier
+                )
+            attempts.append(failed_attempt)
             return _failed_step_result(config, step, attempts=attempts, error=str(exc))
         attempt_record = {
             "attempt_number": attempt_number,
@@ -151,11 +159,11 @@ def _run_calculation_step(
 
         try:
             review = _review_from_committed_round(committed_round)
-            proposer_outputs = {
-                proposer_id: output
-                for proposer_id, output in committed_round.proposals.items()
-                if proposer_id in active_proposer_ids
-            }
+            if set(committed_round.proposals) != set(active_proposer_ids):
+                raise ValueError(
+                    "committed proposer outputs must exactly match active proposer ids"
+                )
+            proposer_outputs = dict(committed_round.proposals)
             review_consensus = _review_consensus(
                 review,
                 active_proposer_ids=active_proposer_ids,
@@ -183,15 +191,21 @@ def _run_calculation_step(
             )
             if source_discrepancy_block is not None:
                 return source_discrepancy_block
-            accepted_result = review_consensus.get("accepted_result")
+            workflow_action_block = _workflow_action_blocked_step_result(
+                step,
+                attempts=attempts,
+                consensus=review_consensus,
+            )
+            if workflow_action_block is not None:
+                return workflow_action_block
             return {
                 "step_id": step.step_id,
                 "kind": step.kind,
                 "status": "accepted",
                 "attempts": attempts,
-                "accepted_output": accepted_result
-                if accepted_result is not None
-                else {"proposer_outputs": proposer_outputs},
+                "accepted_output": copy.deepcopy(
+                    review_consensus["accepted_result"]
+                ),
                 "blocked_output": None,
                 "reviewer_consensus": review_consensus,
             }
@@ -310,17 +324,90 @@ def _execute_public_batch(
 ) -> CommittedRound:
     """Execute one independent batch and expand only its committed first round."""
 
-    repository = RunRepository(run_root)
-    handler = ProposerReviewerHandler(ProposerReviewerService(LLMTaskService()))
-    snapshot = RunEngine(repository).execute(
-        RunSpec(run_id, handler.name, encode_batch_request(request)), handler
-    )
+    runner = BatchRunner()
+    try:
+        snapshot = runner.run(request, run_root, run_id)
+    except Exception as exc:
+        return _recover_committed_round_or_raise(
+            runner,
+            request,
+            run_root,
+            run_id,
+            error=exc,
+        )
     if snapshot.status is not RunStatus.SUCCEEDED:
         detail = ""
         if snapshot.error is not None:
             detail = f": {snapshot.error.message}"
-        raise RuntimeError(f"calculation batch ended as {snapshot.status.value}{detail}")
-    return read_batch_round(repository, run_id, request.loops[0].loop_id, 1)
+        return _recover_committed_round_or_raise(
+            runner,
+            request,
+            run_root,
+            run_id,
+            error=RuntimeError(
+                f"calculation batch ended as {snapshot.status.value}{detail}"
+            ),
+        )
+    return _recover_committed_round_or_raise(
+        runner,
+        request,
+        run_root,
+        run_id,
+        error=RuntimeError(
+            "calculation batch succeeded but its committed round was unavailable"
+        ),
+    )
+
+
+def _recover_committed_round_or_raise(
+    runner: BatchRunner,
+    request: BatchRequest,
+    run_root: Path,
+    run_id: str,
+    *,
+    error: Exception,
+) -> CommittedRound:
+    frontier: dict[str, Any]
+    try:
+        projection = runner.projection(run_root, run_id)
+        inspection = projection.inspect()
+        encoded_frontier = _jsonable(inspection)
+        frontier = (
+            dict(encoded_frontier)
+            if isinstance(encoded_frontier, Mapping)
+            else {
+                "run_lifecycle": str(
+                    getattr(inspection, "run_lifecycle", "")
+                ),
+                "run_revision": getattr(inspection, "run_revision", None),
+            }
+        )
+    except Exception as inspect_error:
+        raise BatchExecutionError(
+            str(error),
+            durable_frontier={"inspection_error": str(inspect_error)},
+        ) from error
+    loop = next(
+        (
+            item
+            for item in inspection.loops
+            if item.loop_id == request.loops[0].loop_id
+        ),
+        None,
+    )
+    if loop is not None and loop.rounds_completed >= 1:
+        try:
+            return projection.read_round(request.loops[0].loop_id, 1)
+        except Exception as round_error:
+            frontier["round_read_error"] = str(round_error)
+            raise BatchExecutionError(
+                str(round_error),
+                durable_frontier=frontier,
+            ) from round_error
+    raise BatchExecutionError(
+        str(error),
+        durable_frontier=frontier,
+    ) from error
 
 
 def _review_from_committed_round(committed_round: CommittedRound) -> Mapping[str, Any]:
@@ -346,6 +433,7 @@ def _dry_run_result(config: CalculateConfig, run_root: Path) -> dict[str, Any]:
 
 __all__ = [
     "BatchExecutor",
+    "BatchExecutionError",
     "_execute_public_batch",
     "_review_from_committed_round",
     "_run_calculation_step",

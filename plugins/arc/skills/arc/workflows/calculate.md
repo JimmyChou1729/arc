@@ -86,6 +86,13 @@ python3 <skill-dir>/scripts/run-calculate.py \
   --json
 ```
 
+The command exits `0` for `completed`, `dry_run`, `blocked_for_user`, and
+`blocked_for_revision`. A blocked result is a normal nonterminal workflow
+handoff: read its `blocked_output`, preserve the saved state, and follow the
+human or planning action instead of treating it as success or failure. The
+command exits `1` for a `failed` result and `2` for command usage or invalid
+configuration.
+
 Inspect the returned JSON and saved calculation state. Large or slow runs are
 runtime facts, not workflow blocks. Use the owning package's status command or
 the host's background-command facility instead of frequent manual polling.

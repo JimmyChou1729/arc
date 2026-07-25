@@ -70,7 +70,7 @@ def _human_gate_blocked_step_result(
         return None
 
     workflow_action = _normalized_workflow_action(consensus.get("workflow_action"), trigger_status)
-    requires_human = _workflow_action_requires_human(workflow_action, allow_nonhuman_control=True)
+    requires_human = _workflow_action_requires_human(workflow_action)
     if requires_human:
         workflow_action = copy.deepcopy(workflow_action)
         workflow_action["action"] = "pause_for_human"
@@ -102,6 +102,47 @@ def _human_gate_blocked_step_result(
     }
 
 
+def _workflow_action_blocked_step_result(
+    step: CalculateStep,
+    *,
+    attempts: list[dict[str, Any]],
+    consensus: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    workflow_action = _normalized_workflow_action(
+        consensus.get("workflow_action"),
+        str(consensus.get("status", "")),
+    )
+    if (
+        workflow_action["action"] == "continue"
+        and workflow_action["requires_human"] is False
+    ):
+        return None
+    requires_human = _workflow_action_requires_human(workflow_action)
+    expert_question = str(workflow_action.get("expert_question", "")).strip()
+    if requires_human and not expert_question:
+        expert_question = _default_expert_question(
+            str(consensus.get("status", "")),
+            workflow_action,
+        )
+    return {
+        "step_id": step.step_id,
+        "kind": step.kind,
+        "status": "blocked_for_user" if requires_human else "blocked_for_revision",
+        "attempts": attempts,
+        "accepted_output": None,
+        "blocked_output": {
+            "reason": "workflow_action",
+            "trigger_status": str(consensus.get("status", "")),
+            "requires_human": requires_human,
+            "workflow_action": workflow_action,
+            "expert_question": expert_question,
+            "analysis": str(consensus.get("analysis", "")),
+            "last_consensus": copy.deepcopy(dict(consensus)),
+        },
+        "reviewer_consensus": dict(consensus),
+    }
+
+
 def _review_consensus(
     review: Mapping[str, Any],
     *,
@@ -129,26 +170,152 @@ def _review_consensus(
             message += ", or reference_disagrees"
         raise ValueError(message)
     consensus = dict(consensus)
+    _validate_consensus_proposer_ids(
+        consensus,
+        active_proposer_ids=active_proposer_ids,
+    )
     _validate_source_discrepancies(consensus)
-    consensus["workflow_action"] = _normalized_workflow_action(consensus.get("workflow_action"), str(status))
+    consensus["workflow_action"] = _normalized_workflow_action(
+        consensus.get("workflow_action"),
+        str(status),
+    )
     if status == "all_agree":
+        _require_exact_agreement_set(
+            consensus,
+            active_proposer_ids=active_proposer_ids,
+            status="all_agree",
+        )
         _validate_best_written_selection(
             consensus,
             active_proposer_ids=active_proposer_ids,
             selectable_proposer_ids=selectable_proposer_ids,
         )
+        _validate_accepted_result(
+            consensus,
+            selectable_proposer_ids=selectable_proposer_ids,
+            expected_reference_claim_status=(
+                "agrees" if reviewer_reference_claim else "not_applicable"
+            ),
+        )
         _validate_all_agree_agreement_assessment(consensus)
     if status == "reference_disagrees":
+        _require_exact_agreement_set(
+            consensus,
+            active_proposer_ids=active_proposer_ids,
+            status="reference_disagrees",
+        )
         _validate_best_written_selection(
             consensus,
             active_proposer_ids=active_proposer_ids,
             selectable_proposer_ids=selectable_proposer_ids,
+        )
+        _validate_accepted_result(
+            consensus,
+            selectable_proposer_ids=selectable_proposer_ids,
+            expected_reference_claim_status="disagrees",
         )
         _validate_reference_disagrees_agreement_assessment(
             consensus,
             active_proposer_ids=active_proposer_ids,
         )
+    if status not in {"all_agree", "reference_disagrees"} and consensus.get(
+        "accepted_result"
+    ) is not None:
+        raise ValueError(f"{status} consensus requires accepted_result=null")
     return consensus
+
+
+def _validate_consensus_proposer_ids(
+    consensus: dict[str, Any],
+    *,
+    active_proposer_ids: list[str],
+) -> None:
+    allowed = set(active_proposer_ids)
+    for field in [
+        "agreed_proposer_ids",
+        "likely_wrong_proposer_ids",
+        "recalculate_proposer_ids",
+    ]:
+        raw = consensus.get(field)
+        if not isinstance(raw, list):
+            raise ValueError(f"{field} must be an array")
+        if any(
+            not isinstance(item, str) or not item or item not in allowed
+            for item in raw
+        ):
+            raise ValueError(f"{field} must contain only active proposer ids")
+        if len(raw) != len(set(raw)):
+            raise ValueError(f"{field} entries must be unique")
+        consensus[field] = list(raw)
+
+
+def _require_exact_agreement_set(
+    consensus: Mapping[str, Any],
+    *,
+    active_proposer_ids: list[str],
+    status: str,
+) -> None:
+    agreed_ids = consensus["agreed_proposer_ids"]
+    if set(agreed_ids) != set(active_proposer_ids):
+        raise ValueError(
+            f"{status} agreed_proposer_ids must exactly match active proposer ids"
+        )
+
+
+def _validate_accepted_result(
+    consensus: Mapping[str, Any],
+    *,
+    selectable_proposer_ids: list[str],
+    expected_reference_claim_status: str,
+) -> None:
+    result = consensus.get("accepted_result")
+    if not isinstance(result, dict):
+        raise ValueError("accepted_result must be an object")
+    required = {
+        "summary",
+        "final_result",
+        "derivation",
+        "validity_scope",
+        "selected_proposer_id",
+        "reference_claim_status",
+        "source_proposer_id",
+    }
+    if set(result) != required:
+        raise ValueError(
+            "accepted_result must contain exactly the closed accepted-result fields"
+        )
+    for field in [
+        "summary",
+        "final_result",
+        "derivation",
+        "validity_scope",
+        "selected_proposer_id",
+        "reference_claim_status",
+        "source_proposer_id",
+    ]:
+        if not isinstance(result[field], str) or not result[field].strip():
+            raise ValueError(f"accepted_result.{field} must be a non-empty string")
+    best_written = consensus.get("best_written_proposer_id")
+    for field in ["selected_proposer_id", "source_proposer_id"]:
+        if result[field] not in selectable_proposer_ids:
+            raise ValueError(
+                f"accepted_result.{field} must identify an active or locked proposer output"
+            )
+        if result[field] != best_written:
+            raise ValueError(
+                f"accepted_result.{field} must match best_written_proposer_id"
+            )
+    if result["reference_claim_status"] not in {
+        "agrees",
+        "disagrees",
+        "not_applicable",
+    }:
+        raise ValueError("accepted_result.reference_claim_status is invalid")
+    if result["reference_claim_status"] != expected_reference_claim_status:
+        raise ValueError(
+            "accepted_result.reference_claim_status must be "
+            f"{expected_reference_claim_status}"
+        )
 
 
 def _validate_best_written_selection(
@@ -347,9 +514,8 @@ def _human_gate_pause_statuses_from_mapping(human_gate: Mapping[str, Any]) -> tu
 
 
 def _normalized_workflow_action(raw: Any, trigger_status: str) -> dict[str, Any]:
-    default = _default_workflow_action(trigger_status)
     if not isinstance(raw, dict):
-        return default
+        raise ValueError("consensus.workflow_action must be an object")
 
     allowed_actions = {"continue", "pause_for_human", "revise_plan", "split_step", "retry"}
     allowed_issue_types = {
@@ -366,24 +532,39 @@ def _normalized_workflow_action(raw: Any, trigger_status: str) -> dict[str, Any]
         "worker_failure",
         "other",
     }
-    action = str(raw.get("action", default["action"])).strip()
+    action = str(raw.get("action", "")).strip()
     if action not in allowed_actions:
-        action = default["action"]
-    issue_type = str(raw.get("issue_type", default["issue_type"])).strip()
+        raise ValueError("workflow_action.action is invalid")
+    issue_type = str(raw.get("issue_type", "")).strip()
     if issue_type not in allowed_issue_types:
-        issue_type = default["issue_type"]
-    requires_human = _bool_default(
-        raw.get("requires_human", default["requires_human"]),
-        bool(default["requires_human"]),
-    )
+        raise ValueError("workflow_action.issue_type is invalid")
+    requires_human = raw.get("requires_human")
+    if type(requires_human) is not bool:
+        raise ValueError("workflow_action.requires_human must be a boolean")
+    proposed_revision = raw.get("proposed_revision")
+    if proposed_revision is not None and not isinstance(proposed_revision, str):
+        raise ValueError("workflow_action.proposed_revision must be a string or null")
+    if (
+        action in REVISION_ACTIONS
+        and requires_human is False
+        and (
+            not isinstance(proposed_revision, str)
+            or not proposed_revision.strip()
+        )
+    ):
+        raise ValueError(
+            "nonhuman revise_plan/split_step requires a non-empty proposed_revision"
+        )
 
     normalized = copy.deepcopy(raw)
     normalized["action"] = action
     normalized["requires_human"] = requires_human
     normalized["issue_type"] = issue_type
-    normalized["reason"] = str(raw.get("reason", default["reason"]) or default["reason"])
-    normalized.setdefault("proposed_revision", None)
-    normalized["expert_question"] = str(raw.get("expert_question", default["expert_question"]) or "")
+    normalized["reason"] = str(
+        raw.get("reason", f"consensus status {trigger_status}") or ""
+    )
+    normalized["proposed_revision"] = proposed_revision
+    normalized["expert_question"] = str(raw.get("expert_question", "") or "")
     return normalized
 
 
@@ -521,14 +702,9 @@ def _default_workflow_action(trigger_status: str, reason: str | None = None) -> 
 
 def _workflow_action_requires_human(
     workflow_action: Mapping[str, Any],
-    *,
-    allow_nonhuman_control: bool = False,
 ) -> bool:
     action = str(workflow_action.get("action", "")).strip()
-    nonhuman_actions = set(REVISION_ACTIONS)
-    if allow_nonhuman_control:
-        nonhuman_actions.update({"continue", "retry"})
-    if action in nonhuman_actions and workflow_action.get("requires_human") is False:
+    if action in REVISION_ACTIONS and workflow_action.get("requires_human") is False:
         return False
     return True
 
@@ -562,4 +738,5 @@ __all__ = [
     "_review_consensus",
     "_source_discrepancy_blocked_step_result",
     "_valid_ids",
+    "_workflow_action_blocked_step_result",
 ]
