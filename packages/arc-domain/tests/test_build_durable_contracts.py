@@ -129,6 +129,31 @@ def _selection(paper_id: str) -> dict:
     }
 
 
+def _summary_payload(*, user_intent: str) -> dict:
+    choice = {
+        "paper_id": FOUNDATION,
+        "title": "Selected foundation",
+        "reason": "fake selection",
+    }
+    return {
+        "schema_version": "arc.domain_summary.v5",
+        "domain_title": "Example domain",
+        "brief_introduction": "A compact introduction.",
+        "task_focus": {
+            "user_intent": user_intent,
+            "research_scope": "The supplied papers.",
+            "priority_rules": ["Satisfy the user intent first."],
+        },
+        "foundation_paper": choice,
+        "best_reference_paper": choice,
+        "methodology": [],
+        "mathematical_opportunities": {"well_defined_problems": []},
+        "known_solved_cases": [],
+        "open_axes_for_new_work": [],
+        "warnings": [],
+    }
+
+
 def _request_stage(task_id: str) -> str:
     for prefix, stage in (
         ("foundation-audit-", "audit"),
@@ -191,11 +216,13 @@ class DomainTaskService:
         expand_audit: bool = False,
         selected_foundation: str = FOUNDATION,
         stopped_stage: str | None = None,
+        summary_value: dict | None = None,
     ) -> None:
         self.fail_stage = fail_stage
         self.expand_audit = expand_audit
         self.selected_foundation = selected_foundation
         self.stopped_stage = stopped_stage
+        self.summary_value = summary_value
         self.requests = []
 
     def execute_or_resume(self, context, request, **kwargs):
@@ -220,6 +247,8 @@ class DomainTaskService:
                 }
             )
         if stage == "summary":
+            if self.summary_value is not None:
+                return _completed(self.summary_value)
             return _failure(FailureCategory.TIMEOUT)
         raise AssertionError(f"unhandled stage {stage}")
 
@@ -295,6 +324,53 @@ def test_all_domain_llm_requests_use_formatter_json_repair(tmp_path: Path) -> No
     }
     assert all(isinstance(request.output, JsonOutput) for request in service.requests)
     assert {request.output.repair for request in service.requests} == {"format"}
+
+
+def test_successful_summary_binds_request_intent_and_replays_without_llm(
+    tmp_path: Path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs")
+    request = _request()
+    model_payload = _summary_payload(user_intent="model-altered intent")
+    service = DomainTaskService(summary_value=model_payload)
+
+    snapshot = DomainBuildRunner(repository).execute(
+        request,
+        paper_access=FakePaperAccess(),
+        task_service=service,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    summary_request = next(
+        item for item in service.requests if item.task_id.startswith("domain-summary-")
+    )
+    assert f'"user_intent": "{request.intent}"' in summary_request.prompt
+    assert "foundation_selection.intent" not in summary_request.prompt
+    result, store = _result(repository, snapshot)
+    assert result.summary is not None
+    assert result.summary_markdown is not None
+    published_summary = json.loads(store.read_bytes(result.summary).decode("utf-8"))
+    published_markdown = store.read_bytes(result.summary_markdown).decode("utf-8")
+    assert published_summary["task_focus"]["user_intent"] == request.intent
+    assert f"- User intent: {request.intent}" in published_markdown
+    assert model_payload["task_focus"]["user_intent"] == "model-altered intent"
+
+    replay_service = DomainTaskService(
+        summary_value=_summary_payload(user_intent="must not be used")
+    )
+    replayed = DomainBuildRunner(repository).execute(
+        request,
+        paper_access=FakePaperAccess(),
+        task_service=replay_service,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert replayed.status is RunStatus.SUCCEEDED
+    assert replay_service.requests == []
+    replayed_result, _ = _result(repository, replayed)
+    assert replayed_result.summary == result.summary
+    assert replayed_result.summary_markdown == result.summary_markdown
 
 
 def test_verified_reference_inference_candidate_is_available_to_selection(

@@ -845,7 +845,12 @@ class DomainBuildHandler:
                 domain_id_for(self.request.seed_paper, self.request.intent),
                 self.request.intent,
             ),
-            summary_prompt(graph, evidence, selection),
+            summary_prompt(
+                graph,
+                evidence,
+                selection,
+                intent=self.request.intent,
+            ),
             JsonOutput(DOMAIN_SUMMARY_SCHEMA, repair="format"),
             self.request.model,
         )
@@ -858,6 +863,7 @@ class DomainBuildHandler:
                 graph=graph,
                 evidence=evidence,
                 selection=selection,
+                intent=self.request.intent,
             )
             summary_ref = context.artifacts.publish_json(_SUMMARY_ARTIFACT, summary)
             markdown_ref = context.artifacts.publish_bytes(

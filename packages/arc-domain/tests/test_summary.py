@@ -23,7 +23,6 @@ def _context() -> tuple[dict, dict, dict]:
         },
         {"papers": [{"paper_id": REFERENCE_ID, "title": "Reference"}], "warnings": []},
         {
-            "intent": "Find a controlled calculation.",
             "selected_foundation": {"paper_id": PAPER_ID, "title": "Foundation", "reason": "anchor"},
             "best_reference_paper": {"paper_id": REFERENCE_ID, "title": "Reference", "reason": "entry point"},
         },
@@ -82,14 +81,60 @@ def test_normalize_summary_output_returns_only_closed_v5_payload():
     graph, evidence, selection = _context()
     payload = _payload()
 
-    assert summary.normalize_summary_output(
-        payload, graph=graph, evidence=evidence, selection=selection
-    ) is payload
+    normalized = summary.normalize_summary_output(
+        payload,
+        graph=graph,
+        evidence=evidence,
+        selection=selection,
+        intent="Find a controlled calculation.",
+    )
+
+    assert normalized == payload
+    assert normalized is not payload
 
     malformed = deepcopy(payload)
     malformed["unexpected"] = True
     with pytest.raises(ValueError, match="domain_summary_schema_invalid"):
-        summary.normalize_summary_output(malformed, graph=graph, evidence=evidence, selection=selection)
+        summary.normalize_summary_output(
+            malformed,
+            graph=graph,
+            evidence=evidence,
+            selection=selection,
+            intent="Find a controlled calculation.",
+        )
+
+
+def test_normalize_summary_output_binds_a_copy_to_authoritative_intent():
+    graph, evidence, selection = _context()
+    payload = _payload()
+    payload["task_focus"]["user_intent"] = "model-altered intent"
+
+    normalized = summary.normalize_summary_output(
+        payload,
+        graph=graph,
+        evidence=evidence,
+        selection=selection,
+        intent="用户的原始研究意图",
+    )
+
+    assert normalized["task_focus"]["user_intent"] == "用户的原始研究意图"
+    assert payload["task_focus"]["user_intent"] == "model-altered intent"
+
+
+def test_normalize_summary_output_preserves_empty_authoritative_intent():
+    graph, evidence, selection = _context()
+    payload = _payload()
+
+    normalized = summary.normalize_summary_output(
+        payload,
+        graph=graph,
+        evidence=evidence,
+        selection=selection,
+        intent="",
+    )
+
+    assert normalized["task_focus"]["user_intent"] == ""
+    assert payload["task_focus"]["user_intent"] == "Find a controlled calculation."
 
 
 def test_normalize_summary_output_rejects_unknown_opportunity_target():
@@ -100,7 +145,13 @@ def test_normalize_summary_output_rejects_unknown_opportunity_target():
     ]
 
     with pytest.raises(ValueError, match="domain_summary_unknown_target_domain_papers"):
-        summary.normalize_summary_output(payload, graph=graph, evidence=evidence, selection=selection)
+        summary.normalize_summary_output(
+            payload,
+            graph=graph,
+            evidence=evidence,
+            selection=selection,
+            intent="Find a controlled calculation.",
+        )
 
 
 def test_summary_prompt_compacts_large_evidence():
@@ -122,12 +173,54 @@ def test_summary_prompt_compacts_large_evidence():
         for item in evidence["papers"]
     ]
 
-    prompt = summary.summary_prompt(graph, evidence, selection)
+    prompt = summary.summary_prompt(
+        graph,
+        evidence,
+        selection,
+        intent="用户的原始研究意图",
+    )
 
     assert len(prompt) <= summary.SUMMARY_PROMPT_CHAR_LIMIT
     assert "[truncated]" in prompt
     assert '"paper_detail_limit": 150' in prompt
     assert '"omitted_paper_count": 50' in prompt
+    assert '"user_intent": "用户的原始研究意图"' in prompt
+    assert "foundation_selection.intent" not in prompt
+
+
+def test_summary_prompt_fallback_compaction_preserves_authoritative_intent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    graph, evidence, selection = _context()
+    repeated = "source sentence " * 10_000
+    evidence["papers"] = [
+        {
+            "paper_id": f"arXiv:2401.{index:05d}",
+            "role": "domain_paper",
+            "title": f"Paper {index}",
+            "abstract": repeated,
+            "conclusion": {"text": repeated},
+            "warnings": [repeated],
+        }
+        for index in range(200)
+    ]
+    graph["nodes"] = [
+        {"paper_id": item["paper_id"], "role": item["role"], "title": item["title"]}
+        for item in evidence["papers"]
+    ]
+    monkeypatch.setattr(summary, "SUMMARY_PROMPT_CHAR_LIMIT", 300_000)
+
+    prompt = summary.summary_prompt(
+        graph,
+        evidence,
+        selection,
+        intent="用户的原始研究意图",
+    )
+
+    assert len(prompt) <= 300_000
+    assert '"paper_detail_limit": 80' in prompt
+    assert '"omitted_paper_count": 120' in prompt
+    assert '"user_intent": "用户的原始研究意图"' in prompt
 
 
 def test_render_summary_markdown_renders_opportunity_without_warnings():
