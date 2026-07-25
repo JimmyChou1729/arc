@@ -1357,7 +1357,7 @@ def test_pdf_equation_sequence_rejects_unlabelled_logical_display_unit(tmp_path)
 
     assert "equation_label_reconciliation" not in outcome.document.metadata
     assert any(
-        "PDF display equations are not all uniquely numbered" in warning
+        "unlabelled compact display block was detected" in warning
         for warning in outcome.warnings
     )
 
@@ -1395,6 +1395,80 @@ def test_pdf_equation_sequence_rejects_unlabelled_primary_display_unit(tmp_path)
         "primary display equations are not all uniquely numbered" in warning
         for warning in outcome.warnings
     )
+
+
+def test_pdf_layout_sequence_accepts_interleaved_columns_and_standalone_labels(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"""
+        <article><h1>Overview</h1>
+        <table class="ltx_equation">
+          <tr><td><math alttext="a = 1"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
+          <tr><td><math alttext="b = 2"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+          <tr><td><math alttext="c = 3"></math></td><td><span class="ltx_tag">(6)</span></td></tr>
+        </table></article>
+        """,
+        SourceFormat.HTML,
+    )
+    pdf_payload = b"%PDF interleaved equation columns"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            pdf_payload: PDFTextLayer(
+                (
+                    "Overview\n"
+                    "a = 1                                  c = 3 (3)\n"
+                    "      (1)                 This prose cites (2) but is not a label.\n"
+                    "b = 2 (2)",
+                )
+            )
+        }
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    equations = [
+        block for block in outcome.document.blocks if block.kind is RichBlockKind.EQUATION
+    ]
+    provenance = outcome.document.metadata["equation_label_reconciliation"]
+    assert [provenance[block.block_id]["pdf_label"] for block in equations] == [
+        "1",
+        "2",
+        "3",
+    ]
+    assert [provenance[block.block_id]["page_number"] for block in equations] == [
+        1,
+        1,
+        1,
+    ]
+
+
+def test_pdf_layout_sequence_refuses_ambiguous_duplicate_label_layout(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"""
+        <article><h1>Overview</h1>
+        <table class="ltx_equation"><tr><td><math alttext="x = 1"></math></td><td><span class="ltx_tag">(4)</span></td></tr></table>
+        </article>
+        """,
+        SourceFormat.HTML,
+    )
+    pdf_payload = b"%PDF duplicate layout label"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {pdf_payload: PDFTextLayer(("Overview\nx = 1 (1)", "x = 1 (1)"))}
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    assert "equation_label_reconciliation" not in outcome.document.metadata
+    assert any("layout evidence is ambiguous" in warning for warning in outcome.warnings)
 
 
 def test_ambiguous_pdf_math_evidence_is_diagnostic_not_a_rich_parse_failure(tmp_path):
@@ -1480,7 +1554,7 @@ def test_incomplete_pdf_equation_sequence_keeps_rich_labels(tmp_path):
 
     assert "equation_label_reconciliation" not in outcome.document.metadata
     assert any(
-        "complete numeric sequence is unavailable" in warning
+        "complete numbered layout sequence is unavailable" in warning
         for warning in outcome.warnings
     )
 

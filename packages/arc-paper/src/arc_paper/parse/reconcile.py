@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from ..sources import (
@@ -12,7 +13,6 @@ from ..sources import (
     SourceFormat,
 )
 from .models import MathSpan, ParsedDocument, VisualPageReviewInput
-from .parser import _pdf_equation_unit
 
 
 RICH_FORMATS = {SourceFormat.HTML, SourceFormat.MARKDOWN, SourceFormat.TEX}
@@ -591,32 +591,22 @@ def _strict_pdf_equation_label_mapping(
             None,
             "PDF equation labels were not canonically mapped: primary labels are not unique",
         )
-    all_pdf_display_spans = [
-        span for span in validator.math_spans if span.kind.value == "display"
-    ]
-    pdf_spans = [
-        span
-        for span in all_pdf_display_spans
-        if _pure_equation_number(span.source_label)
-    ]
-    if len(pdf_spans) != len(all_pdf_display_spans):
+    expected = [str(index) for index in range(1, len(primary_spans) + 1)]
+    pdf_units, layout_warning = _pdf_layout_equation_units(
+        raw_pages, expected_count=len(primary_spans)
+    )
+    if pdf_units is None:
         return (
             None,
-            "PDF equation labels were not canonically mapped: PDF display equations are not all uniquely numbered",
+            layout_warning,
         )
-    pdf_labels = [_pure_equation_number(span.source_label) for span in pdf_spans]
-    expected = [str(index) for index in range(1, len(primary_spans) + 1)]
-    if len(pdf_spans) != len(primary_spans) or pdf_labels != expected:
+    pdf_labels = [str(unit.label) for unit in pdf_units]
+    if pdf_labels != expected:
         return (
             None,
             "PDF equation labels were not canonically mapped: complete numeric sequence is unavailable",
         )
-    page_numbers = _pdf_logical_equation_unit_pages(pdf_spans, raw_pages)
-    if page_numbers is None:
-        return (
-            None,
-            "PDF equation labels were not canonically mapped: PDF logical equation units could not be located",
-        )
+    page_numbers = [unit.page_number for unit in pdf_units]
     if page_numbers != sorted(page_numbers):
         return (
             None,
@@ -648,35 +638,205 @@ def _strict_pdf_equation_label_mapping(
     )
 
 
-def _pdf_logical_equation_unit_pages(
-    spans: list[MathSpan], raw_pages: list[str]
-) -> list[int] | None:
-    """Recover pages from the PDF parser's equation units, not label mentions.
+@dataclass(frozen=True)
+class _PDFLayoutEquationUnit:
+    """One printed equation number located in a layout-text formula region."""
 
-    A printed ``(22)`` may be cited in ordinary prose on several pages.  The
-    parser identifies logical PDF equations from math-like lines; replay that
-    narrow extraction here and require its full ordered sequence to agree with
-    the already parsed spans.  This keeps page provenance strict without
-    confusing citations for displayed equations.
+    label: int
+    page_number: int
+
+
+@dataclass(frozen=True)
+class _PDFLayoutLabelCandidate:
+    label: int
+    page_number: int
+    line_index: int
+    score: int
+
+
+def _pdf_layout_equation_units(
+    raw_pages: list[str], *, expected_count: int
+) -> tuple[tuple[_PDFLayoutEquationUnit, ...] | None, str]:
+    """Recover a complete canonical sequence from ``pdftotext -layout`` text.
+
+    A normal prose reference such as ``see (22)`` has neither a column-boundary
+    position nor nearby formula-shaped text.  A rendered equation number is
+    typically at a line end or followed by the whitespace gap to another
+    column, and can therefore be located without treating every short line
+    containing ``-`` or ``=`` as a mathematical display.
     """
 
-    observed: list[tuple[str, str, int]] = []
+    if expected_count < 1:
+        return (), ""
+    candidates = _pdf_layout_label_candidates(raw_pages, expected_count)
+    selected: list[_PDFLayoutLabelCandidate] = []
+    for label in range(1, expected_count + 1):
+        matches = [candidate for candidate in candidates if candidate.label == label]
+        if not matches:
+            return (
+                None,
+                "PDF equation labels were not canonically mapped: complete numbered layout sequence is unavailable",
+            )
+        best_score = max(candidate.score for candidate in matches)
+        best = [candidate for candidate in matches if candidate.score == best_score]
+        if len(best) != 1:
+            return (
+                None,
+                "PDF equation labels were not canonically mapped: layout evidence is ambiguous",
+            )
+        selected.append(best[0])
+    if [candidate.page_number for candidate in selected] != sorted(
+        candidate.page_number for candidate in selected
+    ):
+        return (
+            None,
+            "PDF equation labels were not canonically mapped: printed labels are out of document order",
+        )
+    if _has_independent_compact_unlabelled_formula(raw_pages, selected):
+        return (
+            None,
+            "PDF equation labels were not canonically mapped: an unlabelled compact display block was detected",
+        )
+    return (
+        tuple(
+            _PDFLayoutEquationUnit(
+                label=candidate.label,
+                page_number=candidate.page_number,
+            )
+            for candidate in selected
+        ),
+        "",
+    )
+
+
+def _pdf_layout_label_candidates(
+    raw_pages: list[str], expected_count: int
+) -> list[_PDFLayoutLabelCandidate]:
+    output: list[_PDFLayoutLabelCandidate] = []
     for page_number, page in enumerate(raw_pages, 1):
-        for line in page.splitlines():
-            unit = _pdf_equation_unit(line)
-            if unit is not None:
-                observed.append((unit.source_label, unit.normalized_tex, page_number))
-    if len(observed) != len(spans):
+        lines = page.splitlines()
+        for line_index, line in enumerate(lines):
+            for match in re.finditer(r"\(\s*(\d+)\s*\)", line):
+                label = int(match.group(1))
+                if not 1 <= label <= expected_count:
+                    continue
+                region = _pdf_layout_label_region(line, match)
+                if region is None:
+                    continue
+                side, text = region
+                score = _pdf_layout_formula_score(
+                    lines,
+                    line_index=line_index,
+                    label_column=match.start(),
+                    side=side,
+                    own_text=text,
+                )
+                if score:
+                    output.append(
+                        _PDFLayoutLabelCandidate(
+                            label=label,
+                            page_number=page_number,
+                            line_index=line_index,
+                            score=score,
+                        )
+                    )
+    return output
+
+
+def _pdf_layout_label_region(
+    line: str, match: re.Match[str]
+) -> tuple[str, str] | None:
+    """Return the formula-side text only for a column-boundary label token."""
+
+    suffix = line[match.end() :]
+    next_content = next(
+        (index for index, value in enumerate(suffix) if not value.isspace()),
+        None,
+    )
+    if next_content is None:
+        return "tail", line[max(0, match.start() - 72) : match.start()]
+    if next_content < 3:
         return None
-    page_numbers: list[int] = []
-    for span, (label, tex, page_number) in zip(spans, observed, strict=True):
-        if (
-            span.source_label != label
-            or _math_fingerprint(span.normalized_tex) != _math_fingerprint(tex)
-        ):
-            return None
-        page_numbers.append(page_number)
-    return page_numbers
+    return "prefix", line[: match.start()]
+
+
+def _pdf_layout_formula_score(
+    lines: list[str],
+    *,
+    line_index: int,
+    label_column: int,
+    side: str,
+    own_text: str,
+) -> int:
+    """Score local formula evidence while keeping prose references below zero."""
+
+    score = 8 * _pdf_formula_shape_score(own_text)
+    for index in range(max(0, line_index - 4), min(len(lines), line_index + 5)):
+        if index == line_index:
+            continue
+        distance = abs(index - line_index)
+        score += (5 - distance) * _pdf_formula_shape_score(
+            _pdf_layout_neighbor_region(
+                lines[index], label_column=label_column, side=side
+            )
+        )
+    return score
+
+
+def _pdf_layout_neighbor_region(
+    line: str, *, label_column: int, side: str
+) -> str:
+    if side == "prefix":
+        return line[:label_column]
+    return line[max(0, label_column - 72) : label_column]
+
+
+def _pdf_formula_shape_score(value: str) -> int:
+    """Identify compact symbolic text without promoting ordinary prose."""
+
+    stripped = value.strip()
+    if not stripped:
+        return 0
+    strong_symbols = re.findall(r"[=≡≈≃≤≥<>∑∫√∂±]", stripped)
+    short_words = re.findall(r"[A-Za-z]{3,}", stripped)
+    non_prose_symbols = re.findall(
+        r"[^\sA-Za-z0-9.,;:()\[\]{}]", stripped
+    )
+    digits = re.findall(r"\d", stripped)
+    if strong_symbols:
+        return 3
+    if len(short_words) <= 3 and (non_prose_symbols or len(digits) >= 2):
+        return 1
+    return 0
+
+
+def _has_independent_compact_unlabelled_formula(
+    raw_pages: list[str], selected: list[_PDFLayoutLabelCandidate]
+) -> bool:
+    """Reject only unmistakable standalone formula lines without a label.
+
+    Layout text cannot always distinguish a multiline numbered expression from
+    an adjacent unnumbered expression.  This deliberately narrow check catches
+    a compact, left-aligned independent formula (the safe synthetic failure
+    mode) without treating indented continuation fragments as separate units.
+    """
+
+    labelled_lines = {
+        (candidate.page_number, candidate.line_index) for candidate in selected
+    }
+    for page_number, page in enumerate(raw_pages, 1):
+        for line_index, line in enumerate(page.splitlines()):
+            if (page_number, line_index) in labelled_lines:
+                continue
+            if len(line) - len(line.lstrip()) > 2 or re.search(r"\s{3,}", line):
+                continue
+            if len(re.findall(r"[A-Za-z]{3,}", line)) > 2:
+                continue
+            if _pdf_formula_shape_score(line) < 3:
+                continue
+            if re.search(r"[=≡≈≃≤≥<>]", line):
+                return True
+    return False
 
 
 def _pages_for_math(pages: list[str], tex: str) -> list[int]:
