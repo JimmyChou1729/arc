@@ -85,6 +85,11 @@ from .network import (
     normalize_intent_ranking,
     strict_window_citer_streams,
 )
+from .package_view import (
+    DomainPackageValidationError,
+    decode_domain_package,
+    decode_domain_paper_pack,
+)
 from .packs import build_domain_packs
 from .paths import DomainPaths, domain_id_for
 from .render import render_network_html
@@ -192,6 +197,7 @@ class DomainBuildHandler:
                 context,
                 resume_input,
                 graph,
+                paper_pack,
                 evidence_pack,
                 selection,
                 warnings,
@@ -772,12 +778,21 @@ class DomainBuildHandler:
         graph: dict[str, Any],
         warnings: list[DomainBuildWarning],
     ) -> tuple[dict[str, Any], dict[str, Any], Any, Any]:
+        expected_domain_id = domain_id_for(
+            self.request.seed_paper,
+            self.request.intent,
+        )
         paper_ref = context.artifacts.find(_PAPER_PACK_ARTIFACT)
         evidence_ref = context.artifacts.find(_EVIDENCE_PACK_ARTIFACT)
         if paper_ref is not None and evidence_ref is not None:
             _extend_stored_warnings(context, _PACK_WARNINGS_ARTIFACT, warnings)
+            paper_pack = _read_json(context, paper_ref, "paper pack")
+            _validate_paper_pack_artifact(
+                paper_pack,
+                expected_domain_id=expected_domain_id,
+            )
             return (
-                _read_json(context, paper_ref, "paper pack"),
+                paper_pack,
                 _read_json(context, evidence_ref, "evidence pack"),
                 paper_ref,
                 evidence_ref,
@@ -815,6 +830,10 @@ class DomainBuildHandler:
                     )
                 )
         packs = build_domain_packs(graph, acquired)
+        _validate_paper_pack_artifact(
+            packs.paper_json_pack,
+            expected_domain_id=expected_domain_id,
+        )
         context.artifacts.publish_json(
             _PACK_WARNINGS_ARTIFACT,
             [_warning_document(item) for item in warnings[warning_start:]],
@@ -839,6 +858,7 @@ class DomainBuildHandler:
         context: RunContext,
         resume_input: Any,
         graph: dict[str, Any],
+        paper_pack: dict[str, Any],
         evidence: dict[str, Any],
         selection: dict[str, Any],
         warnings: list[DomainBuildWarning],
@@ -846,6 +866,14 @@ class DomainBuildHandler:
         summary_ref = context.artifacts.find(_SUMMARY_ARTIFACT)
         markdown_ref = context.artifacts.find(_SUMMARY_MARKDOWN_ARTIFACT)
         if summary_ref is not None and markdown_ref is not None:
+            _validate_domain_package_artifacts(
+                _read_json(context, summary_ref, "domain summary"),
+                paper_pack,
+                expected_domain_id=domain_id_for(
+                    self.request.seed_paper,
+                    self.request.intent,
+                ),
+            )
             return summary_ref, markdown_ref
         unavailable = context.artifacts.find(_SUMMARY_UNAVAILABLE_ARTIFACT)
         if unavailable is not None:
@@ -894,6 +922,14 @@ class DomainBuildHandler:
                         {"stage": "summary"},
                     )
                 )
+            _validate_domain_package_artifacts(
+                summary,
+                paper_pack,
+                expected_domain_id=domain_id_for(
+                    self.request.seed_paper,
+                    self.request.intent,
+                ),
+            )
             summary_ref = context.artifacts.publish_json(_SUMMARY_ARTIFACT, summary)
             markdown_ref = context.artifacts.publish_bytes(
                 _SUMMARY_MARKDOWN_ARTIFACT,
@@ -1052,6 +1088,44 @@ def domain_build_run_id(request: DomainBuildRequest) -> str:
         canonical_json_bytes(encode_domain_build_request(request))
     ).hexdigest()
     return f"domain-{digest[:24]}"
+
+
+def _validate_paper_pack_artifact(
+    paper_pack: Mapping[str, Any],
+    *,
+    expected_domain_id: str,
+) -> None:
+    try:
+        decode_domain_paper_pack(
+            paper_pack,
+            expected_domain_id=expected_domain_id,
+        )
+    except DomainPackageValidationError as exc:
+        raise DomainBuildStageError(
+            exc.code,
+            str(exc),
+            {"stage": "paper_pack"},
+        ) from exc
+
+
+def _validate_domain_package_artifacts(
+    summary: Mapping[str, Any],
+    paper_pack: Mapping[str, Any],
+    *,
+    expected_domain_id: str,
+) -> None:
+    try:
+        decode_domain_package(
+            summary,
+            paper_pack,
+            expected_domain_id=expected_domain_id,
+        )
+    except DomainPackageValidationError as exc:
+        raise DomainBuildStageError(
+            exc.code,
+            str(exc),
+            {"stage": "summary"},
+        ) from exc
 
 
 def _read_json(context: RunContext, ref: Any, description: str) -> dict[str, Any]:

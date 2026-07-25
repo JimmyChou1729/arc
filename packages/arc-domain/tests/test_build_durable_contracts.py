@@ -18,6 +18,7 @@ from arc_domain.contracts import (
     DomainBuildRequest,
     decode_domain_build_result,
 )
+from arc_domain.package_view import DomainPackageValidationError
 from arc_domain.paths import domain_id_for
 from arc_jobs import (
     ImmutableArtifactStore,
@@ -555,6 +556,44 @@ def test_invalid_summary_provenance_is_a_typed_terminal_failure(
     assert snapshot.error.details == {"stage": "summary"}
     store = ImmutableArtifactStore(
         repository.run_directory(snapshot.run_id), repository_root=repository.root
+    )
+    assert store.find("summary/json") is None
+    assert store.find("summary/markdown") is None
+
+
+def test_build_validates_the_package_view_before_publishing_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from arc_domain import build as build_module
+
+    def reject_package(*_args, **_kwargs):
+        raise DomainPackageValidationError("simulated package coverage failure")
+
+    monkeypatch.setattr(
+        build_module,
+        "decode_domain_package",
+        reject_package,
+    )
+    repository = RunRepository(tmp_path / "runs")
+
+    snapshot = DomainBuildRunner(repository).execute(
+        _request(),
+        paper_access=FakePaperAccess(),
+        task_service=DomainTaskService(
+            summary_value=_summary_payload(user_intent=_request().intent)
+        ),
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert snapshot.status is RunStatus.FAILED
+    assert snapshot.error is not None
+    assert snapshot.error.code == "domain_package_invalid"
+    assert snapshot.error.message == "simulated package coverage failure"
+    assert snapshot.error.details == {"stage": "summary"}
+    store = ImmutableArtifactStore(
+        repository.run_directory(snapshot.run_id),
+        repository_root=repository.root,
     )
     assert store.find("summary/json") is None
     assert store.find("summary/markdown") is None
