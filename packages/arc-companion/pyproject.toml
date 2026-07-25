@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "arc-companion"
 version = "1.0.1"
 description = "Source-faithful, LLM-assisted paper companions for ARC."
-readme = "../../README.md"
+readme = "README.md"
 license = "MIT"
 authors = [{ name = "ARC" }]
 requires-python = ">=3.11"

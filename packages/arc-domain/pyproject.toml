@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "arc-domain"
 version = "1.0.1"
 description = "Build cached research-field domain artifacts from a seed paper."
-readme = "../../README.md"
+readme = "README.md"
 license = "MIT"
 authors = [{ name = "ARC" }]
 requires-python = ">=3.11"
