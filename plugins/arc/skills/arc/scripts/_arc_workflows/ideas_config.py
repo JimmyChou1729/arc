@@ -17,7 +17,6 @@ from _arc_workflows.domain_seed_provenance import (
 )
 from _arc_workflows.workflow_io import (
     NonObjectJsonError,
-    UNBOUNDED_SAFE_ID_RE,
     read_json_object,
     require_safe_id,
 )
@@ -90,25 +89,8 @@ def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
     if not variant_glob:
         raise ConfigError("variant_glob is required")
     loops_per_variant = _positive_int(data.get("loops_per_variant", 5), "loops_per_variant")
-    artifact_options = _dict(data.get("artifact_options", {}), "artifact_options")
-    unknown_artifact_options = set(artifact_options) - {"save_prompts"}
-    if unknown_artifact_options:
-        raise ConfigError(
-            "artifact_options has unsupported fields: "
-            + ", ".join(sorted(unknown_artifact_options))
-        )
-    if (
-        "save_prompts" in artifact_options
-        and _bool(
-            artifact_options["save_prompts"],
-            "artifact_options.save_prompts",
-        )
-        is not True
-    ):
-        raise ConfigError(
-            "artifact_options.save_prompts must be true; durable ideas "
-            "execution always retains materialized prompts"
-        )
+    if "artifact_options" in data:
+        raise ConfigError("artifact_options is not supported")
     domain_manifest_path = _configured_manifest_path(
         data, project_dir=project_dir
     )
@@ -526,7 +508,6 @@ def _safe_id(value: str, field_name: str) -> str:
     return require_safe_id(
         value,
         field_name,
-        pattern=UNBOUNDED_SAFE_ID_RE,
         error_type=ConfigError,
     )
 

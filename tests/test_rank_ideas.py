@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
+import pytest
+
 from arc_jobs import RunEngine, RunRepository, RunSpec, RunStatus
 from arc_llm import InvalidRequestError, LLMCompleted, LLMFailed
 from arc_proposer_reviewer import (
@@ -65,7 +67,7 @@ def _single_scheme() -> dict[str, Any]:
     }
 
 
-def test_formal_normalization_fills_missing_or_non_object_marks_with_zero() -> None:
+def test_formal_normalization_rejects_missing_or_non_object_marks() -> None:
     old_path = list(sys.path)
     sys.path.insert(0, str(SCRIPT.parent))
     try:
@@ -73,27 +75,36 @@ def test_formal_normalization_fills_missing_or_non_object_marks_with_zero() -> N
     finally:
         sys.path[:] = old_path
 
-    scheme = _single_scheme()
-    expected = {
-        "user_intent_relevance": 0,
-        "novelty": 0,
-        "confidence_of_novelty": 0,
-        "scientific_value": 0,
-        "planning": 0,
-        "problem_well_definedness": 0,
-        "total_score": 0,
-    }
+    assert normalized_review_marks({"payload": {}}, _single_scheme()) is None
+    assert (
+        normalized_review_marks(
+            {"payload": {"marks": []}},
+            _single_scheme(),
+        )
+        is None
+    )
 
-    assert normalized_review_marks(
-        {"payload": {}},
-        scheme,
-        fill_missing_total=True,
-    ) == expected
-    assert normalized_review_marks(
-        {"payload": {"marks": []}},
-        scheme,
-        fill_missing_total=True,
-    ) == expected
+
+def test_compatibility_classification_requires_current_fields() -> None:
+    old_path = list(sys.path)
+    sys.path.insert(0, str(SCRIPT.parent))
+    try:
+        from _arc_workflows.ideas_policy import (
+            compatibility_classification,
+        )
+    finally:
+        sys.path[:] = old_path
+
+    with pytest.raises(
+        ValueError,
+        match="requires blocking_compatibility_failures",
+    ):
+        compatibility_classification(
+            {
+                "compatibility_failures": ["old field"],
+                "feasibility_status": "feasible",
+            }
+        )
 
 
 def _cross_scheme() -> dict[str, Any]:

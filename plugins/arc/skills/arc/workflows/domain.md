@@ -119,7 +119,7 @@ exactly one explicit-anchor or validated origin-selection record.
 Step 2: For each distinct build seed, start one durable domain build.
 `arc-domain build` owns its own durable run; start it directly. For a
 date-limited field with an explicit or selected
-canonical origin, use v2 fixed-seed/strict-window mode:
+canonical origin, use fixed-seed/strict-window mode:
 
 ```bash
 arc-domain build <build-seed-paper> \
@@ -134,20 +134,16 @@ arc-domain build <build-seed-paper> \
 ```
 
 Use exact `--model` only when the context intentionally pins one model.
-The two mode flags promote the request and policy to v2. When supplied,
-`--policy '<full-policy-json-document>'` must be a complete closed policy for
-its declared v1 or v2 schema. With either mode flag, a complete v1 policy is
-promoted by carrying all resolved limits forward; a complete v2 policy is used
-directly, and explicit flags override its matching mode. The CLI persists the
-complete resolved v2 policy. `fixed-seed` prevents foundation-selection
+When supplied, `--policy '<full-policy-json-document>'` must be a complete
+closed current policy. Explicit mode flags override the corresponding policy
+values, and the CLI persists the complete resolved policy. `fixed-seed`
+prevents foundation-selection
 evidence from retargeting the citer graph. `strict-window` filters direct
 citers by their first-public date before pool caps and ranking. There is no
 `--refresh` or `--as-of-date` flag.
 
-For a non-date-limited legacy field without a fixed-origin requirement, omit
-both mode flags to retain v1's `infer_from_seed` and
-`representative_plus_recent` behavior. Do not reinterpret an existing v1 run
-as a strict-window build.
+For a non-date-limited field without a fixed-origin requirement, omit both
+mode flags to use `infer_from_seed` and `representative_plus_recent`.
 
 If several domain IDs are distinct, their builds may run concurrently. Record
 every returned `run_id` and `domain_id`. A paused result must be continued only
@@ -323,7 +319,7 @@ both directions, scans every copied `*_paper_json_pack.json`, rejects any pack
 with no matching domain summary, and uses each record's actual build seed. It
 decodes each complete summary/Markdown/paper-pack set through the package-owned
 typed domain view and accepts only the current closed v5 summary contract.
-Legacy v4 summaries and the missing-record seed fallback are rejected.
+Unsupported summary schemas and missing-record seed fallbacks are rejected.
 
 ```bash
 python3 <skill-dir>/scripts/write-domain-manifest.py \

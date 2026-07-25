@@ -25,9 +25,6 @@ DEFAULT_HUMAN_GATE_PAUSE_STATUSES = (
     "unresolved",
     "failed",
 )
-LEGACY_ALLOWED_CONTEXT_KEYS = {"foundation_file", "allowed_foundation", "target_equation_id"}
-
-
 class ConfigError(ValueError):
     """Invalid calculate-workflow configuration."""
 
@@ -52,7 +49,6 @@ class CalculateConfig:
     max_recalculations: int
     human_gate: dict[str, Any]
     defaults: dict[str, Any]
-    artifact_options: dict[str, Any]
     steps: list[CalculateStep]
 
 
@@ -80,11 +76,8 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
     if defaults.get("model") is not None and str(defaults.get("provider", "auto") or "auto") == "auto":
         raise ConfigError("defaults.model requires explicit provider")
     _validate_strict_integrity_reference(defaults.get("integrity_reference_path"))
-    artifact_options = _dict(data.get("artifact_options", {}), "artifact_options")
-    if "save_prompts" in artifact_options:
-        if artifact_options["save_prompts"] is not True:
-            raise ConfigError("artifact_options.save_prompts only supports true")
-        artifact_options.pop("save_prompts")
+    if "artifact_options" in data:
+        raise ConfigError("artifact_options is not supported")
 
     raw_steps = data.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
@@ -102,9 +95,6 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
         if kind != "new_calculation":
             raise ConfigError("step.kind must be new_calculation")
         allowed_context = _dict(step_data.get("allowed_context", {}), f"{step_id}.allowed_context")
-        for legacy_key in sorted(LEGACY_ALLOWED_CONTEXT_KEYS):
-            if legacy_key in allowed_context:
-                raise ConfigError(f"allowed_context.{legacy_key} is no longer supported")
         steps.append(
             CalculateStep(
                 step_id=step_id,
@@ -135,7 +125,6 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
         max_recalculations=max_recalculations,
         human_gate=human_gate,
         defaults=defaults,
-        artifact_options=artifact_options,
         steps=steps,
     )
 

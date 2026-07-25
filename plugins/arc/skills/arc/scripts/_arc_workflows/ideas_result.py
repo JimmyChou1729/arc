@@ -25,6 +25,9 @@ from _arc_workflows.ideas_ranking import (
 from _arc_workflows.ideas_templates import IdeaPlan
 
 
+IDEAS_RESULT_SCHEMA = "arc.workflow.ideas.result.v2"
+
+
 def observed_result(
     config: IdeasConfig,
     *,
@@ -77,7 +80,7 @@ def observed_result(
     ]
     reviewer_call_count = sum(committed_rounds.values())
     return {
-        "schema_version": "arc.workflow.ideas.result.v1",
+        "schema_version": IDEAS_RESULT_SCHEMA,
         "status": inspection.run_lifecycle,
         "run_id": config.run_id,
         "run_root": str(repository.root),
@@ -86,9 +89,7 @@ def observed_result(
         "warnings": warnings,
         "proposal_count": len(ideas),
         "reviewer_call_count": reviewer_call_count,
-        "loop_reviewer_call_count": reviewer_call_count,
         "max_concurrent_loops": max_concurrent,
-        "max_concurrent_proposal_calls": max_concurrent,
         "batch_request_artifact_id": "proposer-reviewer/request",
         "batch": {
             "batch_id": request.batch_id,
@@ -111,7 +112,7 @@ def dry_run_result(
     max_concurrent: int,
 ) -> dict[str, Any]:
     return {
-        "schema_version": "arc.workflow.ideas.result.v1",
+        "schema_version": IDEAS_RESULT_SCHEMA,
         "status": "dry_run",
         "run_id": config.run_id,
         "run_root": str(config.run_dir.resolve()),
@@ -122,11 +123,7 @@ def dry_run_result(
         "reviewer_call_count": sum(
             loop.max_rounds for loop in request.loops
         ),
-        "loop_reviewer_call_count": sum(
-            loop.max_rounds for loop in request.loops
-        ),
         "max_concurrent_loops": max_concurrent,
-        "max_concurrent_proposal_calls": max_concurrent,
         "batch_request": encode_batch_request(request),
         "loops": [
             {
@@ -171,7 +168,6 @@ def not_started_result(
     result["status"] = status
     result.pop("batch_request", None)
     result["reviewer_call_count"] = 0
-    result["loop_reviewer_call_count"] = 0
     return result
 
 

@@ -18,6 +18,8 @@ import pytest
 
 from arc_jobs import canonical_json_bytes
 from arc_llm import InteractionRequest, InteractionResponse, LLMCompleted
+from arc_proposer_reviewer import ProposerReviewerHandler
+from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -271,7 +273,7 @@ def test_dry_run_materializes_public_typed_request_with_three_rounds(tmp_path: P
 
     request = result["batch_request"]
     assert result["status"] == "dry_run"
-    assert request["schema_version"] == "arc.proposer_reviewer.batch.v1"
+    assert request["schema_version"] == BATCH_SCHEMA_VERSION
     assert request["loops"][0]["max_rounds"] == 3
     proposer = request["loops"][0]["proposers"][0]
     reviewer = request["loops"][0]["reviewer"]
@@ -426,7 +428,7 @@ def test_execution_uses_public_projection_for_three_committed_rounds_and_scores(
     )
 
     assert result["status"] == "succeeded"
-    assert observed["spec"].handler == "arc.proposer_reviewer.batch.v1"
+    assert observed["spec"].handler == ProposerReviewerHandler.name
     assert observed["handler"].options.max_concurrent_loops == 1
     assert len(llm.calls) == 6
     assert result["loops"] == [
@@ -472,7 +474,8 @@ def test_no_info_disables_evidence_and_cross_domain_keeps_structured_context(tmp
         dry_run=True,
     )
     no_info_loop = no_info_result["batch_request"]["loops"][0]
-    assert "interaction_operations" not in no_info_loop["proposers"][0]
+    assert no_info_loop["proposers"][0]["interaction_operations"] == {}
+    assert no_info_loop["proposers"][0]["max_interaction_turns"] == 2
     assert "controller_evidence_operations" not in no_info_loop["context"]
     assert "review_payload" not in no_info_loop["reviewer"]["output_schema"]["properties"]
 
@@ -694,6 +697,47 @@ def test_cross_domain_cards_accept_v5_summaries_without_domain_id(
     )
 
 
+def test_cross_domain_cards_reject_v4_summaries(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    project = tmp_path / "cross-project"
+    _write_cross_domain_manifest(project)
+    (project / "domain/a.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "arc.domain_summary.v4",
+                "domain_id": "a",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        IdeasConfigError,
+        match="schema_version must be arc.domain_summary.v5",
+    ):
+        runner.run_ideas(
+            {
+                "schema_version": "arc.workflow.ideas.config.v1",
+                "run_id": "cross-v4",
+                "run_dir": str(project / "ideas"),
+                "project_dir": str(project),
+                "user_intent": "Transfer a useful method.",
+                "variant_config_dir": str(WORKFLOW_JSON),
+                "variant_glob": "ideas-cross-domain.variant.json",
+                "loops_per_variant": 1,
+                "exploration_profiles": [
+                    {
+                        "profile_id": "forward",
+                        "mission": "Transfer A to B.",
+                    }
+                ],
+            },
+            dry_run=True,
+        )
+
+
 def test_cross_domain_cards_reject_domain_id_in_closed_v5_summary(
     tmp_path: Path,
 ) -> None:
@@ -798,12 +842,15 @@ def test_execution_exception_reports_committed_durable_progress(
     )
 
     assert result["status"] == "failed"
+    assert result["schema_version"] == "arc.workflow.ideas.result.v2"
     assert result["execution_error"] == {
         "code": "ideas_batch_execution_failed",
         "exception_type": "RuntimeError",
     }
     assert result["batch"]["durable_lifecycle"] == "succeeded"
     assert result["reviewer_call_count"] == 3
+    assert "loop_reviewer_call_count" not in result
+    assert "max_concurrent_proposal_calls" not in result
     assert result["loops"][0]["committed_rounds"] == 3
 
 
@@ -832,32 +879,25 @@ def test_duplicate_enabled_variant_ids_are_rejected(tmp_path: Path) -> None:
         runner.run_ideas(config, dry_run=True)
 
 
-def test_save_prompts_false_is_rejected_and_true_is_accepted(
+@pytest.mark.parametrize("value", [False, True])
+def test_artifact_options_is_rejected(
     tmp_path: Path,
+    value: bool,
 ) -> None:
     runner = _load_runner_module()
     config = _single_domain_config(tmp_path)
 
     with pytest.raises(
         IdeasConfigError,
-        match="artifact_options.save_prompts must be true",
+        match="artifact_options is not supported",
     ):
         runner.run_ideas(
             {
                 **config,
-                "artifact_options": {"save_prompts": False},
+                "artifact_options": {"save_prompts": value},
             },
             dry_run=True,
         )
-
-    result = runner.run_ideas(
-        {
-            **config,
-            "artifact_options": {"save_prompts": True},
-        },
-        dry_run=True,
-    )
-    assert result["status"] == "dry_run"
 
 
 @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
@@ -968,7 +1008,14 @@ def _write_cross_domain_manifest(project: Path) -> None:
     domain.mkdir(parents=True)
     for domain_id in ("a", "b"):
         (domain / f"{domain_id}.json").write_text(
-            json.dumps({"schema_version": "arc.domain_summary.v4", "domain_id": domain_id}),
+            json.dumps(
+                {
+                    "schema_version": "arc.domain_summary.v5",
+                    "mathematical_opportunities": {
+                        "well_defined_problems": []
+                    },
+                }
+            ),
             encoding="utf-8",
         )
     field_cards = {

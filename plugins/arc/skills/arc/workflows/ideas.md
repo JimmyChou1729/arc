@@ -35,7 +35,7 @@ its validated `arc.workflow.domain_seed_provenance.v1` artifact, routes by
 `field_count`: one field, including multiple seed-specific packages, uses the
 single-domain prompts; two or more fields use cross-domain prompts, directed
 transfer profiles, reviewer assessment, and qualification gates. Cross-domain
-cards and source/target roles use `field_id`. A missing, legacy, or invalid
+cards and source/target roles use `field_id`. A missing, unsupported, or invalid
 manifest must be regenerated before any ideas work.
 
 Proceed only when the domain-build handoff status is `completed` or `degraded`.
@@ -235,7 +235,7 @@ that pass the mathematical-definition and feasibility gate. Do not pad the top
 three with infeasible candidates. Add explicit failures to the unqualified
 appendix and print any insufficient-qualified-candidate `WARNING:` messages.
 No-assessment single-domain variants remain visibly marked as using the
-`no_assessment` policy; do not infer a legacy artifact layout.
+`no_assessment` policy; do not infer an alternate artifact layout.
 
 Step 2: After writing the project-level Markdown report, follow
 `manuals/arc-jobs.md` Markdown Report Export for

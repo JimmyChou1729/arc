@@ -15,8 +15,9 @@ running:
 git check-ignore -q --no-index <project-dir>
 ```
 
-Do not point the new CLI at a legacy Companion project. Old static outputs stay
-readable, but state is not migrated.
+Do not point the CLI at a nonempty directory containing unrelated project
+state. Existing files stay untouched, but runtime state requires a new or
+recognized Companion project directory.
 
 ### Step 2: Resolve source and intent
 

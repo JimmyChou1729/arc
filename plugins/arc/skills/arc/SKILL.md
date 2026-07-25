@@ -131,12 +131,9 @@ installs or starts MCP.
 The launcher defaults `ARC_HOME` to `$HOME/.codex/arc`; other hosts may set an
 explicit portable location. It keeps `runtimes/`, `cache/arc-paper/`,
 `cache/arc-domain/`, `cache/arc-llm/`, `jobs/`, `tmp/arc-llm/`, and
-`migrations/` below that root. On first use it migrates only recognized legacy
-ARC caches under a lock. Verified duplicates are deduplicated, conflicts are
-preserved under `migration-conflicts/`, and a failed migration stops startup
-instead of splitting state. `doctor` reports resolved paths, migration status,
-detected host, and provider. After runtime preparation the launcher exports
-the detected `ARC_AGENT_HOST` for CLI provider selection.
+runtime state below that root. `doctor` reports the resolved source, runtime,
+cache, job, and temporary paths. Provider selection remains owned by the
+installed `arc-llm` package.
 
 ## Workflow
 

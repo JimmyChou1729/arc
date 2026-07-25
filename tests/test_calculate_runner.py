@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
+from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -210,7 +211,7 @@ def test_calculate_builds_public_batch_and_hides_blind_reference(tmp_path: Path)
     request, batch_root, run_id = fake.calls[0]
     loop = request.loops[0]
     assert result["status"] == "completed"
-    assert request.schema_version == "arc.proposer_reviewer.batch.v1"
+    assert request.schema_version == BATCH_SCHEMA_VERSION
     assert request.failure_policy is modules.prompts.BatchFailurePolicy.COLLECT
     assert modules.proposer_protocol.encode_batch_request(request)["batch_id"] == request.batch_id
     assert loop.max_rounds == 1
@@ -1016,23 +1017,18 @@ def test_calculate_docs_define_blocked_as_normal_nonterminal_exit() -> None:
 def test_config_parsing_and_model_selection_errors_are_typed(tmp_path: Path) -> None:
     modules = load_calculate_modules()
     config = modules.config.load_calculation_config(
-        minimal_config(
-            tmp_path,
-            human_gate={"enabled": "false"},
-            artifact_options={"save_prompts": True},
-        )
+        minimal_config(tmp_path, human_gate={"enabled": "false"})
     )
 
     assert config.human_gate["enabled"] is False
-    assert config.artifact_options == {}
     with pytest.raises(
         modules.config.ConfigError,
-        match="artifact_options.save_prompts only supports true",
+        match="artifact_options is not supported",
     ):
         modules.config.load_calculation_config(
             minimal_config(
                 tmp_path,
-                artifact_options={"save_prompts": False},
+                artifact_options={"save_prompts": True},
             )
         )
     with pytest.raises(modules.config.ConfigError, match="explicit provider"):

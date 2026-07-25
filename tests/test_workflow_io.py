@@ -78,7 +78,7 @@ def test_strict_integer_rejects_bool_and_numeric_coercion(value: object) -> None
     )
 
 
-def test_safe_id_supports_bounded_and_legacy_compatible_callers() -> None:
+def test_safe_id_is_bounded_for_every_caller() -> None:
     class ConfigError(ValueError):
         pass
 
@@ -90,12 +90,9 @@ def test_safe_id_supports_bounded_and_legacy_compatible_callers() -> None:
             "run_id",
             error_type=ConfigError,
         )
-    assert (
+    with pytest.raises(ConfigError, match=r"variant_id must match \^"):
         workflow_io.require_safe_id(
             too_long,
             "variant_id",
-            pattern=workflow_io.UNBOUNDED_SAFE_ID_RE,
             error_type=ConfigError,
         )
-        == too_long
-    )

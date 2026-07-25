@@ -15,6 +15,7 @@ from arc_proposer_reviewer import (
     ProposerFailurePolicy,
     WorkerSpec,
 )
+from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 
 from _arc_workflows.calculate_config import (
     CalculateConfig,
@@ -68,7 +69,7 @@ def _attempt_batch_request(
         accepted_step_outputs=accepted_step_outputs,
     )
     return BatchRequest(
-        schema_version="arc.proposer_reviewer.batch.v1",
+        schema_version=BATCH_SCHEMA_VERSION,
         batch_id=_batch_run_id(config.run_id, attempt_id),
         loops=(
             LoopSpec(
@@ -278,7 +279,7 @@ def _reviewer_workflow_instruction(human_gate: Mapping[str, Any]) -> str:
     if not _bool_default(human_gate.get("enabled", False), False):
         return (
             "workflow_action is still required. In normal mode, choose continue for "
-            "all_agree and reference_disagrees when legacy acceptance applies; for other "
+            "all_agree and reference_disagrees when the current acceptance policy applies; for other "
             "statuses, choose retry or pause_for_human with a concise expert_question."
         )
     pause_statuses = ", ".join(_human_gate_pause_statuses_from_mapping(human_gate))

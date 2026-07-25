@@ -289,31 +289,23 @@ def cross_qualification(
 def compatibility_classification(
     assessment: Mapping[str, Any],
 ) -> dict[str, Any]:
-    if (
-        "blocking_compatibility_failures" in assessment
-        or "manageable_compatibility_risks" in assessment
-    ):
-        return {
-            "policy": "explicit_blocking_and_manageable_v2",
-            "blocking_failures": _string_list(
-                assessment.get("blocking_compatibility_failures")
-            ),
-            "manageable_risks": _string_list(
-                assessment.get("manageable_compatibility_risks")
-            ),
-        }
-
-    legacy = _string_list(assessment.get("compatibility_failures"))
-    if assessment.get("feasibility_status") == "feasible_with_named_risk":
-        return {
-            "policy": "legacy_compatibility_failures_as_named_risks",
-            "blocking_failures": [],
-            "manageable_risks": legacy,
-        }
+    required = {
+        "blocking_compatibility_failures",
+        "manageable_compatibility_risks",
+    }
+    if not required.issubset(assessment):
+        raise ValueError(
+            "cross-domain assessment requires blocking_compatibility_failures "
+            "and manageable_compatibility_risks"
+        )
     return {
-        "policy": "legacy_compatibility_failures_as_blocking",
-        "blocking_failures": legacy,
-        "manageable_risks": [],
+        "policy": "explicit_blocking_and_manageable_v2",
+        "blocking_failures": _string_list(
+            assessment.get("blocking_compatibility_failures")
+        ),
+        "manageable_risks": _string_list(
+            assessment.get("manageable_compatibility_risks")
+        ),
     }
 
 

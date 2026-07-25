@@ -220,18 +220,6 @@ def caller_context(
         result["generation_mode"] = "cross_domain"
         cards = domain_cards(config)
         result["domain_cards"] = cards
-        legacy_domain_ids = [
-            str(card.get("field_id", ""))
-            for card in cards
-            if not card.get("summary_capabilities", {}).get(
-                "mathematical_opportunities"
-            )
-        ]
-        if legacy_domain_ids:
-            result.setdefault("warnings", []).append(
-                "legacy_domain_summary_without_mathematical_opportunities: "
-                + ", ".join(legacy_domain_ids)
-            )
         result["exploration_profile"] = cross_domain_profile(
             config,
             idea_index=idea_index,
@@ -303,7 +291,6 @@ def domain_cards(config: IdeasConfig) -> list[dict[str, Any]]:
                 f"{config.domain_manifest_path}.field_groups[{index}] requires "
                 "field_id and field_card"
             )
-        versions: list[str] = []
         opportunities: list[Any] = []
         for package_index, package_id in enumerate(
             group.get("domain_package_ids", [])
@@ -320,40 +307,25 @@ def domain_cards(config: IdeasConfig) -> list[dict[str, Any]]:
             )
             summary = read_json(summary_path)
             version = str(summary.get("schema_version", "")).strip()
-            if version not in {"arc.domain_summary.v4", "arc.domain_summary.v5"}:
+            if version != "arc.domain_summary.v5":
                 raise ConfigError(
                     f"{summary_path}.schema_version must be "
-                    "arc.domain_summary.v4 or arc.domain_summary.v5"
+                    "arc.domain_summary.v5"
                 )
-            legacy_domain_id = str(summary.get("domain_id", "")).strip()
-            if version == "arc.domain_summary.v5" and "domain_id" in summary:
+            if "domain_id" in summary:
                 raise ConfigError(
                     f"{summary_path} arc.domain_summary.v5 must not contain domain_id"
                 )
-            if (
-                version == "arc.domain_summary.v4"
-                and legacy_domain_id
-                and legacy_domain_id != str(package_id)
-            ):
+            raw = summary.get("mathematical_opportunities")
+            validation_error = mathematical_opportunities_validation_error(raw)
+            if validation_error is not None:
                 raise ConfigError(
-                    f"package {package_id!r} points to legacy summary for "
-                    f"another package: {summary_path}"
+                    f"{summary_path}.mathematical_opportunities is invalid "
+                    f"for v5: {validation_error}"
                 )
-            versions.append(version)
-            if version == "arc.domain_summary.v5":
-                raw = summary.get("mathematical_opportunities")
-                validation_error = mathematical_opportunities_validation_error(raw)
-                if validation_error is not None:
-                    raise ConfigError(
-                        f"{summary_path}.mathematical_opportunities is invalid "
-                        f"for v5: {validation_error}"
-                    )
-                opportunities.extend(
-                    copy.deepcopy(raw.get("well_defined_problems", []))
-                )
-        supports = bool(versions) and all(
-            item == "arc.domain_summary.v5" for item in versions
-        )
+            opportunities.extend(
+                copy.deepcopy(raw.get("well_defined_problems", []))
+            )
         card = copy.deepcopy(dict(field_card))
         card.update(
             {
@@ -362,7 +334,7 @@ def domain_cards(config: IdeasConfig) -> list[dict[str, Any]]:
                     group.get("domain_package_ids", [])
                 ),
                 "summary_capabilities": {
-                    "mathematical_opportunities": supports
+                    "mathematical_opportunities": True
                 },
                 "mathematical_opportunities": {
                     "well_defined_problems": opportunities
@@ -383,28 +355,29 @@ def domain_summary_path(
     entry: Mapping[str, Any],
     index: int,
 ) -> Path:
-    raw = str(
-        entry.get("summary_json_path")
-        or entry.get("domain_summary_path")
-        or entry.get("summary_path")
-        or ""
-    ).strip()
+    raw = str(entry.get("summary_json_path") or "").strip()
     if not raw:
         raise ConfigError(
             f"{config.domain_manifest_path}.domains[{index}] requires summary_json_path"
         )
     candidate = Path(raw).expanduser()
     if candidate.is_absolute():
-        path = candidate
-    else:
-        project_relative = config.project_dir / candidate
-        manifest_relative = config.domain_manifest_path.parent / candidate
-        path = (
-            project_relative if project_relative.is_file() else manifest_relative
+        raise ConfigError(
+            f"{config.domain_manifest_path}.domains[{index}].summary_json_path "
+            "must be project-relative"
         )
+    project_root = config.project_dir.expanduser().resolve()
+    path = (project_root / candidate).resolve()
+    try:
+        path.relative_to(project_root)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{config.domain_manifest_path}.domains[{index}].summary_json_path "
+            "must stay inside project_dir"
+        ) from exc
     if not path.is_file():
         raise ConfigError(f"domain summary does not exist: {path}")
-    return path.resolve()
+    return path
 
 
 def domain_markdown_files(domain_dir: Path) -> list[dict[str, str]]:

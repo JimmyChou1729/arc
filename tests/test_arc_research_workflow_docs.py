@@ -1317,7 +1317,7 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     assert "`domain_records` to be a non-empty array" in compact_domain
     assert "package-owned typed domain view" in compact_domain
     assert "only the current closed v5 summary contract" in compact_domain
-    assert "Legacy v4 summaries" in compact_domain
+    assert "Unsupported summary schemas" in compact_domain
     assert "`domain/field-groupings/`" in compact_domain
     assert "publishes `domain-manifest.json` last" in compact_domain
     assert "manifest output must remain inside the project" in compact_domain
@@ -1599,13 +1599,12 @@ def test_arc_runtime_and_job_docs_cover_unified_context_and_lifecycle() -> None:
         "cache/arc-domain/",
         "cache/arc-llm/",
         "tmp/arc-llm/",
-        "migration-conflicts/",
-        "ARC_AGENT_HOST",
     ):
         assert value in skill
-    assert "migration status" in skill
-    assert "detected host" in skill
-    assert "provider" in skill
+    assert "migration-conflicts/" not in skill
+    assert "ARC_AGENT_HOST" not in skill
+    assert "migration status" not in skill
+    assert "Provider selection remains owned by" in skill
     assert "arc-jobs status" in jobs
     assert "arc-jobs stop" in jobs
     assert "arc-jobs validate" in jobs
@@ -1709,8 +1708,8 @@ def test_domain_origin_resolution_keeps_the_seed_date_unbounded() -> None:
     assert "to be a recorded candidate ID" in workflow
     assert "--foundation-mode fixed-seed" in workflow
     assert "--citer-selection-mode strict-window" in workflow
-    assert "a complete v1 policy is\npromoted" in workflow
-    assert "a complete v2 policy is used\ndirectly" in workflow
+    assert "complete\nclosed current policy" in workflow
+    assert "persists the complete resolved policy" in workflow
     assert "strict date windows" in manual
 
     assert schema["additionalProperties"] is False

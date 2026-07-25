@@ -269,16 +269,12 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
 def normalized_review_marks(
     review: Any,
     scheme: Mapping[str, Any],
-    *,
-    fill_missing_total: bool = False,
 ) -> dict[str, Any] | None:
     """Normalize one public review payload for quick and formal score views."""
     payload = review_payload(review)
     marks = payload.get("marks")
     if not isinstance(marks, Mapping) or "total_score" not in marks:
-        if not fill_missing_total:
-            return None
-        marks = {field: 0 for field in score_fields(scheme)}
+        return None
     return normalized_marks(marks, scheme)
 
 
@@ -330,22 +326,23 @@ def _round_entry(
     proposer_output = _json_object(committed.proposals[proposer_id])
     review = _json_object(committed.review)
     payload = review_payload(review)
-    marks = normalized_review_marks(
-        review,
-        scheme,
-        fill_missing_total=True,
-    )
+    marks = normalized_review_marks(review, scheme)
     if marks is None:
-        marks = {field: 0 for field in score_fields(scheme)}
+        raise SystemExit(
+            f"committed round {committed.round_number} for {loop.loop_id} "
+            "has no valid reviewer marks"
+        )
+    title = proposer_output.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise SystemExit(
+            f"committed round {committed.round_number} for {loop.loop_id} "
+            "has no proposal title"
+        )
 
     entry = {
         "loop_id": loop.loop_id,
         "round": committed.round_number,
-        "title": str(
-            proposer_output.get("title")
-            or proposer_output.get("warning")
-            or "Recovered / unstructured idea"
-        ),
+        "title": title.strip(),
         "marks": marks,
         "proposer_output": proposer_output,
         "proposer_id": proposer_id,

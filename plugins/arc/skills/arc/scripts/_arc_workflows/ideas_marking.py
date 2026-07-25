@@ -90,8 +90,6 @@ def _scheme_path(workflow_dir: Path | str | None) -> Path:
     )
     if root.suffix == ".json":
         return root
-    if root.name == "scripts":
-        root = root.parent / "json"
     return root / DEFAULT_MARKING_SCHEME_FILENAME
 
 
