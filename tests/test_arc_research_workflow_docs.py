@@ -1119,7 +1119,11 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     assert "paper JSON pack's `domain_id` is the authoritative" in compact_domain
     assert "v5 does not carry that identity field" in compact_domain
     assert "match in both directions" in compact_domain
+    assert "scans every copied `*_paper_json_pack.json`" in compact_domain
+    assert "rejects any pack with no matching domain summary" in compact_domain
     assert "legacy project with no `domain_records`" in compact_domain
+    assert "unrelated orphan packs are ignored" in compact_domain
+    assert "summary must declare schema v4 or v5" in compact_domain
     assert "only a consistency assertion" in compact_domain
 
 

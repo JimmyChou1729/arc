@@ -187,10 +187,13 @@ domain export and validates its referenced artifacts before any ideas workflow.
 The project-local paper JSON pack's v1 `domain_id` is the authoritative
 `domain_package_id`; the closed v5 summary deliberately has no identity field.
 When `context.json.domain_records` is nonempty, the helper requires exact
-bidirectional coverage between those records and copied paper packs and uses
-the records' actual build seeds. A legacy project without records retains its
-foundation/prefix seed fallback, but the pack remains the package-identity
-source. A legacy summary ID is checked only for consistency.
+bidirectional coverage between those records and copied paper packs, scans
+every copied `*_paper_json_pack.json`, rejects a pack with no matching summary,
+and uses the records' actual build seeds. A legacy project without records
+includes only complete summary/Markdown/paper-pack artifact sets and ignores
+unrelated orphan packs; it retains its foundation/prefix seed fallback, but the
+pack remains the package-identity source. Summaries must declare schema v4 or
+v5. A legacy summary ID is checked only for consistency.
 For multiple exported packages, its `write-domain-manifest.py` helper uses one
 typed `LLMClient.generate` pair-classification request with a deterministic task
 ID and a project-local `domain/field-grouping-llm` run root. Invalid grouping
