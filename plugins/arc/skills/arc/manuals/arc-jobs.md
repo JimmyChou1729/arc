@@ -1,38 +1,46 @@
-# ARC Jobs
+# ARC Jobs Quick Start
 
-`arc-jobs` is ARC's protocol-neutral control surface for a durable run that is
-already owned by an ARC package. It does not submit commands, launch detached
-workers, list global jobs, watch progress, or export results.
+`arc-jobs` inspects durable runs already created by another ARC package. Use it
+when an owning command returned a run root and run ID but has no more specific
+control command. It does not create or resume package work.
 
-## Durable Run Control
-
-Use an explicit run root and run ID:
+## Inspect or Validate an Existing Run
 
 ```bash
 arc-jobs status --run-root <run-root> --run-id <run-id>
-arc-jobs stop --run-root <run-root> --run-id <run-id> [--reason TEXT]
 arc-jobs validate --run-root <run-root> --run-id <run-id>
 ```
 
-- `status` returns the current durable snapshot as one command-result envelope.
-- `stop` records a resumable stop request. Resume through the owning package
-  workflow; `arc-jobs` has no generic resume command.
-- `validate` checks durable state and reports typed issues without changing it.
+`status` returns the current typed snapshot. `validate` checks durable state
+without changing it. Prefer the owning package's status or validate command
+when one exists.
 
-Start `arc-domain build`, `arc-companion build`, and other owning commands
-directly. Use their package-specific status/resume/stop/validate commands when
-available. When a direct command should run without blocking the conversation,
-use the coding-agent host's background-command facility and keep the command
-portable across hosts.
+Request a stop only when the user or owning workflow intends to pause work:
 
-Do not stop a run merely because it is slow. LLM calls use the idle-timeout
-policy documented in `manuals/arc-llm.md`; a stop pauses the current attempt
-for same-run resume.
+```bash
+arc-jobs stop \
+  --run-root <run-root> \
+  --run-id <run-id> \
+  --reason "<reason>"
+```
+
+Resume through the owning package with the same run ID. Do not stop a run only
+because a model call is slow.
 
 ## Markdown Report Export
 
-Convert a report to PDF with the canonical Pandoc/XeLaTeX command in
-`rules/math_typeset.md` (PDF Export section), run as an ordinary command
-instead of routing it through `arc-jobs`. On failure, print `WARNING:` with the
-exact error and continue according to the owning workflow; do not debug Pandoc
-or TeX unless the user requested that work.
+For user-facing Markdown, run the canonical Pandoc/XeLaTeX command from
+`rules/math_typeset.md` as an ordinary blocking command instead of routing it
+through `arc-jobs`. On failure, print `WARNING:` with the exact error and
+continue according to the owning workflow; do not debug Pandoc or TeX unless
+the user requested that work.
+
+## Help
+
+```bash
+arc-jobs --help
+arc-jobs <command> --help
+```
+
+All commands return one typed JSON result. Keep the run root and ID from the
+owning command; never infer them from physical durable-state paths.

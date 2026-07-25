@@ -89,7 +89,7 @@ not optional.
 - Standalone language detection, bilingual glossary generation, or block
   translation: read `manuals/arc-translate.md`.
 - Typed proposer-reviewer batch construction, resume, or safe observation of
-  committed rounds: read `manuals/arc-llm.md`.
+  committed rounds: read `manuals/arc-proposer-reviewer.md`.
 - Companion-reading PDF generation: read `workflows/companion.md` and
   `manuals/arc-companion.md` before fetching a paper or starting LLM work.
 - User-facing Markdown report export: use the ordinary blocking

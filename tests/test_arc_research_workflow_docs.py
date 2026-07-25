@@ -138,7 +138,7 @@ def test_arc_skill_references_pdf_export_manuals() -> None:
     assert "`rules/math_typeset.md`" in text
     assert "`manuals/arc-jobs.md`" in text
     assert "canonical pandoc/xelatex command" in manual
-    assert "ordinary command" in manual_flat
+    assert "ordinary blocking command" in manual_flat
     assert "instead of routing it through `arc-jobs`" in manual_flat
     assert "md2pdf" not in manual
     assert "markdown report" in manual
@@ -148,23 +148,25 @@ def test_arc_skill_references_pdf_export_manuals() -> None:
 
 def test_shared_docs_describe_public_proposer_reviewer_projection() -> None:
     skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-    manual = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
+    manual = (SKILL / "manuals/arc-proposer-reviewer.md").read_text(encoding="utf-8")
+    llm = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     for text in (skill, manual, readme):
         assert "arc-proposer-reviewer" in text
+    for text in (skill, manual):
         assert "inspect" in text
         assert "trace" in text
         assert "show-round" in text
+    assert "`manuals/arc-proposer-reviewer.md`" in skill
     assert "core-only" in skill
     assert "best effort" in skill
     assert "ranking, recovery, retries, or resume" in skill
-    assert "pending, running, paused, and terminal" in manual
-    assert "published-but-uncommitted" in manual
-    assert "per-loop revision\nvector" in manual
-    assert "only public query that expands" in manual
-    assert "sessions, task IDs, private group IDs, full pause\nrecords, or physical paths" in manual
-    assert "trace-integrity warning" in manual
+    assert "best-effort activity" in manual
+    assert "verified committed-round" in manual
+    assert "public expansion" in manual
+    assert "physical durable-state paths" in manual
+    assert "arc-proposer-reviewer inspect" not in llm
     assert "arc-llm run-text" not in readme
     assert "arc-llm run-json" not in readme
 
@@ -262,34 +264,21 @@ def test_arc_skill_resolves_generated_project_dir_under_launch_cwd() -> None:
     assert ".codex" in setup
 
 
-def test_readme_documents_project_dirs_as_launch_cwd_children() -> None:
+def test_readme_keeps_generated_runs_in_the_ignored_local_tree() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
-    workflow = text[text.index("## End-To-End Research Workflows") :]
-    workflow_flat = " ".join(workflow.split())
-
-    assert "<launch-cwd>/<safe-dir-name>/context.json" in workflow
-    assert "direct child of the directory where the agent command was launched" in workflow_flat
-    assert "not under host-internal directories such as `.claude/projects`" in workflow
-    assert "not wrapped in `arc-output/`" in workflow
+    assert "below the git-ignored `local/` tree" in text
+    assert "quick-start manuals are self-contained" in text
 
 
 def test_workflow_script_commands_use_skill_dir_placeholder() -> None:
     ideas = (WF / "ideas.md").read_text(encoding="utf-8")
     calculate = (WF / "calculate.md").read_text(encoding="utf-8")
-    manual = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
-    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "python3 <skill-dir>/scripts/run-ideas.py" in ideas
     assert "python3 <skill-dir>/scripts/rank-ideas.py" in ideas
     assert "python3 <skill-dir>/scripts/run-calculate.py" in calculate
     assert "python3 <skill-dir>/workflows/scripts/" not in ideas
     assert "python3 <skill-dir>/workflows/scripts/" not in calculate
-    assert "Do not diagnose `arc-llm` by running `pip show arc-llm`" in manual
-    assert "wrong Python path/runtime" in manual
-    for text in (ideas, calculate, skill, readme):
-        assert "Do not diagnose `arc-llm` by running `pip show arc-llm`" not in text
-        assert "wrong Python path/runtime" not in text
 
 
 def test_domain_summary_warnings_are_visible_and_recorded() -> None:
@@ -298,67 +287,236 @@ def test_domain_summary_warnings_are_visible_and_recorded() -> None:
 
     assert "print `WARNING:` immediately" in domain
     assert "`<project-dir>/context/domain/warnings.md`" in domain
-    assert "summary warnings to project `self-reflect.md` and `context/domain/warnings.md`" in manual
+    assert "status, warnings, and published artifact references" in manual
 
 
 def test_manuals_do_not_hardcode_checkout_cache_paths() -> None:
-    for manual in ["arc-paper.md", "arc-domain.md"]:
-        text = (SKILL / "manuals" / manual).read_text(encoding="utf-8")
-        assert "/arc-dev/cache/" not in text
+    for manual in sorted((SKILL / "manuals").glob("arc-*.md")):
+        text = manual.read_text(encoding="utf-8")
+        assert "/arc-dev/" not in text
+        assert "--help" in text
     paper = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    paper_flat = " ".join(paper.split())
     assert "doctor-cache" not in paper
-    assert "arc-paper cache list --since 1d" in paper
-    assert "arc-paper cache remove --id arXiv:0911.3380 --yes" in paper
-    assert "arc-paper cache update --id arXiv:0911.3380" in paper
-    assert "Controlled read-only" in paper
+    assert "cache administration" in paper_flat
+    assert "physical cache paths" in paper
     assert "ARC_JOBS_CACHE" not in (
         SKILL / "manuals/arc-jobs.md"
     ).read_text(encoding="utf-8")
+
+
+def test_package_manuals_are_self_contained_quick_starts() -> None:
+    expected = {
+        "arc-paper.md": "`arc-paper`",
+        "arc-domain.md": "`arc-domain`",
+        "arc-jobs.md": "`arc-jobs`",
+        "arc-llm.md": "`arc-llm`",
+        "arc-proposer-reviewer.md": "`arc-proposer-reviewer`",
+        "arc-translate.md": "`arc-translate`",
+        "arc-companion.md": "`arc-companion`",
+    }
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+    assert {path.name for path in (SKILL / "manuals").glob("arc-*.md")} == set(expected)
+    for name, package in expected.items():
+        text = (SKILL / "manuals" / name).read_text(encoding="utf-8")
+        assert "Quick Start" in text
+        assert package in text
+        assert "## Help" in text
+        assert len(text.splitlines()) < 120
+        assert f"`manuals/{name}`" in skill
+
+
+def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
+    for package in (
+        "arc-jobs",
+        "arc-llm",
+        "arc-proposer-reviewer",
+        "arc-paper",
+        "arc-domain",
+        "arc-translate",
+        "arc-companion",
+    ):
+        sys.path.insert(0, str(ROOT / "packages" / package / "src"))
+
+    modules = {
+        name: importlib.import_module(module)
+        for name, module in {
+            "paper": "arc_paper.cli",
+            "domain": "arc_domain.cli",
+            "jobs": "arc_jobs.cli",
+            "llm": "arc_llm.cli",
+            "proposer": "arc_proposer_reviewer.cli",
+            "translate": "arc_translate.cli",
+            "companion": "arc_companion.cli",
+        }.items()
+    }
+    parsers = {
+        "paper": modules["paper"]._parser(),
+        "domain": modules["domain"]._parser(),
+        "jobs": modules["jobs"]._parser(),
+        "llm": modules["llm"]._build_parser(),
+        "proposer": modules["proposer"]._parser(),
+        "translate": modules["translate"]._parser(),
+        "companion": modules["companion"]._parser(),
+    }
+    cases = (
+        ("arc-paper.md", "arc-paper get-metadata", "paper", ["get-metadata", "arXiv:1234.5678"]),
+        (
+            "arc-paper.md",
+            "arc-paper get-arxiv-table-of-contents",
+            "paper",
+            ["get-arxiv-table-of-contents", "1234.5678"],
+        ),
+        (
+            "arc-paper.md",
+            "arc-paper get-arxiv-section",
+            "paper",
+            ["get-arxiv-section", "1234.5678", "Introduction"],
+        ),
+        (
+            "arc-paper.md",
+            "arc-paper parse-local",
+            "paper",
+            ["parse-local", "chapter.tex", "--validator", "book.pdf"],
+        ),
+        (
+            "arc-paper.md",
+            "arc-paper search-cached-full-text",
+            "paper",
+            [
+                "search-cached-full-text",
+                "--term",
+                "specific phrase",
+                "--term",
+                "alternate phrase",
+            ],
+        ),
+        (
+            "arc-paper.md",
+            "arc-paper extract-keywords",
+            "paper",
+            ["extract-keywords", "source.md", "--project-dir", "run/keywords"],
+        ),
+        (
+            "arc-domain.md",
+            "arc-domain build",
+            "domain",
+            ["build", "arXiv:1234.5678", "--intent", "scientific intent"],
+        ),
+        (
+            "arc-domain.md",
+            "arc-domain status",
+            "domain",
+            ["status", "--run-id", "domain_run"],
+        ),
+        (
+            "arc-jobs.md",
+            "arc-jobs validate",
+            "jobs",
+            ["validate", "--run-root", "runs", "--run-id", "run_1"],
+        ),
+        (
+            "arc-llm.md",
+            "arc-llm generate",
+            "llm",
+            ["generate", "--request", "request.json", "--run-root", "runs"],
+        ),
+        (
+            "arc-proposer-reviewer.md",
+            "arc-proposer-reviewer validate",
+            "proposer",
+            ["validate", "--request", "batch.json"],
+        ),
+        (
+            "arc-proposer-reviewer.md",
+            "arc-proposer-reviewer show-round",
+            "proposer",
+            [
+                "show-round",
+                "--run-root",
+                "runs",
+                "--run-id",
+                "batch_1",
+                "--loop-id",
+                "loop_1",
+                "--round",
+                "1",
+            ],
+        ),
+        (
+            "arc-translate.md",
+            "arc-translate detect-language",
+            "translate",
+            [
+                "detect-language",
+                "source.md",
+                "--project-dir",
+                "translation",
+                "--target-language",
+                "zh-CN",
+            ],
+        ),
+        (
+            "arc-translate.md",
+            "arc-translate translate-blocks",
+            "translate",
+            ["translate-blocks", "source.md", "--project-dir", "translation"],
+        ),
+        (
+            "arc-companion.md",
+            "arc-companion build",
+            "companion",
+            [
+                "build",
+                "source.md",
+                "--pdf",
+                "source.pdf",
+                "--project-dir",
+                "companion",
+            ],
+        ),
+        (
+            "arc-companion.md",
+            "arc-companion render",
+            "companion",
+            ["render", "--project-dir", "companion", "--format", "all"],
+        ),
+    )
+
+    for manual_name, command, parser_name, argv in cases:
+        manual = (SKILL / "manuals" / manual_name).read_text(encoding="utf-8")
+        assert command in manual
+        parsers[parser_name].parse_args(argv)
 
 
 def test_arc_paper_manual_documents_cache_first_arxiv_queries() -> None:
     text = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
 
     for command in (
+        "get-metadata",
         "get-arxiv-table-of-contents",
         "get-arxiv-section",
-        "search-arxiv-full-text",
-        "search-arxiv-equations",
+        "get-references",
+        "get-citers",
     ):
         assert f"arc-paper {command}" in text
-        assert f"arc-paper.{command}.v1" in text
-    assert "bare ID" in text
-    assert "`arXiv:` ID" in text
-    assert "versioned ID" in text
-    assert "never fall back to PDF" in text
-    assert "content-identity and parser-contract key" in text
-    assert "`SourceRepository`" in text
+    assert "cache-first HTML" in text
+    assert "Use `--refresh` only" in text
+    assert "arc-paper <command> --help" in text
 
 
 def test_arc_paper_docs_define_bounded_cached_full_text_search() -> None:
     manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
-    readme = (ROOT / "packages/arc-paper/README.md").read_text(encoding="utf-8")
+    compact = " ".join(manual.split())
 
-    for text in (manual, readme):
-        compact = " ".join(text.split())
-        assert "search-cached-full-text" in compact
-        assert '--term "heavy field"' in compact
-        assert '--term "massive exchange"' in compact
-        assert "literal OR alternatives" in compact
-        assert "top 50 matching paper titles" in compact
-        assert "top_paper_titles" in compact
-        assert "never returns abstracts or summaries" in compact
-        assert "without network" in compact
-        assert "rg_unavailable" in compact
-
-    assert "arc-paper.search-cached-full-text.v1" in manual
-    assert "mode=refinement_required" in manual
-    assert "search_cached_full_text(" in manual
-    assert "case_sensitive=False" in manual
-    assert "--case-sensitive" in manual
-    assert "1–500" in manual
-    assert "at most 20 occurrences" in manual
-    assert "at most 400 characters" in manual
+    assert "search-cached-full-text" in compact
+    assert compact.count("--term") == 2
+    assert "specific multiword synonyms" in compact
+    assert "literal-OR request" in compact
+    assert "up to 50 paper titles, not abstracts" in compact
+    assert "rg_unavailable" in compact
+    assert "refinement_required" in compact
 
 
 def test_translate_docs_define_standalone_approximate_workflows() -> None:
@@ -378,41 +536,28 @@ def test_translate_docs_define_standalone_approximate_workflows() -> None:
         assert f"arc-translate {command}" in translate
     assert "runs only its named step" in translate
     assert "--approx-term-count 50" in translate
-    assert "estimate, not an exact result size" in translate
+    assert "term\ncount is approximate" in translate
     assert "matched_sentences" in translate
-    assert "not definitions or\nexplanations" in translate
+    assert "never\ndefinitions or explanations" in translate
 
-    assert "arc-paper extract-keywords SOURCE" in paper
+    assert "arc-paper extract-keywords <source>" in paper
     assert "--approx-count 50" in paper
-    assert "occurrence frequency" in paper
+    assert "machine-counted occurrence frequency" in paper
     assert "never definitions" in paper
 
     assert "`arc-translate`" in companion
-    assert "run in parallel" in companion
-    assert "--approx-term-count N" in companion
+    assert "may proceed in parallel" in companion
+    assert "glossary size is approximate" in companion
 
 
-def test_arc_paper_docs_define_cache_administration_contract() -> None:
+def test_arc_paper_quick_start_defers_cache_administration_to_help() -> None:
     manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
-    readme = (ROOT / "packages/arc-paper/README.md").read_text(encoding="utf-8")
+    compact = " ".join(manual.split())
 
-    for text in (manual, readme):
-        compact = " ".join(text.split())
-        assert "arc-paper cache list --since 1d" in compact
-        assert "rolling UTC window" in compact
-        assert "Ordinary" in compact and "reads" in compact
-        assert "arc-paper cache remove --id arXiv:0911.3380 --yes" in compact
-        assert "physically deletes" in compact
-        assert "shared content-addressed source" in compact
-        assert "remote read" in compact and "fetching the source again" in compact
-        assert "local source" in compact.lower()
-        assert "not recoverable" in compact
-        assert "arc-paper cache update --id arXiv:0911.3380" in compact
-        assert "mostrecent" in compact
-        assert "mostcited" in compact
-        assert "limit 1000" in compact
-        assert "ar5iv HTML" in compact
-        assert "arXiv PDF" in compact
+    assert "cache administration" in compact
+    assert "arc-paper <command> --help" in manual
+    assert "arc-paper cache list" not in manual
+    assert "arc-paper cache remove" not in manual
 
 
 def test_ideas_workflow_guides_one_multi_term_cached_search_request() -> None:
@@ -1157,8 +1302,8 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     assert "typed LLM pause, failure,\nor stop" in domain
     assert "run_json" not in domain
     assert "LLMAbortScope" not in domain
-    assert "LLMClient.generate" in manual
-    assert "private-artifact" in manual
+    assert "arc.workflow.domain_manifest.v3" in manual
+    assert "arc.workflow.domain_seed_provenance.v1" in manual
     assert "domain_manifest_path" in ideas
     assert "two or more fields use cross-domain prompts" in ideas
     assert "source domain may contribute a mature method" in ideas
@@ -1229,31 +1374,16 @@ def test_max_model_tier_requires_an_explicit_user_request() -> None:
     assert "`max`" not in manual
 
 
-def test_readme_and_llm_manual_document_experimental_kimi_provider() -> None:
+def test_readme_and_llm_manual_keep_provider_entrypoints_concise() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     manual = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
-    warning = (
-        "kimi-code-cli is experimental and inherits Kimi Code configuration, instructions, "
-        "skills, hooks, plugins, MCP, tool permissions, and persistent sessions; it may access "
-        "the network, run commands, and modify files."
-    )
 
-    for text in (readme,):
-        compact = " ".join(text.split())
-        assert "Kimi Code CLI `>=0.28.0`" in text
-        assert "`kimi login`" in text
-        assert "ARC_AGENT_HOST=kimi-code" in text
-        assert "ARC_KIMI_BIN" in text
-        assert "ARC_KIMI_WORK_DIR" in text
-        assert "ARC_KIMI_IDLE_TIMEOUT_SECONDS" in text
-        assert "ARC_LLM_KIMI_LOW_MODEL" in text
-        assert "provider-side" in text
-        assert "not a sandbox" in compact
-        assert warning in compact
-
-    assert "usage fields remain null" in readme
-    assert "does not copy, migrate, or delete Kimi sessions" in readme
+    assert "Codex, Claude Code, and\nKimi Code" in readme
+    assert "Kimi Code\nsupport is experimental" in readme
     assert "arc-llm doctor --provider auto" in readme
+    assert "arc-llm doctor --provider kimi" in readme
+    assert "arc-llm doctor --provider auto" in manual
+    assert "without printing\ncredentials" in manual
     assert "arc-llm doctor --provider kimi" in readme
     for obsolete in (
         "arc-llm doctor host",
@@ -1261,11 +1391,8 @@ def test_readme_and_llm_manual_document_experimental_kimi_provider() -> None:
         "arc-llm doctor config",
     ):
         assert obsolete not in readme
-    assert "`kimi` provider uses an ACP adapter" in manual
-    assert "provider configuration is\ninherited" in manual
-    assert "native session resume" in manual
-    assert "JSON Schema in\nthe prompt" in manual
-    assert "partial usage" in manual
+    assert "supported host-native provider" in manual
+    assert "provider diagnosis" in manual
     for retired in (
         "Kimi Code CLI `>=0.28.0`",
         "`kimi login`",
@@ -1317,14 +1444,13 @@ def test_ideas_no_info_description_mentions_shared_marking_scheme() -> None:
     assert "no inherited host-tool access" in description
 
 
-def test_readme_documents_domain_only_ideas_release_default() -> None:
+def test_readme_routes_idea_details_to_the_skill_layer() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
-    ideas_section = text.split("### 2. Ideas", 1)[1].split("### 3.", 1)[0]
 
-    assert "release idea workflow feeds ARC-built domain Markdown" in ideas_section
-    assert "no-info variant is disabled by default" in ideas_section
-    assert "opt-in test fixture" in ideas_section
-    assert "comparison" not in ideas_section
+    assert "typed proposer-reviewer idea or calculation loops" in text
+    assert "The Skill selects package commands" in text
+    assert "release idea workflow" not in text
+    assert "no-info variant" not in text
 
 
 def test_ideas_workflow_documents_enabled_variants_not_file_renaming() -> None:
@@ -1454,9 +1580,9 @@ def test_arc_runtime_and_job_docs_cover_unified_context_and_lifecycle() -> None:
     assert "arc-jobs status" in jobs
     assert "arc-jobs stop" in jobs
     assert "arc-jobs validate" in jobs
-    assert "does not submit commands" in jobs
+    assert "does not create or resume package work" in jobs
     assert "owning package" in jobs
-    assert "background-command facility" in jobs
+    assert "background-command facility" in skill
     assert "no absolute runtime limit" in skill
     assert "30 minutes" in skill
     assert "credentials" in llm
@@ -1492,7 +1618,8 @@ def test_docs_do_not_advertise_retired_job_or_companion_commands() -> None:
     companion = (SKILL / "manuals/arc-companion.md").read_text(encoding="utf-8")
     for command in ("build", "status", "resume", "stop", "render", "validate"):
         assert f"arc-companion {command}" in companion
-    assert "There is no v1 `package`, `gc`, or\n`render-web` command." in companion
+    for retired in ("arc-companion package", "arc-companion render-web"):
+        assert retired not in companion
 
 
 def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> None:
@@ -1501,10 +1628,12 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
     manual = (SKILL / "manuals/arc-domain.md").read_text(encoding="utf-8")
     ideas = (WF / "ideas.md").read_text(encoding="utf-8")
 
-    for text in (skill, domain, manual):
+    for text in (skill, domain):
         assert "recent_window_days" in text
         assert "as_of_date" in text
         assert "corresponding" in text and "two" in text
+    assert "recent_window_days" in manual
+    assert "as_of_date" in manual
     assert "arc.workflow.domain_manifest.v3" in domain
     assert "arc.workflow.domain_manifest.v3" in manual
     assert "arc.workflow.domain_seed_provenance.v1" in domain
@@ -1553,11 +1682,7 @@ def test_domain_origin_resolution_keeps_the_seed_date_unbounded() -> None:
     assert "--citer-selection-mode strict-window" in workflow
     assert "a complete v1 policy is\npromoted" in workflow
     assert "a complete v2 policy is used\ndirectly" in workflow
-    assert "arc.domain_build_policy.v1" in manual
-    assert "representative_plus_recent" in manual
-    assert "strict_window" in manual
-    assert "promotes a complete v1 policy" in manual
-    assert "uses a complete v2 policy directly" in manual
+    assert "strict date windows" in manual
 
     assert schema["additionalProperties"] is False
     assert schema["properties"]["schema_version"]["const"] == "arc.domain_origin_selection.v1"
@@ -1602,8 +1727,8 @@ def test_arc_llm_manual_uses_only_the_current_durable_cli() -> None:
         "arc-llm circuit",
     ):
         assert obsolete not in manual
-    assert "output-last-message" in manual
-    assert "authoritative terminal candidate" in manual
+    assert "arc-proposer-reviewer inspect" not in manual
+    assert "arc-llm <command> --help" in manual
 
 
 def test_core_skill_docs_keep_arc_cli_only() -> None:
@@ -1650,9 +1775,7 @@ def test_readme_documents_marketplace_first_install() -> None:
 
     assert "plugins/arc/bin/arc-runtime setup --profile core" in text
     assert "ARC_MCP_INSTALL_RETRY=1" not in text
-    assert "arc-runtime setup --profile core --retry" in text
-    assert "Python `venv` + `pip` is the" in text
-    assert "host-recorded full commit SHA" in text
+    assert "Python `venv` plus `pip`" in text
     assert "codex plugin marketplace add tririver/arc --ref stable" in text
     assert "codex plugin add arc@arc" in text
     assert "/plugin marketplace add tririver/arc@stable" in text
@@ -1665,7 +1788,7 @@ def test_readme_documents_marketplace_first_install() -> None:
 def test_readme_examples_use_the_ignored_run_tree_not_reference_material() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "0_ref/" not in text
-    assert "--project-dir ./local/companion/0911.3380" in text
+    assert "below the git-ignored `local/` tree" in text
 
 
 def test_interaction_reference_allows_portable_typed_fallback() -> None:

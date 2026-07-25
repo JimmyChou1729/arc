@@ -1,76 +1,63 @@
-# ARC Companion Manual
+# ARC Companion Quick Start
 
-`arc-companion` creates a source-anchored textbook companion with a searchable
-PDF and responsive static Web reader.
+`arc-companion` builds a source-anchored reading companion with translation,
+chapter guides, a searchable PDF, and a static Web reader. Use the Companion
+workflow for a complete managed run; use this manual for its package commands.
 
-## Source contract
+## Build from a Local Rich Source
 
-- Authoritative source: Markdown, HTML, or single-file flattened TeX.
-- Optional validator: PDF, used only for mismatch checks and page mapping.
-- A missing PDF is a technical warning and does not enter book content.
-- An explicit PDF mismatch or ambiguity fails before any model call.
-- Relative local figures are imported into the `arc-paper` source repository
-  by content digest.
-
-## Build contract
+Use Markdown, HTML, or flattened single-file TeX as the authoritative source.
+A PDF validator checks fidelity and supplies page mapping:
 
 ```bash
-arc-companion build SOURCE --project-dir DIR [options] --json
+arc-companion build <source.md> \
+  --pdf <validator.pdf> \
+  --project-dir <project-dir> \
+  --target-language <language-tag>
 ```
 
-Options:
-
-- `--pdf PATH`: local PDF validator.
-- `--pdf fetch`: fetch the PDF validator for a remote paper ID.
-- `--target-language TAG`: generated guide/translation language; default
-  `zh-CN`.
-- `--user-intent TEXT`: optional reading goal; empty uses the fixed neutral
-  textbook intent.
-- `--approx-term-count N`: approximate glossary size; default 50, range 1–200.
-- `--provider NAME`, `--model NAME`: explicit generation recipe. An exact
-  model requires an explicit provider.
-- `--workers N`: bounded chapter concurrency, 1 through 24.
-- `--refresh`: refresh remote source acquisition.
-
-The build delegates language detection, bilingual glossary generation, and
-translation review to `arc-translate`. After the glossary/evidence barrier,
-each chapter's translation and Companion guide run in parallel. Only glossary
-entries whose source term occurs in the chapter are included in that chapter's
-prompts. Translation, when enabled, covers every block exactly once. Learning
-units are selective and anchored to source block IDs.
-
-The term count is approximate. Chapter extraction deliberately has headroom,
-and deduplicated underfill is accepted without padding or count-based retries.
-Literal matched sentences used to ground glossary generation are search
-results, not definitions.
-
-## Durable control
+For a remote arXiv paper, let ARC fetch the PDF validator:
 
 ```bash
-arc-companion status --project-dir DIR --json
-arc-companion resume --project-dir DIR [--input JSON_OR_FILE] --json
-arc-companion stop --project-dir DIR [--reason TEXT] --json
+arc-companion build <arxiv-id> \
+  --pdf fetch \
+  --project-dir <project-dir> \
+  --target-language <language-tag>
 ```
 
-Resume input must match the opaque key and closed contract in the current
-pause descriptor. Stop pauses the current attempt; `resume` continues this
-same run. Completed child LLM tasks and accepted chapter artifacts
-replay within the same run lineage; changing workers does not invalidate them.
+The build reuses compatible verified source, glossary, translation, and
+chapter artifacts. Language detection and translation belong to
+`arc-translate`; after the glossary barrier, translation and guide generation
+may proceed in parallel. The glossary size is approximate.
 
-## Rendering
+## Inspect and Recover
 
 ```bash
-arc-companion render --project-dir DIR --format all|pdf|web --json
-arc-companion validate --project-dir DIR --json
+arc-companion status --project-dir <project-dir>
+arc-companion resume --project-dir <project-dir> --input <resume-input.json>
+arc-companion stop --project-dir <project-dir> --reason "<reason>"
 ```
 
-Rendering loads only the immutable `AcceptedBook`; it does not load an LLM
-runtime. Wide Web layouts show source/translation and textbook notes in
-parallel; narrow layouts interleave source, translation, then notes by anchor.
-PDF uses the same anchor order. PDF validation checks metadata, searchable
-text, embedded fonts, and a page raster in temporary directories that are
-always removed.
+Omit `--input` when the current pause descriptor does not require it. Resume
+the same project and run lineage so accepted child work can replay.
 
-Successful output is immutable under `releases/<release-id>/`; `current.json`
-is replaced only after complete validation. There is no v1 `package`, `gc`, or
-`render-web` command.
+## Validate and Render
+
+```bash
+arc-companion validate --project-dir <project-dir>
+arc-companion render --project-dir <project-dir> --format all
+```
+
+Validation checks the accepted source-anchored book and release. Rendering is
+model-free and consumes only accepted artifacts. The accepted
+compatibility-only `--json` flag does not change typed JSON output.
+
+## Help
+
+```bash
+arc-companion --help
+arc-companion <command> --help
+```
+
+Use help for target-language defaults, workers, glossary size, provider/model
+selection, refresh behavior, and typed build failures.

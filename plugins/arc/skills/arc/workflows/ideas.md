@@ -95,7 +95,7 @@ Step 3: Print any returned `WARNING:` messages. Rank only loops whose public
 lifecycle is `succeeded`; failed, pending, running, paused, and
 integrity-error loops remain visible in inspection but are excluded from the
 formal ranking. For loop concurrency and durable pause/resume behavior, see
-`manuals/arc-llm.md`.
+`manuals/arc-proposer-reviewer.md`.
 
 ### Evidence Boundary
 
