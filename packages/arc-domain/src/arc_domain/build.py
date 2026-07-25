@@ -841,7 +841,7 @@ class DomainBuildHandler:
 
         request = LLMRequest(
             _task_id(
-                "domain-summary",
+                "domain-summary-v2",
                 domain_id_for(self.request.seed_paper, self.request.intent),
                 self.request.intent,
             ),

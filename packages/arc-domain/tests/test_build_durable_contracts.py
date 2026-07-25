@@ -5,13 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from arc_domain.build import DomainBuildRunner
+from arc_domain.build import DomainBuildRunner, _task_id
 from arc_domain.contracts import (
     DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
     DomainBuildPolicy,
     DomainBuildRequest,
     decode_domain_build_result,
 )
+from arc_domain.paths import domain_id_for
 from arc_jobs import ImmutableArtifactStore, RunRepository, RunStatus
 from arc_llm import (
     DeliveryState,
@@ -159,7 +160,7 @@ def _request_stage(task_id: str) -> str:
         ("foundation-audit-", "audit"),
         ("foundation-select-", "selection"),
         ("network-rank-", "ranking"),
-        ("domain-summary-", "summary"),
+        ("domain-summary-v2-", "summary"),
     ):
         if task_id.startswith(prefix):
             return stage
@@ -343,7 +344,14 @@ def test_successful_summary_binds_request_intent_and_replays_without_llm(
 
     assert snapshot.status is RunStatus.SUCCEEDED
     summary_request = next(
-        item for item in service.requests if item.task_id.startswith("domain-summary-")
+        item for item in service.requests if item.task_id.startswith("domain-summary-v2-")
+    )
+    task_identity = domain_id_for(request.seed_paper, request.intent)
+    assert summary_request.task_id == _task_id(
+        "domain-summary-v2", task_identity, request.intent
+    )
+    assert summary_request.task_id != _task_id(
+        "domain-summary", task_identity, request.intent
     )
     assert f'"user_intent": "{request.intent}"' in summary_request.prompt
     assert "foundation_selection.intent" not in summary_request.prompt
