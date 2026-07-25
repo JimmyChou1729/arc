@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from arc_llm import LLMExecutionOptions, ModelSelection
 from arc_paper import (
+    EQUATION_LABEL_VISUAL_PROMPT_VERSION,
     RichDocument,
     rich_document_from_document,
     rich_document_to_document,
@@ -23,7 +24,7 @@ from .prompts import (
 
 COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v2"
 COMPANION_GENERATION_RECIPE_SCHEMA = (
-    "arc.companion.generation_recipe.v3"
+    "arc.companion.generation_recipe.v4"
 )
 COMPANION_CONTENT_CONTRACT = "arc.companion.source_anchored_textbook.v1"
 NEUTRAL_TEXTBOOK_INTENT = (
@@ -84,6 +85,9 @@ class CompanionGenerationRecipe:
     chapter_guide_review_prompt: str = (
         CHAPTER_GUIDE_REVIEW_PROMPT_VERSION
     )
+    equation_label_visual_prompt: str = (
+        EQUATION_LABEL_VISUAL_PROMPT_VERSION
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.model, ModelSelection):
@@ -101,6 +105,9 @@ class CompanionGenerationRecipe:
             "chapter_guide_prompt": CHAPTER_GUIDE_PROMPT_VERSION,
             "chapter_guide_review_prompt": (
                 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION
+            ),
+            "equation_label_visual_prompt": (
+                EQUATION_LABEL_VISUAL_PROMPT_VERSION
             ),
         }
         for name, value in expected.items():
@@ -160,6 +167,9 @@ def encode_generation_recipe(
         "chapter_guide_review_prompt": (
             recipe.chapter_guide_review_prompt
         ),
+        "equation_label_visual_prompt": (
+            recipe.equation_label_visual_prompt
+        ),
     }
 
 
@@ -217,6 +227,7 @@ def decode_generation_recipe(
             "chapter_plan_prompt",
             "chapter_guide_prompt",
             "chapter_guide_review_prompt",
+            "equation_label_visual_prompt",
         },
         "generation recipe",
     )
@@ -250,6 +261,9 @@ def decode_generation_recipe(
         ),
         chapter_guide_review_prompt=_string(
             raw_recipe, "chapter_guide_review_prompt"
+        ),
+        equation_label_visual_prompt=_string(
+            raw_recipe, "equation_label_visual_prompt"
         ),
     )
 

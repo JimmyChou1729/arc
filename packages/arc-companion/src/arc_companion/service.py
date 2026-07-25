@@ -21,7 +21,11 @@ from arc_jobs import (
 )
 from arc_llm import LLMTaskService
 
-from .build import COMPANION_BUILD_HANDLER, CompanionBuildHandler
+from .build import (
+    COMPANION_BUILD_HANDLER,
+    CompanionBuildHandler,
+    validate_build_diagnostics,
+)
 from .contracts import AcceptedBook, CompanionContentCodec
 from .request_contracts import (
     CompanionBuildRequest,
@@ -157,6 +161,46 @@ class CompanionService:
 
     def inspect(self, run_id: str) -> RunView:
         return self.repository.inspect(run_id)
+
+    def build_diagnostics(
+        self, run_id: str
+    ) -> Mapping[str, Any] | None:
+        """Return the immutable terminal source-preparation diagnostic."""
+
+        self.repository.inspect(run_id)
+        artifacts = ImmutableArtifactStore(
+            self.repository.run_directory(run_id),
+            repository_root=self.repository.root,
+        )
+        ref = artifacts.find("diagnostics/build")
+        if ref is None:
+            return None
+        try:
+            value = json.loads(
+                artifacts.read_bytes(ref).decode("utf-8")
+            )
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise CompanionServiceError(
+                "build_diagnostics_invalid",
+                "run build diagnostics are unreadable",
+            ) from exc
+        if not isinstance(value, Mapping):
+            raise CompanionServiceError(
+                "build_diagnostics_invalid",
+                "run build diagnostics are invalid",
+            )
+        try:
+            validate_build_diagnostics(value)
+        except (CompanionContentError, TypeError, ValueError) as exc:
+            raise CompanionServiceError(
+                "build_diagnostics_invalid",
+                "run build diagnostics are invalid",
+            ) from exc
+        return dict(value)
 
     def stop(self, run_id: str, *, reason: str | None = None) -> RunView:
         return self.repository.request_stop(run_id, reason=reason)

@@ -39,7 +39,7 @@ from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
-    assert CompanionBuildHandler.name == "arc.companion.build.v2"
+    assert CompanionBuildHandler.name == "arc.companion.build.v3"
     assert not any(name.startswith("Legacy") for name in public_names)
     for module_name in (
         "arc_companion.build_v2",
@@ -230,19 +230,35 @@ def test_provider_model_and_prompt_contract_change_run_identity(
         }
     ) == 3
 
-    monkeypatch.setattr(
-        request_contracts,
-        "CHAPTER_GUIDE_REVIEW_PROMPT_VERSION",
-        "arc.companion.chapter-guide-review-prompt.test-next",
-    )
-    next_review = CompanionGenerationRecipe(
-        chapter_guide_review_prompt=(
-            "arc.companion.chapter-guide-review-prompt.test-next"
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            request_contracts,
+            "CHAPTER_GUIDE_REVIEW_PROMPT_VERSION",
+            "arc.companion.chapter-guide-review-prompt.test-next",
         )
-    )
-    assert companion_run_id(request, next_review) != companion_run_id(
-        request, auto
-    )
+        next_review = CompanionGenerationRecipe(
+            chapter_guide_review_prompt=(
+                "arc.companion.chapter-guide-review-prompt.test-next"
+            )
+        )
+        assert companion_run_id(request, next_review) != companion_run_id(
+            request, auto
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            request_contracts,
+            "EQUATION_LABEL_VISUAL_PROMPT_VERSION",
+            "arc.paper.equation-label-visual-prompt.test-next",
+        )
+        next_visual = CompanionGenerationRecipe(
+            equation_label_visual_prompt=(
+                "arc.paper.equation-label-visual-prompt.test-next"
+            )
+        )
+        assert companion_run_id(request, next_visual) != companion_run_id(
+            request, auto
+        )
 
 
 def test_workers_and_cache_root_are_operational_not_content_identity(

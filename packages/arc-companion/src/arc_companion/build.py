@@ -26,6 +26,18 @@ from arc_llm import (
     LLMRequest,
     LLMTaskService,
 )
+from arc_paper import (
+    EquationLabelReviewService,
+    PdftoppmFullPageRenderer,
+    RichDocument,
+    SourceFormat,
+    SourceRepository,
+    SourceRepositoryError,
+    apply_visual_equation_labels,
+    detect_suspicious_equation_labels,
+    rich_document_from_document,
+    rich_document_to_document,
+)
 
 from ._build_support import (
     accepted_chapter_document,
@@ -90,8 +102,11 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v2"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v3"
+COMPANION_BUILD_DIAGNOSTICS_SCHEMA = "arc.companion.build_diagnostics.v1"
 _BOOK_ARTIFACT = "book/accepted"
+_DIAGNOSTICS_ARTIFACT = "diagnostics/build"
+_EFFECTIVE_SOURCE_ARTIFACT = "source/effective"
 _RESULT_ARTIFACT = "result"
 
 
@@ -126,7 +141,7 @@ class CompanionBuildHandler:
             return Failed(
                 RunError(
                     "companion_build_binding_mismatch",
-                    "Handler bindings do not match the durable v2 build request.",
+                    "Handler bindings do not match the durable v3 build request.",
                 )
             )
         existing = context.artifacts.find(_RESULT_ARTIFACT)
@@ -134,14 +149,18 @@ class CompanionBuildHandler:
             return Succeeded(existing)
         try:
             resume_input = outer_resume_input(context)
-            chapters = plan_source_chapters(self.request.source)
+            prepared_source = self._prepare_source(context, resume_input)
+            if isinstance(prepared_source, Paused):
+                return prepared_source
+            source = prepared_source
+            chapters = plan_source_chapters(source)
             blocks = {
-                item.block_id: item for item in self.request.source.blocks
+                item.block_id: item for item in source.blocks
             }
 
             language = self.translation_adapter.detect_language(
                 context,
-                self.request.source,
+                source,
                 target_language=self.request.target_language,
                 model=self.recipe.model,
                 execution=self.execution.llm,
@@ -160,7 +179,7 @@ class CompanionBuildHandler:
                 )
 
             plans = self._plans(
-                context, resume_input, chapters, blocks
+                context, resume_input, source, chapters, blocks
             )
             if isinstance(plans, (Paused, Failed)):
                 return plans
@@ -172,7 +191,7 @@ class CompanionBuildHandler:
             if translation_required:
                 glossary_outcome = self.translation_adapter.build_glossary(
                     context,
-                    self.request.source,
+                    source,
                     language=language,
                     target_language=self.request.target_language,
                     approx_count=self.recipe.approx_term_count,
@@ -189,7 +208,7 @@ class CompanionBuildHandler:
             else:
                 # Same-primary-language runs deliberately never invoke keyword,
                 # glossary, or translation work.
-                glossary = _empty_glossary(self.request.source)
+                glossary = _empty_glossary(source)
 
             chapters_outcome = self._chapter_lanes(
                 context,
@@ -199,6 +218,7 @@ class CompanionBuildHandler:
                 glossary,
                 evidence,
                 blocks,
+                source=source,
                 language=language,
                 translation_required=translation_required,
             )
@@ -208,8 +228,8 @@ class CompanionBuildHandler:
             book_ref = context.artifacts.find(_BOOK_ARTIFACT)
             if book_ref is None:
                 book = AcceptedBook(
-                    document_digest=self.request.source.document_digest,
-                    title=_document_title(self.request),
+                    document_digest=source.document_digest,
+                    title=_document_title(source),
                     source_language=str(language["language_tag"]),
                     target_language=self.request.target_language,
                     translation_mode=(
@@ -218,7 +238,7 @@ class CompanionBuildHandler:
                     chapters=chapters_outcome,
                     glossary=(
                         _glossary_contracts(
-                            glossary, self.request.source
+                            glossary, source
                         )
                         if translation_required
                         else ()
@@ -229,7 +249,7 @@ class CompanionBuildHandler:
                     book,
                     expected_block_ids=[
                         item.block_id
-                        for item in self.request.source.blocks
+                        for item in source.blocks
                     ],
                 )
                 book_ref = context.artifacts.publish_bytes(
@@ -252,10 +272,174 @@ class CompanionBuildHandler:
         except (KeyError, TypeError, ValueError) as exc:
             return Failed(RunError("companion_content_invalid", str(exc)))
 
+    def _prepare_source(
+        self,
+        context: RunContext,
+        resume_input: Any,
+    ) -> RichDocument | Paused:
+        existing = context.artifacts.find(_DIAGNOSTICS_ARTIFACT)
+        if existing is not None:
+            diagnostics = read_json(context, existing, "build diagnostics")
+            validate_build_diagnostics(diagnostics)
+            if (
+                diagnostics["source_document_digest"]
+                != self.request.source.document_digest
+            ):
+                raise CompanionContentError(
+                    "build_diagnostics_mismatch",
+                    "Build diagnostics do not match the requested source.",
+                )
+            if diagnostics["status"] != "applied":
+                if (
+                    diagnostics["effective_document_digest"]
+                    != self.request.source.document_digest
+                ):
+                    raise CompanionContentError(
+                        "build_diagnostics_mismatch",
+                        "Retained-label diagnostics changed the effective source.",
+                    )
+                return self.request.source
+            source_ref = context.artifacts.find(_EFFECTIVE_SOURCE_ARTIFACT)
+            if source_ref is None:
+                raise CompanionContentError(
+                    "effective_source_missing",
+                    "Applied equation-label diagnostics have no effective source.",
+                )
+            source = rich_document_from_document(
+                read_json(context, source_ref, "effective source")
+            )
+            if (
+                source.document_digest
+                != diagnostics["effective_document_digest"]
+            ):
+                raise CompanionContentError(
+                    "effective_source_mismatch",
+                    "Effective source does not match build diagnostics.",
+                )
+            return source
+
+        reasons = detect_suspicious_equation_labels(self.request.source)
+        if not reasons:
+            self._publish_build_diagnostics(
+                context,
+                status="not_required",
+                source=self.request.source,
+                trigger_reasons=(),
+                warnings=(),
+                visual_review=None,
+            )
+            return self.request.source
+
+        warning = ""
+        outcome = None
+        if len(self.request.validator_digests) != 1:
+            warning = (
+                "PDF visual equation-label review was not run: exactly one PDF "
+                "validator is required; retaining web equation labels."
+            )
+        elif self.execution.cache_root is None:
+            warning = (
+                "PDF visual equation-label review was not run: the paper cache "
+                "root is unavailable; retaining web equation labels."
+            )
+        else:
+            digest = self.request.validator_digests[0]
+            repository = SourceRepository(self.execution.cache_root)
+            try:
+                pdf = repository.get(SourceFormat.PDF, digest)
+                pdf_bytes = repository.read_bytes(pdf)
+            except SourceRepositoryError as exc:
+                warning = (
+                    "PDF visual equation-label review was not run "
+                    f"({exc.code}): {exc}; retaining web equation labels."
+                )
+            else:
+                outcome = EquationLabelReviewService(
+                    PdftoppmFullPageRenderer(),
+                    llm=self.task_service,
+                ).review(
+                    context,
+                    self.request.source,
+                    pdf_digest=digest,
+                    pdf_bytes=pdf_bytes,
+                    model=self.recipe.model,
+                    resume_input=resume_input,
+                    options=self.execution.llm,
+                )
+                if isinstance(outcome, LLMPaused):
+                    return Paused(awaiting_from_pause(outcome))
+
+        if outcome is not None and outcome.complete:
+            source = apply_visual_equation_labels(
+                self.request.source, outcome
+            )
+            context.artifacts.publish_json(
+                _EFFECTIVE_SOURCE_ARTIFACT,
+                rich_document_to_document(source),
+            )
+            self._publish_build_diagnostics(
+                context,
+                status="applied",
+                source=source,
+                trigger_reasons=reasons,
+                warnings=outcome.warnings,
+                visual_review=outcome.diagnostics_document,
+            )
+            return source
+
+        warnings = (warning,) if warning else (
+            tuple(outcome.warnings)
+            if outcome is not None and outcome.warnings
+            else (
+                "PDF visual equation-label review did not produce a complete "
+                "unambiguous mapping; retaining web equation labels.",
+            )
+        )
+        self._publish_build_diagnostics(
+            context,
+            status="retained_web_labels",
+            source=self.request.source,
+            trigger_reasons=reasons,
+            warnings=warnings,
+            visual_review=(
+                outcome.diagnostics_document
+                if outcome is not None
+                else None
+            ),
+        )
+        return self.request.source
+
+    def _publish_build_diagnostics(
+        self,
+        context: RunContext,
+        *,
+        status: str,
+        source: RichDocument,
+        trigger_reasons: tuple[str, ...],
+        warnings: tuple[str, ...],
+        visual_review: Mapping[str, Any] | None,
+    ) -> None:
+        document = {
+            "schema_version": COMPANION_BUILD_DIAGNOSTICS_SCHEMA,
+            "status": status,
+            "source_document_digest": self.request.source.document_digest,
+            "effective_document_digest": source.document_digest,
+            "trigger_reasons": list(trigger_reasons),
+            "warnings": list(warnings),
+            "visual_review": (
+                dict(visual_review)
+                if visual_review is not None
+                else None
+            ),
+        }
+        validate_build_diagnostics(document)
+        context.artifacts.publish_json(_DIAGNOSTICS_ARTIFACT, document)
+
     def _plans(
         self,
         context: RunContext,
         resume_input: Any,
+        source: RichDocument,
         chapters: tuple[SourceChapter, ...],
         blocks: Mapping[str, Any],
     ) -> tuple[dict[str, Any], ...] | Paused | Failed:
@@ -287,7 +471,7 @@ class CompanionBuildHandler:
                     chapter_id=chapter.chapter_id,
                     title=chapter.title,
                     blocks=[
-                        _source_block_document(self.request.source, blocks[item])
+                        _source_block_document(source, blocks[item])
                         for item in chapter.block_ids
                     ],
                     target_language=self.request.target_language,
@@ -357,6 +541,7 @@ class CompanionBuildHandler:
         evidence: Sequence[Mapping[str, Any]],
         blocks: Mapping[str, Any],
         *,
+        source: RichDocument,
         language: Mapping[str, Any],
         translation_required: bool,
     ) -> tuple[AcceptedChapter, ...] | Paused | Failed:
@@ -382,7 +567,7 @@ class CompanionBuildHandler:
             chapter.chapter_id: _literal_glossary_entries(
                 entries,
                 [
-                    _source_block_document(self.request.source, blocks[block_id])
+                    _source_block_document(source, blocks[block_id])
                     for block_id in chapter.block_ids
                 ],
             )
@@ -453,7 +638,7 @@ class CompanionBuildHandler:
             if lane == "translation":
                 outcome = self.translation_adapter.translate_blocks(
                     context,
-                    self.request.source,
+                    source,
                     block_ids=chapter.block_ids,
                     language=language,
                     glossary=glossary,
@@ -484,6 +669,7 @@ class CompanionBuildHandler:
                 chapter_entries[chapter_id],
                 blocks,
                 language,
+                source,
             )
 
         result = context.run_group(
@@ -512,7 +698,7 @@ class CompanionBuildHandler:
         accepted: list[AcceptedChapter] = []
         page_by_block = {
             item.block_id: item.page_number
-            for item in self.request.source.page_map
+            for item in source.page_map
         }
         for chapter in chapters:
             guide = results[f"guide-{chapter.chapter_id}"]
@@ -535,7 +721,7 @@ class CompanionBuildHandler:
                         blocks[block_id],
                         page_number=page_by_block.get(block_id),
                         equation_label_provenance=equation_label_provenance(
-                            self.request.source, block_id
+                            source, block_id
                         ),
                     )
                     for block_id in chapter.block_ids
@@ -592,13 +778,14 @@ class CompanionBuildHandler:
         glossary: Sequence[Mapping[str, Any]],
         blocks: Mapping[str, Any],
         language: Mapping[str, Any],
+        source: RichDocument,
     ) -> Mapping[str, Any] | Paused | UnitResult:
         artifact_id = f"chapters/{chapter.chapter_id}/guide-accepted"
         existing = context.artifacts.find(artifact_id)
         if existing is not None:
             return read_json(context, existing, "accepted chapter guide")
         source_documents = [
-            _source_block_document(self.request.source, blocks[item])
+            _source_block_document(source, blocks[item])
             for item in chapter.block_ids
         ]
         planned_documents = planned_source_documents(
@@ -817,14 +1004,107 @@ def _source_block_document(source: Any, block: Any) -> dict[str, Any]:
     )
 
 
-def _document_title(request: CompanionBuildRequest) -> str:
-    value = request.source.metadata.get("title")
+def _document_title(source: RichDocument) -> str:
+    value = source.metadata.get("title")
     if isinstance(value, str) and value.strip():
         return value.strip()
     return "Companion"
 
 
+def validate_build_diagnostics(value: Mapping[str, Any]) -> None:
+    fields = {
+        "schema_version",
+        "status",
+        "source_document_digest",
+        "effective_document_digest",
+        "trigger_reasons",
+        "warnings",
+        "visual_review",
+    }
+    if set(value) != fields:
+        raise CompanionContentError(
+            "build_diagnostics_invalid",
+            "Build diagnostics contain invalid fields.",
+        )
+    if value["schema_version"] != COMPANION_BUILD_DIAGNOSTICS_SCHEMA:
+        raise CompanionContentError(
+            "build_diagnostics_invalid",
+            "Build diagnostics use an unsupported schema.",
+        )
+    if value["status"] not in {
+        "not_required",
+        "applied",
+        "retained_web_labels",
+    }:
+        raise CompanionContentError(
+            "build_diagnostics_invalid",
+            "Build diagnostics contain an invalid status.",
+        )
+    for key in ("source_document_digest", "effective_document_digest"):
+        digest = value[key]
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise CompanionContentError(
+                "build_diagnostics_invalid",
+                "Build diagnostics contain an invalid document digest.",
+            )
+    for key in ("trigger_reasons", "warnings"):
+        items = value[key]
+        if (
+            not isinstance(items, list)
+            or any(not isinstance(item, str) or not item for item in items)
+        ):
+            raise CompanionContentError(
+                "build_diagnostics_invalid",
+                f"Build diagnostics contain invalid {key}.",
+            )
+    if value["visual_review"] is not None and not isinstance(
+        value["visual_review"], Mapping
+    ):
+        raise CompanionContentError(
+            "build_diagnostics_invalid",
+            "Build diagnostics contain an invalid visual review.",
+        )
+    status = value["status"]
+    reasons = value["trigger_reasons"]
+    warnings = value["warnings"]
+    visual_review = value["visual_review"]
+    if status == "not_required" and (
+        reasons
+        or warnings
+        or visual_review is not None
+        or value["effective_document_digest"]
+        != value["source_document_digest"]
+    ):
+        raise CompanionContentError(
+            "build_diagnostics_invalid",
+            "Not-required build diagnostics contain review state.",
+        )
+    if status == "retained_web_labels" and (
+        not reasons
+        or not warnings
+        or value["effective_document_digest"]
+        != value["source_document_digest"]
+    ):
+        raise CompanionContentError(
+            "build_diagnostics_invalid",
+            "Retained-label build diagnostics are incomplete.",
+        )
+    if status == "applied" and (
+        not reasons or visual_review is None
+    ):
+        raise CompanionContentError(
+            "build_diagnostics_invalid",
+            "Applied build diagnostics lack visual evidence.",
+        )
+
+
 __all__ = [
+    "COMPANION_BUILD_DIAGNOSTICS_SCHEMA",
     "COMPANION_BUILD_HANDLER",
     "CompanionBuildHandler",
+    "validate_build_diagnostics",
 ]

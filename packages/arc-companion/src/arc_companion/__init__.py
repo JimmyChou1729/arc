@@ -40,10 +40,21 @@ __version__ = "1.0.1"
 def __getattr__(name: str) -> Any:
     """Keep render-only imports independent of the LLM runtime."""
 
-    if name in {"COMPANION_BUILD_HANDLER", "CompanionBuildHandler"}:
-        from .build import COMPANION_BUILD_HANDLER, CompanionBuildHandler
+    if name in {
+        "COMPANION_BUILD_DIAGNOSTICS_SCHEMA",
+        "COMPANION_BUILD_HANDLER",
+        "CompanionBuildHandler",
+    }:
+        from .build import (
+            COMPANION_BUILD_DIAGNOSTICS_SCHEMA,
+            COMPANION_BUILD_HANDLER,
+            CompanionBuildHandler,
+        )
 
         return {
+            "COMPANION_BUILD_DIAGNOSTICS_SCHEMA": (
+                COMPANION_BUILD_DIAGNOSTICS_SCHEMA
+            ),
             "COMPANION_BUILD_HANDLER": COMPANION_BUILD_HANDLER,
             "CompanionBuildHandler": CompanionBuildHandler,
         }[name]
@@ -81,6 +92,7 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "ACCEPTED_BOOK_SCHEMA",
+    "COMPANION_BUILD_DIAGNOSTICS_SCHEMA",
     "COMPANION_BUILD_HANDLER",
     "COMPANION_CONTENT_CONTRACT",
     "NEUTRAL_TEXTBOOK_INTENT",

@@ -26,9 +26,11 @@ from arc_jobs import (
 from arc_llm import ModelSelection
 from arc_paper import (
     ArcPaperService,
+    PDF_VALIDATOR_MISSING_WARNING,
     RichDocumentParserService,
     RichDocumentValidationError,
     SourceBundle,
+    detect_suspicious_equation_labels,
 )
 
 from .project import CompanionProjectError, CompanionProjectPaths
@@ -329,6 +331,9 @@ def _status(args: argparse.Namespace) -> CommandResult:
         "selected_run": selected_run,
         "active_release": current,
         "release_matches_selected_run": release_matches_selected_run,
+        "build_diagnostics": CompanionService(
+            paths.jobs_root
+        ).build_diagnostics(run_id),
     }
     return CommandResult(
         base.status,
@@ -337,6 +342,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
         artifacts=base.artifacts,
         warnings=(
             *_source_warnings(paths, run_id),
+            *_build_warnings(paths, run_id),
             *release_warnings,
             *delivery_warnings,
         ),
@@ -427,10 +433,13 @@ def _snapshot_result(
 ) -> CommandResult:
     base = command_result_from_snapshot(snapshot)
     persisted = paths.source_diagnostics(snapshot.run_id)
-    effective_warnings = warnings or persisted
-    command_warnings = tuple(
-        CommandWarning("source_diagnostic", item)
-        for item in effective_warnings
+    source_values = tuple(dict.fromkeys((*persisted, *warnings)))
+    command_warnings = (
+        tuple(
+            CommandWarning("source_diagnostic", item)
+            for item in source_values
+        )
+        + _build_warnings(paths, snapshot.run_id)
     )
     if snapshot.status is not RunStatus.SUCCEEDED:
         return CommandResult(
@@ -480,24 +489,77 @@ def _resolve_source(
         validators = (
             (paper.import_source(Path(pdf)),) if pdf is not None else ()
         )
-    else:
-        primary = paper.fetch_arxiv_auto(source, refresh=refresh)
-        if pdf is None:
+        outcome = RichDocumentParserService(paper.repository).parse(
+            SourceBundle(primary=primary, validators=validators)
+        )
+        return (
+            outcome.document,
+            tuple(item.artifact_digest for item in validators),
+            tuple(outcome.warnings),
+        )
+
+    parser = RichDocumentParserService(paper.repository)
+    primary = paper.fetch_arxiv_auto(source, refresh=refresh)
+    probe = parser.parse(SourceBundle(primary=primary))
+    reasons = detect_suspicious_equation_labels(probe.document)
+    forced_html_refresh = False
+    if reasons and not refresh:
+        primary = paper.fetch_arxiv_auto(source, refresh=True)
+        forced_html_refresh = True
+        probe = parser.parse(SourceBundle(primary=primary))
+        reasons = detect_suspicious_equation_labels(probe.document)
+
+    explicit_validator = pdf is not None
+    validators: tuple[Any, ...]
+    acquisition_warnings: list[str] = []
+    if pdf == "fetch":
+        validators = (
+            paper.fetch_arxiv_pdf(
+                source,
+                refresh=refresh or forced_html_refresh,
+            ),
+        )
+    elif pdf is not None:
+        pdf_path = Path(pdf)
+        if not pdf_path.is_file():
+            raise _UsageError("--pdf must be an existing path or 'fetch'")
+        validators = (paper.import_source(pdf_path),)
+    elif reasons:
+        try:
+            validators = (
+                paper.fetch_arxiv_pdf(
+                    source,
+                    refresh=refresh or forced_html_refresh,
+                ),
+            )
+        except Exception as exc:
+            code = getattr(exc, "code", "pdf_fetch_failed")
+            acquisition_warnings.append(
+                "PDF visual equation-label review could not acquire the PDF "
+                f"({code}): {exc}; retaining web equation labels."
+            )
             validators = ()
-        elif pdf == "fetch":
-            validators = (paper.fetch_arxiv_pdf(source, refresh=refresh),)
-        else:
-            pdf_path = Path(pdf)
-            if not pdf_path.is_file():
-                raise _UsageError("--pdf must be an existing path or 'fetch'")
-            validators = (paper.import_source(pdf_path),)
-    outcome = RichDocumentParserService(paper.repository).parse(
-        SourceBundle(primary=primary, validators=validators)
-    )
+    else:
+        validators = ()
+
+    if explicit_validator:
+        outcome = parser.parse(
+            SourceBundle(primary=primary, validators=validators)
+        )
+    else:
+        outcome = probe
+    warnings = list(outcome.warnings)
+    if reasons and not explicit_validator:
+        warnings = [
+            item
+            for item in warnings
+            if item != PDF_VALIDATOR_MISSING_WARNING
+        ]
+    warnings.extend(acquisition_warnings)
     return (
         outcome.document,
         tuple(item.artifact_digest for item in validators),
-        tuple(outcome.warnings),
+        tuple(dict.fromkeys(warnings)),
     )
 
 
@@ -538,6 +600,20 @@ def _source_warnings(
     return tuple(
         CommandWarning("source_diagnostic", item)
         for item in paths.source_diagnostics(run_id)
+    )
+
+
+def _build_warnings(
+    paths: CompanionProjectPaths, run_id: str
+) -> tuple[CommandWarning, ...]:
+    diagnostics = CompanionService(paths.jobs_root).build_diagnostics(
+        run_id
+    )
+    if diagnostics is None:
+        return ()
+    return tuple(
+        CommandWarning("equation_label_review", item)
+        for item in diagnostics["warnings"]
     )
 
 
