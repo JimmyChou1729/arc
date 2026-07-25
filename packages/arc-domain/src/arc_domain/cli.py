@@ -34,6 +34,7 @@ from . import (
     decode_domain_build_result,
     encode_domain_build_policy,
 )
+from .build import validate_domain_build_workers
 from .catalog import DomainPublicationError, publish_domain_result, read_domain_catalog
 from .paths import DomainPaths
 
@@ -79,6 +80,7 @@ def _parser() -> _Parser:
     resume = commands.add_parser("resume")
     resume.add_argument("run_id")
     resume.add_argument("--input")
+    resume.add_argument("--workers", type=int, default=8)
     resume.add_argument("--cache-root")
 
     status = commands.add_parser("status")
@@ -114,6 +116,13 @@ def _paths(cache_root: str | None) -> DomainPaths:
 
 def _repository(paths: DomainPaths) -> RunRepository:
     return RunRepository(paths.root)
+
+
+def _validated_workers(value: object) -> int:
+    try:
+        return validate_domain_build_workers(value)
+    except ValueError as exc:
+        raise _UsageError(str(exc)) from exc
 
 
 def _request_from_args(args: argparse.Namespace) -> DomainBuildRequest:
@@ -184,8 +193,6 @@ def _request_from_args(args: argparse.Namespace) -> DomainBuildRequest:
             policy_document = encode_domain_build_policy(policy)
             policy_document.update(overrides)
             policy = decode_domain_build_policy(policy_document)
-        if args.workers < 1:
-            raise _UsageError("--workers must be at least one")
         return DomainBuildRequest(
             seed_paper=args.seed_paper,
             intent=args.intent,
@@ -257,23 +264,27 @@ def _published_result(repository: RunRepository, paths: DomainPaths, snapshot) -
 
 
 def _build(args: argparse.Namespace) -> tuple[CommandResult, int]:
+    max_workers = _validated_workers(args.workers)
     request = _request_from_args(args)
     paths = _paths(args.cache_root)
     repository = _repository(paths)
     snapshot = DomainBuildRunner(repository).execute(
         request,
         run_id=args.run_id,
-        max_workers=args.workers,
+        max_workers=max_workers,
     )
     result = _published_result(repository, paths, snapshot)
     return result, _exit_code(result)
 
 
 def _resume(args: argparse.Namespace) -> tuple[CommandResult, int]:
+    max_workers = _validated_workers(args.workers)
     paths = _paths(args.cache_root)
     repository = _repository(paths)
     snapshot = DomainBuildRunner(repository).resume(
-        args.run_id, input=_resume_input(args.input)
+        args.run_id,
+        input=_resume_input(args.input),
+        max_workers=max_workers,
     )
     result = _published_result(repository, paths, snapshot)
     return result, _exit_code(result)

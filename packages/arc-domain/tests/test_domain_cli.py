@@ -261,8 +261,8 @@ def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def resume(self, run_id: str, *, input):
-            type(self).resumed = (run_id, input)
+        def resume(self, run_id: str, *, input, max_workers):
+            type(self).resumed = (run_id, input, max_workers)
             return snapshot
 
     monkeypatch.setattr(cli, "DomainBuildRunner", RecordingRunner)
@@ -277,6 +277,8 @@ def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
                 "resume-run",
                 "--input",
                 json.dumps(resume_input),
+                "--workers",
+                "24",
                 "--cache-root",
                 str(tmp_path),
             ]
@@ -286,8 +288,36 @@ def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
 
     envelope = _envelope(capsys)
     assert envelope["status"] == "completed"
-    assert RecordingRunner.resumed == ("resume-run", resume_input)
+    assert RecordingRunner.resumed == ("resume-run", resume_input, 24)
     assert envelope["data"]["domain"]["id"] == "domain-cli"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["build", "arXiv:2401.00001", "--workers", "0"],
+        ["build", "arXiv:2401.00001", "--workers", "25"],
+        ["resume", "run-1", "--workers", "0"],
+        ["resume", "run-1", "--workers", "25"],
+    ],
+)
+def test_build_and_resume_reject_workers_outside_shared_bounds_before_io(
+    argv: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    def paths_must_not_resolve(_cache_root):
+        raise AssertionError("invalid workers must be rejected before local I/O")
+
+    monkeypatch.setattr(cli, "_paths", paths_must_not_resolve)
+
+    assert cli.main(argv) == 2
+    envelope = _envelope(capsys)
+    assert envelope["error"]["code"] == "invalid_request"
+    assert (
+        envelope["error"]["message"]
+        == "domain build workers must be an integer between 1 and 24"
+    )
 
 
 def test_status_uses_explicit_run_or_catalog_latest(tmp_path: Path, capsys) -> None:
@@ -377,6 +407,8 @@ def test_stop_and_validate_delegate_to_root_run_control(
         ["status", "--run-id", "a", "--domain-id", "b"],
         ["get-summary"],
         ["build", "arXiv:2401.00001", "--policy", "not-json"],
+        ["build", "arXiv:2401.00001", "--workers", "many"],
+        ["resume", "run-1", "--workers", "many"],
     ],
 )
 def test_invalid_requests_always_emit_shared_envelope(argv: list[str], capsys) -> None:
@@ -470,7 +502,8 @@ def test_resume_requires_a_strict_resume_input_object(
         def __init__(self, _repository: RunRepository) -> None:
             pass
 
-        def resume(self, _run_id: str, *, input):
+        def resume(self, _run_id: str, *, input, max_workers):
+            del max_workers
             raise AssertionError(f"runner must not receive invalid input: {input!r}")
 
     monkeypatch.setattr(cli, "DomainBuildRunner", Runner)

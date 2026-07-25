@@ -3,7 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from arc_domain.build import DomainBuildRunner, domain_build_run_id
+import pytest
+
+from arc_domain.build import (
+    DomainBuildHandler,
+    DomainBuildRunner,
+    domain_build_run_id,
+    validate_domain_build_workers,
+)
 from arc_domain.contracts import (
     DomainBuildPolicy,
     DomainBuildRequest,
@@ -315,6 +322,69 @@ def _request() -> DomainBuildRequest:
     )
 
 
+def test_worker_count_is_bounded_operational_policy_not_content_identity() -> None:
+    request = _request()
+    paper_access = FakePaperAccess()
+    task_service = FakeTaskService()
+    reference_service = NoReferenceInference()
+
+    single_worker = DomainBuildHandler(
+        request,
+        paper_access=paper_access,
+        task_service=task_service,
+        reference_service=reference_service,
+        max_workers=1,
+    )
+    maximum_workers = DomainBuildHandler(
+        request,
+        paper_access=paper_access,
+        task_service=task_service,
+        reference_service=reference_service,
+        max_workers=24,
+    )
+
+    assert single_worker.max_workers == 1
+    assert maximum_workers.max_workers == 24
+    assert single_worker.semantic_input() == maximum_workers.semantic_input()
+    assert "workers" not in single_worker.semantic_input()
+    assert {
+        domain_build_run_id(handler.request)
+        for handler in (single_worker, maximum_workers)
+    } == {domain_build_run_id(request)}
+
+
+@pytest.mark.parametrize("value", [True, False, -1, 0, 25, 1.5, "8", None])
+def test_worker_count_validator_rejects_non_integer_or_out_of_range_values(
+    value: object,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="domain build workers must be an integer between 1 and 24",
+    ):
+        validate_domain_build_workers(value)
+
+
+@pytest.mark.parametrize("operation", ["execute", "resume"])
+def test_runner_rejects_invalid_workers_before_durable_run_access(
+    operation: str,
+    tmp_path: Path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs-root")
+    runner = DomainBuildRunner(repository)
+    run_id = "invalid-workers" if operation == "execute" else "missing-run"
+
+    with pytest.raises(
+        ValueError,
+        match="domain build workers must be an integer between 1 and 24",
+    ):
+        if operation == "execute":
+            runner.execute(_request(), run_id=run_id, max_workers=25)
+        else:
+            runner.resume(run_id, max_workers=25)
+
+    assert not repository.run_directory(run_id).exists()
+
+
 def _decode_result(repository: RunRepository, run_id: str):
     snapshot = repository.inspect(run_id).snapshot
     assert snapshot.result_ref is not None
@@ -344,6 +414,7 @@ def test_complete_build_is_durable_bounded_and_uses_optional_summary_fallback(
 
     assert snapshot.status is RunStatus.SUCCEEDED
     assert snapshot.run_id == domain_build_run_id(request)
+    assert "workers" not in repository.read_spec(snapshot.run_id).semantic_input
     result = _decode_result(repository, snapshot.run_id)
     assert result.summary is None
     assert result.summary_markdown is None

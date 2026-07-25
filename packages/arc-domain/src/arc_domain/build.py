@@ -113,6 +113,8 @@ _SUMMARY_UNAVAILABLE_ARTIFACT = "summary/unavailable"
 _RESULT_ARTIFACT = "result"
 _FOUNDATION_RECENT_CITER_WITNESS_LIMIT = 50
 _FOUNDATION_WITNESS_LIMIT = 60
+_MIN_DOMAIN_BUILD_WORKERS = 1
+_MAX_DOMAIN_BUILD_WORKERS = 24
 
 
 class DomainBuildStageError(RuntimeError):
@@ -120,6 +122,18 @@ class DomainBuildStageError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.details = dict(details or {})
+
+
+def validate_domain_build_workers(value: object) -> int:
+    """Return a supported operational worker count."""
+
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not _MIN_DOMAIN_BUILD_WORKERS <= value <= _MAX_DOMAIN_BUILD_WORKERS
+    ):
+        raise ValueError("domain build workers must be an integer between 1 and 24")
+    return value
 
 
 class DomainBuildHandler:
@@ -136,8 +150,7 @@ class DomainBuildHandler:
         reference_service: ReferenceInferenceService | None = None,
         max_workers: int = 8,
     ) -> None:
-        if isinstance(max_workers, bool) or not isinstance(max_workers, int) or max_workers < 1:
-            raise ValueError("max_workers must be at least one")
+        max_workers = validate_domain_build_workers(max_workers)
         self.request = request
         self.paper = paper_access or DomainPaperAccess()
         self.task_service = task_service or LLMTaskService()
@@ -1020,6 +1033,7 @@ class DomainBuildRunner:
         reference_service: ReferenceInferenceService | None = None,
         max_workers: int = 8,
     ) -> RunSnapshot:
+        max_workers = validate_domain_build_workers(max_workers)
         request = decode_domain_build_request(
             self.repository.read_spec(run_id).semantic_input
         )
@@ -1213,4 +1227,5 @@ __all__ = [
     "DomainBuildHandler",
     "DomainBuildRunner",
     "domain_build_run_id",
+    "validate_domain_build_workers",
 ]
