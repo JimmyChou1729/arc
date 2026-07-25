@@ -27,17 +27,19 @@ from arc_jobs import (
 
 
 POLICY = {
-    "schema_version": "arc.domain_build_policy.v1",
+    "schema_version": "arc.domain_build_policy.v2",
     "as_of_date": "2026-07-24",
     "recent_window_days": 365,
     "citer_pool_limit": 10,
     "ranked_paper_limit": 2,
     "graph_node_limit": 5,
+    "foundation_mode": "infer_from_seed",
+    "citer_selection_mode": "representative_plus_recent",
 }
 
 
 class _SucceededDomainHandler:
-    name = "arc.domain.build.v1"
+    name = "arc.domain.build.v2"
 
     def __init__(self, domain_id: str) -> None:
         self.domain_id = domain_id
@@ -67,7 +69,7 @@ class _SucceededDomainHandler:
 
 
 class _PausedDomainHandler:
-    name = "arc.domain.build.v1"
+    name = "arc.domain.build.v2"
 
     def execute(self, context):
         request = context.artifacts.publish_json("resume-request", {"resume": True})
@@ -83,7 +85,7 @@ class _PausedDomainHandler:
 
 
 class _StoppedDomainHandler:
-    name = "arc.domain.build.v1"
+    name = "arc.domain.build.v2"
 
     def execute(self, _context):
         from arc_jobs import StoppedError
@@ -207,7 +209,7 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
     assert catalog.active == "build-run"
 
 
-def test_mode_flags_promote_a_resolved_v1_policy_to_v2(
+def test_mode_flags_override_the_current_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:
     repository = RunRepository(tmp_path)

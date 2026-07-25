@@ -1,4 +1,4 @@
-"""Pure projections of acquired paper data into the legacy domain packs.
+"""Pure projections of acquired paper data into the current domain packs.
 
 The durable domain build acquires each paper once, then passes the resulting
 records here.  This module deliberately neither fetches nor persists anything:

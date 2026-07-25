@@ -46,7 +46,6 @@ from ._llm import (
 )
 from .catalog import register_domain_run
 from .contracts import (
-    DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
     DomainBuildRequest,
     DomainBuildResult,
     DomainBuildWarning,
@@ -102,7 +101,7 @@ from .summary import (
 from .text import deterministic_sample, paper_key
 
 
-DOMAIN_BUILD_HANDLER = "arc.domain.build.v1"
+DOMAIN_BUILD_HANDLER = "arc.domain.build.v2"
 DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION = "arc.domain_build_semantic.v1"
 DOMAIN_NETWORK_RENDER_RECIPE = "arc.domain.network_html.v1"
 
@@ -290,7 +289,7 @@ class DomainBuildHandler:
 
         # Candidate evidence has a fixed witness budget.  Keep the complete
         # reference list in foundation/input for provenance, but derive the
-        # candidate-facing subset again so resumed legacy artifacts cannot
+        # candidate-facing subset again so resumed artifacts cannot
         # widen the metadata-acquisition scope.
         newest_citers = newest_citers[:_FOUNDATION_RECENT_CITER_WITNESS_LIMIT]
         witness_references = _sample_foundation_witness_references(
@@ -350,10 +349,6 @@ class DomainBuildHandler:
                 seed_metadata=seed_metadata,
                 candidates=candidates,
                 intent=self.request.intent,
-                v2_semantics=(
-                    self.request.policy.schema_version
-                    == DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2
-                ),
             ),
             JsonOutput(FOUNDATION_CANDIDATE_AUDIT_SCHEMA, repair="format"),
             self.request.model,
@@ -444,10 +439,6 @@ class DomainBuildHandler:
                 seed_metadata=seed_metadata,
                 candidates=candidates,
                 intent=self.request.intent,
-                v2_semantics=(
-                    self.request.policy.schema_version
-                    == DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2
-                ),
                 fixed_seed=self.request.policy.foundation_mode == "fixed_seed",
             ),
             JsonOutput(FOUNDATION_SELECTION_SCHEMA, repair="format"),

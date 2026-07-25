@@ -4,6 +4,11 @@
 deterministic joining of translation and guide lanes, rendering, release
 publication, and validation. It consumes verified documents from `arc-paper`
 and reusable language, glossary, and translation results from `arc-translate`.
+Its public build API is the split translation/guide workflow:
+`CompanionBuildRequest`, `CompanionGenerationRecipe`, and
+`CompanionBuildHandler` are the sole durable build lineage. Published content
+uses the `arc.companion.accepted_book.v2` delivery contract and embeds the
+current RichDocument v2 inline-span payloads directly.
 
 ## Quick start
 

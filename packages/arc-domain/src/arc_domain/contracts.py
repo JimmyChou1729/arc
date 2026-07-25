@@ -11,11 +11,9 @@ from arc_llm import InvalidRequestError, ModelSelection
 from arc_paper import normalize_paper_id
 
 
-DOMAIN_BUILD_POLICY_SCHEMA_VERSION = "arc.domain_build_policy.v1"
-DOMAIN_BUILD_REQUEST_SCHEMA_VERSION = "arc.domain_build_request.v1"
+DOMAIN_BUILD_POLICY_SCHEMA_VERSION = "arc.domain_build_policy.v2"
+DOMAIN_BUILD_REQUEST_SCHEMA_VERSION = "arc.domain_build_request.v2"
 DOMAIN_BUILD_RESULT_SCHEMA_VERSION = "arc.domain_build_result.v1"
-DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2 = "arc.domain_build_policy.v2"
-DOMAIN_BUILD_REQUEST_SCHEMA_VERSION_V2 = "arc.domain_build_request.v2"
 
 FOUNDATION_MODES = ("infer_from_seed", "fixed_seed")
 CITER_SELECTION_MODES = ("representative_plus_recent", "strict_window")
@@ -31,8 +29,8 @@ class DomainBuildPolicy:
     ranked_paper_limit: int = 50
     graph_node_limit: int = 90
     schema_version: str = DOMAIN_BUILD_POLICY_SCHEMA_VERSION
-    foundation_mode: str | None = None
-    citer_selection_mode: str | None = None
+    foundation_mode: str = "infer_from_seed"
+    citer_selection_mode: str = "representative_plus_recent"
 
     def __post_init__(self) -> None:
         _validate_iso_date(self.as_of_date)
@@ -42,33 +40,27 @@ class DomainBuildPolicy:
         _validate_bounded_int("graph_node_limit", self.graph_node_limit, minimum=2)
         if self.graph_node_limit <= self.ranked_paper_limit:
             raise ValueError("graph_node_limit must be greater than ranked_paper_limit.")
-        if self.schema_version == DOMAIN_BUILD_POLICY_SCHEMA_VERSION:
-            if self.foundation_mode is not None or self.citer_selection_mode is not None:
-                raise ValueError("v1 policy must not contain v2 selection modes.")
-        elif self.schema_version == DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2:
-            if self.foundation_mode not in FOUNDATION_MODES:
-                raise ValueError(
-                    "foundation_mode must be one of: "
-                    + ", ".join(FOUNDATION_MODES)
-                    + "."
-                )
-            if self.citer_selection_mode not in CITER_SELECTION_MODES:
-                raise ValueError(
-                    "citer_selection_mode must be one of: "
-                    + ", ".join(CITER_SELECTION_MODES)
-                    + "."
-                )
-        else:
+        if self.schema_version != DOMAIN_BUILD_POLICY_SCHEMA_VERSION:
             raise ValueError(
-                "schema_version must be "
-                f"{DOMAIN_BUILD_POLICY_SCHEMA_VERSION} or "
-                f"{DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2}."
+                f"schema_version must be {DOMAIN_BUILD_POLICY_SCHEMA_VERSION}."
+            )
+        if self.foundation_mode not in FOUNDATION_MODES:
+            raise ValueError(
+                "foundation_mode must be one of: "
+                + ", ".join(FOUNDATION_MODES)
+                + "."
+            )
+        if self.citer_selection_mode not in CITER_SELECTION_MODES:
+            raise ValueError(
+                "citer_selection_mode must be one of: "
+                + ", ".join(CITER_SELECTION_MODES)
+                + "."
             )
 
 
 @dataclass(frozen=True)
 class DomainBuildRequest:
-    """Normalized semantic input for the ``arc.domain.build.v1`` handler."""
+    """Normalized semantic input for the ``arc.domain.build.v2`` handler."""
 
     seed_paper: str
     intent: str
@@ -92,15 +84,12 @@ class DomainBuildRequest:
             raise ValueError("policy must be a DomainBuildPolicy.")
         if not isinstance(self.model, ModelSelection):
             raise ValueError("model must be a ModelSelection.")
-        expected_schema_version = (
-            DOMAIN_BUILD_REQUEST_SCHEMA_VERSION
-            if self.policy.schema_version == DOMAIN_BUILD_POLICY_SCHEMA_VERSION
-            else DOMAIN_BUILD_REQUEST_SCHEMA_VERSION_V2
+        schema_version = (
+            self.schema_version or DOMAIN_BUILD_REQUEST_SCHEMA_VERSION
         )
-        schema_version = self.schema_version or expected_schema_version
-        if schema_version != expected_schema_version:
+        if schema_version != DOMAIN_BUILD_REQUEST_SCHEMA_VERSION:
             raise ValueError(
-                "request schema_version must match the policy schema version."
+                f"schema_version must be {DOMAIN_BUILD_REQUEST_SCHEMA_VERSION}."
             )
         object.__setattr__(self, "seed_paper", normalized)
         object.__setattr__(self, "intent", self.intent.strip())
@@ -178,9 +167,8 @@ def encode_domain_build_policy(policy: DomainBuildPolicy) -> dict[str, Any]:
         "ranked_paper_limit": policy.ranked_paper_limit,
         "graph_node_limit": policy.graph_node_limit,
     }
-    if policy.schema_version == DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2:
-        document["foundation_mode"] = policy.foundation_mode
-        document["citer_selection_mode"] = policy.citer_selection_mode
+    document["foundation_mode"] = policy.foundation_mode
+    document["citer_selection_mode"] = policy.citer_selection_mode
     return document
 
 
@@ -197,14 +185,12 @@ def decode_domain_build_policy(document: Mapping[str, Any]) -> DomainBuildPolicy
         "citer_pool_limit",
         "ranked_paper_limit",
         "graph_node_limit",
+        "foundation_mode",
+        "citer_selection_mode",
     }
-    if raw_schema_version == DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2:
-        fields.update({"foundation_mode", "citer_selection_mode"})
-    elif raw_schema_version != DOMAIN_BUILD_POLICY_SCHEMA_VERSION:
+    if raw_schema_version != DOMAIN_BUILD_POLICY_SCHEMA_VERSION:
         raise ValueError(
-            "schema_version must be "
-            f"{DOMAIN_BUILD_POLICY_SCHEMA_VERSION} or "
-            f"{DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2}."
+            f"schema_version must be {DOMAIN_BUILD_POLICY_SCHEMA_VERSION}."
         )
     value = _exact_object(document, fields, "policy")
     return DomainBuildPolicy(
@@ -214,15 +200,11 @@ def decode_domain_build_policy(document: Mapping[str, Any]) -> DomainBuildPolicy
         ranked_paper_limit=_required_int(value, "ranked_paper_limit", "policy"),
         graph_node_limit=_required_int(value, "graph_node_limit", "policy"),
         schema_version=_required_string(value, "schema_version", "policy"),
-        foundation_mode=(
-            _required_string(value, "foundation_mode", "policy")
-            if raw_schema_version == DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2
-            else None
+        foundation_mode=_required_string(
+            value, "foundation_mode", "policy"
         ),
-        citer_selection_mode=(
-            _required_string(value, "citer_selection_mode", "policy")
-            if raw_schema_version == DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2
-            else None
+        citer_selection_mode=_required_string(
+            value, "citer_selection_mode", "policy"
         ),
     )
 
@@ -247,14 +229,9 @@ def decode_domain_build_request(document: Mapping[str, Any]) -> DomainBuildReque
     if not isinstance(document, Mapping):
         raise ValueError("request must be an object.")
     raw_schema_version = document.get("schema_version")
-    if raw_schema_version not in {
-        DOMAIN_BUILD_REQUEST_SCHEMA_VERSION,
-        DOMAIN_BUILD_REQUEST_SCHEMA_VERSION_V2,
-    }:
+    if raw_schema_version != DOMAIN_BUILD_REQUEST_SCHEMA_VERSION:
         raise ValueError(
-            "schema_version must be "
-            f"{DOMAIN_BUILD_REQUEST_SCHEMA_VERSION} or "
-            f"{DOMAIN_BUILD_REQUEST_SCHEMA_VERSION_V2}."
+            f"schema_version must be {DOMAIN_BUILD_REQUEST_SCHEMA_VERSION}."
         )
     value = _exact_object(
         document,

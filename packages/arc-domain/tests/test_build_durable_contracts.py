@@ -13,7 +13,6 @@ from arc_domain.build import (
     domain_build_run_id,
 )
 from arc_domain.contracts import (
-    DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
     DomainBuildPolicy,
     DomainBuildRequest,
     decode_domain_build_result,
@@ -83,7 +82,9 @@ def _request() -> DomainBuildRequest:
     )
 
 
-def _v2_request(*, fixed_seed: bool = False, strict_window: bool = False) -> DomainBuildRequest:
+def _request_with_modes(
+    *, fixed_seed: bool = False, strict_window: bool = False
+) -> DomainBuildRequest:
     return DomainBuildRequest(
         SEED,
         "recent methods",
@@ -93,7 +94,6 @@ def _v2_request(*, fixed_seed: bool = False, strict_window: bool = False) -> Dom
             citer_pool_limit=10,
             ranked_paper_limit=1,
             graph_node_limit=5,
-            schema_version=DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
             foundation_mode="fixed_seed" if fixed_seed else "infer_from_seed",
             citer_selection_mode=(
                 "strict_window" if strict_window else "representative_plus_recent"
@@ -447,14 +447,14 @@ def test_successful_summary_binds_request_intent_and_replays_without_llm(
     assert replayed_result.summary_markdown == result.summary_markdown
 
 
-def test_real_task_service_ignores_legacy_summary_state_and_replays_parent(
+def test_real_task_service_ignores_unrelated_summary_state_and_replays_parent(
     tmp_path: Path,
 ) -> None:
     repository = RunRepository(tmp_path / "runs")
     request = _request()
     adapter = ScriptedDomainProvider(
         [
-            {"legacy": True},
+            {"stale": True},
             _audit(),
             _selection(FOUNDATION),
             {
@@ -484,26 +484,26 @@ def test_real_task_service_ignores_legacy_summary_state_and_replays_parent(
         execution_slice=None,
     )
     task_identity = domain_id_for(request.seed_paper, request.intent)
-    legacy_task_id = _task_id(
+    unrelated_task_id = _task_id(
         "domain-summary", task_identity, request.intent
     )
-    legacy = task_service.execute(
+    unrelated = task_service.execute(
         context,
         LLMRequest(
-            legacy_task_id,
-            "Return the legacy marker.",
+            unrelated_task_id,
+            "Return the stale marker.",
             JsonOutput(
                 {
                     "type": "object",
-                    "properties": {"legacy": {"type": "boolean"}},
-                    "required": ["legacy"],
+                    "properties": {"stale": {"type": "boolean"}},
+                    "required": ["stale"],
                     "additionalProperties": False,
                 }
             ),
             request.model,
         ),
     )
-    assert isinstance(legacy, LLMCompleted)
+    assert isinstance(unrelated, LLMCompleted)
 
     completed = DomainBuildRunner(repository).execute(
         request,
@@ -631,10 +631,12 @@ def test_verified_reference_inference_candidate_is_available_to_selection(
     assert selection["selected_foundation"]["paper_id"] == INFERRED_FOUNDATION
 
 
-def test_fixed_seed_v2_repairs_an_llm_attempt_to_move_the_foundation(tmp_path: Path) -> None:
+def test_fixed_seed_repairs_an_llm_attempt_to_move_the_foundation(
+    tmp_path: Path,
+) -> None:
     repository = RunRepository(tmp_path / "runs")
     snapshot = DomainBuildRunner(repository).execute(
-        _v2_request(fixed_seed=True),
+        _request_with_modes(fixed_seed=True),
         paper_access=FakePaperAccess(),
         task_service=DomainTaskService(selected_foundation=FOUNDATION),
         reference_service=ForbiddenReferenceService(),
@@ -649,7 +651,7 @@ def test_fixed_seed_v2_repairs_an_llm_attempt_to_move_the_foundation(tmp_path: P
     assert graph["foundation_paper"] == SEED
 
 
-def test_strict_window_v2_excludes_undated_and_old_citers_before_ranking(
+def test_strict_window_excludes_undated_and_old_citers_before_ranking(
     tmp_path: Path,
 ) -> None:
     old = "arXiv:2001.00002"
@@ -676,7 +678,7 @@ def test_strict_window_v2_excludes_undated_and_old_citers_before_ranking(
 
     repository = RunRepository(tmp_path / "runs")
     snapshot = DomainBuildRunner(repository).execute(
-        _v2_request(strict_window=True),
+        _request_with_modes(strict_window=True),
         paper_access=StrictPaper(),
         task_service=DomainTaskService(selected_foundation=FOUNDATION),
         reference_service=ForbiddenReferenceService(),
@@ -719,7 +721,7 @@ def test_strict_window_with_no_eligible_citers_skips_llm_ranking(tmp_path: Path)
     repository = RunRepository(tmp_path / "runs")
     service = DomainTaskService(selected_foundation=FOUNDATION)
     snapshot = DomainBuildRunner(repository).execute(
-        _v2_request(strict_window=True),
+        _request_with_modes(strict_window=True),
         paper_access=NoEligiblePaper(),
         task_service=service,
         reference_service=ForbiddenReferenceService(),

@@ -41,24 +41,11 @@ def __getattr__(name: str) -> Any:
     """Keep render-only imports independent of the LLM runtime."""
 
     if name in {"COMPANION_BUILD_HANDLER", "CompanionBuildHandler"}:
-        from .build_v2 import (
-            COMPANION_BUILD_HANDLER_V2,
-            CompanionBuildHandlerV2,
-        )
-
-        return {
-            "COMPANION_BUILD_HANDLER": COMPANION_BUILD_HANDLER_V2,
-            "CompanionBuildHandler": CompanionBuildHandlerV2,
-        }[name]
-    if name in {
-        "LEGACY_COMPANION_BUILD_HANDLER",
-        "LegacyCompanionBuildHandler",
-    }:
         from .build import COMPANION_BUILD_HANDLER, CompanionBuildHandler
 
         return {
-            "LEGACY_COMPANION_BUILD_HANDLER": COMPANION_BUILD_HANDLER,
-            "LegacyCompanionBuildHandler": CompanionBuildHandler,
+            "COMPANION_BUILD_HANDLER": COMPANION_BUILD_HANDLER,
+            "CompanionBuildHandler": CompanionBuildHandler,
         }[name]
     if name in {
         "COMPANION_CONTENT_CONTRACT",
@@ -69,27 +56,14 @@ def __getattr__(name: str) -> Any:
 
         return getattr(request_contracts, name)
     if name in {"CompanionBuildRequest", "CompanionGenerationRecipe"}:
-        from .request_contracts_v2 import (
-            CompanionBuildRequestV2,
-            CompanionGenerationRecipeV2,
-        )
-
-        return {
-            "CompanionBuildRequest": CompanionBuildRequestV2,
-            "CompanionGenerationRecipe": CompanionGenerationRecipeV2,
-        }[name]
-    if name in {
-        "LegacyCompanionBuildRequest",
-        "LegacyCompanionGenerationRecipe",
-    }:
-        from .request_contracts_v1 import (
+        from .request_contracts import (
             CompanionBuildRequest,
             CompanionGenerationRecipe,
         )
 
         return {
-            "LegacyCompanionBuildRequest": CompanionBuildRequest,
-            "LegacyCompanionGenerationRecipe": CompanionGenerationRecipe,
+            "CompanionBuildRequest": CompanionBuildRequest,
+            "CompanionGenerationRecipe": CompanionGenerationRecipe,
         }[name]
     if name in {
         "CompanionService",
@@ -127,10 +101,6 @@ __all__ = [
     "EvidenceSource",
     "GlossaryEntry",
     "LearningUnit",
-    "LEGACY_COMPANION_BUILD_HANDLER",
-    "LegacyCompanionBuildHandler",
-    "LegacyCompanionBuildRequest",
-    "LegacyCompanionGenerationRecipe",
     "PlannedLearningUnit",
     "RenderedCompanion",
     "SourceAnchor",

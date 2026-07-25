@@ -27,7 +27,7 @@ from arc_jobs import (
 from arc_llm import InvalidRequestError, ModelSelection, decode_resume_input
 
 from . import (
-    DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
+    DOMAIN_BUILD_POLICY_SCHEMA_VERSION,
     DomainBuildRequest,
     DomainBuildRunner,
     decode_domain_build_policy,
@@ -172,12 +172,14 @@ def _validated_workers(value: object) -> int:
 def _request_from_args(args: argparse.Namespace) -> DomainBuildRequest:
     if args.policy is None:
         policy_document: dict[str, Any] = {
-            "schema_version": "arc.domain_build_policy.v1",
+            "schema_version": DOMAIN_BUILD_POLICY_SCHEMA_VERSION,
             "as_of_date": datetime.now(timezone.utc).date().isoformat(),
             "recent_window_days": 365,
             "citer_pool_limit": 1000,
             "ranked_paper_limit": 50,
             "graph_node_limit": 90,
+            "foundation_mode": "infer_from_seed",
+            "citer_selection_mode": "representative_plus_recent",
         }
     else:
         try:
@@ -210,32 +212,15 @@ def _request_from_args(args: argparse.Namespace) -> DomainBuildRequest:
                 else None
             ),
         }
-        if any(value is not None for value in mode_overrides.values()):
-            # Mode flags opt the whole semantic input into the closed v2
-            # contract.  Carry every resolved numeric setting forward rather
-            # than mixing a partial v2 document with a v1 policy.
-            policy_document = {
-                "schema_version": DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
-                "as_of_date": policy.as_of_date,
-                "recent_window_days": policy.recent_window_days,
-                "citer_pool_limit": policy.citer_pool_limit,
-                "ranked_paper_limit": policy.ranked_paper_limit,
-                "graph_node_limit": policy.graph_node_limit,
-                "foundation_mode": (
-                    mode_overrides["foundation_mode"]
-                    or policy.foundation_mode
-                    or "infer_from_seed"
-                ),
-                "citer_selection_mode": (
-                    mode_overrides["citer_selection_mode"]
-                    or policy.citer_selection_mode
-                    or "representative_plus_recent"
-                ),
-            }
-            policy = decode_domain_build_policy(policy_document)
-        if overrides:
+        mode_overrides = {
+            name: value
+            for name, value in mode_overrides.items()
+            if value is not None
+        }
+        if overrides or mode_overrides:
             policy_document = encode_domain_build_policy(policy)
             policy_document.update(overrides)
+            policy_document.update(mode_overrides)
             policy = decode_domain_build_policy(policy_document)
         return DomainBuildRequest(
             seed_paper=args.seed_paper,

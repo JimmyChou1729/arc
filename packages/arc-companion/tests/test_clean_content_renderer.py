@@ -107,8 +107,6 @@ _PDF_TOOLS = (
 def _plain_inline(text: str) -> dict[str, object]:
     return {
         "text": text,
-        "links": (),
-        "inline_math": (),
         "inline_spans": (
             {"kind": "text", "start": 0, "end": len(text), "text": text},
         ),
@@ -211,12 +209,6 @@ def accepted_book() -> AcceptedBook:
             },
             payload={
                 "text": intro_text,
-                "links": (
-                    {"text": "source note", "target": "https://example.test/note"},
-                ),
-                "inline_math": (
-                    {"tex": r"\sum_i p_i=1", "source": math_source},
-                ),
                 "inline_spans": (
                     {
                         "kind": "text",
@@ -651,9 +643,6 @@ def test_source_fragment_links_resolve_to_release_anchors(
     intro = chapter.source_anchors[0]
     equation = chapter.source_anchors[1]
     intro_payload = dict(intro.payload)
-    intro_payload["links"] = (
-        {"text": "source note", "target": "#equation-source"},
-    )
     intro_payload["inline_spans"] = tuple(
         (
             {**dict(span), "target": "#equation-source"}
@@ -705,7 +694,6 @@ def test_unresolved_or_relative_source_links_fail_before_render(
     chapter = accepted_book.chapters[0]
     intro = chapter.source_anchors[0]
     payload = dict(intro.payload)
-    payload["links"] = ({"text": "source note", "target": target},)
     payload["inline_spans"] = tuple(
         (
             {**dict(span), "target": target}

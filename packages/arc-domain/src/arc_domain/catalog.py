@@ -100,21 +100,6 @@ class DomainCatalogUpdate:
         ):
             raise TypeError("catalog update diagnostics are invalid")
 
-    @property
-    def revision(self) -> int:
-        """Compatibility projection for callers that previously got a catalog."""
-
-        return self.catalog.revision
-
-    @property
-    def latest(self) -> str | None:
-        return self.catalog.latest
-
-    @property
-    def active(self) -> str | None:
-        return self.catalog.active
-
-
 @dataclass(frozen=True)
 class DomainPublication:
     """The result of materializing one run's public domain generation."""

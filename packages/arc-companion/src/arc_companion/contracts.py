@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import Any
 
 
-ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v1"
+ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v2"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _BLOCK_KINDS = {
     "heading",
@@ -93,7 +93,6 @@ class SourceAnchor:
             },
             page_number=page_number,
         )
-
 
 @dataclass(frozen=True)
 class PlannedLearningUnit:

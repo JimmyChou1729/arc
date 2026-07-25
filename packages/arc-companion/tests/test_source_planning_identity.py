@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 
+import pytest
 from arc_llm import ModelSelection
 from arc_paper import (
     RichBlockKind,
@@ -13,14 +15,14 @@ from arc_paper import (
     SourceRepository,
 )
 
-import arc_companion.request_contracts_v1 as request_contracts
+import arc_companion.request_contracts as request_contracts
+from arc_companion import __all__ as public_names
 from arc_companion.build import CompanionBuildHandler
-from arc_companion.prompts_v1 import (
+from arc_companion.prompts import (
     CHAPTER_PLAN_SCHEMA,
-    LANGUAGE_SCHEMA,
     chapter_plan_prompt,
 )
-from arc_companion.request_contracts_v1 import (
+from arc_companion.request_contracts import (
     NEUTRAL_TEXTBOOK_INTENT,
     CompanionBuildRequest,
     CompanionExecutionOptions,
@@ -29,10 +31,23 @@ from arc_companion.request_contracts_v1 import (
 )
 from arc_companion.service import companion_run_id
 from arc_companion.source_planning import (
-    deterministic_language_samples,
     plan_source_chapters,
-    same_primary_language,
 )
+
+
+def test_public_build_surface_is_current_only() -> None:
+    assert CompanionBuildHandler.name == "arc.companion.build.v2"
+    assert not any(name.startswith("Legacy") for name in public_names)
+    for module_name in (
+        "arc_companion.build_v2",
+        "arc_companion.generation_validation_v2",
+        "arc_companion.prompts_v1",
+        "arc_companion.prompts_v2",
+        "arc_companion.request_contracts_v1",
+        "arc_companion.request_contracts_v2",
+    ):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
 
 
 def _document(tmp_path: Path, text: str, *, name: str = "source.md"):
@@ -54,45 +69,10 @@ def _prompt_payload(prompt: str) -> dict:
 
 
 def test_companion_provider_enum_nodes_declare_string_types() -> None:
-    assert LANGUAGE_SCHEMA["properties"]["classification"]["type"] == "string"
     planned_unit = CHAPTER_PLAN_SCHEMA["properties"]["learning_units"]["items"]
     assert planned_unit["properties"]["kind"]["type"] == "string"
     evidence = CHAPTER_PLAN_SCHEMA["properties"]["evidence_requests"]["items"]
     assert evidence["properties"]["kind"]["type"] == "string"
-
-
-def test_language_samples_are_stable_beginning_middle_end(
-    tmp_path: Path,
-) -> None:
-    document = _document(
-        tmp_path,
-        "# Heading\n\n"
-        + "a" * 30
-        + "\n\n"
-        + "b" * 30
-        + "\n\n"
-        + "c" * 30,
-    )
-    joined = "\n\n".join(
-        (
-            "Heading",
-            "a" * 30,
-            "b" * 30,
-            "c" * 30,
-        )
-    )
-    expected = (
-        joined[:20],
-        joined[(len(joined) - 20) // 2 : (len(joined) - 20) // 2 + 20],
-        joined[-20:],
-    )
-
-    assert deterministic_language_samples(
-        document, maximum_characters=60
-    ) == expected
-    assert deterministic_language_samples(
-        document, maximum_characters=60
-    ) == expected
 
 
 def test_source_chapters_cover_front_matter_and_mixed_headings_exactly(
@@ -139,7 +119,7 @@ def test_source_chapter_without_heading_uses_document_title(
     )
 
 
-def test_language_and_empty_intent_contracts_enter_prompt_and_identity(
+def test_empty_intent_contract_enters_prompt_and_identity(
     tmp_path: Path,
 ) -> None:
     document = _document(tmp_path, "# Source\n\nBody.\n")
@@ -159,8 +139,6 @@ def test_language_and_empty_intent_contracts_enter_prompt_and_identity(
         intent=request.effective_intent,
     )
 
-    assert same_primary_language("zh", "zh-CN")
-    assert not same_primary_language("und", "zh-CN")
     assert request.effective_intent == NEUTRAL_TEXTBOOK_INTENT
     assert semantic_input["request"]["user_intent"] == NEUTRAL_TEXTBOOK_INTENT
     assert _prompt_payload(prompt)["intent"] == NEUTRAL_TEXTBOOK_INTENT
@@ -204,11 +182,13 @@ def test_provider_model_and_prompt_contract_change_run_identity(
 
     monkeypatch.setattr(
         request_contracts,
-        "CHAPTER_REVIEW_PROMPT_VERSION",
-        "arc.companion.chapter-review-prompt.test-next",
+        "CHAPTER_GUIDE_REVIEW_PROMPT_VERSION",
+        "arc.companion.chapter-guide-review-prompt.test-next",
     )
     next_review = CompanionGenerationRecipe(
-        chapter_review_prompt="arc.companion.chapter-review-prompt.test-next"
+        chapter_guide_review_prompt=(
+            "arc.companion.chapter-guide-review-prompt.test-next"
+        )
     )
     assert companion_run_id(request, next_review) != companion_run_id(
         request, auto

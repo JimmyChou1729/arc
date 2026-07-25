@@ -227,11 +227,10 @@ def _validate_anchor(
     elif anchor.kind == "paragraph":
         _require_payload_fields(
             payload,
-            {"text", "links", "inline_math", "inline_spans"},
+            {"text", "inline_spans"},
             path,
             issues,
         )
-        _validate_links(payload.get("links"), path=f"{path}.payload.links", issues=issues)
         _validate_inline_spans(
             payload,
             path=f"{path}.payload",
@@ -250,12 +249,7 @@ def _validate_anchor(
                         "list items must be objects",
                     )
                     continue
-                _validate_links(
-                    item.get("links"),
-                    path=f"{path}.payload.items[{index}].links",
-                    issues=issues,
-                )
-                if set(item) != {"text", "links", "inline_math", "inline_spans"}:
+                if set(item) != {"text", "inline_spans"}:
                     _issue(
                         issues,
                         "invalid_list_item",
@@ -372,32 +366,6 @@ def _require_payload_fields(
         )
 
 
-def _validate_links(
-    value: object, *, path: str, issues: list[ValidationIssue]
-) -> None:
-    if not isinstance(value, (list, tuple)):
-        _issue(issues, "invalid_links", path, "links must be a list")
-        return
-    for index, link in enumerate(value):
-        item_path = f"{path}[{index}]"
-        if not isinstance(link, Mapping) or set(link) != {"text", "target"}:
-            _issue(
-                issues,
-                "invalid_link",
-                item_path,
-                "links must contain exactly text and target",
-            )
-            continue
-        target = link.get("target")
-        if not isinstance(target, str) or not _safe_link_target(target):
-            _issue(
-                issues,
-                "unsafe_link",
-                f"{item_path}.target",
-                "link target uses an unsupported or unsafe scheme",
-            )
-
-
 def _validate_inline_spans(
     payload: Mapping[str, object],
     *,
@@ -416,8 +384,6 @@ def _validate_inline_spans(
         return
     cursor = 0
     reconstructed: list[str] = []
-    derived_links: list[tuple[str, str]] = []
-    derived_math: list[tuple[str, str]] = []
     for index, raw in enumerate(spans):
         item_path = f"{path}.inline_spans[{index}]"
         if not isinstance(raw, Mapping):
@@ -454,11 +420,24 @@ def _validate_inline_spans(
         reconstructed.append(value)
         cursor = end
         if kind == "link":
-            derived_links.append((value, str(raw.get("target") or "")))
+            target = raw.get("target")
+            if not isinstance(target, str) or not _safe_link_target(target):
+                _issue(
+                    issues,
+                    "unsafe_link",
+                    f"{item_path}.target",
+                    "link target uses an unsupported or unsafe scheme",
+                )
         elif kind == "math":
-            derived_math.append(
-                (str(raw.get("tex") or ""), str(raw.get("source") or ""))
-            )
+            if not isinstance(raw.get("tex"), str) or not isinstance(
+                raw.get("source"), str
+            ):
+                _issue(
+                    issues,
+                    "invalid_inline_span",
+                    item_path,
+                    "math spans require string tex and source fields",
+                )
     if "".join(reconstructed) != text:
         _issue(
             issues,
@@ -466,36 +445,6 @@ def _validate_inline_spans(
             f"{path}.inline_spans",
             "inline spans must reconstruct source text exactly",
         )
-    links = payload.get("links")
-    if isinstance(links, (list, tuple)):
-        expected_links = [
-            (str(item.get("text") or ""), str(item.get("target") or ""))
-            for item in links
-            if isinstance(item, Mapping)
-        ]
-        if derived_links != expected_links:
-            _issue(
-                issues,
-                "inline_link_mismatch",
-                f"{path}.links",
-                "link compatibility field differs from ordered spans",
-            )
-    inline_math = payload.get("inline_math")
-    if isinstance(inline_math, (list, tuple)):
-        expected_math = [
-            (str(item.get("tex") or ""), str(item.get("source") or ""))
-            for item in inline_math
-            if isinstance(item, Mapping)
-        ]
-        if derived_math != expected_math:
-            _issue(
-                issues,
-                "inline_math_mismatch",
-                f"{path}.inline_math",
-                "inline math compatibility field differs from ordered spans",
-            )
-
-
 def _validate_citations(
     citations: Sequence[str],
     *,

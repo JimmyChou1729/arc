@@ -79,8 +79,6 @@ def _book() -> AcceptedBook:
                         section_path=(),
                         payload={
                             "text": "Source",
-                            "links": (),
-                            "inline_math": (),
                             "inline_spans": (
                                 {
                                     "kind": "text",
@@ -114,16 +112,16 @@ def test_cli_exposes_exactly_six_protocol_commands() -> None:
     }
 
 
-def test_legacy_project_is_rejected_without_modification(
+def test_unknown_nonempty_project_is_rejected_without_modification(
     tmp_path: Path, capsys
 ) -> None:
     source = tmp_path / "source.md"
     source.write_text("# Source\n\nText.", encoding="utf-8")
-    project = tmp_path / "legacy"
+    project = tmp_path / "unknown"
     project.mkdir()
-    legacy = project / "state.json"
-    legacy.write_text('{"legacy":true}\n', encoding="utf-8")
-    before = legacy.read_bytes()
+    unknown = project / "state.json"
+    unknown.write_text('{"unknown":true}\n', encoding="utf-8")
+    before = unknown.read_bytes()
 
     assert main(
         ["build", str(source), "--project-dir", str(project), "--json"]
@@ -132,9 +130,9 @@ def test_legacy_project_is_rejected_without_modification(
     result = json.loads(capsys.readouterr().out)
     assert result["schema_version"] == "arc.command_result.v2"
     assert result["status"] == "failed"
-    assert result["error"]["code"] == "legacy_project_state"
-    assert legacy.read_bytes() == before
-    assert tuple(project.iterdir()) == (legacy,)
+    assert result["error"]["code"] == "project_directory_not_empty"
+    assert unknown.read_bytes() == before
+    assert tuple(project.iterdir()) == (unknown,)
 
 
 def test_status_persists_source_diagnostics_and_stop_uses_same_run(
@@ -149,7 +147,7 @@ def test_status_persists_source_diagnostics_and_stop_uses_same_run(
     )
     repository = RunRepository(project.jobs_root)
     class PausingHandler:
-        name = "arc.companion.build.v1"
+        name = "arc.companion.build.v2"
 
         def execute(self, _context):
             return Paused(
@@ -166,7 +164,8 @@ def test_status_persists_source_diagnostics_and_stop_uses_same_run(
     status = json.loads(capsys.readouterr().out)
     assert status["schema_version"] == "arc.command_result.v2"
     assert status["status"] == "paused"
-    assert status["data"]["selected_run"] == status["data"]["run"]
+    assert "run" not in status["data"]
+    assert "release" not in status["data"]
     assert status["data"]["selected_run"]["id"] == run_id
     assert status["data"]["active_release"] is None
     assert status["data"]["release_matches_selected_run"] is False
@@ -219,7 +218,7 @@ def test_status_does_not_attribute_an_old_release_to_the_selected_run(
     repository = RunRepository(project.jobs_root)
 
     class PausingHandler:
-        name = "arc.companion.build.v1"
+        name = "arc.companion.build.v2"
 
         def execute(self, _context):
             return Paused(
@@ -235,9 +234,9 @@ def test_status_does_not_attribute_an_old_release_to_the_selected_run(
     ) == 2
     status = json.loads(capsys.readouterr().out)
     data = status["data"]
-    assert data["selected_run"] == data["run"]
+    assert "run" not in data
     assert data["selected_run"]["id"] == selected_run_id
-    assert data["active_release"] == data["release"]
+    assert "release" not in data
     assert data["active_release"]["run_id"] == "companion-old"
     assert data["release_matches_selected_run"] is False
     assert status["warnings"] == [
@@ -277,7 +276,7 @@ def test_stop_acknowledges_a_running_attempt_before_it_pauses(
     snapshots = []
 
     class BlockingHandler:
-        name = "arc.companion.build.v1"
+        name = "arc.companion.build.v2"
 
         def execute(self, context):
             started.set()

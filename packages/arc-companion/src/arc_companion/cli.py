@@ -36,10 +36,10 @@ from .release import (
     CompanionReleasePublisher,
 )
 from .renderer import CompanionRenderError, CompanionRenderer
-from .request_contracts import CompanionExecutionOptions
-from .request_contracts_v2 import (
-    CompanionBuildRequestV2,
-    CompanionGenerationRecipeV2,
+from .request_contracts import (
+    CompanionBuildRequest,
+    CompanionExecutionOptions,
+    CompanionGenerationRecipe,
 )
 from .service import (
     CompanionService,
@@ -252,7 +252,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
         and not Path(args.pdf).is_file()
     ):
         raise _UsageError("--pdf must be an existing path or 'fetch'")
-    # Legacy refusal happens before source/cache writes.
+    # Unknown project state is refused before source/cache writes.
     paths = CompanionProjectPaths.open(args.project_dir)
     paper = ArcPaperService(cache_root=paths.paper_cache_root)
     rich, validators, warnings = _resolve_source(
@@ -261,13 +261,13 @@ def _build(args: argparse.Namespace) -> CommandResult:
         pdf=args.pdf,
         refresh=args.refresh,
     )
-    request = CompanionBuildRequestV2(
+    request = CompanionBuildRequest(
         source=rich,
         validator_digests=validators,
         target_language=args.target_language,
         user_intent=args.user_intent,
     )
-    recipe = CompanionGenerationRecipeV2(
+    recipe = CompanionGenerationRecipe(
         model=ModelSelection(
             provider=args.provider,
             model=args.model,
@@ -329,11 +329,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
         "selected_run": selected_run,
         "active_release": current,
         "release_matches_selected_run": release_matches_selected_run,
-        # Compatibility aliases for existing protocol consumers.
-        "run": selected_run,
     }
-    if current is not None:
-        data["release"] = current
     return CommandResult(
         base.status,
         run=base.run,

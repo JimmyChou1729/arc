@@ -30,7 +30,7 @@ class DomainPackageValidationError(ValueError):
 
 @dataclass(frozen=True)
 class DomainSummaryView:
-    """Validated fields owned by one v4 or v5 domain-summary artifact."""
+    """Validated fields owned by one current domain-summary artifact."""
 
     schema_version: str
     title: str
@@ -43,7 +43,6 @@ class DomainSummaryView:
     known_solved_cases: tuple[Mapping[str, Any], ...]
     open_axes_for_new_work: tuple[Mapping[str, Any], ...]
     referenced_paper_ids: tuple[str, ...]
-    legacy_domain_id: str | None
     _paper_references: tuple[tuple[str, str], ...] = field(
         repr=False,
     )
@@ -92,7 +91,7 @@ class DomainPackageView:
 
 
 def decode_domain_summary(value: Any) -> DomainSummaryView:
-    """Decode a closed v5 or established legacy-v4 summary artifact."""
+    """Decode the closed current v5 summary artifact."""
 
     document = _mapping(value, path="summary")
     schema_version = _nonempty_string(
@@ -102,16 +101,11 @@ def decode_domain_summary(value: Any) -> DomainSummaryView:
     current_version = DOMAIN_SUMMARY_SCHEMA["properties"]["schema_version"][
         "const"
     ]
-    if schema_version == current_version:
-        schema = DOMAIN_SUMMARY_SCHEMA
-    elif schema_version == "arc.domain_summary.v4":
-        schema = _legacy_v4_summary_schema()
-    else:
+    if schema_version != current_version:
         raise DomainPackageValidationError(
-            "summary.schema_version must be arc.domain_summary.v4 or "
-            f"{current_version}"
+            f"summary.schema_version must be {current_version}"
         )
-    error = _schema_error(document, schema)
+    error = _schema_error(document, DOMAIN_SUMMARY_SCHEMA)
     if error is not None:
         raise DomainPackageValidationError(
             f"summary does not match {schema_version}: {error}"
@@ -127,16 +121,6 @@ def decode_domain_summary(value: Any) -> DomainSummaryView:
             }
         )
     )
-    legacy_domain_id = None
-    if "domain_id" in document:
-        legacy_domain_id = _domain_id(
-            document["domain_id"],
-            path="summary.domain_id",
-        )
-    mathematical_opportunities = document.get("mathematical_opportunities")
-    if mathematical_opportunities is None:
-        mathematical_opportunities = {"well_defined_problems": []}
-
     return DomainSummaryView(
         schema_version=schema_version,
         title=title,
@@ -152,14 +136,13 @@ def decode_domain_summary(value: Any) -> DomainSummaryView:
         ),
         methodology=tuple(deepcopy(document["methodology"])),
         mathematical_opportunities=deepcopy(
-            dict(mathematical_opportunities)
+            dict(document["mathematical_opportunities"])
         ),
         known_solved_cases=tuple(deepcopy(document["known_solved_cases"])),
         open_axes_for_new_work=tuple(
             deepcopy(document["open_axes_for_new_work"])
         ),
         referenced_paper_ids=normalized_references,
-        legacy_domain_id=legacy_domain_id,
         _paper_references=references,
     )
 
@@ -295,14 +278,6 @@ def decode_domain_package(
         expected_domain_id=expected_domain_id,
     )
     decoded_summary = decode_domain_summary(summary)
-    if (
-        decoded_summary.legacy_domain_id is not None
-        and decoded_summary.legacy_domain_id != decoded_pack.domain_id
-    ):
-        raise DomainPackageValidationError(
-            f"summary.domain_id {decoded_summary.legacy_domain_id!r} does not "
-            f"match paper_pack.domain_id {decoded_pack.domain_id!r}"
-        )
     if not decoded_pack.equivalent(
         decoded_summary.foundation_paper_id,
         decoded_pack.foundation_paper_id,
@@ -326,31 +301,6 @@ def decode_domain_package(
         summary=decoded_summary,
         paper_pack=decoded_pack,
     )
-
-
-def _legacy_v4_summary_schema() -> dict[str, Any]:
-    schema = deepcopy(DOMAIN_SUMMARY_SCHEMA)
-    schema.pop("$id", None)
-    schema["properties"]["schema_version"] = {
-        "type": "string",
-        "const": "arc.domain_summary.v4",
-    }
-    schema["required"] = [
-        key
-        for key in schema["required"]
-        if key != "mathematical_opportunities"
-    ]
-    schema["properties"].pop("mathematical_opportunities", None)
-    schema["properties"].update(
-        {
-            "domain_id": {"type": "string", "minLength": 1},
-            "summary_method": {"type": "string", "minLength": 1},
-            "created_at": {"type": "string", "minLength": 1},
-            "relaxed_payload": {"type": "object"},
-            "arc_llm_call_record": {"type": "object"},
-        }
-    )
-    return schema
 
 
 def _summary_paper_references(

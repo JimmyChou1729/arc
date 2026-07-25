@@ -1,4 +1,4 @@
-"""Small project layout and legacy-state refusal for Companion 1.0.1."""
+"""Small project layout and unknown-state refusal for Companion."""
 
 from __future__ import annotations
 
@@ -37,8 +37,8 @@ class CompanionProjectPaths:
             entries = tuple(root.iterdir())
             if entries and not marker.is_file():
                 raise CompanionProjectError(
-                    "legacy_project_state",
-                    "project directory contains legacy or unrelated state; "
+                    "project_directory_not_empty",
+                    "project directory contains unrecognized or unrelated state; "
                     "use a new project directory",
                 )
         root.mkdir(parents=True, exist_ok=True)
@@ -51,14 +51,14 @@ class CompanionProjectPaths:
 
     @classmethod
     def load(cls, value: str | Path) -> "CompanionProjectPaths":
-        """Open an existing v1 project without creating or changing files."""
+        """Open an existing project without creating or changing files."""
 
         root = Path(value)
         marker = root / "companion-project.json"
         if not root.is_dir() or not marker.is_file():
             raise CompanionProjectError(
                 "project_not_found",
-                "Companion 1.0.1 project does not exist",
+                "Companion project does not exist",
             )
         paths = cls(root.resolve())
         paths._read_project()
@@ -180,8 +180,8 @@ class CompanionProjectPaths:
             )
         if value.get("schema_version") != PROJECT_SCHEMA:
             raise CompanionProjectError(
-                "legacy_project_state",
-                "project marker is not a Companion 1.0.1 project",
+                "project_state_invalid",
+                "project marker uses an unsupported schema",
             )
         run_id = value.get("current_run_id")
         if run_id is not None and (not isinstance(run_id, str) or not run_id):

@@ -17,11 +17,11 @@ from arc_paper import (
     SourceRepository,
 )
 
-from arc_companion.build_v2 import (
-    COMPANION_BUILD_HANDLER_V2,
-    CompanionBuildHandlerV2,
+from arc_companion.build import (
+    COMPANION_BUILD_HANDLER,
+    CompanionBuildHandler,
 )
-from arc_companion.prompts_v2 import (
+from arc_companion.prompts import (
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
@@ -196,7 +196,7 @@ def _request_payload(prompt: str) -> tuple[str, dict]:
     return first.removeprefix("Contract: "), json.loads(payload)
 
 
-def test_v2_translation_and_guide_share_post_glossary_group(
+def test_translation_and_guide_share_post_glossary_group(
     tmp_path: Path,
 ) -> None:
     document = _document(tmp_path)
@@ -218,7 +218,7 @@ def test_v2_translation_and_guide_share_post_glossary_group(
     prepared = service.prepare(request, recipe=recipe)
     assert service.repository.read_spec(
         prepared.run_id
-    ).handler == COMPANION_BUILD_HANDLER_V2
+    ).handler == COMPANION_BUILD_HANDLER
     completed = service.execute(
         prepared.run_id,
         execution=CompanionExecutionOptions(workers=2),
@@ -251,7 +251,7 @@ def test_v2_translation_and_guide_share_post_glossary_group(
     assert book.glossary[0].definition == "量子场的定义"
 
 
-def test_v2_same_language_skips_all_translation_owned_steps(
+def test_same_language_skips_all_translation_owned_steps(
     tmp_path: Path,
 ) -> None:
     document = _document(tmp_path)
@@ -275,7 +275,7 @@ def test_v2_same_language_skips_all_translation_owned_steps(
 
 
 @pytest.mark.parametrize("value", [0, 201, True])
-def test_v2_approx_term_count_range(value: int) -> None:
+def test_approx_term_count_range(value: int) -> None:
     with pytest.raises(ValueError, match="approx_term_count"):
         CompanionGenerationRecipe(approx_term_count=value)
 
@@ -284,11 +284,11 @@ def test_guide_identity_does_not_depend_on_translation_output(
     tmp_path: Path,
 ) -> None:
     request = CompanionBuildRequest(_document(tmp_path))
-    first = CompanionBuildHandlerV2(
+    first = CompanionBuildHandler(
         request,
         translation_adapter=FakeTranslationAdapter(mode="enabled"),
     )
-    second = CompanionBuildHandlerV2(
+    second = CompanionBuildHandler(
         request,
         translation_adapter=FakeTranslationAdapter(mode="enabled"),
     )

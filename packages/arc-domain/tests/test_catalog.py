@@ -40,7 +40,7 @@ def _repository(tmp_path: Path) -> RunRepository:
 
 
 class _DomainResultHandler:
-    name = "arc.domain.build.v1"
+    name = "arc.domain.build.v2"
 
     def __init__(self, domain_id: str) -> None:
         self.domain_id = domain_id
@@ -54,7 +54,7 @@ class _DomainResultHandler:
 
 
 class _NoResultHandler:
-    name = "arc.domain.build.v1"
+    name = "arc.domain.build.v2"
 
     def execute(self, context):
         return Succeeded()
@@ -204,7 +204,7 @@ def test_run_id_breaks_creation_time_ties_for_catalog_pointers(
     register_domain_run(repository, paths, domain_id="domain-a", run_id="run-a")
     catalog = register_domain_run(repository, paths, domain_id="domain-a", run_id="run-b")
 
-    assert catalog.latest == "run-b"
+    assert catalog.catalog.latest == "run-b"
 
 
 @pytest.mark.parametrize(
@@ -415,8 +415,8 @@ def test_catalog_repair_diagnostic_is_recomputed_after_a_cas_loss(
         run_id="candidate-run",
     )
 
-    assert update.latest == "rival-run"
-    assert update.revision == 1
+    assert update.catalog.latest == "rival-run"
+    assert update.catalog.revision == 1
     assert update.diagnostics == ()
 
 
@@ -471,7 +471,7 @@ def test_publication_rejects_pending_runs_before_touching_the_catalog(
     repository.create(
         RunSpec(
             run_id="pending-run",
-            handler="arc.domain.build.v1",
+            handler="arc.domain.build.v2",
             semantic_input={"request": "pending-run"},
         )
     )

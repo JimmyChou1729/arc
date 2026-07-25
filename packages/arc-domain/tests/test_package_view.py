@@ -80,11 +80,6 @@ def _summary(*, schema_version: str = "arc.domain_summary.v5") -> dict:
         ],
         "warnings": [],
     }
-    if schema_version == "arc.domain_summary.v4":
-        value.pop("mathematical_opportunities")
-        value["domain_id"] = "domain-a"
-        value["summary_method"] = "llm"
-        value["created_at"] = "2026-07-25T00:00:00+00:00"
     return value
 
 
@@ -141,7 +136,6 @@ def test_domain_package_view_validates_identity_aliases_and_coverage() -> None:
     assert view.summary.title == "Example domain"
     assert view.summary.overview == "A compact introduction."
     assert view.summary.referenced_paper_ids == (FOUNDATION, REFERENCE_DOI)
-    assert view.summary.legacy_domain_id is None
     assert view.paper_pack.foundation_paper_id == FOUNDATION
     assert view.paper_pack.paper_ids == (FOUNDATION, REFERENCE)
     assert view.paper_pack.citation_edges == ((FOUNDATION, REFERENCE),)
@@ -149,22 +143,11 @@ def test_domain_package_view_validates_identity_aliases_and_coverage() -> None:
     assert view.paper_pack.equivalent(REFERENCE, REFERENCE_DOI)
 
 
-def test_legacy_v4_identity_is_optional_but_must_match_the_paper_pack() -> None:
+def test_v4_summary_is_not_accepted() -> None:
     summary = _summary(schema_version="arc.domain_summary.v4")
-
-    view = decode_domain_package(summary, _paper_pack())
-    assert view.summary.legacy_domain_id == "domain-a"
-    assert view.summary.mathematical_opportunities == {
-        "well_defined_problems": []
-    }
-
-    summary.pop("domain_id")
-    assert decode_domain_package(summary, _paper_pack()).domain_id == "domain-a"
-
-    summary["domain_id"] = "other-domain"
     with pytest.raises(
         DomainPackageValidationError,
-        match="does not match paper_pack.domain_id",
+        match="summary.schema_version must be arc.domain_summary.v5",
     ):
         decode_domain_package(summary, _paper_pack())
 

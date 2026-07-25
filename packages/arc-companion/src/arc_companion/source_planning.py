@@ -1,4 +1,4 @@
-"""Deterministic source sampling and exact chapter coverage."""
+"""Deterministic source chapter planning and exact block coverage."""
 
 from __future__ import annotations
 
@@ -85,54 +85,10 @@ def validate_chapter_coverage(
         )
 
 
-def deterministic_language_samples(
-    document: RichDocument,
-    *,
-    maximum_characters: int = 2400,
-) -> tuple[str, ...]:
-    """Return stable beginning/middle/end samples without token estimation."""
-
-    if maximum_characters < 3:
-        raise ValueError("maximum_characters must be at least three")
-    values = [
-        text
-        for text in (_block_text(block) for block in document.blocks)
-        if text.strip()
-    ]
-    if not values:
-        return ("",)
-    joined = "\n\n".join(values)
-    per_sample = maximum_characters // 3
-    if len(joined) <= maximum_characters:
-        return (joined,)
-    middle_start = max(0, (len(joined) - per_sample) // 2)
-    return (
-        joined[:per_sample],
-        joined[middle_start : middle_start + per_sample],
-        joined[-per_sample:],
-    )
-
-
 def block_prompt_document(block: RichBlock) -> dict[str, Any]:
     """Public-codec projection used in all source-anchored prompts."""
 
     return rich_block_to_document(block)
-
-
-def same_primary_language(source_tag: str, target_tag: str) -> bool:
-    """Compare normalized BCP-47 primary subtags only."""
-
-    source = _primary_language(source_tag)
-    target = _primary_language(target_tag)
-    return bool(source and target and source == target)
-
-
-def _primary_language(tag: str) -> str:
-    value = str(tag or "").strip().replace("_", "-").casefold()
-    primary = value.split("-", 1)[0]
-    if not primary or not primary.isalpha() or not 2 <= len(primary) <= 8:
-        return ""
-    return primary
 
 
 def _chapter(
@@ -155,33 +111,9 @@ def _document_title(document: RichDocument) -> str:
     return str(title).strip() if isinstance(title, str) and title.strip() else "Document"
 
 
-def _block_text(block: RichBlock) -> str:
-    payload = block.payload
-    if block.kind in {RichBlockKind.HEADING, RichBlockKind.PARAGRAPH}:
-        return str(payload["text"])
-    if block.kind is RichBlockKind.LIST:
-        return "\n".join(str(item) for item in payload["items"])
-    if block.kind is RichBlockKind.CODE:
-        return str(payload["text"])
-    if block.kind is RichBlockKind.EQUATION:
-        return str(payload["tex"])
-    if block.kind is RichBlockKind.TABLE:
-        rows = [payload["headers"], *payload["rows"]]
-        return "\n".join(" | ".join(map(str, row)) for row in rows)
-    if block.kind is RichBlockKind.FIGURE:
-        return " ".join(
-            str(payload[name])
-            for name in ("alt_text", "caption")
-            if payload[name]
-        )
-    raise ValueError(f"unsupported rich block kind: {block.kind}")
-
-
 __all__ = [
     "SourceChapter",
     "block_prompt_document",
-    "deterministic_language_samples",
     "plan_source_chapters",
-    "same_primary_language",
     "validate_chapter_coverage",
 ]

@@ -6,6 +6,13 @@ graphs, evidence and paper packs, domain summaries, HTML rendering, and
 published domain generations. It calls `arc-paper` for paper data and
 `arc-llm` for model work.
 
+Durable builds accept only the closed `arc.domain_build_policy.v2` and
+`arc.domain_build_request.v2` contracts. The default policy infers the
+foundation from the seed and combines representative and recent citers;
+callers may instead select fixed-seed and strict-window modes explicitly.
+Exported summary packages accept the current `arc.domain_summary.v5`
+contract.
+
 ## Quick start
 
 Build one domain with an explicit research intent:

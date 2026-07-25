@@ -233,7 +233,6 @@ def candidate_audit_prompt(
     intent: str,
     min_citation_count: int = MIN_FOUNDATION_CITATION_COUNT,
     max_citation_count: int = MAX_FOUNDATION_CITATION_COUNT,
-    v2_semantics: bool = False,
 ) -> str:
     """Return the fixed prompt contract for an external candidate audit."""
 
@@ -249,14 +248,13 @@ def candidate_audit_prompt(
             f"Candidate papers:\n{[dict(candidate) for candidate in candidates]}",
             "Return JSON only.",
     ]
-    if v2_semantics:
-        lines.insert(
-            5,
-            "Citation counts are a soft scope prior: papers below "
-            f"{min_citation_count} citations may indicate a too-shallow field, while "
-            f"papers above {max_citation_count} may be broader parent domains. "
-            "Evidence for a canonical same-scope origin may override either signal.",
-        )
+    lines.insert(
+        5,
+        "Citation counts are a soft scope prior: papers below "
+        f"{min_citation_count} citations may indicate a too-shallow field, while "
+        f"papers above {max_citation_count} may be broader parent domains. "
+        "Evidence for a canonical same-scope origin may override either signal.",
+    )
     return "\n\n".join(lines)
 
 
@@ -486,7 +484,6 @@ def foundation_selection_prompt(
     intent: str,
     min_citation_count: int = MIN_FOUNDATION_CITATION_COUNT,
     max_citation_count: int = MAX_FOUNDATION_CITATION_COUNT,
-    v2_semantics: bool = False,
     fixed_seed: bool = False,
 ) -> str:
     """Return the fixed prompt contract for external foundation selection."""
@@ -503,25 +500,24 @@ def foundation_selection_prompt(
             f"Candidate papers:\n{[dict(candidate) for candidate in candidates]}",
             "Return JSON only.",
     ]
-    if v2_semantics:
-        lines.insert(
-            6,
-            f"The {min_citation_count}–{max_citation_count} citation band is a soft scope prior: below it may be "
-            "too shallow and at or above its upper end may be an over-broad parent domain. Do not "
-            "override direct canonical-origin evidence solely because of this prior.",
+    lines.insert(
+        6,
+        f"The {min_citation_count}–{max_citation_count} citation band is a soft scope prior: below it may be "
+        "too shallow and at or above its upper end may be an over-broad parent domain. Do not "
+        "override direct canonical-origin evidence solely because of this prior.",
+    )
+    if fixed_seed:
+        lines[1] = (
+            "Choose best_reference_paper and parent_foundations only from the "
+            "supplied candidates."
         )
-        if fixed_seed:
-            lines[1] = (
-                "Choose best_reference_paper and parent_foundations only from the "
-                "supplied candidates."
-            )
-            lines.insert(
-                2,
-                "Fixed-seed mode is active: selected_foundation must be the separate "
-                "Seed paper, even when it is absent from the bounded candidate set. "
-                "Use the candidate fields for better reading references or earlier "
-                "parents, not to replace the seed.",
-            )
+        lines.insert(
+            2,
+            "Fixed-seed mode is active: selected_foundation must be the separate "
+            "Seed paper, even when it is absent from the bounded candidate set. "
+            "Use the candidate fields for better reading references or earlier "
+            "parents, not to replace the seed.",
+        )
     return "\n\n".join(lines)
 
 
@@ -950,13 +946,3 @@ def _is_paper_sequence(value: Any) -> bool:
 
 def _usable_metadata(value: Any) -> bool:
     return isinstance(value, Mapping) and not value.get("error")
-
-
-# Pure compatibility aliases for callers that have not moved to the public
-# names.  They intentionally do not recreate the former I/O-bearing helpers.
-_candidate_audit_prompt = candidate_audit_prompt
-_default_candidate_audit = default_candidate_audit
-_repair_candidate_audit = normalize_candidate_audit
-_foundation_prompt = foundation_selection_prompt
-_deterministic_selection = deterministic_foundation_selection
-_repair_selection = normalize_foundation_selection

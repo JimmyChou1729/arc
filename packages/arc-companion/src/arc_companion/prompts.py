@@ -1,4 +1,4 @@
-"""Guide-only prompt contracts for Companion's split v2 workflow."""
+"""Guide-only prompt contracts for the current Companion workflow."""
 
 from __future__ import annotations
 

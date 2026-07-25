@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from arc_domain.build import (
+    DOMAIN_BUILD_HANDLER,
     DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION,
     DOMAIN_NETWORK_RENDER_RECIPE,
     DomainBuildHandler,
@@ -362,7 +363,7 @@ def test_worker_count_is_bounded_operational_policy_not_content_identity() -> No
     } == {domain_build_run_id(request)}
 
 
-def test_domain_build_semantic_input_is_closed_and_legacy_resume_is_rejected(
+def test_domain_build_semantic_input_is_closed_and_unwrapped_resume_is_rejected(
     tmp_path: Path,
 ) -> None:
     request = _request()
@@ -378,11 +379,12 @@ def test_domain_build_semantic_input_is_closed_and_legacy_resume_is_rejected(
         "request": encode_domain_build_request(request),
         "network_render_recipe": DOMAIN_NETWORK_RENDER_RECIPE,
     }
+    assert handler.name == DOMAIN_BUILD_HANDLER == "arc.domain.build.v2"
 
     repository = RunRepository(tmp_path / "runs")
     repository.create(
         RunSpec(
-            "legacy-raw-request",
+            "unwrapped-request",
             handler.name,
             encode_domain_build_request(request),
         )
@@ -391,7 +393,7 @@ def test_domain_build_semantic_input_is_closed_and_legacy_resume_is_rejected(
         ValueError,
         match="must contain exactly schema_version",
     ):
-        DomainBuildRunner(repository).resume("legacy-raw-request")
+        DomainBuildRunner(repository).resume("unwrapped-request")
 
 
 @pytest.mark.parametrize("value", [True, False, -1, 0, 25, 1.5, "8", None])
