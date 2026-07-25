@@ -190,13 +190,14 @@ def _build(args: argparse.Namespace) -> CommandResult:
         cache_root=paths.paper_cache_root,
     )
     run_id = companion_run_id(request, recipe)
+    service = CompanionService(paths.jobs_root)
+    prepared = service.prepare(request, recipe=recipe, run_id=run_id)
+    run_id = prepared.run_id
     paths.select_run(run_id)
     paths.write_source_diagnostics(run_id, warnings)
-    snapshot = CompanionService(paths.jobs_root).build(
-        request,
-        recipe=recipe,
+    snapshot = service.execute(
+        run_id,
         execution=execution,
-        run_id=run_id,
     )
     return _snapshot_result(paths, snapshot, warnings=warnings)
 

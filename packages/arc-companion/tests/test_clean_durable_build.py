@@ -426,8 +426,11 @@ def test_durable_build_detects_language_once_and_skips_same_base_translation(
     tasks = FakeCompanionTasks()
     service = CompanionService(RunRepository(tmp_path / "jobs"))
 
-    snapshot = service.build(
-        request,
+    prepared = service.prepare(request)
+    assert prepared.status is RunStatus.PENDING
+    assert not tasks.counts
+    snapshot = service.execute(
+        prepared.run_id,
         execution=CompanionExecutionOptions(workers=2),
         task_service=tasks,
     )

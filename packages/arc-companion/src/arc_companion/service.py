@@ -58,15 +58,51 @@ class CompanionService:
         run_id: str | None = None,
         task_service: LLMTaskService | None = None,
     ) -> RunSnapshot:
+        prepared = self.prepare(request, recipe=recipe, run_id=run_id)
+        return self.execute(
+            prepared.run_id,
+            execution=execution,
+            task_service=task_service,
+        )
+
+    def prepare(
+        self,
+        request: CompanionBuildRequest,
+        *,
+        recipe: CompanionGenerationRecipe = CompanionGenerationRecipe(),
+        run_id: str | None = None,
+    ) -> RunSnapshot:
+        """Durably create one build before an external selector points to it."""
+
+        resolved = run_id or companion_run_id(request, recipe)
+        spec = RunSpec(
+            resolved,
+            COMPANION_BUILD_HANDLER,
+            encode_handler_semantic_input(request, recipe),
+        )
+        return self.repository.create(spec)
+
+    def execute(
+        self,
+        run_id: str,
+        *,
+        execution: CompanionExecutionOptions = CompanionExecutionOptions(),
+        task_service: LLMTaskService | None = None,
+    ) -> RunSnapshot:
+        """Execute or replay one already prepared Companion build."""
+
+        spec = self.repository.read_spec(run_id)
+        if spec.handler != COMPANION_BUILD_HANDLER:
+            raise CompanionServiceError(
+                "run_handler_invalid", "run is not a Companion build"
+            )
+        request, recipe = decode_handler_semantic_input(spec.semantic_input)
         handler = CompanionBuildHandler(
             request,
             recipe,
             execution=execution,
             task_service=task_service,
         )
-        resolved = run_id or companion_run_id(request, recipe)
-        spec = RunSpec(resolved, handler.name, handler.semantic_input())
-        self.repository.create(spec)
         return self.engine.execute(spec, handler)
 
     def resume(

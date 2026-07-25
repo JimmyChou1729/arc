@@ -53,8 +53,19 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
         def __init__(self, _repository) -> None:
             pass
 
-        def build(self, request, **kwargs):
-            calls.append(("build", request))
+        def prepare(self, request, **kwargs):
+            calls.append(("prepare", request))
+            assert kwargs["run_id"] == "companion-fake"
+            assert CompanionProjectPaths.load(project).current_run_id is None
+            return SimpleNamespace(run_id=kwargs["run_id"])
+
+        def execute(self, run_id, **kwargs):
+            calls.append(("execute", run_id))
+            assert run_id == "companion-fake"
+            assert (
+                CompanionProjectPaths.load(project).current_run_id
+                == "companion-fake"
+            )
             assert kwargs["execution"].workers == 3
             return snapshots[0]
 
