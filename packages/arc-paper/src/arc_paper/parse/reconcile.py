@@ -257,14 +257,22 @@ def _reconcile_pdf(
 
     entries: list[ReconciliationEntry] = []
     warnings: list[str] = []
+    raw_pages = [page.text for page in validator.pages]
     page_fingerprints = [_fingerprint(page.text) for page in validator.pages]
     for section in primary.sections:
         title = _fingerprint(section.title)
-        matching_pages = [
+        exact_matching_pages = _pages_for_exact_section_title(raw_pages, section.title)
+        substring_matching_pages = [
             index
             for index, page in enumerate(page_fingerprints, 1)
             if title and title in page
         ]
+        matching_pages = exact_matching_pages or substring_matching_pages
+        method = (
+            "normalized_exact_line"
+            if exact_matching_pages
+            else ("normalized_page_substring" if substring_matching_pages else "none")
+        )
         if len(matching_pages) == 1:
             status = ReconciliationStatus.VERIFIED
             message = "primary section title maps to one PDF page"
@@ -282,6 +290,7 @@ def _reconcile_pdf(
                 message,
                 page_candidates=matching_pages,
                 title=section.title,
+                matching_method=method,
             )
         )
         if status is not ReconciliationStatus.VERIFIED:
@@ -289,7 +298,6 @@ def _reconcile_pdf(
                 f"PDF section evidence {status.value} for {section.section_id}"
             )
 
-    raw_pages = [page.text for page in validator.pages]
     for span in primary.math_spans:
         pages_by_label = _pages_for_printed_label(raw_pages, span.source_label)
         pages_by_math = _pages_for_math(raw_pages, span.normalized_tex)
@@ -323,6 +331,35 @@ def _reconcile_pdf(
         if status is not ReconciliationStatus.VERIFIED:
             warnings.append(f"PDF math evidence {status.value} for {span.span_id}")
     return tuple(entries), tuple(warnings)
+
+
+def _pages_for_exact_section_title(pages: list[str], title: str) -> list[int]:
+    """Return pages containing the title as one normalized text-layer line.
+
+    PDF tables of contents normally retain a page number or leader after a
+    section title.  Treating the whole extracted line as evidence therefore
+    prefers a rendered heading over a TOC mention without requiring layout
+    metadata from the PDF extractor.
+    """
+
+    needle = _section_heading_fingerprint(title)
+    if not needle:
+        return []
+    return [
+        page_number
+        for page_number, page in enumerate(pages, 1)
+        if any(
+            _section_heading_fingerprint(line) == needle
+            for line in page.splitlines()
+        )
+    ]
+
+
+def _section_heading_fingerprint(value: str) -> str:
+    """Normalize a heading line while ignoring an optional numeric section label."""
+
+    normalized = _fingerprint(value)
+    return re.sub(r"^\d+(?: \d+)* (?=\S)", "", normalized)
 
 
 def _pages_for_printed_label(pages: list[str], label: str) -> list[int]:

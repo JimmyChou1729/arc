@@ -834,6 +834,108 @@ def test_pdf_validator_records_deterministic_page_and_printed_number_evidence(
     assert entry.provenance["printed_equation_number"] == "2.1"
 
 
+def test_pdf_section_title_prefers_exact_body_heading_over_toc_reference(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# Introduction\nText.\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf = _store(repository, b"%PDF toc and body", SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            b"%PDF toc and body": PDFTextLayer(
+                (
+                    "Contents\n1. Introduction ........ 3",
+                    "1. Introduction\nText.",
+                )
+            )
+        }
+    )
+
+    outcome = PaperParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+    section_id = outcome.document.sections[0].section_id
+    entry = next(
+        item
+        for item in outcome.report.entries
+        if item.subject_id == f"section:{section_id}"
+    )
+
+    assert entry.status is ReconciliationStatus.VERIFIED
+    assert entry.provenance["page_candidates"] == [2]
+    assert entry.provenance["matching_method"] == "normalized_exact_line"
+
+
+def test_pdf_section_title_exact_duplicate_remains_ambiguous(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# Introduction\nText.\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf = _store(repository, b"%PDF repeated headings", SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            b"%PDF repeated headings": PDFTextLayer(
+                ("Introduction\nFirst body.", "Introduction\nSecond body.")
+            )
+        }
+    )
+
+    outcome = PaperParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+    section_id = outcome.document.sections[0].section_id
+    entry = next(
+        item
+        for item in outcome.report.entries
+        if item.subject_id == f"section:{section_id}"
+    )
+
+    assert entry.status is ReconciliationStatus.AMBIGUOUS
+    assert entry.provenance["page_candidates"] == [1, 2]
+    assert entry.provenance["matching_method"] == "normalized_exact_line"
+
+
+def test_pdf_section_title_falls_back_to_page_substring_or_reports_missing(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# Introduction\nText.\n\n# Results\nMore text.\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf = _store(repository, b"%PDF fallback and missing", SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            b"%PDF fallback and missing": PDFTextLayer(
+                ("The introduction begins within this extracted line.",)
+            )
+        }
+    )
+
+    outcome = PaperParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+    entries = {
+        item.subject_id: item
+        for item in outcome.report.entries
+        if item.subject_id.startswith("section:")
+    }
+    introduction, results = outcome.document.sections
+
+    fallback = entries[f"section:{introduction.section_id}"]
+    assert fallback.status is ReconciliationStatus.VERIFIED
+    assert fallback.provenance["page_candidates"] == [1]
+    assert fallback.provenance["matching_method"] == "normalized_page_substring"
+
+    missing = entries[f"section:{results.section_id}"]
+    assert missing.status is ReconciliationStatus.MISSING
+    assert missing.provenance["page_candidates"] == []
+    assert missing.provenance["matching_method"] == "none"
+
+
 def test_non_pdf_primary_fails_before_text_extraction(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     payload = b"this is not a PDF"
