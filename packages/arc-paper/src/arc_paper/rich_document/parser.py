@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 from .._parsing import ParseError, normalize_tex
 from .._parsing.html_source import (
@@ -53,6 +53,37 @@ class _RawBlock:
     kind: RichBlockKind
     locator: SourceLocator
     payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _HTMLFallback:
+    locator_node: Tag
+    values: tuple[Tag | NavigableString, ...]
+
+
+_HTML_BLOCK_NAMES = {
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "p",
+    "ul",
+    "ol",
+    "pre",
+    "table",
+    "figure",
+    "img",
+}
+_HTML_IGNORED_NAMES = {
+    "head",
+    "nav",
+    "noscript",
+    "script",
+    "style",
+    "template",
+}
 
 
 def parse_rich_artifact_bytes(
@@ -586,13 +617,9 @@ def _markdown_plain_text(value: str) -> str:
     return " ".join(value.split())
 
 
-def _parse_html(
-    text: str,
-    artifact: SourceArtifact,
-    import_asset: AssetImporter,
-) -> list[_RawBlock]:
-    soup = BeautifulSoup(text, "html.parser")
-    roots = rich_html_roots(soup)
+def _html_explicit_candidates(
+    roots: list[Tag | BeautifulSoup],
+) -> list[Tag]:
     candidate_names = [
         "h1",
         "h2",
@@ -616,30 +643,121 @@ def _parse_html(
             for node in root.find_all(candidate_names)
             if isinstance(node, Tag)
         )
-    output: list[_RawBlock] = []
-    block_names = {
-        "p",
-        "ul",
-        "ol",
-        "pre",
-        "table",
-        "figure",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
-    }
     eligible: list[Tag] = []
+    block_containers = _HTML_BLOCK_NAMES - {"img"}
     for node in candidates:
-        parent = node.find_parent(block_names)
+        parent = node.find_parent(block_containers)
         if isinstance(parent, Tag):
             continue
         if node.name == "img" and isinstance(node.find_parent("figure"), Tag):
             continue
         eligible.append(node)
-    for ordinal, node in enumerate(eligible):
+    return eligible
+
+
+def _html_visible_body_events(
+    root: Tag | BeautifulSoup,
+) -> list[Tag | _HTMLFallback]:
+    events: list[Tag | _HTMLFallback] = []
+
+    def visit(container: Tag | BeautifulSoup) -> None:
+        pending: list[Tag | NavigableString] = []
+
+        def flush() -> None:
+            if not _html_values_have_visible_content(pending):
+                pending.clear()
+                return
+            locator_node = next(
+                (value for value in pending if isinstance(value, Tag)),
+                container,
+            )
+            events.append(
+                _HTMLFallback(
+                    locator_node=locator_node,
+                    values=tuple(pending),
+                )
+            )
+            pending.clear()
+
+        for child in container.children:
+            if isinstance(child, Comment):
+                continue
+            if isinstance(child, NavigableString):
+                pending.append(child)
+                continue
+            if not isinstance(child, Tag):
+                continue
+            if child.name in _HTML_IGNORED_NAMES:
+                flush()
+                continue
+            if _html_is_block_node(child):
+                flush()
+                events.append(child)
+                continue
+            if _html_contains_block_node(child):
+                flush()
+                visit(child)
+                continue
+            pending.append(child)
+        flush()
+
+    visit(root)
+    return events
+
+
+def _html_is_block_node(node: Tag) -> bool:
+    if node.name == "math":
+        return str(node.get("display") or "").casefold() == "block"
+    return (node.name or "") in _HTML_BLOCK_NAMES
+
+
+def _html_contains_block_node(node: Tag) -> bool:
+    return any(
+        isinstance(descendant, Tag)
+        and (
+            descendant.name in _HTML_IGNORED_NAMES
+            or _html_is_block_node(descendant)
+        )
+        for descendant in node.descendants
+    )
+
+
+def _html_values_have_visible_content(
+    values: list[Tag | NavigableString],
+) -> bool:
+    for value in values:
+        if isinstance(value, NavigableString):
+            if str(value).strip():
+                return True
+            continue
+        if value.name in {"img", "math"}:
+            if (
+                value.get("src")
+                or value.get("alt")
+                or value.get("alttext")
+                or value.get_text(" ", strip=True)
+            ):
+                return True
+            continue
+        if value.get_text(" ", strip=True):
+            return True
+    return False
+
+
+def _parse_html(
+    text: str,
+    artifact: SourceArtifact,
+    import_asset: AssetImporter,
+) -> list[_RawBlock]:
+    soup = BeautifulSoup(text, "html.parser")
+    roots = rich_html_roots(soup)
+    if any(getattr(root, "name", "") == "article" for root in roots):
+        events: list[Tag | _HTMLFallback] = _html_explicit_candidates(roots)
+    else:
+        events = _html_visible_body_events(roots[0])
+    output: list[_RawBlock] = []
+    for ordinal, event in enumerate(events):
+        node = event.locator_node if isinstance(event, _HTMLFallback) else event
         line_start, column_start, line_end, column_end = (
             rich_html_source_position(node)
         )
@@ -652,6 +770,14 @@ def _parse_html(
             selector=rich_html_selector(node, ordinal),
             source_id=str(node.get("id") or ""),
         )
+        if isinstance(event, _HTMLFallback):
+            _append_html_fallback_blocks(
+                output,
+                locator=locator,
+                values=event.values,
+                import_asset=import_asset,
+            )
+            continue
         if re.fullmatch(r"h[1-6]", node.name or ""):
             output.append(
                 _RawBlock(
@@ -701,25 +827,6 @@ def _parse_html(
                 )
                 else None
             )
-            if isinstance(equation_math, Tag):
-                tex = _html_math_tex(equation_math)
-                if tex:
-                    output.append(
-                        _RawBlock(
-                            RichBlockKind.EQUATION,
-                            locator,
-                            {
-                                "tex": tex,
-                                "display": True,
-                                "label": str(
-                                    node.get("id")
-                                    or equation_math.get("id")
-                                    or ""
-                                ),
-                            },
-                        )
-                    )
-                continue
             caption = node.find("caption")
             rows = node.find_all("tr")
             header_cells = rows[0].find_all(["th", "td"]) if rows else []
@@ -738,6 +845,18 @@ def _parse_html(
                     else ""
                 ),
                 import_asset=import_asset,
+                forced_block_math=(
+                    equation_math if isinstance(equation_math, Tag) else None
+                ),
+                forced_block_math_label=str(
+                    node.get("id")
+                    or (
+                        equation_math.get("id")
+                        if isinstance(equation_math, Tag)
+                        else ""
+                    )
+                    or ""
+                ),
             )
         elif node.name in {"figure", "img"}:
             image = node.find("img") if node.name == "figure" else node
@@ -782,9 +901,45 @@ def _append_html_paragraph_blocks(
     node: Tag,
     import_asset: AssetImporter,
 ) -> None:
-    for segment in _html_inline_segments(node):
+    _append_html_flow_blocks(
+        output,
+        locator=locator,
+        segments=_html_inline_segments(node),
+        import_asset=import_asset,
+    )
+
+
+def _append_html_fallback_blocks(
+    output: list[_RawBlock],
+    *,
+    locator: SourceLocator,
+    values: tuple[Tag | NavigableString, ...],
+    import_asset: AssetImporter,
+) -> None:
+    _append_html_flow_blocks(
+        output,
+        locator=locator,
+        segments=_html_inline_segments_from_values(values),
+        import_asset=import_asset,
+    )
+
+
+def _append_html_flow_blocks(
+    output: list[_RawBlock],
+    *,
+    locator: SourceLocator,
+    segments: list[dict[str, Any] | Tag],
+    import_asset: AssetImporter,
+) -> None:
+    for segment in segments:
         if isinstance(segment, Tag):
-            output.append(_html_image_block(locator, segment, import_asset))
+            embedded = _html_embedded_block(
+                locator,
+                segment,
+                import_asset,
+            )
+            if embedded is not None:
+                output.append(embedded)
         elif segment["text"]:
             output.append(
                 _RawBlock(RichBlockKind.PARAGRAPH, locator, segment)
@@ -817,7 +972,13 @@ def _append_html_list_blocks(
         for segment in _html_inline_segments(item):
             if isinstance(segment, Tag):
                 flush()
-                output.append(_html_image_block(locator, segment, import_asset))
+                embedded = _html_embedded_block(
+                    locator,
+                    segment,
+                    import_asset,
+                )
+                if embedded is not None:
+                    output.append(embedded)
             elif segment["text"]:
                 pending.append(segment)
     flush()
@@ -831,10 +992,13 @@ def _append_html_table_blocks(
     rows: list[list[Tag]],
     caption: str,
     import_asset: AssetImporter,
+    forced_block_math: Tag | None = None,
+    forced_block_math_label: str = "",
 ) -> None:
     shape = [headers, *rows]
     pending = [["" for _ in row] for row in shape]
     emitted_table = False
+    emitted_block_math = False
 
     def flush(*, force: bool = False) -> None:
         nonlocal emitted_table
@@ -858,12 +1022,26 @@ def _append_html_table_blocks(
 
     for row_index, row in enumerate(shape):
         for column, cell in enumerate(row):
-            for segment in _html_inline_segments(cell):
+            for segment in _html_inline_segments(
+                cell,
+                forced_block_math=forced_block_math,
+            ):
                 if isinstance(segment, Tag):
                     flush()
-                    output.append(
-                        _html_image_block(locator, segment, import_asset)
+                    embedded = _html_embedded_block(
+                        locator,
+                        segment,
+                        import_asset,
+                        equation_label=(
+                            forced_block_math_label
+                            if segment is forced_block_math
+                            else ""
+                        ),
                     )
+                    if embedded is not None:
+                        output.append(embedded)
+                        if segment.name == "math":
+                            emitted_block_math = True
                 elif segment["text"]:
                     pending[row_index][column] = " ".join(
                         value
@@ -873,28 +1051,58 @@ def _append_html_table_blocks(
                         )
                         if value
                     )
-    flush(force=not emitted_table)
+    flush(force=not emitted_table and not emitted_block_math)
 
 
-def _html_image_block(
+def _html_embedded_block(
     locator: SourceLocator,
-    image: Tag,
+    node: Tag,
     import_asset: AssetImporter,
-) -> _RawBlock:
-    target = str(image.get("src") or "")
+    *,
+    equation_label: str = "",
+) -> _RawBlock | None:
+    if node.name == "math":
+        tex = _html_math_tex(node)
+        if not tex:
+            return None
+        return _RawBlock(
+            RichBlockKind.EQUATION,
+            locator,
+            {
+                "tex": tex,
+                "display": True,
+                "label": equation_label or str(node.get("id") or ""),
+            },
+        )
+    target = str(node.get("src") or "")
     return _RawBlock(
         RichBlockKind.FIGURE,
         locator,
         _figure_payload(
             import_asset(target),
-            alt_text=str(image.get("alt") or ""),
+            alt_text=str(node.get("alt") or ""),
             caption="",
             target=target,
         ),
     )
 
 
-def _html_inline_segments(node: Tag) -> list[dict[str, Any] | Tag]:
+def _html_inline_segments(
+    node: Tag,
+    *,
+    forced_block_math: Tag | None = None,
+) -> list[dict[str, Any] | Tag]:
+    return _html_inline_segments_from_values(
+        (node,),
+        forced_block_math=forced_block_math,
+    )
+
+
+def _html_inline_segments_from_values(
+    values: tuple[Tag | NavigableString, ...],
+    *,
+    forced_block_math: Tag | None = None,
+) -> list[dict[str, Any] | Tag]:
     segments: list[dict[str, Any] | Tag] = []
     parts: list[dict[str, str]] = []
 
@@ -923,7 +1131,12 @@ def _html_inline_segments(node: Tag) -> list[dict[str, Any] | Tag]:
             segments.append(value)
             return
         if value.name == "math":
-            if str(value.get("display") or "").casefold() == "block":
+            if (
+                value is forced_block_math
+                or str(value.get("display") or "").casefold() == "block"
+            ):
+                flush()
+                segments.append(value)
                 return
             tex = _html_math_tex(value)
             if tex:
@@ -941,7 +1154,8 @@ def _html_inline_segments(node: Tag) -> list[dict[str, Any] | Tag]:
             if isinstance(child, (Tag, NavigableString)):
                 visit(child, link_target=nested_link)
 
-    visit(node)
+    for value in values:
+        visit(value)
     flush()
     return segments
 

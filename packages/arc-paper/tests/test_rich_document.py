@@ -386,6 +386,111 @@ def test_html_locators_use_opening_tags_and_cover_top_level_articles_once(
     )
 
 
+def test_html_without_article_preserves_visible_non_navigation_text_in_order(
+    tmp_path,
+):
+    source = tmp_path / "body.html"
+    source.write_text(
+        "\n".join(
+            [
+                "<html><body>",
+                "  <div class='chrome'><nav>Navigation only.</nav></div>",
+                "  <main>",
+                "    <div id='lead'>Lead <span>context</span>.</div>",
+                "    <p id='middle'>Middle text.</p>",
+                "    <section><div id='tail'>Tail text.</div></section>",
+                "  </main>",
+                "</body></html>",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    repository = SourceRepository(tmp_path / "cache")
+
+    document = RichDocumentParserService(repository).parse_source(
+        repository.import_path(source)
+    )
+
+    assert [block.kind for block in document.blocks] == [
+        RichBlockKind.PARAGRAPH,
+        RichBlockKind.PARAGRAPH,
+        RichBlockKind.PARAGRAPH,
+    ]
+    assert [block.payload["text"] for block in document.blocks] == [
+        "Lead context.",
+        "Middle text.",
+        "Tail text.",
+    ]
+    assert all(
+        "Navigation only." not in block.payload["text"]
+        for block in document.blocks
+    )
+
+
+def test_html_block_math_splits_paragraph_and_table_in_source_order(
+    tmp_path,
+):
+    source = tmp_path / "block-math.html"
+    source.write_text(
+        "\n".join(
+            [
+                "<article>",
+                "  <p id='prose'>Before ",
+                "    <math id='paragraph-equation' display='block' alttext='x = 1'></math>",
+                "    after.</p>",
+                "  <table id='values'>",
+                "    <tr><th>Value</th></tr>",
+                "    <tr><td>Left ",
+                "      <math id='table-equation' display='block' alttext='y = 2'></math>",
+                "      right.</td></tr>",
+                "  </table>",
+                "</article>",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    repository = SourceRepository(tmp_path / "cache")
+
+    document = RichDocumentParserService(repository).parse_source(
+        repository.import_path(source)
+    )
+
+    assert [block.kind for block in document.blocks] == [
+        RichBlockKind.PARAGRAPH,
+        RichBlockKind.EQUATION,
+        RichBlockKind.PARAGRAPH,
+        RichBlockKind.TABLE,
+        RichBlockKind.EQUATION,
+        RichBlockKind.TABLE,
+    ]
+    before, paragraph_equation, after, left, table_equation, right = (
+        document.blocks
+    )
+    assert before.payload["text"] == "Before"
+    assert paragraph_equation.payload == {
+        "tex": "x = 1",
+        "display": True,
+        "label": "paragraph-equation",
+    }
+    assert after.payload["text"] == "after."
+    assert left.payload["headers"] == ("Value",)
+    assert left.payload["rows"] == (("Left",),)
+    assert table_equation.payload == {
+        "tex": "y = 2",
+        "display": True,
+        "label": "table-equation",
+    }
+    assert right.payload["headers"] == ("",)
+    assert right.payload["rows"] == (("right.",),)
+    assert before.locator == paragraph_equation.locator == after.locator
+    assert left.locator == table_equation.locator == right.locator
+    assert [
+        block.payload["tex"]
+        for block in document.blocks
+        if block.kind is RichBlockKind.EQUATION
+    ] == ["x = 1", "y = 2"]
+
+
 @pytest.mark.parametrize("source_format", [SourceFormat.MARKDOWN, SourceFormat.HTML])
 def test_inline_images_are_imported_as_figure_blocks(tmp_path, source_format):
     image = tmp_path / "inline.png"
