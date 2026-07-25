@@ -149,6 +149,8 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
 
 def _build(args: argparse.Namespace) -> CommandResult:
     _validate_workers(args.workers)
+    if not args.target_language.strip():
+        raise _UsageError("--target-language must be non-empty")
     if not args.provider.strip():
         raise _UsageError("--provider must be non-empty")
     if args.model is not None and not args.model.strip():

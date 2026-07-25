@@ -212,3 +212,21 @@ def test_main_model_provider_errors_use_invalid_request_envelope(
     provider = _result(capsys)
     assert provider["status"] == "failed"
     assert provider["error"]["code"] == "invalid_request"
+
+    assert main(
+        [
+            "build",
+            str(source),
+            "--project-dir",
+            str(tmp_path / "language-project"),
+            "--target-language",
+            "   ",
+        ]
+    ) == 1
+    language = _result(capsys)
+    assert language["status"] == "failed"
+    assert language["error"]["code"] == "invalid_request"
+
+    assert not (tmp_path / "model-project").exists()
+    assert not (tmp_path / "provider-project").exists()
+    assert not (tmp_path / "language-project").exists()
