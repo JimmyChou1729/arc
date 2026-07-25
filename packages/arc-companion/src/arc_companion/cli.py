@@ -120,13 +120,15 @@ def main(argv: list[str] | None = None) -> int:
         CompanionRenderError,
         CompanionServiceError,
         RichDocumentValidationError,
-        OSError,
-        ValueError,
     ) as exc:
         result = _failed(
-            str(getattr(exc, "code", "companion_command_failed")),
+            str(exc.code),
             str(exc),
         )
+    except OSError as exc:
+        result = _failed("local_io_error", str(exc))
+    except Exception as exc:
+        result = _failed("internal_error", str(exc))
     sys.stdout.write(command_result_json(result) + "\n")
     return _exit_code(result)
 

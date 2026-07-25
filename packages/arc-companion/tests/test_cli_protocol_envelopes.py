@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from arc_jobs import CommandResult, CommandStatus, RunStatus
 from arc_paper import (
     RichDocumentParserService,
@@ -16,6 +17,7 @@ from arc_paper import (
 import arc_companion.cli as cli_module
 from arc_companion.cli import main
 from arc_companion.project import CompanionProjectPaths
+from arc_companion.service import CompanionServiceError
 
 
 def _document(tmp_path: Path):
@@ -245,3 +247,35 @@ def test_main_model_provider_errors_use_invalid_request_envelope(
     assert not (tmp_path / "model-project").exists()
     assert not (tmp_path / "provider-project").exists()
     assert not (tmp_path / "language-project").exists()
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (
+            CompanionServiceError("accepted_book_invalid", "bad artifact"),
+            "accepted_book_invalid",
+        ),
+        (OSError("disk unavailable"), "local_io_error"),
+        (RuntimeError("unexpected failure"), "internal_error"),
+    ],
+)
+def test_main_classifies_typed_io_and_internal_failures(
+    error: Exception,
+    code: str,
+    capsys,
+    monkeypatch,
+) -> None:
+    def fail(_args):
+        raise error
+
+    monkeypatch.setattr(cli_module, "_dispatch", fail)
+
+    assert main(["status", "--project-dir", "unused"]) == 1
+    result = _result(capsys)
+    assert result["status"] == "failed"
+    assert result["error"] == {
+        "code": code,
+        "message": str(error),
+        "details": {},
+    }
