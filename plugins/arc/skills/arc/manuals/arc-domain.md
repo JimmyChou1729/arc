@@ -182,7 +182,7 @@ provider-unavailable conditions remain paused for external resolution.
 
 The owning domain workflow prints and records summary warnings to project `self-reflect.md` and `context/domain/warnings.md`; the briefing itself must not conceal them.
 
-That workflow writes `arc.workflow.domain_manifest.v2` only after a completed
+That workflow writes `arc.workflow.domain_manifest.v3` only after a completed
 domain export and validates its referenced artifacts before any ideas workflow.
 The project-local paper JSON pack's v1 `domain_id` is the authoritative
 `domain_package_id`; the closed v5 summary deliberately has no identity field.
@@ -193,6 +193,11 @@ matching summary, and uses the records' actual build seeds. Each complete
 summary/Markdown/paper-pack set is decoded through the package-owned typed
 domain view, and only the current closed v5 summary contract is accepted.
 Legacy v4 summaries and missing-record seed fallback are rejected.
+It additionally requires closed `origin_selections` and
+`domain_deduplications` arrays that cover every normalized requested seed and
+successful build exactly once. It publishes a content-addressed
+`arc.workflow.domain_seed_provenance.v1` document before the manifest; manifest
+v3 records its project-relative path and SHA-256 digest.
 For multiple exported packages, its `write-domain-manifest.py` helper uses one
 typed `LLMClient.generate` pair-classification request with a deterministic task
 ID and a project-local `domain/field-grouping-llm` run root. Invalid grouping

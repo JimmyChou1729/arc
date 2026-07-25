@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from arc_jobs import canonical_json_bytes
+from arc_paper import normalize_paper_id
+
+from _arc_workflows.domain_seed_provenance import (
+    SEED_PROVENANCE_SCHEMA_VERSION,
+    SeedProvenanceError,
+    validate_seed_provenance,
+)
 from _arc_workflows.workflow_io import (
     NonObjectJsonError,
     UNBOUNDED_SAFE_ID_RE,
@@ -17,7 +26,7 @@ from _arc_workflows.source_checkout import validate_strict_checkout_path
 
 IDEAS_CONFIG_SCHEMA = "arc.workflow.ideas.config.v1"
 IDEAS_VARIANT_SCHEMA = "arc.workflow.ideas.variant.v1"
-DOMAIN_MANIFEST_SCHEMA = "arc.workflow.domain_manifest.v2"
+DOMAIN_MANIFEST_SCHEMA = "arc.workflow.domain_manifest.v3"
 RESEARCH_SCOPES = {"single_domain", "cross_domain"}
 
 
@@ -59,7 +68,7 @@ class IdeasConfig:
     loops_per_variant: int
     variants: list[VariantConfig]
     domain_manifest_path: Path
-    domain_manifest: dict[str, Any] | None
+    domain_manifest: dict[str, Any]
     research_scope: str
     exploration_profiles: list[dict[str, str]]
     routing_warnings: list[str]
@@ -100,10 +109,12 @@ def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
             "artifact_options.save_prompts must be true; durable ideas "
             "execution always retains materialized prompts"
         )
-    domain_manifest_path, manifest_was_explicit = _configured_manifest_path(data, project_dir=project_dir)
+    domain_manifest_path = _configured_manifest_path(
+        data, project_dir=project_dir
+    )
     domain_manifest, research_scope, routing_warnings = _load_domain_manifest(
         domain_manifest_path,
-        required=manifest_was_explicit,
+        project_dir=project_dir,
     )
     variants = [
         variant
@@ -213,12 +224,16 @@ def _parse_variant(payload: Mapping[str, Any], *, path: Path) -> VariantConfig |
     )
 
 
-def _configured_manifest_path(data: Mapping[str, Any], *, project_dir: Path) -> tuple[Path, bool]:
+def _configured_manifest_path(
+    data: Mapping[str, Any],
+    *,
+    project_dir: Path,
+) -> Path:
     raw = str(data.get("domain_manifest_path", "") or "").strip()
     if not raw:
-        return project_dir / "domain" / "domain-manifest.json", False
+        return project_dir / "domain" / "domain-manifest.json"
     path = Path(raw).expanduser()
-    return (path if path.is_absolute() else project_dir / path), True
+    return path if path.is_absolute() else project_dir / path
 
 
 def _validate_strict_variant_config_dir(path: Path) -> None:
@@ -230,26 +245,19 @@ def _validate_strict_variant_config_dir(path: Path) -> None:
     )
 
 
-def _load_domain_manifest(path: Path, *, required: bool) -> tuple[dict[str, Any] | None, str, list[str]]:
+def _load_domain_manifest(
+    path: Path,
+    *,
+    project_dir: Path,
+) -> tuple[dict[str, Any], str, list[str]]:
     if not path.is_file():
-        if required:
-            raise ConfigError(f"domain_manifest_path does not exist: {path}")
-        return (
-            None,
-            "single_domain",
-            [
-                "domain_manifest_unavailable: Domain manifest was unavailable; "
-                "using the legacy single-domain ideas path."
-            ],
-        )
+        raise ConfigError(f"domain_manifest_path does not exist: {path}")
     try:
         payload = read_json_object(path)
     except (OSError, json.JSONDecodeError) as exc:
         raise ConfigError(f"Could not read domain manifest {path}: {exc}") from exc
     except NonObjectJsonError as exc:
         raise ConfigError(f"domain manifest must be an object: {path}") from exc
-    if payload.get("schema_version") == "arc.workflow.domain_manifest.v1":
-        raise ConfigError(f"{path} uses domain manifest v1; regenerate it to add semantic field grouping")
     if payload.get("schema_version") != DOMAIN_MANIFEST_SCHEMA:
         raise ConfigError(f"{path}.schema_version must be {DOMAIN_MANIFEST_SCHEMA}")
     packages, groups = payload.get("domain_packages"), payload.get("field_groups")
@@ -257,11 +265,40 @@ def _load_domain_manifest(path: Path, *, required: bool) -> tuple[dict[str, Any]
         raise ConfigError(f"{path}.domain_packages must be a non-empty array")
     if not isinstance(groups, list) or not groups:
         raise ConfigError(f"{path}.field_groups must be a non-empty array")
-    package_ids = [str(item.get("domain_package_id", "")).strip() for item in packages if isinstance(item, dict)]
-    if len(package_ids) != len(packages) or "" in package_ids or len(set(package_ids)) != len(package_ids):
-        raise ConfigError(f"{path}.domain_packages requires unique domain_package_id values")
+    package_seeds: dict[str, str] = {}
+    for index, item in enumerate(packages):
+        if not isinstance(item, dict):
+            raise ConfigError(
+                f"{path}.domain_packages[{index}] must be an object"
+            )
+        package_id = str(
+            item.get("domain_package_id", "")
+        ).strip()
+        seed_raw = item.get("seed_paper")
+        if (
+            not package_id
+            or not isinstance(seed_raw, str)
+            or not seed_raw.strip()
+        ):
+            raise ConfigError(
+                f"{path}.domain_packages[{index}] requires "
+                "domain_package_id and seed_paper"
+            )
+        if package_id in package_seeds:
+            raise ConfigError(
+                f"{path}.domain_packages requires unique "
+                "domain_package_id values"
+            )
+        package_seeds[package_id] = normalize_paper_id(seed_raw)
+    package_ids = list(package_seeds)
     if payload.get("package_count") != len(packages):
         raise ConfigError(f"{path}.package_count is inconsistent")
+    _validate_seed_provenance_artifact(
+        path,
+        payload,
+        package_seeds=package_seeds,
+        project_dir=project_dir,
+    )
     field_ids, covered = [], []
     for index, group in enumerate(groups):
         if not isinstance(group, dict): raise ConfigError(f"{path}.field_groups[{index}] must be an object")
@@ -284,11 +321,11 @@ def _load_domain_manifest(path: Path, *, required: bool) -> tuple[dict[str, Any]
     grouping_raw = str(payload.get("grouping_artifact", "")).strip()
     if not grouping_raw:
         raise ConfigError(f"{path}.grouping_artifact is required")
-    grouping_path = Path(grouping_raw).expanduser()
-    if not grouping_path.is_absolute():
-        project_candidate = path.parent.parent / grouping_path
-        manifest_candidate = path.parent / grouping_path
-        grouping_path = project_candidate if project_candidate.is_file() else manifest_candidate
+    grouping_path = _project_artifact_path(
+        project_dir,
+        grouping_raw,
+        field_name=f"{path}.grouping_artifact",
+    )
     if not grouping_path.is_file():
         raise ConfigError(f"{path}.grouping_artifact does not exist: {grouping_path}")
     try:
@@ -306,6 +343,125 @@ def _load_domain_manifest(path: Path, *, required: bool) -> tuple[dict[str, Any]
         raise ConfigError(f"{grouping_path}.field_groups is inconsistent with the domain manifest")
     warnings = payload.get("grouping_warnings", [])
     return payload, expected_scope, [str(item) for item in warnings]
+
+
+def _validate_seed_provenance_artifact(
+    manifest_path: Path,
+    manifest: Mapping[str, Any],
+    *,
+    package_seeds: Mapping[str, str],
+    project_dir: Path,
+) -> None:
+    reference = manifest.get("seed_provenance_artifact")
+    if not isinstance(reference, dict) or set(reference) != {
+        "path",
+        "sha256",
+        "schema_version",
+    }:
+        raise ConfigError(
+            f"{manifest_path}.seed_provenance_artifact must contain "
+            "exactly path, sha256, and schema_version"
+        )
+    if (
+        reference.get("schema_version")
+        != SEED_PROVENANCE_SCHEMA_VERSION
+    ):
+        raise ConfigError(
+            f"{manifest_path}.seed_provenance_artifact."
+            f"schema_version must be {SEED_PROVENANCE_SCHEMA_VERSION}"
+        )
+    relative = str(reference.get("path", "")).strip()
+    expected_digest = str(reference.get("sha256", "")).strip()
+    if not relative:
+        raise ConfigError(
+            f"{manifest_path}.seed_provenance_artifact.path is "
+            "required"
+        )
+    if (
+        len(expected_digest) != 64
+        or any(character not in "0123456789abcdef"
+               for character in expected_digest)
+    ):
+        raise ConfigError(
+            f"{manifest_path}.seed_provenance_artifact.sha256 must "
+            "be a lowercase SHA-256 digest"
+        )
+    provenance_path = _project_artifact_path(
+        project_dir,
+        relative,
+        field_name=(
+            f"{manifest_path}.seed_provenance_artifact.path"
+        ),
+    )
+    if not provenance_path.is_file():
+        raise ConfigError(
+            f"{manifest_path}.seed_provenance_artifact does not "
+            f"exist: {provenance_path}"
+        )
+    try:
+        provenance = read_json_object(provenance_path)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigError(
+            f"Could not read seed provenance {provenance_path}: {exc}"
+        ) from exc
+    except NonObjectJsonError as exc:
+        raise ConfigError(
+            f"seed provenance must be an object: {provenance_path}"
+        ) from exc
+    actual_digest = hashlib.sha256(
+        canonical_json_bytes(provenance)
+    ).hexdigest()
+    if actual_digest != expected_digest:
+        raise ConfigError(
+            f"{provenance_path} does not match manifest SHA-256"
+        )
+    try:
+        validated = validate_seed_provenance(
+            provenance,
+            expected_domain_ids=set(package_seeds),
+        )
+    except SeedProvenanceError as exc:
+        raise ConfigError(
+            f"invalid seed provenance {provenance_path}: {exc}"
+        ) from exc
+    provenance_seeds = {
+        item["domain_id"]: item["build_seed"]
+        for item in validated["build_origins"]
+    }
+    if provenance_seeds != dict(package_seeds):
+        raise ConfigError(
+            f"{manifest_path}.domain_packages seed_paper values "
+            "must match seed provenance build origins"
+        )
+    requested = manifest.get("requested_seed_papers")
+    if requested != [
+        item["requested_seed"]
+        for item in validated["requested_seed_mappings"]
+    ]:
+        raise ConfigError(
+            f"{manifest_path}.requested_seed_papers is inconsistent "
+            "with seed provenance"
+        )
+
+
+def _project_artifact_path(
+    project_dir: Path,
+    relative: str,
+    *,
+    field_name: str,
+) -> Path:
+    candidate = Path(relative).expanduser()
+    if candidate.is_absolute():
+        raise ConfigError(f"{field_name} must be project-relative")
+    project_root = project_dir.expanduser().resolve()
+    resolved = (project_root / candidate).resolve()
+    try:
+        resolved.relative_to(project_root)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{field_name} must stay inside project_dir"
+        ) from exc
+    return resolved
 
 
 def _exploration_profiles(raw: Any) -> list[dict[str, str]]:

@@ -103,6 +103,8 @@ from .text import deterministic_sample, paper_key
 
 
 DOMAIN_BUILD_HANDLER = "arc.domain.build.v1"
+DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION = "arc.domain_build_semantic.v1"
+DOMAIN_NETWORK_RENDER_RECIPE = "arc.domain.network_html.v1"
 
 _FOUNDATION_SELECTION_ARTIFACT = "foundation/selection"
 _FOUNDATION_WARNINGS_ARTIFACT = "foundation/warnings"
@@ -163,7 +165,7 @@ class DomainBuildHandler:
         self.max_workers = max_workers
 
     def semantic_input(self) -> dict[str, JsonValue]:
-        return encode_domain_build_request(self.request)
+        return _encode_domain_build_semantic_input(self.request)
 
     def execute(self, context: RunContext):
         if dict(context.semantic_input) != self.semantic_input():
@@ -1070,7 +1072,7 @@ class DomainBuildRunner:
         max_workers: int = 8,
     ) -> RunSnapshot:
         max_workers = validate_domain_build_workers(max_workers)
-        request = decode_domain_build_request(
+        request = _decode_domain_build_semantic_input(
             self.repository.read_spec(run_id).semantic_input
         )
         handler = DomainBuildHandler(
@@ -1085,9 +1087,58 @@ class DomainBuildRunner:
 
 def domain_build_run_id(request: DomainBuildRequest) -> str:
     digest = hashlib.sha256(
-        canonical_json_bytes(encode_domain_build_request(request))
+        canonical_json_bytes(
+            _encode_domain_build_semantic_input(request)
+        )
     ).hexdigest()
     return f"domain-{digest[:24]}"
+
+
+def _encode_domain_build_semantic_input(
+    request: DomainBuildRequest,
+) -> dict[str, JsonValue]:
+    return {
+        "schema_version": DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION,
+        "request": encode_domain_build_request(request),
+        "network_render_recipe": DOMAIN_NETWORK_RENDER_RECIPE,
+    }
+
+
+def _decode_domain_build_semantic_input(
+    value: Mapping[str, JsonValue],
+) -> DomainBuildRequest:
+    expected_keys = {
+        "schema_version",
+        "request",
+        "network_render_recipe",
+    }
+    if set(value) != expected_keys:
+        raise ValueError(
+            "domain build semantic input must contain exactly "
+            "schema_version, request, and network_render_recipe"
+        )
+    if (
+        value.get("schema_version")
+        != DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            "domain build semantic input schema_version must be "
+            f"{DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION}"
+        )
+    if (
+        value.get("network_render_recipe")
+        != DOMAIN_NETWORK_RENDER_RECIPE
+    ):
+        raise ValueError(
+            "domain build semantic input network_render_recipe "
+            f"must be {DOMAIN_NETWORK_RENDER_RECIPE}"
+        )
+    request = value.get("request")
+    if not isinstance(request, Mapping):
+        raise ValueError(
+            "domain build semantic input request must be an object"
+        )
+    return decode_domain_build_request(request)
 
 
 def _validate_paper_pack_artifact(
@@ -1297,7 +1348,9 @@ def _append_group_warnings(
 
 
 __all__ = [
+    "DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION",
     "DOMAIN_BUILD_HANDLER",
+    "DOMAIN_NETWORK_RENDER_RECIPE",
     "DomainBuildHandler",
     "DomainBuildRunner",
     "domain_build_run_id",

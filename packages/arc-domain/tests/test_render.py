@@ -45,3 +45,47 @@ def test_render_network_html_is_pure_and_orders_domain_before_common_reference()
 
 def test_render_contract_does_not_claim_the_cdn_document_is_self_contained():
     assert "self-contained" not in (render_network_html.__doc__ or "")
+
+
+def test_render_pins_mathjax_and_uses_canonical_paper_links_everywhere():
+    graph = {
+        "foundation_paper": "arXiv:2401.00001",
+        "nodes": [
+            {
+                "id": "arxiv",
+                "paper_id": "2401.00001v2",
+                "title": "ArXiv paper",
+                "role": "selected_foundation",
+            },
+            {
+                "id": "doi",
+                "paper_id": "DOI:10.1000/ABC",
+                "title": "DOI paper",
+                "role": "domain_paper",
+            },
+            {
+                "id": "inspire",
+                "paper_id": "recid:12345",
+                "title": "INSPIRE paper",
+                "role": "common_reference",
+            },
+        ],
+        "edges": [],
+    }
+
+    rendered = render_network_html(graph)
+
+    assert (
+        "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/"
+        "es5/tex-chtml.js"
+    ) in rendered
+    assert "mathjax@3/es5" not in rendered
+    for expected in (
+        "https://arxiv.org/abs/2401.00001",
+        "https://doi.org/10.1000/abc",
+        "https://inspirehep.net/literature/12345",
+    ):
+        assert rendered.count(expected) == 2
+    assert "arxivHref" not in rendered
+    assert 'href="#"' not in rendered
+    assert rendered.count('rel="noopener noreferrer"') == 4

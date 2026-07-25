@@ -214,7 +214,7 @@ Include `automation_level`, `workflow`, `original_request`, `user_intent`,
 `provider`, `model_tier`, `workers`, `refresh`, `recent_window_days`, and
 `as_of_date`. A domain origin-resolution path additionally records
 `origin_candidates`, `origin_selections`, `origin_selection_run_ids`,
-`foundation_mode`, `citer_selection_mode`, and, when required,
+`domain_deduplications`, `foundation_mode`, `citer_selection_mode`, and, when required,
 `source_provenance` plus the requested refactor ancestor.
 
 Default `recent_window_days` to `365` and freeze `as_of_date` to the run's UTC

@@ -27,11 +27,15 @@ from _arc_workflows.domain_manifest_inputs import (
     _relative,
     collect_domain_manifest_inputs,
 )
+from _arc_workflows.domain_seed_provenance import (
+    SEED_PROVENANCE_SCHEMA_VERSION,
+)
 from _arc_workflows.workflow_io import write_json_object
 
 
-SCHEMA_VERSION = "arc.workflow.domain_manifest.v2"
+SCHEMA_VERSION = "arc.workflow.domain_manifest.v3"
 GROUPING_DIRECTORY = "field-groupings"
+SEED_PROVENANCE_DIRECTORY = "seed-provenance"
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,8 @@ class PreparedDomainManifest:
     manifest: dict[str, Any]
     grouping: dict[str, Any]
     grouping_path: Path
+    seed_provenance: dict[str, Any]
+    seed_provenance_path: Path
     project_dir: Path
     protected_input_paths: tuple[Path, ...]
 
@@ -169,6 +175,14 @@ def _prepare_domain_manifest(
         / GROUPING_DIRECTORY
         / f"field-grouping-{grouping_digest}.json"
     )
+    seed_provenance_digest = hashlib.sha256(
+        canonical_json_bytes(inputs.seed_provenance)
+    ).hexdigest()
+    seed_provenance_path = (
+        inputs.domain_dir
+        / SEED_PROVENANCE_DIRECTORY
+        / f"seed-provenance-{seed_provenance_digest[:24]}.json"
+    )
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "user_intent": str(
@@ -182,6 +196,13 @@ def _prepare_domain_manifest(
         "requested_seed_papers": (
             inputs.requested_seed_papers
         ),
+        "seed_provenance_artifact": {
+            "path": _relative(
+                inputs.project_dir, seed_provenance_path
+            ),
+            "sha256": seed_provenance_digest,
+            "schema_version": SEED_PROVENANCE_SCHEMA_VERSION,
+        },
         "package_count": len(domains),
         "domain_packages": domains,
         "field_count": len(field_groups),
@@ -198,6 +219,8 @@ def _prepare_domain_manifest(
         manifest=manifest,
         grouping=grouping_payload,
         grouping_path=grouping_path,
+        seed_provenance=inputs.seed_provenance,
+        seed_provenance_path=seed_provenance_path,
         project_dir=inputs.project_dir,
         protected_input_paths=_protected_input_paths(inputs),
     )
@@ -213,22 +236,46 @@ def _publish_prepared(
         destination=destination,
     )
     grouping_path = prepared.grouping_path
-    if grouping_path.exists():
-        try:
-            existing = _read_object(grouping_path)
-        except ManifestError as exc:
-            raise ManifestError(
-                "immutable field grouping is unreadable: "
-                f"{grouping_path}"
-            ) from exc
-        if existing != prepared.grouping:
-            raise ManifestError(
-                "immutable field grouping conflicts with its "
-                f"content identity: {grouping_path}"
-            )
-    else:
+    seed_provenance_path = prepared.seed_provenance_path
+    provenance_exists = _preflight_immutable_artifact(
+        seed_provenance_path,
+        prepared.seed_provenance,
+        label="seed provenance",
+    )
+    grouping_exists = _preflight_immutable_artifact(
+        grouping_path,
+        prepared.grouping,
+        label="field grouping",
+    )
+    if not provenance_exists:
+        write_json_object(
+            seed_provenance_path, prepared.seed_provenance
+        )
+    if not grouping_exists:
         write_json_object(grouping_path, prepared.grouping)
     write_json_object(destination, prepared.manifest)
+
+
+def _preflight_immutable_artifact(
+    path: Path,
+    expected: dict[str, Any],
+    *,
+    label: str,
+) -> bool:
+    if not path.exists():
+        return False
+    try:
+        existing = _read_object(path)
+    except ManifestError as exc:
+        raise ManifestError(
+            f"immutable {label} is unreadable: {path}"
+        ) from exc
+    if existing != expected:
+        raise ManifestError(
+            f"immutable {label} conflicts with its content "
+            f"identity: {path}"
+        )
+    return True
 
 
 def _protected_input_paths(
@@ -256,11 +303,23 @@ def _validate_publication_paths(
 ) -> None:
     destination = destination.resolve()
     grouping_path = prepared.grouping_path.resolve()
+    seed_provenance_path = (
+        prepared.seed_provenance_path.resolve()
+    )
     project_dir = prepared.project_dir.resolve()
     if destination == grouping_path:
         raise ManifestError(
             "manifest output must not be the immutable grouping "
             f"artifact: {destination}"
+        )
+    if destination == seed_provenance_path:
+        raise ManifestError(
+            "manifest output must not be the immutable seed "
+            f"provenance artifact: {destination}"
+        )
+    if grouping_path == seed_provenance_path:
+        raise ManifestError(
+            "immutable supporting artifact paths must be distinct"
         )
     try:
         destination.relative_to(project_dir)
@@ -273,6 +332,7 @@ def _validate_publication_paths(
     for label, path in (
         ("manifest output", destination),
         ("immutable grouping artifact", grouping_path),
+        ("immutable seed provenance artifact", seed_provenance_path),
     ):
         if path in protected:
             raise ManifestError(
@@ -283,6 +343,7 @@ def _validate_publication_paths(
 
 __all__ = [
     "GROUPING_DIRECTORY",
+    "SEED_PROVENANCE_DIRECTORY",
     "PreparedDomainManifest",
     "SCHEMA_VERSION",
     "build_domain_manifest",

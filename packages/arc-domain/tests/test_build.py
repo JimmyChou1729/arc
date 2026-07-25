@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from arc_domain.build import (
+    DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION,
+    DOMAIN_NETWORK_RENDER_RECIPE,
     DomainBuildHandler,
     DomainBuildRunner,
     domain_build_run_id,
@@ -15,8 +17,15 @@ from arc_domain.contracts import (
     DomainBuildPolicy,
     DomainBuildRequest,
     decode_domain_build_result,
+    encode_domain_build_request,
 )
-from arc_jobs import ImmutableArtifactStore, ResumeReason, RunRepository, RunStatus
+from arc_jobs import (
+    ImmutableArtifactStore,
+    ResumeReason,
+    RunRepository,
+    RunSpec,
+    RunStatus,
+)
 from arc_llm import (
     DeliveryState,
     FailureCategory,
@@ -351,6 +360,38 @@ def test_worker_count_is_bounded_operational_policy_not_content_identity() -> No
         domain_build_run_id(handler.request)
         for handler in (single_worker, maximum_workers)
     } == {domain_build_run_id(request)}
+
+
+def test_domain_build_semantic_input_is_closed_and_legacy_resume_is_rejected(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    handler = DomainBuildHandler(
+        request,
+        paper_access=FakePaperAccess(),
+        task_service=FakeTaskService(),
+        reference_service=NoReferenceInference(),
+    )
+
+    assert handler.semantic_input() == {
+        "schema_version": DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION,
+        "request": encode_domain_build_request(request),
+        "network_render_recipe": DOMAIN_NETWORK_RENDER_RECIPE,
+    }
+
+    repository = RunRepository(tmp_path / "runs")
+    repository.create(
+        RunSpec(
+            "legacy-raw-request",
+            handler.name,
+            encode_domain_build_request(request),
+        )
+    )
+    with pytest.raises(
+        ValueError,
+        match="must contain exactly schema_version",
+    ):
+        DomainBuildRunner(repository).resume("legacy-raw-request")
 
 
 @pytest.mark.parametrize("value", [True, False, -1, 0, 25, 1.5, "8", None])

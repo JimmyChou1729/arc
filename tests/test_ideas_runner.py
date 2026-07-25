@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import shutil
@@ -15,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from arc_jobs import canonical_json_bytes
 from arc_llm import InteractionRequest, InteractionResponse, LLMCompleted
 
 
@@ -26,7 +28,10 @@ RUNNER = SCRIPTS / "run-ideas.py"
 sys.path.insert(0, str(SCRIPTS))
 try:
     from _arc_workflows.evidence import EVIDENCE_OPERATION_NAMES
-    from _arc_workflows.ideas_config import ConfigError as IdeasConfigError
+    from _arc_workflows.ideas_config import (
+        ConfigError as IdeasConfigError,
+        load_ideas_config,
+    )
     from _arc_workflows.ideas_templates import read_json as read_ideas_json
 finally:
     sys.path.remove(str(SCRIPTS))
@@ -69,6 +74,7 @@ def _single_domain_config(tmp_path: Path, *, loops: int = 1) -> dict[str, Any]:
     project = tmp_path / "project"
     (project / "domain").mkdir(parents=True)
     (project / "domain" / "brief.md").write_text("# Brief\n", encoding="utf-8")
+    _write_single_domain_manifest(project)
     return {
         "schema_version": "arc.workflow.ideas.config.v1",
         "run_id": "ideas-test",
@@ -79,6 +85,94 @@ def _single_domain_config(tmp_path: Path, *, loops: int = 1) -> dict[str, Any]:
         "variant_glob": "ideas-domain.variant.json",
         "loops_per_variant": loops,
     }
+
+
+def _write_single_domain_manifest(project: Path) -> None:
+    domain = project / "domain"
+    seed = "arXiv:2401.00001"
+    package_id = "single"
+    provenance = {
+        "schema_version": "arc.workflow.domain_seed_provenance.v1",
+        "requested_seed_mappings": [
+            {
+                "requested_seed": seed,
+                "build_seed": seed,
+                "domain_id": package_id,
+                "resolution": "explicit_seed",
+            }
+        ],
+        "build_origins": [
+            {
+                "domain_id": package_id,
+                "build_seed": seed,
+                "origin_selection": {
+                    "mode": "explicit_seed",
+                    "requested_seed": seed,
+                },
+            }
+        ],
+        "deduplications": [],
+    }
+    (domain / "seed-provenance.json").write_text(
+        json.dumps(provenance), encoding="utf-8"
+    )
+    field_card = {
+        "seed_papers": [seed],
+        "summary_json_paths": ["domain/single.json"],
+        "summary_markdown_paths": ["domain/brief.md"],
+        "paper_json_pack_paths": ["domain/single-papers.json"],
+        "task_focus": {},
+        "methodology": [],
+    }
+    groups = [
+        {
+            "field_id": "field-single",
+            "domain_package_ids": [package_id],
+            "field_card": field_card,
+        }
+    ]
+    (domain / "field-grouping.json").write_text(
+        json.dumps(
+            {
+                "schema_version": (
+                    "arc.workflow.domain_field_grouping.v1"
+                ),
+                "field_groups": groups,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (domain / "domain-manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "arc.workflow.domain_manifest.v3",
+                "research_scope": "single_domain",
+                "requested_seed_papers": [seed],
+                "seed_provenance_artifact": {
+                    "path": "domain/seed-provenance.json",
+                    "sha256": hashlib.sha256(
+                        canonical_json_bytes(provenance)
+                    ).hexdigest(),
+                    "schema_version": (
+                        "arc.workflow.domain_seed_provenance.v1"
+                    ),
+                },
+                "package_count": 1,
+                "field_count": 1,
+                "grouping_artifact": "domain/field-grouping.json",
+                "domain_packages": [
+                    {
+                        "domain_package_id": package_id,
+                        "seed_paper": seed,
+                        "summary_json_path": "domain/single.json",
+                    }
+                ],
+                "field_groups": groups,
+                "grouping_warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 class _ThreeRoundLLM:
@@ -367,13 +461,11 @@ def test_no_info_disables_evidence_and_cross_domain_keeps_structured_context(tmp
     no_info = json.loads((workflow / "ideas-no-info.variant.json").read_text(encoding="utf-8"))
     no_info["enabled"] = True
     (workflow / "ideas-no-info.variant.json").write_text(json.dumps(no_info), encoding="utf-8")
-    project = tmp_path / "no-info-project"
+    single_config = _single_domain_config(tmp_path)
     no_info_result = runner.run_ideas(
         {
-            **_single_domain_config(tmp_path),
+            **single_config,
             "run_id": "no-info",
-            "project_dir": str(project),
-            "run_dir": str(project / "ideas"),
             "variant_config_dir": str(workflow),
             "variant_glob": "ideas-no-info.variant.json",
         },
@@ -408,6 +500,155 @@ def test_no_info_disables_evidence_and_cross_domain_keeps_structured_context(tmp
         EVIDENCE_OPERATION_NAMES
     )
     assert "review_payload" not in cross_loop["reviewer"]["output_schema"]["properties"]
+
+
+def test_ideas_requires_current_manifest_and_bound_seed_provenance(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "cross-project"
+    _write_cross_domain_manifest(project)
+    config = {
+        "schema_version": "arc.workflow.ideas.config.v1",
+        "run_id": "current-provenance",
+        "run_dir": str(project / "ideas"),
+        "project_dir": str(project),
+        "user_intent": "Transfer a useful method.",
+        "variant_config_dir": str(WORKFLOW_JSON),
+        "variant_glob": "ideas-cross-domain.variant.json",
+        "loops_per_variant": 1,
+        "exploration_profiles": [
+            {
+                "profile_id": "forward",
+                "mission": "Transfer A to B.",
+            }
+        ],
+    }
+
+    loaded = load_ideas_config(config)
+    assert loaded.domain_manifest is not None
+    custom_manifest = (
+        project / "handoffs/nested/current-domain.json"
+    )
+    custom_manifest.parent.mkdir(parents=True)
+    custom_manifest.write_bytes(
+        (project / "domain/domain-manifest.json").read_bytes()
+    )
+    custom_loaded = load_ideas_config(
+        {
+            **config,
+            "domain_manifest_path": str(custom_manifest),
+        }
+    )
+    assert custom_loaded.domain_manifest_path == custom_manifest
+    escaped_manifest = json.loads(
+        custom_manifest.read_text(encoding="utf-8")
+    )
+    escaped_manifest["seed_provenance_artifact"]["path"] = (
+        "../../outside-provenance.json"
+    )
+    custom_manifest.write_text(
+        json.dumps(escaped_manifest), encoding="utf-8"
+    )
+    with pytest.raises(
+        IdeasConfigError,
+        match="must stay inside project_dir",
+    ):
+        load_ideas_config(
+            {
+                **config,
+                "domain_manifest_path": str(custom_manifest),
+            }
+        )
+
+    provenance_path = project / "domain/seed-provenance.json"
+    manifest_path = project / "domain/domain-manifest.json"
+    original_provenance = provenance_path.read_bytes()
+    original_manifest = manifest_path.read_bytes()
+    provenance = json.loads(
+        provenance_path.read_text(encoding="utf-8")
+    )
+    provenance["deduplications"].append(
+        {
+            "requested_seed": "changed",
+            "kept_build_seed": "a",
+            "domain_id": "a",
+        }
+    )
+    provenance_path.write_text(
+        json.dumps(provenance), encoding="utf-8"
+    )
+    with pytest.raises(
+        IdeasConfigError,
+        match="does not match manifest SHA-256",
+    ):
+        load_ideas_config(config)
+
+    provenance_path.write_bytes(original_provenance)
+    manifest_path.write_bytes(original_manifest)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = "arc.workflow.domain_manifest.v2"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(
+        IdeasConfigError,
+        match=(
+            "schema_version must be "
+            "arc.workflow.domain_manifest.v3"
+        ),
+    ):
+        load_ideas_config(config)
+
+
+def test_ideas_requires_manifest_for_default_single_domain_path(
+    tmp_path: Path,
+) -> None:
+    config = _single_domain_config(tmp_path)
+    missing_project = tmp_path / "missing-project"
+
+    with pytest.raises(
+        IdeasConfigError,
+        match="domain_manifest_path does not exist",
+    ):
+        load_ideas_config(
+            {
+                **config,
+                "project_dir": str(missing_project),
+                "run_dir": str(missing_project / "ideas"),
+            }
+        )
+
+
+def test_ideas_binds_package_seed_to_provenance_build_origin(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "cross-project"
+    _write_cross_domain_manifest(project)
+    manifest_path = project / "domain/domain-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["domain_packages"][0]["seed_paper"] = "arXiv:2401.00001"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(
+        IdeasConfigError,
+        match="must match seed provenance build origins",
+    ):
+        load_ideas_config(
+            {
+                "schema_version": "arc.workflow.ideas.config.v1",
+                "run_id": "seed-mismatch",
+                "run_dir": str(project / "ideas"),
+                "project_dir": str(project),
+                "user_intent": "Transfer a useful method.",
+                "variant_config_dir": str(WORKFLOW_JSON),
+                "variant_glob": "ideas-cross-domain.variant.json",
+                "loops_per_variant": 1,
+                "exploration_profiles": [
+                    {
+                        "profile_id": "forward",
+                        "mission": "Transfer A to B.",
+                    }
+                ],
+            }
+        )
 
 
 def test_cross_domain_cards_accept_v5_summaries_without_domain_id(
@@ -756,17 +997,65 @@ def _write_cross_domain_manifest(project: Path) -> None:
         json.dumps({"schema_version": "arc.workflow.domain_field_grouping.v1", "field_groups": groups}),
         encoding="utf-8",
     )
+    provenance = {
+        "schema_version": "arc.workflow.domain_seed_provenance.v1",
+        "requested_seed_mappings": [
+            {
+                "requested_seed": domain_id,
+                "build_seed": domain_id,
+                "domain_id": domain_id,
+                "resolution": "explicit_seed",
+            }
+            for domain_id in ("a", "b")
+        ],
+        "build_origins": [
+            {
+                "domain_id": domain_id,
+                "build_seed": domain_id,
+                "origin_selection": {
+                    "mode": "explicit_seed",
+                    "requested_seed": domain_id,
+                },
+            }
+            for domain_id in ("a", "b")
+        ],
+        "deduplications": [],
+    }
+    provenance_path = domain / "seed-provenance.json"
+    provenance_path.write_text(
+        json.dumps(provenance),
+        encoding="utf-8",
+    )
+    provenance_digest = hashlib.sha256(
+        canonical_json_bytes(provenance)
+    ).hexdigest()
     (domain / "domain-manifest.json").write_text(
         json.dumps(
             {
-                "schema_version": "arc.workflow.domain_manifest.v2",
+                "schema_version": "arc.workflow.domain_manifest.v3",
                 "research_scope": "cross_domain",
+                "requested_seed_papers": ["a", "b"],
+                "seed_provenance_artifact": {
+                    "path": "domain/seed-provenance.json",
+                    "sha256": provenance_digest,
+                    "schema_version": (
+                        "arc.workflow.domain_seed_provenance.v1"
+                    ),
+                },
                 "package_count": 2,
                 "field_count": 2,
-                "grouping_artifact": "field-grouping.json",
+                "grouping_artifact": "domain/field-grouping.json",
                 "domain_packages": [
-                    {"domain_package_id": "a", "summary_json_path": "domain/a.json"},
-                    {"domain_package_id": "b", "summary_json_path": "domain/b.json"},
+                    {
+                        "domain_package_id": "a",
+                        "seed_paper": "a",
+                        "summary_json_path": "domain/a.json",
+                    },
+                    {
+                        "domain_package_id": "b",
+                        "seed_paper": "b",
+                        "summary_json_path": "domain/b.json",
+                    },
                 ],
                 "field_groups": groups,
             }

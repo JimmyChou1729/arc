@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from textwrap import shorten
 from typing import Any
 
+from arc_paper import paper_landing_url
+
 from ._roles import role_order
 
 
@@ -56,7 +58,7 @@ window.MathJax = {{
   }}
 }};
 </script>
-<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"></script>
 <style>
 * {{ box-sizing:border-box; }}
 body {{ margin:0; font-family: Arial, sans-serif; color:#1f2933; background:#eef2f6; }}
@@ -267,7 +269,7 @@ a {{ color:#2563eb; }}
       <p>${{escapeHtml((node.abstract || '').slice(0, 1000))}}</p>
       <div class="muted">Year: ${{node.year || ''}} | Citations: ${{node.citation_count || 0}}${{scoreText(node)}}</div>
       ${{domainScoreDetails(node)}}
-      <div style="margin-top:8px;"><a href="${{arxivHref(node)}}" target="_blank">Open paper</a></div>`;
+      ${{paperLink(node)}}`;
     typesetMath(details);
   }}
 
@@ -293,10 +295,9 @@ a {{ color:#2563eb; }}
     return authors.slice(0, 6).join(', ') + ', et al.';
   }}
 
-  function arxivHref(node) {{
-    const id = String(node.paper_id || node.id || '');
-    if (id.startsWith('arXiv:')) return 'https://arxiv.org/abs/' + encodeURIComponent(id.slice(6));
-    return '#';
+  function paperLink(node) {{
+    if (!node.landing_url) return '';
+    return `<div style="margin-top:8px;"><a href="${{escapeHtml(node.landing_url)}}" target="_blank" rel="noopener noreferrer">Open paper</a></div>`;
   }}
 
   function escapeHtml(s) {{
@@ -313,11 +314,21 @@ def _ranked_row(node: dict[str, Any]) -> str:
     role = str(node.get("role") or "")
     color = ROLE_COLORS.get(role, "#7b8794")
     score = node.get("domain_score") if role == "domain_paper" else ""
+    paper_id = str(node.get("paper_id") or "")
+    landing_url = paper_landing_url(paper_id)
+    title = html.escape(
+        str(node.get("title") or paper_id)
+    )
+    if landing_url is not None:
+        title = (
+            f'<a href="{html.escape(landing_url, quote=True)}" '
+            f'target="_blank" rel="noopener noreferrer">{title}</a>'
+        )
     return (
         f'<tr data-id="{html.escape(str(node.get("id") or ""), quote=True)}">'
         f'<td><span class="chip" style="background:{color};">{html.escape(_role_label(role, compact=True))}</span></td>'
-        f"<td><div class=\"title\">{html.escape(str(node.get('title') or node.get('paper_id') or ''))}</div>"
-        f"<div class=\"muted\">{html.escape(str(node.get('paper_id') or ''))}</div></td>"
+        f'<td><div class="title">{title}</div>'
+        f'<div class="muted">{html.escape(paper_id)}</div></td>'
         f"<td>{html.escape(str(score or ''))}</td>"
         "</tr>"
     )
@@ -344,6 +355,7 @@ def _vis_node(node: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(node.get("id") or paper_id),
         "paper_id": paper_id,
+        "landing_url": paper_landing_url(paper_id),
         "label": shorten(title, width=48, placeholder="..."),
         "raw_title": title,
         "role": role,

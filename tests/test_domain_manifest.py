@@ -57,12 +57,38 @@ def _write_domain(
     context_path = project / "context.json"
     context = json.loads(context_path.read_text(encoding="utf-8"))
     records = context.setdefault("domain_records", [])
-    if not any(
-        isinstance(item, dict) and item.get("domain_id") == domain_id
+    matching_record = next((
+        item
         for item in records
+        if
+        isinstance(item, dict) and item.get("domain_id") == domain_id
+    ), None)
+    if matching_record is None:
+        matching_record = {
+            "domain_id": domain_id,
+            "seed_paper": seed,
+        }
+        records.append(matching_record)
+    build_seed = str(matching_record["seed_paper"])
+    requested = context.setdefault("seed_paper_list", [])
+    if build_seed not in requested:
+        requested.append(build_seed)
+    origins = context.setdefault("origin_selections", [])
+    if not any(
+        isinstance(item, dict)
+        and item.get("domain_id") == domain_id
+        for item in origins
     ):
-        records.append({"domain_id": domain_id, "seed_paper": seed})
-        context_path.write_text(json.dumps(context), encoding="utf-8")
+        origins.append(
+            {
+                "mode": "explicit_seed",
+                "domain_id": domain_id,
+                "build_seed": build_seed,
+                "requested_seed": build_seed,
+            }
+        )
+    context.setdefault("domain_deduplications", [])
+    context_path.write_text(json.dumps(context), encoding="utf-8")
     summary = {
         "schema_version": schema_version,
         "domain_title": f"Domain {domain_id}",
@@ -266,7 +292,7 @@ def test_manifest_uses_distinct_domain_ids_and_relative_paths(tmp_path: Path) ->
 
     payload = publish.build_domain_manifest(project)
 
-    assert payload["schema_version"] == "arc.workflow.domain_manifest.v2"
+    assert payload["schema_version"] == "arc.workflow.domain_manifest.v3"
     assert payload["package_count"] == 2
     assert payload["field_count"] == 1
     assert payload["research_scope"] == "single_domain"
@@ -295,6 +321,186 @@ def test_manifest_preserves_requested_seed_order(tmp_path: Path) -> None:
     payload = publish.build_domain_manifest(project)
 
     assert [item["seed_paper"] for item in payload["domain_packages"]] == ["seed:z", "seed:a"]
+
+
+def test_manifest_publishes_normalized_closed_seed_provenance(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    direct_seed = "https://arxiv.org/abs/2401.00001v2"
+    selected_seed = "arXiv:2402.00001v3"
+    displaced_seed = "DOI:10.1000/ABC"
+    (project / "context.json").write_text(
+        json.dumps(
+            {
+                "seed_paper_list": [
+                    direct_seed,
+                    selected_seed,
+                    displaced_seed,
+                ],
+                "user_intent": "trace every seed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", direct_seed)
+    _write_domain(project, "b", "domain-b", selected_seed)
+    context_path = project / "context.json"
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    selection = {
+        "schema_version": "arc.domain_origin_selection.v1",
+        "selected_paper_id": selected_seed,
+        "selected_paper_title": "Selected origin",
+        "confidence": 0.9,
+        "reasoning": "The candidate evidence identifies the origin.",
+        "candidate_assessments": [
+            {
+                "paper_id": paper_id,
+                "title": f"Candidate {index}",
+                "role": (
+                    "canonical_origin"
+                    if index == 1
+                    else "precursor"
+                ),
+                "citation_prior": "unknown",
+                "assessment": "Evidence-backed assessment.",
+            }
+            for index, paper_id in enumerate(
+                [
+                    selected_seed,
+                    "arXiv:2402.00002",
+                    "inspire:12345",
+                ],
+                start=1,
+            )
+        ],
+        "warnings": [],
+    }
+    context["origin_selections"][1] = {
+        "mode": "origin_selected",
+        "domain_id": "domain-b",
+        "build_seed": selected_seed,
+        "requested_seed": selected_seed,
+        "field_id": "field-b",
+        "selection_run_id": "origin-b",
+        "selection": selection,
+    }
+    context["domain_deduplications"] = [
+        {
+            "requested_seed": displaced_seed,
+            "kept_build_seed": direct_seed,
+            "domain_id": "domain-a",
+        }
+    ]
+    context_path.write_text(json.dumps(context), encoding="utf-8")
+
+    destination = publish.write_domain_manifest(project)
+    manifest = json.loads(destination.read_text(encoding="utf-8"))
+    reference = manifest["seed_provenance_artifact"]
+    provenance_path = project / reference["path"]
+    provenance = json.loads(
+        provenance_path.read_text(encoding="utf-8")
+    )
+
+    assert reference["schema_version"] == (
+        "arc.workflow.domain_seed_provenance.v1"
+    )
+    assert reference["sha256"] == hashlib.sha256(
+        json.dumps(
+            provenance,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    assert provenance["requested_seed_mappings"] == [
+        {
+            "requested_seed": "arXiv:2401.00001",
+            "build_seed": "arXiv:2401.00001",
+            "domain_id": "domain-a",
+            "resolution": "explicit_seed",
+        },
+        {
+            "requested_seed": "arXiv:2402.00001",
+            "build_seed": "arXiv:2402.00001",
+            "domain_id": "domain-b",
+            "resolution": "origin_selected",
+        },
+        {
+            "requested_seed": "doi:10.1000/abc",
+            "build_seed": "arXiv:2401.00001",
+            "domain_id": "domain-a",
+            "resolution": "deduplicated",
+        },
+    ]
+    assert {
+        item["domain_id"] for item in provenance["build_origins"]
+    } == {"domain-a", "domain-b"}
+
+
+def test_manifest_requires_exact_origin_and_requested_seed_coverage(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text("{}", encoding="utf-8")
+    _write_domain(
+        project,
+        "a",
+        "domain-a",
+        "arXiv:2401.00001",
+    )
+    context_path = project / "context.json"
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    context["origin_selections"] = []
+    context_path.write_text(json.dumps(context), encoding="utf-8")
+
+    with pytest.raises(
+        inputs.ManifestError,
+        match="origin_selections must be a non-empty array",
+    ):
+        publish.build_domain_manifest(project)
+
+    context["origin_selections"] = [
+        {
+            "mode": "explicit_seed",
+            "domain_id": "domain-a",
+            "build_seed": "arXiv:2401.00001",
+            "requested_seed": "arXiv:2401.00001",
+        }
+    ]
+    context["seed_paper_list"].append("doi:10.1000/unmapped")
+    context_path.write_text(json.dumps(context), encoding="utf-8")
+    with pytest.raises(
+        inputs.ManifestError,
+        match="requested seeds must be covered exactly once",
+    ):
+        publish.build_domain_manifest(project)
+
+
+def test_manifest_rejects_nonclosed_seed_provenance_inputs(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text("{}", encoding="utf-8")
+    _write_domain(
+        project,
+        "a",
+        "domain-a",
+        "arXiv:2401.00001",
+    )
+    context_path = project / "context.json"
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    context["origin_selections"][0]["legacy"] = True
+    context_path.write_text(json.dumps(context), encoding="utf-8")
+
+    with pytest.raises(
+        inputs.ManifestError,
+        match="must contain exactly",
+    ):
+        publish.build_domain_manifest(project)
 
 
 def test_manifest_rejects_legacy_v4_summary(tmp_path: Path) -> None:
@@ -749,6 +955,10 @@ def test_write_manifest_holds_lease_and_publishes_manifest_last(
     destination = publish.write_domain_manifest(project)
     manifest = json.loads(destination.read_text(encoding="utf-8"))
     grouping_path = project / manifest["grouping_artifact"]
+    provenance_path = (
+        project
+        / manifest["seed_provenance_artifact"]["path"]
+    )
 
     assert events == [
         (
@@ -756,6 +966,7 @@ def test_write_manifest_holds_lease_and_publishes_manifest_last(
             project / "domain" / ".domain-manifest.lock",
         ),
         ("lease-acquired", True),
+        ("write", provenance_path),
         ("write", grouping_path),
         ("write", destination),
         ("lease-released", None),
@@ -868,6 +1079,29 @@ def test_write_manifest_refuses_output_outside_project(
     assert not grouping_path.exists()
 
 
+def test_custom_manifest_output_keeps_project_relative_provenance(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text("{}", encoding="utf-8")
+    _write_domain(project, "a", "domain-a", "arXiv:2401.00001")
+    output = project / "handoffs/nested/current-domain.json"
+
+    destination = publish.write_domain_manifest(
+        project,
+        output=output,
+    )
+    manifest = json.loads(destination.read_text(encoding="utf-8"))
+    reference = manifest["seed_provenance_artifact"]
+
+    assert destination == output
+    assert reference["path"].startswith(
+        "domain/seed-provenance/"
+    )
+    assert (project / reference["path"]).is_file()
+
+
 def test_write_manifest_stops_for_incomplete_typed_llm_outcomes(
     tmp_path: Path,
 ) -> None:
@@ -956,6 +1190,7 @@ def test_write_manifest_runner_exception_publishes_nothing(
 
 def test_immutable_grouping_conflict_preserves_existing_manifest(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -966,10 +1201,23 @@ def test_immutable_grouping_conflict_preserves_existing_manifest(
     _write_domain(project, "a", "domain-a", "seed:a")
     preview = publish.build_domain_manifest(project)
     grouping_path = project / preview["grouping_artifact"]
+    provenance_path = (
+        project / preview["seed_provenance_artifact"]["path"]
+    )
     grouping_path.parent.mkdir(parents=True)
     grouping_path.write_text('{"conflict":true}\n', encoding="utf-8")
     manifest_path = project / "domain/domain-manifest.json"
     manifest_path.write_bytes(b'{"old":"manifest"}\n')
+    writes: list[Path] = []
+    real_writer = publish.write_json_object
+
+    def recording_writer(path, payload, **kwargs):
+        writes.append(Path(path))
+        return real_writer(path, payload, **kwargs)
+
+    monkeypatch.setattr(
+        publish, "write_json_object", recording_writer
+    )
 
     with pytest.raises(
         inputs.ManifestError,
@@ -981,6 +1229,8 @@ def test_immutable_grouping_conflict_preserves_existing_manifest(
     assert grouping_path.read_text(encoding="utf-8") == (
         '{"conflict":true}\n'
     )
+    assert not provenance_path.exists()
+    assert writes == []
 
 
 def test_manifest_publication_failure_preserves_existing_manifest(

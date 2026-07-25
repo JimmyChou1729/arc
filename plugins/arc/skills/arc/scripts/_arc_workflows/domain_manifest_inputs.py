@@ -13,7 +13,12 @@ from arc_domain import (
     decode_domain_package,
 )
 from arc_domain.summary import DOMAIN_SUMMARY_SCHEMA
+from arc_paper import normalize_paper_id
 
+from _arc_workflows.domain_seed_provenance import (
+    SeedProvenanceError,
+    build_seed_provenance,
+)
 from _arc_workflows.workflow_io import (
     NonObjectJsonError,
     read_json_object,
@@ -36,6 +41,7 @@ class DomainManifestInputs:
     domains: list[dict[str, Any]]
     duplicates: list[dict[str, str]]
     requested_seed_papers: list[str]
+    seed_provenance: dict[str, Any]
 
 
 def collect_domain_manifest_inputs(
@@ -212,10 +218,17 @@ def collect_domain_manifest_inputs(
             f"no {SUMMARY_SUFFIX} files found in {domain_dir}"
         )
 
-    requested = context.get("seed_paper_list", [])
-    if not isinstance(requested, list):
-        requested = []
-    requested_strings = [str(item) for item in requested]
+    try:
+        seed_provenance = build_seed_provenance(
+            context,
+            seed_by_domain=seed_by_domain,
+        )
+    except SeedProvenanceError as exc:
+        raise ManifestError(str(exc)) from exc
+    requested_strings = [
+        item["requested_seed"]
+        for item in seed_provenance["requested_seed_mappings"]
+    ]
     requested_order = {
         seed: index for index, seed in enumerate(requested_strings)
     }
@@ -234,6 +247,7 @@ def collect_domain_manifest_inputs(
         domains=domains,
         duplicates=duplicates,
         requested_seed_papers=requested_strings,
+        seed_provenance=seed_provenance,
     )
 
 
@@ -267,18 +281,17 @@ def _seed_by_domain(context: dict[str, Any]) -> dict[str, str]:
                 f"context.json domain_records[{index}] must be an object"
             )
         domain_id = str(record.get("domain_id", "")).strip()
-        seed_paper = str(record.get("seed_paper", "")).strip()
+        seed_paper = normalize_paper_id(
+            str(record.get("seed_paper", "")).strip()
+        )
         if not domain_id or not seed_paper:
             raise ManifestError(
                 f"context.json domain_records[{index}] requires "
                 "domain_id and seed_paper"
             )
-        if (
-            domain_id in result
-            and result[domain_id] != seed_paper
-        ):
+        if domain_id in result:
             raise ManifestError(
-                "conflicting requested seeds recorded for domain "
+                "domain_records contains duplicate domain ID "
                 f"{domain_id}"
             )
         result[domain_id] = seed_paper

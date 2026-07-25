@@ -1075,18 +1075,14 @@ def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
         sys.dont_write_bytecode = old_dont_write_bytecode
         sys.path.remove(str(SCRIPTS))
 
-    config = config_module.load_ideas_config(
-        {
-            "schema_version": "arc.workflow.ideas.config.v1",
-            "run_id": "test",
-            "run_dir": "/tmp/arc-test",
-            "project_dir": "/tmp/arc-test-project",
-            "user_intent": "intent",
-            "variant_config_dir": str(WJ),
-        }
+    variant_path = WJ / "ideas-domain.variant.json"
+    variant = config_module._parse_variant(
+        json.loads(variant_path.read_text(encoding="utf-8")),
+        path=variant_path,
     )
+    assert variant is not None
     reviewer_payload = templates_module.reviewer_worker_payload(
-        config.variants[0]
+        variant
     )
     marks = reviewer_payload["output_schema"]["properties"]["marks"]
     mark_properties = marks["properties"]
@@ -1152,7 +1148,8 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     manual = (SKILL / "manuals/arc-domain.md").read_text(encoding="utf-8")
 
     assert "write-domain-manifest.py" in domain
-    assert "arc.workflow.domain_manifest.v2" in domain
+    assert "arc.workflow.domain_manifest.v3" in domain
+    assert "arc.workflow.domain_seed_provenance.v1" in domain
     assert "field_count" in domain
     assert "field_id" in domain
     assert "LLMClient.generate" in domain
@@ -1508,8 +1505,10 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
         assert "recent_window_days" in text
         assert "as_of_date" in text
         assert "corresponding" in text and "two" in text
-    assert "arc.workflow.domain_manifest.v2" in domain
-    assert "arc.workflow.domain_manifest.v2" in manual
+    assert "arc.workflow.domain_manifest.v3" in domain
+    assert "arc.workflow.domain_manifest.v3" in manual
+    assert "arc.workflow.domain_seed_provenance.v1" in domain
+    assert "arc.workflow.domain_seed_provenance.v1" in manual
     assert "field_count" in ideas
     assert "multiple seed-specific packages" in ideas
     assert "field_id" in ideas

@@ -111,9 +111,10 @@ the same domain ID in parallel; see `manuals/arc-domain.md`.
 
 Step 1: Resolve the domain ID for each normalized build seed with the exact
 `<user-intent>`. If multiple entries resolve to the same domain ID, keep one
-entry for Phase 2 and record the duplicate in `<project-dir>/context.json` or a
-visible workflow note. Link each build seed to its explicit-anchor or validated
-origin-selection record.
+entry for Phase 2 and record every displaced requested seed in
+`context.json.domain_deduplications` as an exact object with
+`requested_seed`, `kept_build_seed`, and `domain_id`. Link each build seed to
+exactly one explicit-anchor or validated origin-selection record.
 
 Step 2: For each distinct build seed, start one durable domain build.
 `arc-domain build` owns its own durable run; start it directly. For a
@@ -295,10 +296,24 @@ project-local domain handoff manifest:
 Before running the helper, record every successful build in
 `<project-dir>/context.json` under `domain_records` as objects containing the
 actual `seed_paper` passed to `arc-domain build` and its returned `domain_id`.
-For a resolved origin, retain its source candidate/evidence in
-`origin_selections`; do not create a second manifest package for the displaced
-candidate. A v1 build may still distinguish its requested seed from the
-builder-selected foundation.
+Use exactly one record per domain ID. Also record exactly one closed
+`origin_selections` entry per successful build:
+
+- An explicit build entry contains exactly `mode: explicit_seed`, `domain_id`,
+  `build_seed`, and `requested_seed`; the two seed values normalize equally.
+- A resolved-origin entry contains exactly `mode: origin_selected`,
+  `domain_id`, `build_seed`, `requested_seed`, `field_id`,
+  `selection_run_id`, and `selection`. Set `requested_seed` to the same
+  normalized identifier when the selected origin is retained in
+  `seed_paper_list`, or to JSON `null` when it is a non-requested build seed.
+  `selection` is the complete validated
+  `arc.domain_origin_selection.v1` result, and its selected paper must
+  normalize to `build_seed`.
+
+Always write `domain_deduplications` as an array, including when it is empty.
+Every normalized `seed_paper_list` entry must resolve exactly once through an
+explicit/origin-selected build or a deduplication record. Do not create a
+second manifest package for a displaced candidate.
 
 The copied paper JSON pack's `domain_id` is the authoritative
 `domain_package_id`; a domain summary is research content and v5 does not carry
@@ -317,13 +332,16 @@ python3 <skill-dir>/scripts/write-domain-manifest.py \
 ```
 
 The command must complete successfully before a requested ideas workflow
-starts. It writes `arc.workflow.domain_manifest.v2`, preserving each
+starts. It writes `arc.workflow.domain_manifest.v3`, preserving each
 seed-specific package while semantically grouping packages into stable field
-cards. Only `distinct_field` with confidence at least `0.80` creates hard
-separation; uncertain, low-confidence, or invalid completed grouping
-conservatively merges packages with a warning. Ideas routing uses `field_count`
-and `field_id`, never package count. Print a `WARNING:` and stop before ideas
-if the manifest cannot be written or any referenced artifact is missing.
+cards. It first publishes a content-addressed
+`arc.workflow.domain_seed_provenance.v1` artifact and records that artifact's
+project-relative path and SHA-256 digest in the manifest. Only
+`distinct_field` with confidence at least `0.80` creates hard separation;
+uncertain, low-confidence, or invalid completed grouping conservatively merges
+packages with a warning. Ideas routing uses `field_count` and `field_id`, never
+package count. Print a `WARNING:` and stop before ideas if the manifest cannot
+be written or any referenced artifact is missing.
 
 For one domain package, the helper writes the single field without an LLM call.
 For two or more packages, it makes one typed `LLMClient.generate` request with

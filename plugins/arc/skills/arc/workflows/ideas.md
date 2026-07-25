@@ -30,12 +30,13 @@ Step 3: Replace `<run-id>`, `<project-dir>`, `<user_intent>`, and
 `<skill-workflow-json-dir>`.
 
 Set `domain_manifest_path` to
-`<project-dir>/domain/domain-manifest.json`. Manifest v2 routes by
+`<project-dir>/domain/domain-manifest.json`. Current manifest v3, including
+its validated `arc.workflow.domain_seed_provenance.v1` artifact, routes by
 `field_count`: one field, including multiple seed-specific packages, uses the
 single-domain prompts; two or more fields use cross-domain prompts, directed
 transfer profiles, reviewer assessment, and qualification gates. Cross-domain
-cards and source/target roles use `field_id`. A v1, missing, or invalid
-manifest must be regenerated before cross-domain work.
+cards and source/target roles use `field_id`. A missing, legacy, or invalid
+manifest must be regenerated before any ideas work.
 
 Proceed only when the domain-build handoff status is `completed` or `degraded`.
 For a degraded handoff, print its warnings and use only the verified domain
