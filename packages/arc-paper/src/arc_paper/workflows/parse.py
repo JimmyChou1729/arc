@@ -102,7 +102,9 @@ class MarkdownPDFVisualParseHandler:
                 )
             )
         try:
-            primary = self.service.parse_source(self.primary)
+            primary, primary_cache_warnings = self.service.materialize_source(
+                self.primary
+            )
         except (ParseError, SourceRepositoryError) as exc:
             return Failed(
                 RunError(
@@ -110,9 +112,11 @@ class MarkdownPDFVisualParseHandler:
                     str(exc),
                 )
             )
-        warnings = list(primary.warnings)
+        warnings = list(primary.warnings + primary_cache_warnings)
         try:
-            parsed_pdf = self.service.parse_source(self.pdf_validator)
+            parsed_pdf, validator_cache_warnings = (
+                self.service.materialize_source(self.pdf_validator)
+            )
         except (ParseError, SourceRepositoryError) as exc:
             code = getattr(exc, "code", "validator_parse_failed")
             message = f"validator could not be parsed ({code}): {exc}"
@@ -155,6 +159,7 @@ class MarkdownPDFVisualParseHandler:
                 for entry in deterministic
             ]
             warnings.extend(parsed_pdf.warnings)
+            warnings.extend(validator_cache_warnings)
             warnings.extend(deterministic_warnings)
             try:
                 markdown_bytes = self.sources.read_bytes(self.primary)

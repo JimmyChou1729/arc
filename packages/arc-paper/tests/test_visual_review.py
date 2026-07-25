@@ -71,6 +71,8 @@ def _png(width: int = 100, height: int = 200) -> bytes:
 
 
 class FakePDFTextExtractor:
+    contract_id = "arc.paper.tests.fake_pdf_text.v1"
+
     def __init__(self, pages: tuple[str, ...]):
         self.pages = pages
 

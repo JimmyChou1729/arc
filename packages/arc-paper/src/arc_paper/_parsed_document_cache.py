@@ -18,13 +18,13 @@ from typing import Any, Iterator
 from ._cache_root import resolve_cache_root
 from ._durable_io import atomic_write_bytes, payload_matches
 from ._file_lock import exclusive_file_lock
-from .parse import (
+from .parse.models import (
     ParsedDocument,
     parsed_document_from_document,
     parsed_document_to_document,
 )
 from .source_repository import SourceRepository
-from .sources import SourceArtifact
+from .sources import SourceArtifact, SourceFormat, SourceOrigin, SourceOriginKind
 
 
 PARSER_CONTRACT = "arc.paper.parser.v1"
@@ -124,6 +124,74 @@ class ParsedDocumentCache:
                 (DERIVED_CACHE_REBUILT_WARNING,) if detected_corruption else ()
             )
             return document, warnings
+
+    def cache_key(self, source: SourceArtifact) -> str:
+        """Return the semantic cache key for one source and parser contract."""
+
+        if not isinstance(source, SourceArtifact):
+            raise TypeError("source must be a SourceArtifact")
+        return self._key(source)
+
+    def read_verified_by_key(
+        self,
+        key: str,
+        *,
+        expected_source_identity: Mapping[str, Any],
+        expected_parser_contract: str,
+        expected_document_digest: str,
+    ) -> ParsedDocument:
+        """Read one locator-selected entry after revalidating every identity.
+
+        This is the narrow bridge used by cache-wide read-only operations.
+        Callers provide logical identities from a verified locator; physical
+        cache paths remain private to this cache implementation.
+        """
+
+        if not _is_sha256(key):
+            raise ValueError("parsed cache key must be a SHA-256 digest")
+        if (
+            not isinstance(expected_parser_contract, str)
+            or not expected_parser_contract.strip()
+        ):
+            raise ValueError("expected_parser_contract is required")
+        if not _is_sha256(expected_document_digest):
+            raise ValueError("expected_document_digest must be a SHA-256 digest")
+        source = _source_from_identity(expected_source_identity)
+        if expected_parser_contract.strip() != self.parser_contract:
+            raise ValueError("parsed cache parser contract does not match")
+        if self._key(source) != key:
+            raise ValueError("parsed cache key does not match its logical identity")
+        self.repository.read_bytes(source)
+        try:
+            document = self._read(source)
+        except _DerivedCacheCorrupt as exc:
+            raise ValueError("parsed cache entry failed verification") from exc
+        if document is None:
+            raise ValueError("parsed cache entry is missing")
+        if document.document_digest != expected_document_digest:
+            raise ValueError("parsed cache document digest does not match")
+        return document
+
+    def candidate_document_path_by_key(
+        self,
+        key: str,
+        *,
+        expected_source_identity: Mapping[str, Any],
+        expected_parser_contract: str,
+    ) -> Path:
+        """Resolve one catalog-selected key to its internal search candidate."""
+
+        if not _is_sha256(key):
+            raise ValueError("parsed cache key must be a SHA-256 digest")
+        source = _source_from_identity(expected_source_identity)
+        if (
+            not isinstance(expected_parser_contract, str)
+            or expected_parser_contract.strip() != self.parser_contract
+        ):
+            raise ValueError("parsed cache parser contract does not match")
+        if self._key(source) != key:
+            raise ValueError("parsed cache key does not match its logical identity")
+        return self._entry_dir(key) / "document.json"
 
     def _read(self, source: SourceArtifact) -> ParsedDocument | None:
         entry_dir = self._entry_dir(self._key(source))
@@ -257,6 +325,37 @@ def _source_identity(source: SourceArtifact) -> dict[str, Any]:
         "artifact_digest": source.artifact_digest,
         "size": source.size,
     }
+
+
+def _source_from_identity(value: Mapping[str, Any]) -> SourceArtifact:
+    if not isinstance(value, Mapping) or set(value) != _SOURCE_IDENTITY_FIELDS:
+        raise ValueError("source identity has invalid fields")
+    source_format = value.get("source_format")
+    media_type = value.get("media_type")
+    artifact_digest = value.get("artifact_digest")
+    size = value.get("size")
+    if (
+        not isinstance(source_format, str)
+        or not isinstance(media_type, str)
+        or not _is_sha256(artifact_digest)
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or size < 0
+    ):
+        raise ValueError("source identity is invalid")
+    try:
+        return SourceArtifact(
+            source_format=SourceFormat(source_format),
+            media_type=media_type,
+            artifact_digest=artifact_digest,
+            size=size,
+            origin=SourceOrigin(
+                SourceOriginKind.REPOSITORY,
+                locator=f"{source_format}/sha256/{artifact_digest}",
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("source identity is invalid") from exc
 
 
 def _canonical_json_bytes(value: Any) -> bytes:

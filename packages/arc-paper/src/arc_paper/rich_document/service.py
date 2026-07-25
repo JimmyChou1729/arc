@@ -5,8 +5,9 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from ..parse.parser import PDFTextExtractor, ParseError, parse_artifact_bytes
+from ..parse.parser import PDFTextExtractor, ParseError
 from ..parse.reconcile import reconcile_validator
+from ..parse.service import PaperParserService
 from ..source_repository import SourceRepository, SourceRepositoryError
 from ..sources import (
     ReconciliationEntry,
@@ -58,6 +59,10 @@ class RichDocumentParserService:
     ):
         self.repository = repository
         self.pdf_text_extractor = pdf_text_extractor
+        self.standard_parser = PaperParserService(
+            repository,
+            pdf_text_extractor=pdf_text_extractor,
+        )
 
     def parse(self, bundle: SourceBundle) -> RichParseOutcome:
         if bundle.primary.source_format not in {
@@ -88,6 +93,7 @@ class RichDocumentParserService:
             payload,
             asset_importer=self._asset_importer(bundle.primary.origin.locator),
         )
+        legacy_primary = self.standard_parser.parse_source(bundle.primary)
         if not bundle.validators:
             return RichParseOutcome(
                 document=parsed.document,
@@ -100,13 +106,7 @@ class RichDocumentParserService:
 
         validator = bundle.validators[0]
         try:
-            legacy_primary = parse_artifact_bytes(bundle.primary, payload)
-            validator_payload = self.repository.read_bytes(validator)
-            parsed_validator = parse_artifact_bytes(
-                validator,
-                validator_payload,
-                pdf_text_extractor=self.pdf_text_extractor,
-            )
+            parsed_validator = self.standard_parser.parse_source(validator)
         except (ParseError, SourceRepositoryError) as exc:
             code = getattr(exc, "code", "pdf_validator_invalid")
             raise RichDocumentValidationError(

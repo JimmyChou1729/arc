@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from ._cache_root import resolve_cache_root
-from ._parsed_document_cache import ParsedDocumentCache
 from .arxiv_document import (
     ArxivDocumentProvenance,
     ArxivEquationSearch,
@@ -94,13 +93,6 @@ class ArcPaperService:
             self.repository,
             pdf_text_extractor=pdf_text_extractor,
         )
-        self._parsed_document_cache = ParsedDocumentCache(
-            root,
-            repository=self.repository,
-        )
-        self._parsed_document_memo: dict[
-            tuple[str, str, str, int], ParsedDocument
-        ] = {}
 
     def import_source(
         self,
@@ -108,19 +100,26 @@ class ArcPaperService:
         *,
         source_format: SourceFormat | str | None = None,
     ) -> SourceArtifact:
-        return self.repository.import_path(path, source_format=source_format)
+        source = self.repository.import_path(path, source_format=source_format)
+        self.parser.parse_source(source)
+        return source
 
     def fetch_arxiv_auto(
         self, paper_id: str, *, refresh: bool = False
     ) -> SourceArtifact:
         """Fetch only the ar5iv primary; auto never downloads a PDF."""
 
-        return self.ar5iv.fetch(paper_id, refresh=refresh)
+        source, _, _ = self._fetch_arxiv_auto_materialized(
+            paper_id, refresh=refresh
+        )
+        return source
 
     def fetch_arxiv_pdf(
         self, paper_id: str, *, refresh: bool = False
     ) -> SourceArtifact:
-        return self.arxiv_pdf.fetch(paper_id, refresh=refresh)
+        source = self.arxiv_pdf.fetch(paper_id, refresh=refresh)
+        self.parser.parse_source(source)
+        return source
 
     def parse_bundle(
         self,
@@ -144,14 +143,16 @@ class ArcPaperService:
             raise PaperInputError(
                 "validator_formats must be empty or match validator_paths"
             )
-        primary = self.import_source(primary_path, source_format=primary_format)
+        primary = self.repository.import_path(
+            primary_path, source_format=primary_format
+        )
         formats = (
             tuple(validator_formats)
             if validator_formats
             else (None,) * len(validator_paths)
         )
         validators = tuple(
-            self.import_source(path, source_format=source_format)
+            self.repository.import_path(path, source_format=source_format)
             for path, source_format in zip(validator_paths, formats, strict=True)
         )
         return self.parse_bundle(
@@ -165,7 +166,7 @@ class ArcPaperService:
         *,
         refresh: bool = False,
     ) -> ParseOutcome:
-        primary = self.fetch_arxiv_auto(paper_id, refresh=refresh)
+        primary = self.ar5iv.fetch(paper_id, refresh=refresh)
         return self.parse_bundle(SourceBundle(primary=primary))
 
     def parse_arxiv_pdf(
@@ -174,7 +175,7 @@ class ArcPaperService:
         *,
         refresh: bool = False,
     ) -> ParseOutcome:
-        primary = self.fetch_arxiv_pdf(paper_id, refresh=refresh)
+        primary = self.arxiv_pdf.fetch(paper_id, refresh=refresh)
         return self.parse_bundle(SourceBundle(primary=primary))
 
     def get_metadata(self, paper_id: str, *, refresh: bool = False) -> dict[str, Any]:
@@ -380,16 +381,9 @@ class ArcPaperService:
                 code="not_arxiv_id",
             )
         canonical_id = f"arXiv:{path_id}"
-        source = self.fetch_arxiv_auto(canonical_id, refresh=refresh)
-        identity = source.content_identity
-        warnings: tuple[str, ...] = ()
-        document = self._parsed_document_memo.get(identity)
-        if document is None:
-            document, warnings = self._parsed_document_cache.get_or_parse(
-                source,
-                self.parser.parse_source,
-            )
-            self._parsed_document_memo[identity] = document
+        source, document, warnings = self._fetch_arxiv_auto_materialized(
+            canonical_id, refresh=refresh
+        )
         provenance = ArxivDocumentProvenance(
             canonical_arxiv_id=canonical_id,
             provider="ar5iv",
@@ -398,6 +392,17 @@ class ArcPaperService:
             document_digest=document.document_digest,
         )
         return document, provenance, warnings
+
+    def _fetch_arxiv_auto_materialized(
+        self, paper_id: str, *, refresh: bool
+    ) -> tuple[
+        SourceArtifact,
+        ParsedDocument,
+        tuple[str, ...],
+    ]:
+        source = self.ar5iv.fetch(paper_id, refresh=refresh)
+        document, warnings = self.parser.materialize_source(source)
+        return source, document, warnings
 
 
 def extract_paper_ids(text: str) -> list[str]:

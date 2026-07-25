@@ -39,11 +39,15 @@ class PDFTextExtractionError(RuntimeError):
 
 
 class PDFTextExtractor(Protocol):
+    contract_id: str
+
     def extract(self, payload: bytes) -> PDFTextLayer: ...
 
 
 class PdftotextExtractor:
     """Narrow, replaceable adapter for deterministic PDF text extraction."""
+
+    contract_id = "arc.paper.pdf_text.pdftotext.layout_utf8.v1"
 
     def __init__(self, *, executable: str = "pdftotext", timeout_seconds: float = 30):
         self.executable = executable
@@ -69,10 +73,16 @@ class PdftotextExtractor:
                     text=True,
                     timeout=self.timeout_seconds,
                 )
-        except FileNotFoundError:
-            return PDFTextLayer((), "pdftotext is unavailable; PDF text was not extracted")
-        except subprocess.TimeoutExpired:
-            return PDFTextLayer((), "pdftotext timed out; PDF text was not extracted")
+        except FileNotFoundError as exc:
+            raise PDFTextExtractionError(
+                "pdf_text_extractor_unavailable",
+                "pdftotext is unavailable; install it before parsing PDF full text",
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise PDFTextExtractionError(
+                "pdf_text_extraction_timeout",
+                "pdftotext timed out while extracting PDF full text",
+            ) from exc
         except subprocess.CalledProcessError as exc:
             raise PDFTextExtractionError(
                 "pdf_invalid",
@@ -538,7 +548,7 @@ def _offset_position(offsets: list[int], offset: int) -> tuple[int, int]:
 
 def _parse_tex(artifact: SourceArtifact, text: str) -> ParsedDocument:
     active = _tex_without_comments(text)
-    if re.search(r"\\(?:input|include)\s*(?:\{|[^\s])", active):
+    if re.search(r"\\(?:input|include)(?![A-Za-z@])\s*(?:\{|[^\s])", active):
         raise ParseError(
             "unsupported_tex_project",
             "TeX parsing accepts one pre-flattened file; input/include is unsupported",

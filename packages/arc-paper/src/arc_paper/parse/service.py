@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+from .._full_text_catalog import FullTextCatalog
+from .._parsed_document_cache import PARSER_CONTRACT, ParsedDocumentCache
 from ..source_repository import SourceRepository, SourceRepositoryError
 from ..sources import (
     ParseOutcome,
     ReconciliationEntry,
     ReconciliationReport,
     ReconciliationStatus,
+    SourceArtifact,
     SourceBundle,
     SourceFormat,
     ValidationPolicy,
 )
 from .models import ParsedDocument
-from .parser import PDFTextExtractor, ParseError, parse_artifact_bytes
+from .parser import (
+    PDFTextExtractor,
+    ParseError,
+    PdftotextExtractor,
+    parse_artifact_bytes,
+)
 from .reconcile import reconcile_validator
 
 
@@ -25,7 +33,9 @@ class PaperParserService:
         pdf_text_extractor: PDFTextExtractor | None = None,
     ):
         self.repository = repository
-        self.pdf_text_extractor = pdf_text_extractor
+        self.pdf_text_extractor = pdf_text_extractor or PdftotextExtractor()
+        self._caches: dict[str, ParsedDocumentCache] = {}
+        self._catalog = FullTextCatalog(repository.root)
 
     def parse(
         self,
@@ -34,9 +44,9 @@ class PaperParserService:
         policy: ValidationPolicy | None = None,
     ) -> ParseOutcome:
         resolved_policy = _resolve_policy(bundle, policy)
-        primary = self.parse_source(bundle.primary)
+        primary, primary_cache_warnings = self.materialize_source(bundle.primary)
         entries: list[ReconciliationEntry] = []
-        warnings = list(primary.warnings)
+        warnings = list(primary.warnings + primary_cache_warnings)
         for validator in bundle.validators:
             if resolved_policy is ValidationPolicy.NONE:
                 entries.append(
@@ -49,7 +59,9 @@ class PaperParserService:
                 )
                 continue
             try:
-                parsed_validator = self.parse_source(validator)
+                parsed_validator, validator_cache_warnings = (
+                    self.materialize_source(validator)
+                )
             except (ParseError, SourceRepositoryError) as exc:
                 code = getattr(exc, "code", "validator_parse_failed")
                 message = f"validator could not be parsed ({code}): {exc}"
@@ -91,6 +103,7 @@ class PaperParserService:
                 )
             entries.extend(validator_entries)
             warnings.extend(parsed_validator.warnings)
+            warnings.extend(validator_cache_warnings)
             warnings.extend(validator_warnings)
             if (
                 resolved_policy is ValidationPolicy.VISUAL_ALL_PAGES
@@ -115,13 +128,59 @@ class PaperParserService:
             warnings=tuple(_dedupe(warnings)),
         )
 
-    def parse_source(self, artifact) -> ParsedDocument:
-        payload = self.repository.read_bytes(artifact)
-        return parse_artifact_bytes(
-            artifact,
-            payload,
-            pdf_text_extractor=self.pdf_text_extractor,
-        )
+    def parse_source(self, artifact: SourceArtifact) -> ParsedDocument:
+        """Materialize and return the standard full-text projection."""
+
+        document, _ = self.materialize_source(artifact)
+        return document
+
+    def materialize_source(
+        self, artifact: SourceArtifact
+    ) -> tuple[ParsedDocument, tuple[str, ...]]:
+        """Verify, cache, and logically catalog one repository source."""
+
+        parser_contract = self.parser_contract_for(artifact)
+        cache = self._caches.get(parser_contract)
+        if cache is None:
+            cache = ParsedDocumentCache(
+                repository=self.repository,
+                parser_contract=parser_contract,
+            )
+            self._caches[parser_contract] = cache
+        try:
+            document, warnings = cache.get_or_parse(
+                artifact,
+                lambda source: parse_artifact_bytes(
+                    source,
+                    self.repository.read_bytes(source),
+                    pdf_text_extractor=self.pdf_text_extractor,
+                ),
+            )
+            self._catalog.record(
+                artifact,
+                document,
+                parser_contract=parser_contract,
+                parsed_cache_key=cache.cache_key(artifact),
+            )
+        except OSError as exc:
+            raise ParseError(
+                "full_text_persistence_failed",
+                "parsed full text could not be persisted",
+                artifact=artifact,
+            ) from exc
+        return document, warnings
+
+    def parser_contract_for(self, artifact: SourceArtifact) -> str:
+        if artifact.source_format is not SourceFormat.PDF:
+            return PARSER_CONTRACT
+        contract_id = getattr(self.pdf_text_extractor, "contract_id", None)
+        if not isinstance(contract_id, str) or not contract_id.strip():
+            raise ParseError(
+                "pdf_extractor_contract_missing",
+                "persistent PDF parsing requires a stable extractor contract_id",
+                artifact=artifact,
+            )
+        return f"{PARSER_CONTRACT}+pdf-extractor:{contract_id.strip()}"
 
 
 def _dedupe(values: list[str]) -> list[str]:

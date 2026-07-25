@@ -28,6 +28,8 @@ from arc_paper import (
 
 
 class FakePDFTextExtractor:
+    contract_id = "arc.paper.tests.fake_pdf_text.v1"
+
     def __init__(self, values: dict[bytes, PDFTextLayer]):
         self.values = values
         self.calls: list[bytes] = []
