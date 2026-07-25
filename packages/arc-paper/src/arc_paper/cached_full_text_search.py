@@ -319,8 +319,8 @@ class CachedFullTextSearcher:
         selected: list[_SelectedDocument] = []
         warnings: list[str] = []
         for entry in self.catalog.current_entries():
-            representation = _preferred_representation(entry)
-            if not _has_current_parser_contract(representation):
+            representation = _preferred_current_representation(entry)
+            if representation is None:
                 warnings.append(_STALE_PARSER_CONTRACT_WARNING)
                 continue
             try:
@@ -396,16 +396,23 @@ class CachedFullTextSearcher:
             return None
 
 
-def _preferred_representation(
+def _preferred_current_representation(
     entry: FullTextCatalogEntry,
-) -> FullTextRepresentation:
+) -> FullTextRepresentation | None:
+    """Choose the current HTML/PDF projection without mutating stale locators."""
+
+    current = tuple(
+        item for item in entry.representations if _has_current_parser_contract(item)
+    )
+    if not current:
+        return None
     if entry.kind == "arxiv":
-        by_format = {item.source_format: item for item in entry.representations}
+        by_format = {item.source_format: item for item in current}
         if "html" in by_format:
             return by_format["html"]
         if "pdf" in by_format:
             return by_format["pdf"]
-    return entry.representations[0]
+    return current[0]
 
 
 def _has_current_parser_contract(representation: FullTextRepresentation) -> bool:

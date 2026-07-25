@@ -677,6 +677,48 @@ def test_current_pdf_parser_contract_remains_searchable(tmp_path: Path) -> None:
     assert not result.warnings
 
 
+def test_current_pdf_falls_back_when_html_catalog_projection_is_stale(
+    tmp_path: Path,
+) -> None:
+    repository = SourceRepository(tmp_path / "cache")
+    html = _store(
+        repository,
+        b"<h1>Old HTML</h1><p>stale HTML phrase</p>",
+        SourceFormat.HTML,
+        arxiv_id="0911.3380",
+    )
+    legacy = ParsedDocumentCache(
+        repository=repository,
+        parser_contract="arc.paper.parser.v2",
+    )
+    legacy_document, _ = legacy.get_or_parse(
+        html,
+        lambda artifact: parse_artifact_bytes(
+            artifact, repository.read_bytes(artifact)
+        ),
+    )
+    catalog = FullTextCatalog(repository.root)
+    catalog.record(
+        html,
+        legacy_document,
+        parser_contract=legacy.parser_contract,
+        parsed_cache_key=legacy.cache_key(html),
+    )
+    _materialize(
+        repository,
+        b"%PDF current projection",
+        source_format=SourceFormat.PDF,
+        arxiv_id="0911.3380",
+        pdf_pages=("Current PDF\ncurrent PDF phrase",),
+    )
+
+    result = _searcher(repository).search(("current PDF phrase",))
+
+    assert result.total_occurrences == 1
+    assert result.occurrences[0].source_format == "pdf"
+    assert not result.warnings
+
+
 def test_registry_contract_is_safe_path_free_and_titles_are_strings_only() -> None:
     spec = get_operation("search-cached-full-text")
     assert spec is not None
