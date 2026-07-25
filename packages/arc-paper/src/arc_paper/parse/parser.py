@@ -10,6 +10,20 @@ from typing import Protocol
 
 from bs4 import BeautifulSoup, Tag
 
+from .._parsing import ParseError, normalize_tex
+from .._parsing.html_source import (
+    legacy_html_source_line,
+    standard_html_root,
+)
+from .._parsing.markdown_lex import (
+    markdown_column_width as _markdown_column_width,
+    markdown_indent_width as _markdown_indent_width,
+    markdown_math_end as _markdown_math_end,
+    markdown_quote_content as _markdown_quote_content,
+    match_atx_heading,
+    match_fence,
+)
+from .._parsing.tex_lex import tex_without_comments as _tex_without_comments
 from ..sources import SourceArtifact, SourceFormat
 from .models import (
     MathSpan,
@@ -19,14 +33,6 @@ from .models import (
     ParsedPage,
     ParsedSection,
 )
-
-
-class ParseError(RuntimeError):
-    def __init__(self, code: str, message: str, *, artifact: SourceArtifact):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.artifact = artifact
 
 
 class PDFTextExtractionError(RuntimeError):
@@ -138,18 +144,6 @@ def parse_artifact_bytes(
     if artifact.source_format is SourceFormat.TEX:
         return _parse_tex(artifact, text)
     raise ParseError("unsupported_source", "unsupported source format", artifact=artifact)
-
-
-def normalize_tex(value: str) -> str:
-    value = re.sub(r"(?<!\\)%[^\n]*", "", value)
-    value = re.sub(r"\\(?:label|tag)\s*\{[^{}]*\}", "", value)
-    value = re.sub(r"\\begin\s*\{[^{}]+\*?\}|\\end\s*\{[^{}]+\*?\}", "", value)
-    value = value.strip()
-    for left, right in ((r"\[", r"\]"), (r"\(", r"\)"), ("$$", "$$"), ("$", "$")):
-        if value.startswith(left) and value.endswith(right) and len(value) >= len(left) + len(right):
-            value = value[len(left) : len(value) - len(right)]
-            break
-    return " ".join(value.split())
 
 
 def _span_id(
@@ -268,7 +262,7 @@ def _parse_markdown(artifact: SourceArtifact, text: str) -> ParsedDocument:
     active_fence: tuple[int, str] | None = None
     for index, line in enumerate(lines, 1):
         content, quote_depth = _markdown_quote_content(line)
-        fence_match = re.match(r"^\s{0,3}(`{3,}|~{3,})(.*)$", content)
+        fence_match = match_fence(content)
         if active_fence is not None and quote_depth < active_fence[0]:
             active_fence = None
         if active_fence is not None:
@@ -287,9 +281,7 @@ def _parse_markdown(artifact: SourceArtifact, text: str) -> ParsedDocument:
             active_fence = (quote_depth, marker)
             fenced_lines.add(index)
             continue
-        heading = re.match(
-            r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", content
-        )
+        heading = match_atx_heading(content)
         if heading:
             headings.append((index, len(heading.group(1)), heading.group(2)))
     indented_code_lines = _markdown_indented_code_lines(lines, fenced_lines)
@@ -374,56 +366,6 @@ def _markdown_indented_code_lines(
         math_end = _markdown_math_end(content)
 
     return excluded
-
-
-def _markdown_quote_content(line: str) -> tuple[str, int]:
-    """Remove Markdown block-quote containers while retaining content indent."""
-
-    content = line
-    depth = 0
-    while match := re.match(r"^ {0,3}>[ \t]?", content):
-        content = content[match.end() :]
-        depth += 1
-    return content, depth
-
-
-def _markdown_indent_width(value: str) -> int:
-    width = 0
-    for character in value:
-        if character == " ":
-            width += 1
-        elif character == "\t":
-            width += 4 - (width % 4)
-        else:
-            break
-    return width
-
-
-def _markdown_column_width(value: str) -> int:
-    width = 0
-    for character in value:
-        if character == "\t":
-            width += 4 - (width % 4)
-        else:
-            width += 1
-    return width
-
-
-def _markdown_math_end(line: str) -> str | None:
-    """Return a closing delimiter when a non-code line opens multiline math."""
-
-    if line.count("$$") % 2:
-        return "$$"
-    if line.count(r"\[") > line.count(r"\]"):
-        return r"\]"
-    environment = re.search(
-        r"\\begin\{(equation|align|gather|multline|eqnarray)\*?\}", line
-    )
-    if environment and not re.search(
-        rf"\\end\{{{re.escape(environment.group(1))}\*?\}}", line
-    ):
-        return rf"\end{{{environment.group(1)}"
-    return None
 
 
 def _scan_delimited_math(
@@ -574,19 +516,9 @@ def _parse_tex(artifact: SourceArtifact, text: str) -> ParsedDocument:
     )
 
 
-def _tex_without_comments(text: str) -> str:
-    text = re.sub(
-        r"\\begin\{comment\*?\}.*?\\end\{comment\*?\}",
-        lambda match: "\n" * match.group(0).count("\n"),
-        text,
-        flags=re.DOTALL,
-    )
-    return "\n".join(re.sub(r"(?<!\\)%.*$", "", line) for line in text.splitlines())
-
-
 def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
     soup = BeautifulSoup(text, "lxml")
-    root = soup.select_one("article") or soup.body or soup
+    root = standard_html_root(soup)
     headings = [
         tag for tag in root.find_all(re.compile(r"^h[1-6]$")) if isinstance(tag, Tag)
     ]
@@ -646,7 +578,7 @@ def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
         if not tex:
             continue
         display = node.name != "math" or str(node.get("display") or "").casefold() == "block"
-        line = text[: text.find(str(node))].count("\n") + 1 if str(node) in text else ordinal + 1
+        line = legacy_html_source_line(text, node, ordinal)
         source_key = str(node.get("id") or ordinal)
         span_id = (
             f"math-{hashlib.sha256((artifact.artifact_digest + source_key + tex).encode()).hexdigest()[:24]}"

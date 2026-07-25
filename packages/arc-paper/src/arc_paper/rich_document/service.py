@@ -5,7 +5,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from ..parse.parser import PDFTextExtractor, ParseError
+from .._parsing import ParseError
+from ..parse.parser import PDFTextExtractor
 from ..parse.reconcile import reconcile_validator
 from ..parse.service import PaperParserService
 from ..source_repository import SourceRepository, SourceRepositoryError

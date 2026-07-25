@@ -10,7 +10,20 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
-from ..parse.parser import ParseError, normalize_tex
+from .._parsing import ParseError, normalize_tex
+from .._parsing.html_source import (
+    rich_html_roots,
+    rich_html_selector,
+    rich_html_source_position,
+)
+from .._parsing.markdown_lex import match_atx_heading, match_fence
+from .._parsing.tex_lex import (
+    scan_rich_tex_heading as _tex_heading,
+    scan_tex_balanced as _scan_tex_balanced,
+    scan_tex_balanced_text as _scan_tex_balanced_text,
+    skip_tex_whitespace as _skip_tex_whitespace,
+    tex_without_comments as _tex_without_comments,
+)
 from ..sources import SourceArtifact, SourceFormat
 from .models import (
     RichAsset,
@@ -124,7 +137,7 @@ def _parse_markdown(
         if not line.strip():
             index += 1
             continue
-        heading = re.match(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line)
+        heading = match_atx_heading(line)
         if heading:
             output.append(
                 _raw(
@@ -140,7 +153,7 @@ def _parse_markdown(
             )
             index += 1
             continue
-        fence = re.match(r"^\s{0,3}(`{3,}|~{3,})(.*)$", line)
+        fence = match_fence(line)
         if fence:
             marker = fence.group(1)
             language = fence.group(2).strip().split(maxsplit=1)[0] if fence.group(2).strip() else ""
@@ -579,12 +592,7 @@ def _parse_html(
     import_asset: AssetImporter,
 ) -> list[_RawBlock]:
     soup = BeautifulSoup(text, "html.parser")
-    articles = [
-        node
-        for node in soup.find_all("article")
-        if not isinstance(node.find_parent("article"), Tag)
-    ]
-    roots = articles or [soup.body or soup]
+    roots = rich_html_roots(soup)
     candidate_names = [
         "h1",
         "h2",
@@ -632,23 +640,16 @@ def _parse_html(
             continue
         eligible.append(node)
     for ordinal, node in enumerate(eligible):
-        source_line = getattr(node, "sourceline", None)
-        source_position = getattr(node, "sourcepos", None)
-        has_position = (
-            isinstance(source_line, int)
-            and not isinstance(source_line, bool)
-            and source_line >= 1
-            and isinstance(source_position, int)
-            and not isinstance(source_position, bool)
-            and source_position >= 0
+        line_start, column_start, line_end, column_end = (
+            rich_html_source_position(node)
         )
         locator = SourceLocator(
             source_format=artifact.source_format,
-            line_start=source_line if has_position else None,
-            column_start=source_position + 1 if has_position else None,
-            line_end=source_line if has_position else None,
-            column_end=source_position + 1 if has_position else None,
-            selector=_html_selector(node, ordinal),
+            line_start=line_start,
+            column_start=column_start,
+            line_end=line_end,
+            column_end=column_end,
+            selector=rich_html_selector(node, ordinal),
             source_id=str(node.get("id") or ""),
         )
         if re.fullmatch(r"h[1-6]", node.name or ""):
@@ -772,12 +773,6 @@ def _parse_html(
                     )
                 )
     return output
-
-
-def _html_selector(node: Tag, ordinal: int) -> str:
-    if node.get("id"):
-        return f"#{node['id']}"
-    return f"{node.name}:nth-block({ordinal + 1})"
 
 
 def _append_html_paragraph_blocks(
@@ -1214,100 +1209,6 @@ def _tex_starts_block(value: str) -> bool:
     )
 
 
-def _tex_heading(
-    lines: list[str],
-    index: int,
-    artifact: SourceArtifact,
-) -> tuple[int, str, str] | None:
-    command_match = re.search(
-        r"\\(section|subsection|subsubsection)(?![A-Za-z@])\*?",
-        lines[index],
-    )
-    if command_match is None:
-        return None
-    remainder = "\n".join(lines[index:])
-    cursor = _skip_tex_whitespace(remainder, command_match.end())
-    if cursor < len(remainder) and remainder[cursor] == "[":
-        _, cursor = _scan_tex_balanced(
-            remainder,
-            cursor,
-            opening="[",
-            closing="]",
-            artifact=artifact,
-            description=f"{command_match.group(1)} short title",
-        )
-        cursor = _skip_tex_whitespace(remainder, cursor)
-    if cursor >= len(remainder) or remainder[cursor] != "{":
-        raise ParseError(
-            "unclosed_rich_block",
-            f"{command_match.group(1)} heading has no complete title argument",
-            artifact=artifact,
-        )
-    title, cursor = _scan_tex_balanced(
-        remainder,
-        cursor,
-        opening="{",
-        closing="}",
-        artifact=artifact,
-        description=f"{command_match.group(1)} title",
-    )
-    return (
-        index + remainder[:cursor].count("\n"),
-        command_match.group(1),
-        title,
-    )
-
-
-def _skip_tex_whitespace(value: str, cursor: int) -> int:
-    while cursor < len(value) and value[cursor].isspace():
-        cursor += 1
-    return cursor
-
-
-def _scan_tex_balanced(
-    value: str,
-    cursor: int,
-    *,
-    opening: str,
-    closing: str,
-    artifact: SourceArtifact,
-    description: str,
-) -> tuple[str, int]:
-    if cursor >= len(value) or value[cursor] != opening:
-        raise ValueError("balanced TeX scan must start at the opening delimiter")
-    depth = 1
-    brace_depth = 0
-    current = cursor + 1
-    while current < len(value):
-        character = value[current]
-        if character == "\\":
-            current += 2
-            continue
-        if opening == "[" and character == "{":
-            brace_depth += 1
-            current += 1
-            continue
-        if opening == "[" and character == "}" and brace_depth:
-            brace_depth -= 1
-            current += 1
-            continue
-        if brace_depth:
-            current += 1
-            continue
-        if character == opening:
-            depth += 1
-        elif character == closing:
-            depth -= 1
-            if depth == 0:
-                return value[cursor + 1 : current], current + 1
-        current += 1
-    raise ParseError(
-        "unclosed_rich_block",
-        f"unclosed {description}",
-        artifact=artifact,
-    )
-
-
 def _tex_heading_text(value: str) -> str:
     cursor = 0
     output: list[str] = []
@@ -1337,42 +1238,6 @@ def _tex_heading_text(value: str) -> str:
         output.append(first)
         cursor = after_second
     return _tex_plain_text("".join(output))
-
-
-def _scan_tex_balanced_text(
-    value: str,
-    cursor: int,
-    *,
-    opening: str,
-    closing: str,
-) -> tuple[str, int]:
-    depth = 1
-    current = cursor + 1
-    while current < len(value):
-        character = value[current]
-        if character == "\\":
-            current += 2
-            continue
-        if character == opening:
-            depth += 1
-        elif character == closing:
-            depth -= 1
-            if depth == 0:
-                return value[cursor + 1 : current], current + 1
-        current += 1
-    return value[cursor + 1 :], len(value)
-
-
-def _tex_without_comments(text: str) -> str:
-    text = re.sub(
-        r"\\begin\{comment\*?\}.*?\\end\{comment\*?\}",
-        lambda match: "\n" * match.group(0).count("\n"),
-        text,
-        flags=re.DOTALL,
-    )
-    return "\n".join(
-        re.sub(r"(?<!\\)%.*$", "", line) for line in text.splitlines()
-    )
 
 
 def _tex_plain_text(value: str) -> str:
