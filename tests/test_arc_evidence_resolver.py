@@ -185,7 +185,7 @@ def test_evidence_resolver_reuses_one_service_document_memo_and_records_provenan
     ]
     assert service.parse_count == 1
     response = responses[0]
-    assert response.result["operation_id"] == "arc-paper.get-arxiv-section.v1"
+    assert response.result["operation_id"] == "arc-paper.get-arxiv-section.v2"
     provenance = response.result["provenance"]
     assert provenance["canonical_arxiv_id"] == "arXiv:0911.3380"
     assert provenance["source_digest"] == "a" * 64
