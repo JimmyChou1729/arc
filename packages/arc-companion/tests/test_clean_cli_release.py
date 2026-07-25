@@ -166,6 +166,10 @@ def test_status_persists_source_diagnostics_and_stop_uses_same_run(
     status = json.loads(capsys.readouterr().out)
     assert status["schema_version"] == "arc.command_result.v2"
     assert status["status"] == "paused"
+    assert status["data"]["selected_run"] == status["data"]["run"]
+    assert status["data"]["selected_run"]["id"] == run_id
+    assert status["data"]["active_release"] is None
+    assert status["data"]["release_matches_selected_run"] is False
     assert status["warnings"] == [
         {
             "code": "source_diagnostic",
@@ -199,6 +203,57 @@ def test_status_persists_source_diagnostics_and_stop_uses_same_run(
         "stop_requested": False,
     }
     assert stopped == [(run_id, "user requested")]
+
+
+def test_status_does_not_attribute_an_old_release_to_the_selected_run(
+    tmp_path: Path, capsys
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    selected_run_id = "companion-selected"
+    project.select_run(selected_run_id)
+    project.publish_current(
+        release_id="release-old",
+        manifest=project.root / "releases/release-old/manifest.json",
+        run_id="companion-old",
+    )
+    repository = RunRepository(project.jobs_root)
+
+    class PausingHandler:
+        name = "arc.companion.build.v1"
+
+        def execute(self, _context):
+            return Paused(
+                Awaiting(ResumeReason.EXTERNAL_CONDITION, "resume", False)
+            )
+
+    RunEngine(repository).execute(
+        RunSpec(selected_run_id, PausingHandler.name, {}), PausingHandler()
+    )
+
+    assert main(
+        ["status", "--project-dir", str(project.root), "--json"]
+    ) == 2
+    status = json.loads(capsys.readouterr().out)
+    data = status["data"]
+    assert data["selected_run"] == data["run"]
+    assert data["selected_run"]["id"] == selected_run_id
+    assert data["active_release"] == data["release"]
+    assert data["active_release"]["run_id"] == "companion-old"
+    assert data["release_matches_selected_run"] is False
+
+    project.publish_current(
+        release_id="release-selected",
+        manifest=(
+            project.root / "releases/release-selected/manifest.json"
+        ),
+        run_id=selected_run_id,
+    )
+    assert main(
+        ["status", "--project-dir", str(project.root), "--json"]
+    ) == 2
+    matched = json.loads(capsys.readouterr().out)["data"]
+    assert matched["active_release"]["run_id"] == selected_run_id
+    assert matched["release_matches_selected_run"] is True
 
 
 def test_stop_acknowledges_a_running_attempt_before_it_pauses(

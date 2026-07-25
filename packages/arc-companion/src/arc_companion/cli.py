@@ -228,7 +228,17 @@ def _status(args: argparse.Namespace) -> CommandResult:
     view = CompanionService(paths.jobs_root).inspect(run_id)
     base = command_result_from_snapshot(view.snapshot)
     current = paths.current_release()
-    data: dict[str, Any] = {"run": snapshot_data(view.snapshot)}
+    selected_run = snapshot_data(view.snapshot)
+    release_matches_selected_run = (
+        current is not None and current["run_id"] == run_id
+    )
+    data: dict[str, Any] = {
+        "selected_run": selected_run,
+        "active_release": current,
+        "release_matches_selected_run": release_matches_selected_run,
+        # Compatibility aliases for existing protocol consumers.
+        "run": selected_run,
+    }
     if current is not None:
         data["release"] = current
     return CommandResult(
