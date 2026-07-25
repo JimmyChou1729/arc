@@ -1,8 +1,9 @@
-"""Protocol-only command line interface for deterministic arc-paper operations."""
+"""Protocol-only command line interface for arc-paper operations and workflows."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from collections.abc import Mapping
@@ -14,10 +15,12 @@ from arc_jobs import (
     CommandStatus,
     CommandWarning,
     command_result_json,
+    command_result_from_snapshot,
     run_control_main,
 )
 
 from .registry import dispatch_operation, registry_document, to_json_value
+from .workflows.keywords import KeywordExtractionPaused
 
 
 class _UsageError(ValueError):
@@ -129,6 +132,22 @@ def _parser() -> _Parser:
     )
     parsed.add_argument("--cache-root")
 
+    keywords = commands.add_parser("extract-keywords", add_help=False)
+    keywords.add_argument("source")
+    keywords.add_argument("--project-dir", required=True)
+    keywords.add_argument("--approx-count", type=_approx_count, default=50)
+    keywords.add_argument("--cache-root")
+    keywords.add_argument("--refresh", action="store_true")
+    keywords.add_argument("--llm-provider", default="auto")
+    keywords.add_argument("--model")
+    keywords.add_argument(
+        "--model-tier",
+        choices=("low", "medium", "high", "xhigh"),
+        default="medium",
+    )
+    keywords.add_argument("--run-id")
+    keywords.add_argument("--resume-input", type=_json_object)
+
     cache = commands.add_parser("cache", add_help=False)
     cache_commands = cache.add_subparsers(dest="cache_command", required=True)
     cache_list = cache_commands.add_parser("list", add_help=False)
@@ -172,6 +191,20 @@ def _section_ordinal(value: str) -> int:
             "--ordinal must be a non-negative integer"
         )
     return ordinal
+
+
+def _approx_count(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--approx-count must be an integer between 1 and 200"
+        ) from exc
+    if not 1 <= count <= 200:
+        raise argparse.ArgumentTypeError(
+            "--approx-count must be an integer between 1 and 200"
+        )
+    return count
 
 
 def _parameters(args: argparse.Namespace) -> dict[str, Any]:
@@ -258,6 +291,19 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "policy": args.policy,
             "cache_root": args.cache_root,
         }
+    if command == "extract-keywords":
+        return {
+            "source": args.source,
+            "project_dir": args.project_dir,
+            "approx_count": args.approx_count,
+            "cache_root": args.cache_root,
+            "refresh": args.refresh,
+            "llm_provider": args.llm_provider,
+            "model": args.model,
+            "model_tier": args.model_tier,
+            "run_id": args.run_id,
+            "resume_input": args.resume_input,
+        }
     if command == "cache":
         values: dict[str, Any] = {
             "paper_ids": args.paper_ids,
@@ -287,6 +333,20 @@ def _duration_seconds(value: str | None) -> int | None:
     return seconds
 
 
+def _json_object(value: str) -> dict[str, Any]:
+    try:
+        document = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--resume-input must be a JSON object: {exc.msg}"
+        ) from exc
+    if not isinstance(document, dict):
+        raise argparse.ArgumentTypeError(
+            "--resume-input must be a JSON object"
+        )
+    return document
+
+
 def _help_data() -> dict[str, Any]:
     return {
         "program": "arc-paper",
@@ -310,6 +370,7 @@ def _help_data() -> dict[str, Any]:
             "fetch-arxiv-pdf",
             "import-source",
             "parse-local",
+            "extract-keywords",
             "cache list",
             "cache remove",
             "cache update",
@@ -382,6 +443,11 @@ def main(argv: list[str] | None = None) -> int:
                 data=_result_data(value),
                 warnings=warnings,
             ),
+            exit_code=0,
+        )
+    except KeywordExtractionPaused as exc:
+        return _emit(
+            command_result_from_snapshot(exc.snapshot),
             exit_code=0,
         )
     except _UsageError as exc:

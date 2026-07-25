@@ -51,10 +51,33 @@ canonical-arXiv-ID, or local-digest fallbacks and are resolved without network
 access. `search-cached-full-text` remains the controlled read-only search
 surface and is separate from the explicit administration commands below.
 
+## Approximate keyword inventory
+
+Build a frequency-ordered keyword view from a local source or paper ID:
+
+```bash
+arc-paper extract-keywords SOURCE \
+  --project-dir local/my-project/keyword-run \
+  --approx-count 50
+```
+
+`approx-count` accepts 1 through 200 and plans `ceil(1.5 * approx-count)`
+candidates. Explicit keyword and index fields are extracted in full and
+LLM-reviewed in entry windows before chapter text is read directly for any
+remaining terms. The workflow does not create summaries or global
+selection/reduction artifacts. Underfill succeeds; the returned view is never
+padded and contains at most the planned count.
+
+The project directory owns the durable `arc-jobs` run and supervision
+artifacts. The independent term-inventory cache is lineage-keyed under the
+ordinary `arc-paper` cache. If an explicit field is unusable, the run pauses
+before writing a cache batch and accepts only `discard_index_and_continue` or
+`abort` as supervision actions.
+
 ## Cache administration
 
-Inspect paper, local-source, and opaque legacy entries without modifying their
-read timestamps:
+Inspect paper, local-source, term-inventory, and opaque legacy entries without
+modifying their read timestamps:
 
 ```bash
 arc-paper cache list

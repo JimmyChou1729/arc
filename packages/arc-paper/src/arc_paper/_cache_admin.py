@@ -258,6 +258,9 @@ class CacheAdministrator:
         self.index = PaperCacheIndex(self.root)
         self.remote = RemoteRequestCache(self.root)
         self.catalog = FullTextCatalog(self.root)
+        from .terms import TermInventoryStore
+
+        self.term_inventory = TermInventoryStore(self.root)
 
     def list(
         self,
@@ -296,6 +299,21 @@ class CacheAdministrator:
                 local_source_identity=item.entry.local_source_identity,
                 component=CacheComponent(
                     "full-text",
+                    item.cached_at,
+                    item.time_basis,
+                    (item.entry_id,),
+                ),
+            )
+
+        for item in self.term_inventory.admin_entries():
+            merged[item.entry_id] = _merge_component(
+                merged.get(item.entry_id),
+                entry_id=item.entry_id,
+                kind="local",
+                paper_id=None,
+                local_source_identity=item.source_identity,
+                component=CacheComponent(
+                    "term-inventory",
                     item.cached_at,
                     item.time_basis,
                     (item.entry_id,),

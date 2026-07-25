@@ -489,9 +489,7 @@ def test_rich_document_materializes_standard_primary_and_pdf_validator(
     no_validator = RichDocumentParserService(repository)
     no_validator.parse(SourceBundle(primary=primary))
     entries = FullTextCatalog(repository.root).current_entries()
-    assert [entry.representations[0].source_format for entry in entries] == [
-        "markdown"
-    ]
+    assert entries == ()
 
     pdf = _store(repository, b"%PDF rich fixture", SourceFormat.PDF)
     validated = RichDocumentParserService(

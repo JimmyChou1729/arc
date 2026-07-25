@@ -298,6 +298,77 @@ _SECTION_SCHEMA = _object(
         "page_end",
     ),
 )
+_MATCHED_SENTENCE_SCHEMA = _object(
+    {
+        "text": {"type": "string", "maxLength": 400},
+        "section_id": _NONEMPTY_STRING,
+        "page_number": _NULLABLE_INTEGER,
+        "matched_surface": _NONEMPTY_STRING,
+        "clipped": {"type": "boolean"},
+    },
+    required=(
+        "text",
+        "section_id",
+        "page_number",
+        "matched_surface",
+        "clipped",
+    ),
+)
+_KEYWORD_TERM_SCHEMA = _object(
+    {
+        "term_id": _NONEMPTY_STRING,
+        "term": {"type": "string", "minLength": 1, "maxLength": 300},
+        "aliases": _STRING_ARRAY,
+        "occurrence_count": {"type": "integer", "minimum": 0},
+        "source_refs": _STRING_ARRAY,
+        "matched_sentences": {
+            "type": "array",
+            "maxItems": 10,
+            "items": _MATCHED_SENTENCE_SCHEMA,
+        },
+    },
+    required=(
+        "term_id",
+        "term",
+        "aliases",
+        "occurrence_count",
+        "source_refs",
+        "matched_sentences",
+    ),
+)
+_KEYWORD_RESULT_SCHEMA = _object(
+    {
+        "schema_version": {"const": "arc.paper.keyword_result.v1"},
+        "document_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+        },
+        "source_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+        },
+        "approx_count": {"type": "integer", "minimum": 1, "maximum": 200},
+        "planned_count": {"type": "integer", "minimum": 2, "maximum": 300},
+        "returned_count": {"type": "integer", "minimum": 0, "maximum": 300},
+        "terms": {"type": "array", "maxItems": 300, "items": _KEYWORD_TERM_SCHEMA},
+        "inventory_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+        },
+        "warnings": _STRING_ARRAY,
+    },
+    required=(
+        "schema_version",
+        "document_digest",
+        "source_digest",
+        "approx_count",
+        "planned_count",
+        "returned_count",
+        "terms",
+        "inventory_digest",
+        "warnings",
+    ),
+)
 _TOC_ENTRY_SCHEMA = _object(
     {
         "section_id": _NONEMPTY_STRING,
@@ -999,6 +1070,40 @@ _OPERATIONS = (
         output_schema=_PARSE_OUTCOME_SCHEMA,
         effects=frozenset(
             {OperationEffect.CACHE_WRITE, OperationEffect.ARBITRARY_LOCAL_PATH}
+        ),
+    ),
+    _spec(
+        "extract-keywords",
+        _object(
+            {
+                "source": _NONEMPTY_STRING,
+                "project_dir": _NONEMPTY_STRING,
+                "approx_count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                },
+                "cache_root": {"type": ["string", "null"]},
+                "refresh": {"type": "boolean", "default": False},
+                "llm_provider": _NONEMPTY_STRING,
+                "model": {"type": ["string", "null"]},
+                "model_tier": {
+                    "enum": ["low", "medium", "high", "xhigh"],
+                },
+                "run_id": {"type": ["string", "null"]},
+                "resume_input": {"type": ["object", "null"]},
+            },
+            required=("source", "project_dir"),
+        ),
+        service.extract_keywords,
+        output_schema=_KEYWORD_RESULT_SCHEMA,
+        effects=frozenset(
+            {
+                OperationEffect.NETWORK,
+                OperationEffect.CACHE_WRITE,
+                OperationEffect.ARBITRARY_LOCAL_PATH,
+                OperationEffect.RECURSIVE_LLM,
+            }
         ),
     ),
     _spec(

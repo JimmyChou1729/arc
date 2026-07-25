@@ -1,15 +1,19 @@
-"""Typed deterministic facade for paper acquisition, import, and parsing.
+"""Typed facade for deterministic paper access and explicit workflows.
 
-The service owns no queue, worker, checkpoint, or run state.  Durable workflow
-execution belongs to :mod:`arc_jobs`; LLM work belongs to :mod:`arc_llm`.
+Deterministic methods own no run state. ``extract_keywords`` is a convenience
+wrapper over the package's explicit :mod:`arc_jobs` workflow; LLM execution
+remains owned by :mod:`arc_llm`.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from arc_jobs import JsonValue, RunStatus
+from arc_llm import ModelSelection
 
 from ._cache_admin import (
     CacheAdministrator,
@@ -59,6 +63,10 @@ from .sources import (
     ValidationPolicy,
 )
 
+if TYPE_CHECKING:
+    from .rich_document import RichDocument
+    from .terms import KeywordResult, TermInventoryStore
+
 
 class PaperInputError(ValueError):
     """A stable invalid-request error raised before external effects."""
@@ -76,7 +84,7 @@ def default_cache_root() -> Path:
 
 
 class ArcPaperService:
-    """Small, injectable facade over the package-owned deterministic services."""
+    """Injectable facade over package-owned deterministic and workflow services."""
 
     def __init__(
         self,
@@ -87,6 +95,7 @@ class ArcPaperService:
         ar5iv: Ar5ivProvider | None = None,
         arxiv_pdf: ArxivPdfProvider | None = None,
         pdf_text_extractor: PDFTextExtractor | None = None,
+        keyword_task_service: Any | None = None,
     ):
         try:
             root = resolve_cache_root(cache_root, repository=repository)
@@ -110,6 +119,8 @@ class ArcPaperService:
             pdf_text_extractor=pdf_text_extractor,
         )
         self._cached_full_text_searcher = CachedFullTextSearcher(root)
+        self._keyword_task_service = keyword_task_service
+        self._term_inventory_store: Any | None = None
 
     def import_source(
         self,
@@ -355,6 +366,12 @@ class ArcPaperService:
                     entry.entry_id
                 )
             else:
+                changed = (
+                    self.cache_administrator.term_inventory.remove_admin_entry(
+                        entry.entry_id
+                    )
+                    or changed
+                )
                 for component in entry.components:
                     for storage_entry_id in component.storage_entry_ids:
                         if storage_entry_id.startswith("remote:"):
@@ -475,6 +492,77 @@ class ArcPaperService:
             if item.status == "failed"
         )
         return CacheUpdateResult(tuple(records), tuple(warnings))
+
+    @property
+    def term_inventory_store(self) -> TermInventoryStore:
+        """Return the lazily constructed keyword cache component."""
+
+        from .terms import TermInventoryStore
+
+        if self._term_inventory_store is None:
+            self._term_inventory_store = TermInventoryStore(self.cache_root)
+        return self._term_inventory_store
+
+    def extract_keywords(
+        self,
+        source: SourceArtifact | ParsedDocument | RichDocument,
+        *,
+        project_dir: str | Path,
+        approx_count: int = 50,
+        model: ModelSelection = ModelSelection(tier="medium"),
+        run_id: str | None = None,
+        resume_input: Mapping[str, JsonValue] | None = None,
+    ) -> KeywordResult:
+        """Extract a cache-aware approximate keyword view.
+
+        ``SourceArtifact`` values must belong to this service's repository.
+        ``ParsedDocument`` and ``RichDocument`` values cross the semantic seam
+        directly and are never re-opened through a path.
+        """
+
+        from .rich_document import RichDocument
+        from .terms import KeywordResult
+        from .workflows.keywords import (
+            KeywordExtractionError,
+            KeywordExtractionPaused,
+            KeywordExtractionRunner,
+        )
+
+        if isinstance(source, SourceArtifact):
+            document: ParsedDocument | RichDocument = self.parser.parse_source(
+                source
+            )
+        elif isinstance(source, (ParsedDocument, RichDocument)):
+            document = source
+        else:
+            raise PaperInputError(
+                "keyword source must be a repository SourceArtifact, ParsedDocument, or RichDocument"
+            )
+        runner = KeywordExtractionRunner(
+            project_dir,
+            store=self.term_inventory_store,
+            task_service=self._keyword_task_service,
+        )
+        snapshot = runner.execute(
+            document,
+            approx_count=approx_count,
+            model=model,
+            run_id=run_id,
+            resume_input=resume_input,
+        )
+        if snapshot.status is RunStatus.SUCCEEDED:
+            result: KeywordResult = runner.read_result(snapshot)
+            return result
+        if snapshot.status is RunStatus.PAUSED:
+            raise KeywordExtractionPaused(snapshot)
+        if snapshot.status is RunStatus.FAILED and snapshot.error is not None:
+            raise KeywordExtractionError(
+                snapshot.error.code, snapshot.error.message
+            )
+        raise KeywordExtractionError(
+            "keyword_extraction_incomplete",
+            "keyword extraction ended without a terminal result",
+        )
 
     def search_cached_full_text(
         self,
@@ -1001,6 +1089,41 @@ def parse_local(
     )
 
 
+def extract_keywords(
+    source: str | Path,
+    *,
+    project_dir: str | Path,
+    approx_count: int = 50,
+    cache_root: str | Path | None = None,
+    refresh: bool = False,
+    llm_provider: str = "auto",
+    model: str | None = None,
+    model_tier: str = "medium",
+    run_id: str | None = None,
+    resume_input: Mapping[str, JsonValue] | None = None,
+) -> KeywordResult:
+    service = ArcPaperService(cache_root=cache_root)
+    source_text = str(source)
+    path = Path(source_text)
+    artifact = (
+        service.import_source(path)
+        if path.is_file()
+        else service.fetch_arxiv_auto(source_text, refresh=refresh)
+    )
+    return service.extract_keywords(
+        artifact,
+        project_dir=project_dir,
+        approx_count=approx_count,
+        model=ModelSelection(
+            provider=llm_provider,
+            model=model,
+            tier=model_tier,
+        ),
+        run_id=run_id,
+        resume_input=resume_input,
+    )
+
+
 __all__ = [
     "ArcPaperService",
     "CacheListResult",
@@ -1010,6 +1133,7 @@ __all__ = [
     "PaperInputError",
     "default_cache_root",
     "extract_paper_ids",
+    "extract_keywords",
     "fetch_arxiv_auto",
     "fetch_arxiv_pdf",
     "get_abstract",

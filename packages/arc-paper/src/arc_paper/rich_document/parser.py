@@ -143,14 +143,33 @@ def parse_rich_artifact_bytes(
         raw = _parse_html(text, artifact, import_asset)
     else:
         raw = _parse_tex(text, artifact, import_asset)
+    metadata: dict[str, Any] = {
+        "format": artifact.source_format.value,
+        "single_file": artifact.source_format is SourceFormat.TEX,
+    }
+    # Keep explicit term fields in the format-neutral RichDocument so
+    # downstream keyword workflows never need to reopen the source path.
+    from ..parse.parser import (
+        _html_explicit_term_fields,
+        _markdown_explicit_term_fields,
+        _tex_explicit_term_fields,
+    )
+
+    if artifact.source_format is SourceFormat.MARKDOWN:
+        explicit_fields = _markdown_explicit_term_fields(text)
+    elif artifact.source_format is SourceFormat.HTML:
+        explicit_fields = _html_explicit_term_fields(
+            BeautifulSoup(text, "lxml")
+        )
+    else:
+        explicit_fields = _tex_explicit_term_fields(text)
+    if explicit_fields:
+        metadata["explicit_term_fields"] = explicit_fields
     document = _finalize_document(
         artifact,
         raw,
         assets=tuple(assets.values()),
-        metadata={
-            "format": artifact.source_format.value,
-            "single_file": artifact.source_format is SourceFormat.TEX,
-        },
+        metadata=metadata,
     )
     return RichSourceParseResult(document=document, warnings=tuple(_dedupe(warnings)))
 

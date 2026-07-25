@@ -291,11 +291,15 @@ def _parse_markdown(artifact: SourceArtifact, text: str) -> ParsedDocument:
         excluded_lines=fenced_lines | indented_code_lines,
         include_tex_environments=True,
     )
+    metadata: dict[str, object] = {"format": "markdown"}
+    explicit_fields = _markdown_explicit_term_fields(text)
+    if explicit_fields:
+        metadata["explicit_term_fields"] = explicit_fields
     return ParsedDocument(
         source=artifact,
         sections=_sections_from_headings(headings, lines, artifact),
         math_spans=spans,
-        metadata={"format": "markdown"},
+        metadata=metadata,
     )
 
 
@@ -508,11 +512,15 @@ def _parse_tex(artifact: SourceArtifact, text: str) -> ParsedDocument:
     spans = _scan_delimited_math(
         artifact, lines, excluded_lines=set(), include_tex_environments=True
     )
+    metadata: dict[str, object] = {"format": "tex", "single_file": True}
+    explicit_fields = _tex_explicit_term_fields(active)
+    if explicit_fields:
+        metadata["explicit_term_fields"] = explicit_fields
     return ParsedDocument(
         source=artifact,
         sections=_sections_from_headings(headings, lines, artifact),
         math_spans=spans,
-        metadata={"format": "tex", "single_file": True},
+        metadata=metadata,
     )
 
 
@@ -597,11 +605,15 @@ def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
                 source_label=str(node.get("id") or ""),
             )
         )
+    metadata: dict[str, object] = {"format": "html"}
+    explicit_fields = _html_explicit_term_fields(soup)
+    if explicit_fields:
+        metadata["explicit_term_fields"] = explicit_fields
     return ParsedDocument(
         source=artifact,
         sections=tuple(sections),
         math_spans=tuple(spans),
-        metadata={"format": "html"},
+        metadata=metadata,
     )
 
 
@@ -616,6 +628,173 @@ def _html_neighbor_text(node: Tag, *, previous: bool) -> str:
     if section is not None and candidate.find_parent("section") is not section:
         return ""
     return candidate.get_text(" ", strip=True)
+
+
+def _markdown_explicit_term_fields(text: str) -> list[dict[str, object]]:
+    """Extract only syntactically explicit front-matter term fields."""
+
+    lines = text.splitlines()
+    if len(lines) < 3 or lines[0].strip() != "---":
+        return []
+    end = next(
+        (index for index, line in enumerate(lines[1:], 1) if line.strip() == "---"),
+        None,
+    )
+    if end is None:
+        return []
+    output: list[dict[str, object]] = []
+    index = 1
+    while index < end:
+        match = re.match(
+            r"^\s*(keywords?|key[-_ ]?terms?|index[-_ ]?terms?)\s*:\s*(.*)$",
+            lines[index],
+            re.IGNORECASE,
+        )
+        if match is None:
+            index += 1
+            continue
+        label, remainder = match.group(1), match.group(2).strip()
+        entries: list[str] = []
+        if remainder:
+            unwrapped = remainder.strip("[]")
+            entries.extend(
+                item.strip(" \t\"'")
+                for item in re.split(r"[,;]", unwrapped)
+                if item.strip(" \t\"'")
+            )
+        cursor = index + 1
+        while cursor < end:
+            item_match = re.match(r"^\s*-\s+(.+?)\s*$", lines[cursor])
+            if item_match is None:
+                break
+            entries.append(item_match.group(1).strip(" \t\"'"))
+            cursor += 1
+        if entries:
+            output.append(
+                {
+                    "kind": (
+                        "index" if "index" in label.casefold() else "keywords"
+                    ),
+                    "label": label,
+                    "entries": entries,
+                }
+            )
+        index = max(index + 1, cursor)
+    return output
+
+
+def _tex_explicit_term_fields(text: str) -> list[dict[str, object]]:
+    output: list[dict[str, object]] = []
+    for match in re.finditer(
+        r"\\(?:keywords?|keyterms?)\*?\s*\{([^{}]*)\}",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        entries = [
+            item.strip()
+            for item in re.split(r"[,;]", match.group(1))
+            if item.strip()
+        ]
+        if entries:
+            output.append(
+                {
+                    "kind": "keywords",
+                    "label": "keywords",
+                    "entries": entries,
+                }
+            )
+    for match in re.finditer(
+        r"\\begin\s*\{theindex\}(.*?)\\end\s*\{theindex\}",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        entries = [
+            item.strip()
+            for item in re.findall(
+                r"\\item\s+(.+?)(?=\\item|\\end\s*\{theindex\}|$)",
+                match.group(1),
+                re.DOTALL,
+            )
+            if item.strip()
+        ]
+        if entries:
+            output.append(
+                {
+                    "kind": "index",
+                    "label": "theindex",
+                    "entries": entries,
+                }
+            )
+    return output
+
+
+def _html_explicit_term_fields(
+    soup: BeautifulSoup,
+) -> list[dict[str, object]]:
+    output: list[dict[str, object]] = []
+    for meta in soup.find_all("meta"):
+        if not isinstance(meta, Tag):
+            continue
+        name = str(meta.get("name") or meta.get("property") or "")
+        if re.sub(r"[^a-z]", "", name.casefold()) not in {
+            "keyword",
+            "keywords",
+            "citationkeywords",
+        }:
+            continue
+        entries = [
+            item.strip()
+            for item in re.split(r"[,;]", str(meta.get("content") or ""))
+            if item.strip()
+        ]
+        if entries:
+            output.append(
+                {
+                    "kind": "keywords",
+                    "label": name,
+                    "entries": entries,
+                }
+            )
+    selectors = (
+        "[role='doc-index']",
+        ".ltx_index",
+        ".keywords",
+        ".keyword-list",
+        "[data-type='keywords']",
+    )
+    seen_nodes: set[int] = set()
+    for selector in selectors:
+        for node in soup.select(selector):
+            if not isinstance(node, Tag) or id(node) in seen_nodes:
+                continue
+            seen_nodes.add(id(node))
+            kind = (
+                "index"
+                if node.get("role") == "doc-index"
+                or "index" in " ".join(node.get("class") or ()).casefold()
+                else "keywords"
+            )
+            listed = [
+                item.get_text(" ", strip=True)
+                for item in node.find_all("li")
+                if item.get_text(" ", strip=True)
+            ]
+            entries = listed or [
+                item.strip()
+                for item in re.split(
+                    r"[,;\n]", node.get_text("\n", strip=True)
+                )
+                if item.strip()
+            ]
+            if entries:
+                output.append(
+                    {
+                        "kind": kind,
+                        "label": str(node.get("id") or kind),
+                        "entries": entries,
+                    }
+                )
+    return output
 
 
 def _parse_pdf(
