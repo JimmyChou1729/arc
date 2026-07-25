@@ -114,13 +114,15 @@ def _context(tmp_path: Path) -> RunContext:
     return RunContext(repository, snapshot, resume_input=None, execution_slice=None)
 
 
-def _document(labels: tuple[str, ...]) -> RichDocument:
+def _document(
+    labels: tuple[str, ...], *, source_format: SourceFormat = SourceFormat.HTML
+) -> RichDocument:
     payload = b"<html>equation fixture</html>"
     source = SourceArtifact(
-        SourceFormat.HTML,
+        source_format,
         hashlib.sha256(payload).hexdigest(),
         len(payload),
-        "text/html",
+        "text/html" if source_format is SourceFormat.HTML else "text/markdown",
         SourceOrigin(SourceOriginKind.LOCAL_IMPORT),
     )
     blocks = tuple(
@@ -129,7 +131,7 @@ def _document(labels: tuple[str, ...]) -> RichDocument:
             ordinal=index,
             kind=RichBlockKind.EQUATION,
             section_path=(),
-            locator=SourceLocator(SourceFormat.HTML, selector=f"eq-{index}"),
+            locator=SourceLocator(source_format, selector=f"eq-{index}"),
             payload={"tex": f"x_{index} = {index}", "display": True, "label": label},
         )
         for index, label in enumerate(labels)
@@ -181,6 +183,12 @@ def test_detect_suspicious_equation_labels_requires_uniform_simple_sequence() ->
     assert "regress" in detect_suspicious_equation_labels(_document(("2", "1")))[0]
     assert detect_suspicious_equation_labels(_document(("1", ""))) == ()
     assert detect_suspicious_equation_labels(_document(("1", "A.1"))) == ()
+    assert (
+        detect_suspicious_equation_labels(
+            _document(("1", "3"), source_format=SourceFormat.MARKDOWN)
+        )
+        == ()
+    )
 
 
 def test_complete_visual_mapping_uses_format_repair_and_applies_overlay(

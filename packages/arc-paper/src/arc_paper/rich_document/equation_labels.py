@@ -31,6 +31,7 @@ from arc_llm import (
 )
 
 from ..parse.visual import PDFPageRenderer, RenderedPDFPage
+from ..sources import SourceFormat
 from .models import RichBlock, RichBlockKind, RichDocument
 
 
@@ -152,6 +153,8 @@ def detect_suspicious_equation_labels(document: RichDocument) -> tuple[str, ...]
     simple global sequence.
     """
 
+    if document.source.source_format is not SourceFormat.HTML:
+        return ()
     equations = _display_equations(document)
     if len(equations) < 2:
         return ()
