@@ -509,7 +509,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] in {"status", "stop", "validate"}:
         # arc-jobs is the sole implementation of generic durable-run controls.
-        return run_control_main(arguments)
+        return run_control_main(arguments, prog="arc-paper")
     parser = _parser()
     try:
         args = parser.parse_args(arguments)

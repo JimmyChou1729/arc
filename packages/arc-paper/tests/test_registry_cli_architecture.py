@@ -539,6 +539,28 @@ def test_cli_delegates_generic_run_status_to_arc_jobs(
     assert value["run"]["id"] == "paper-run"
 
 
+@pytest.mark.parametrize("command", ["status", "stop", "validate"])
+def test_delegated_run_controls_keep_arc_paper_help_and_usage_labels(
+    command: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([command, "--help"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.startswith(f"usage: arc-paper {command}")
+    assert "usage: arc-jobs" not in captured.out
+
+    assert main([command]) == 2
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    lines = captured.out.splitlines()
+    assert len(lines) == 1
+    value = json.loads(lines[0])
+    assert value["error"]["details"] == {
+        "help_command": f"arc-paper {command} --help"
+    }
+
+
 def test_removed_control_planes_and_duplicate_parsers_stay_absent() -> None:
     removed = (
         "broker_jobs.py",
