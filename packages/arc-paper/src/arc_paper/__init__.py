@@ -14,6 +14,13 @@ from .registry import (  # noqa: E402
     registry_document,
     resolve_operations,
 )
+from .operation_resolver import (  # noqa: E402
+    PaperOperationFailure,
+    PaperOperationProvenance,
+    PaperOperationRecord,
+    PaperOperationResolver,
+    PaperOperationResult,
+)
 from .document_search import (  # noqa: E402
     DocumentSearchError,
     EquationMatch,
@@ -191,6 +198,11 @@ __all__ = [
     "OperationEffect",
     "OperationRequestError",
     "OperationSpec",
+    "PaperOperationFailure",
+    "PaperOperationProvenance",
+    "PaperOperationRecord",
+    "PaperOperationResolver",
+    "PaperOperationResult",
     "PaperInputError",
     "REGISTRY_SCHEMA_VERSION",
     "dispatch_operation",
