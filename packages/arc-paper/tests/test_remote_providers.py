@@ -41,6 +41,11 @@ def _response(
     )
 
 
+def _gate_response(starts: list[float], started: float) -> httpx.Response:
+    starts.append(started)
+    return httpx.Response(200)
+
+
 def test_ar5iv_fetches_html_into_source_repository_and_replays_without_network(
     tmp_path,
 ):
@@ -127,10 +132,46 @@ def test_official_arxiv_html_caches_404_and_refresh_rechecks_it(tmp_path):
     assert getattr(first.value, "code", "") == "arxiv_html_not_found"
     assert getattr(cached.value, "code", "") == "arxiv_html_not_found"
     assert refreshed.content_identity == replay.content_identity
+    assert (
+        provider.cache.get_json("arxiv-html-availability", "0911.3380") is None
+    )
     assert calls == [
         "https://arxiv.org/html/0911.3380",
         "https://arxiv.org/html/0911.3380",
     ]
+
+
+def test_official_html_refresh_invalidates_a_stale_404_after_transient_error(
+    tmp_path,
+):
+    responses = iter((404, 503, 200))
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        status_code = next(responses)
+        return _response(
+            request,
+            content=b"<html>converted</html>",
+            media_type="text/html",
+            status_code=status_code,
+        )
+
+    provider = ArxivHtmlProvider(
+        cache_root=tmp_path,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        request_gate=HostRequestGate(minimum_interval=0),
+    )
+    with pytest.raises(Exception) as missing:
+        provider.fetch("0911.3380")
+    with pytest.raises(Exception) as transient:
+        provider.fetch("0911.3380", refresh=True)
+    recovered = provider.fetch("0911.3380")
+
+    assert getattr(missing.value, "code", "") == "arxiv_html_not_found"
+    assert getattr(transient.value, "code", "") == "arxiv_html_fetch_failed"
+    assert recovered.origin.provider == "arxiv-html"
+    assert calls == ["https://arxiv.org/html/0911.3380"] * 3
 
 
 def test_official_html_and_pdf_share_arxiv_gate_but_ar5iv_does_not(tmp_path):
@@ -151,6 +192,7 @@ def test_official_html_and_pdf_share_arxiv_gate_but_ar5iv_does_not(tmp_path):
 
     assert official.request_gate is pdf.request_gate
     assert official.request_gate is not fallback.request_gate
+    assert fallback.request_gate.minimum_interval == 0
 
 
 def test_arxiv_gate_uses_fake_clock_for_interval_and_retry_after(tmp_path):
@@ -201,6 +243,45 @@ def test_arxiv_gate_uses_fake_clock_for_interval_and_retry_after(tmp_path):
         ("https://arxiv.org/pdf/0911.3380", 30.0),
     ]
     assert clock.sleeps == [30.0]
+
+
+def test_file_backed_host_gate_reuses_the_next_start_with_a_fake_clock(tmp_path):
+    class FakeClock:
+        def __init__(self):
+            self.value = 0.0
+            self.sleeps: list[float] = []
+
+        def now(self) -> float:
+            return self.value
+
+        def sleep(self, seconds: float) -> None:
+            self.sleeps.append(seconds)
+            self.value += seconds
+
+    clock = FakeClock()
+    state_path = tmp_path / "gate" / "arxiv.next-start"
+    lock_path = tmp_path / "gate" / "arxiv.lock"
+    first = HostRequestGate(
+        minimum_interval=15,
+        clock=clock.now,
+        sleeper=clock.sleep,
+        state_path=state_path,
+        lock_path=lock_path,
+    )
+    second = HostRequestGate(
+        minimum_interval=15,
+        clock=clock.now,
+        sleeper=clock.sleep,
+        state_path=state_path,
+        lock_path=lock_path,
+    )
+    starts: list[float] = []
+
+    first.request(lambda: _gate_response(starts, clock.now()))
+    second.request(lambda: _gate_response(starts, clock.now()))
+
+    assert starts == [0.0, 15.0]
+    assert clock.sleeps == [15.0]
 
 
 def test_shared_arxiv_gate_serializes_html_and_pdf_connections(tmp_path):

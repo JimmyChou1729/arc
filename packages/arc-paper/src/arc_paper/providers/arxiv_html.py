@@ -62,6 +62,9 @@ class ArxivHtmlProvider:
         known_not_found = self._is_known_not_found(aid)
         if not refresh and known_not_found:
             raise _not_found_error(paper_id)
+        if known_not_found:
+            # Refresh must not leave a stale 404 marker after a transient error.
+            self.cache.remove("json", ARXIV_HTML_AVAILABILITY_NAMESPACE, aid)
         artifact = self.cache.fetch_source(
             "arxiv-html",
             aid,
@@ -76,9 +79,6 @@ class ArxivHtmlProvider:
                 honor_cached_not_found=not refresh,
             ),
         )
-        if known_not_found:
-            # A refresh can discover an upstream conversion after a cached 404.
-            self.cache.remove("json", ARXIV_HTML_AVAILABILITY_NAMESPACE, aid)
         return artifact
 
     def _is_known_not_found(self, aid: str) -> bool:

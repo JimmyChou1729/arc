@@ -43,8 +43,10 @@ class Ar5ivProvider:
         self.cache = request_cache or RemoteRequestCache(
             cache_root, source_repository=source_repository
         )
+        # ar5iv publishes no crawl-delay contract.  Keep one active request and
+        # honor Retry-After without inventing arXiv's 15-second interval.
         self.request_gate = request_gate or shared_host_gate(
-            self.cache.root, AR5IV_HOST
+            self.cache.root, AR5IV_HOST, minimum_interval=0
         )
 
     def fetch(self, paper_id: str, *, refresh: bool = False) -> SourceArtifact:

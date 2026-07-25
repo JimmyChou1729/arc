@@ -10,6 +10,7 @@ import pytest
 from arc_paper import ArcPaperService, OPERATION_REGISTRY, OperationEffect
 from arc_paper._cache_admin import CacheAdministrator, PaperCacheIndex
 from arc_paper.cli import main
+from arc_paper.providers.arxiv_html import ARXIV_HTML_AVAILABILITY_NAMESPACE
 from arc_paper.providers.remote_cache import RemoteCacheError, RemoteRequestCache
 from arc_paper.source_repository import SourceRepositoryError
 from arc_paper.sources import SourceFormat, SourceOrigin, SourceOriginKind
@@ -193,15 +194,26 @@ def test_official_html_remote_component_is_listed_and_removed(tmp_path: Path) ->
         origin=origin,
         fetch=lambda: b"<html>official</html>",
     )
+    cache.fetch_json(
+        ARXIV_HTML_AVAILABILITY_NAMESPACE,
+        "0911.3380",
+        fetch=lambda: {"status": "not_found"},
+    )
     service = ArcPaperService(cache_root=tmp_path)
 
     entry = service.list_cache(paper_ids=("arXiv:0911.3380",)).entries[0]
     assert entry.paper_id == "arXiv:0911.3380"
-    assert [component.name for component in entry.components] == ["arxiv-html"]
+    assert [component.name for component in entry.components] == [
+        "arxiv-html",
+        "arxiv-html-availability",
+    ]
 
     removed = service.remove_cache(entry_ids=(entry.entry_id,), dry_run=False)
     assert removed.removed_entry_ids == (entry.entry_id,)
     assert service.list_cache(entry_ids=(entry.entry_id,)).entries == ()
+    assert (
+        cache.get_json(ARXIV_HTML_AVAILABILITY_NAMESPACE, "0911.3380") is None
+    )
 
 
 def test_shared_source_mapping_refetches_after_other_entry_deletes_object(
