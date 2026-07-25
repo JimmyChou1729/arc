@@ -17,7 +17,7 @@ from arc_llm import (
     DeliveryState,
     FailureCategory,
     JsonOutput,
-    LLMCancelled,
+    LLMStopped,
     LLMCompleted,
     LLMFailed,
     ProviderFailure,
@@ -190,12 +190,12 @@ class DomainTaskService:
         fail_stage: str | None = None,
         expand_audit: bool = False,
         selected_foundation: str = FOUNDATION,
-        cancelled_stage: str | None = None,
+        stopped_stage: str | None = None,
     ) -> None:
         self.fail_stage = fail_stage
         self.expand_audit = expand_audit
         self.selected_foundation = selected_foundation
-        self.cancelled_stage = cancelled_stage
+        self.stopped_stage = stopped_stage
         self.requests = []
 
     def execute_or_resume(self, context, request, **kwargs):
@@ -203,8 +203,8 @@ class DomainTaskService:
         self.requests.append(request)
         stage = _request_stage(request.task_id)
 
-        if stage == self.cancelled_stage:
-            return LLMCancelled()
+        if stage == self.stopped_stage:
+            return LLMStopped()
         if stage == self.fail_stage:
             return _failure(FailureCategory.TRANSPORT)
         if stage == "audit":
@@ -466,14 +466,30 @@ def test_transient_foundation_failures_use_stage_specific_fallbacks(
     assert expected_warning in _warning_codes(repository, snapshot)
 
 
-def test_llm_cancellation_cancels_the_outer_domain_run(tmp_path: Path) -> None:
+def test_llm_stop_pauses_the_outer_domain_run(tmp_path: Path) -> None:
     repository = RunRepository(tmp_path / "runs")
+    runner = DomainBuildRunner(repository)
 
-    snapshot = DomainBuildRunner(repository).execute(
+    snapshot = runner.execute(
         _request(),
         paper_access=FakePaperAccess(),
-        task_service=DomainTaskService(cancelled_stage="audit"),
+        task_service=DomainTaskService(stopped_stage="audit"),
         reference_service=ForbiddenReferenceService(),
     )
 
-    assert snapshot.status is RunStatus.CANCELLED
+    assert snapshot.status is RunStatus.PAUSED
+    assert snapshot.awaiting is not None
+    assert snapshot.awaiting.reason.value == "execution_stopped"
+
+    resumed_service = DomainTaskService()
+    resumed = runner.resume(
+        snapshot.run_id,
+        paper_access=FakePaperAccess(),
+        task_service=resumed_service,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert resumed.status is RunStatus.SUCCEEDED
+    assert resumed.run_id == snapshot.run_id
+    assert resumed.attempt == snapshot.attempt + 1
+    assert resumed_service.requests

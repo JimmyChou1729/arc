@@ -4,7 +4,7 @@
 storage, parsing, reconciliation, and paper-specific workflows. `arc-jobs`
 owns durable run state; `arc-llm` owns model execution.
 
-The CLI always writes one `arc.command_result.v1` JSON document to stdout.
+The CLI always writes one `arc.command_result.v2` JSON document to stdout.
 Warnings are part of that document and progress, when present, is written to
 stderr. Do not add `--json`.
 
@@ -180,7 +180,7 @@ They execute child model tasks through
 batch item state is the `arc-jobs` group unit result; failed-item retry creates
 a new run.
 
-Use `arc-jobs status`, `arc-jobs cancel`, and `arc-jobs validate` for generic
+Use `arc-jobs status`, `arc-jobs stop`, and `arc-jobs validate` for generic
 run control. The equivalent commands accepted by `arc-paper` delegate directly
 to `arc-jobs`; `arc-paper` does not implement another status database.
 

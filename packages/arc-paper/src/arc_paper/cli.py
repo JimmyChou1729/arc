@@ -234,7 +234,7 @@ def _help_data() -> dict[str, Any]:
             "parse-local",
             "operations",
             "status (arc-jobs)",
-            "cancel (arc-jobs)",
+            "stop (arc-jobs)",
             "validate (arc-jobs)",
         ],
     }
@@ -254,7 +254,7 @@ def _emit(result: CommandResult, *, exit_code: int) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments and arguments[0] in {"status", "cancel", "validate"}:
+    if arguments and arguments[0] in {"status", "stop", "validate"}:
         # arc-jobs is the sole implementation of generic durable-run controls.
         return run_control_main(arguments)
     try:

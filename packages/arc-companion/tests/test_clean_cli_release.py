@@ -3,12 +3,21 @@ from __future__ import annotations
 import errno
 import json
 import shutil
+import threading
 from pathlib import Path
 
 import arc_companion.project as project_module
 import arc_companion.release as release_module
 import pytest
-from arc_jobs import RunRepository, RunSpec
+from arc_jobs import (
+    Awaiting,
+    Paused,
+    ResumeReason,
+    RunEngine,
+    RunRepository,
+    RunSpec,
+    RunStatus,
+)
 from arc_companion.cli import _parser, main
 from arc_companion.contracts import (
     AcceptedBook,
@@ -99,7 +108,7 @@ def test_cli_exposes_exactly_six_protocol_commands() -> None:
         "build",
         "status",
         "resume",
-        "cancel",
+        "stop",
         "render",
         "validate",
     }
@@ -121,15 +130,15 @@ def test_legacy_project_is_rejected_without_modification(
     ) == 1
 
     result = json.loads(capsys.readouterr().out)
-    assert result["schema_version"] == "arc.command_result.v1"
+    assert result["schema_version"] == "arc.command_result.v2"
     assert result["status"] == "failed"
     assert result["error"]["code"] == "legacy_project_state"
     assert legacy.read_bytes() == before
     assert tuple(project.iterdir()) == (legacy,)
 
 
-def test_status_persists_source_diagnostics_and_cancel_uses_protocol(
-    tmp_path: Path, capsys
+def test_status_persists_source_diagnostics_and_stop_uses_same_run(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = CompanionProjectPaths.open(tmp_path / "project")
     run_id = "companion-diagnostics"
@@ -139,17 +148,24 @@ def test_status_persists_source_diagnostics_and_cancel_uses_protocol(
         ("no PDF validator was supplied",),
     )
     repository = RunRepository(project.jobs_root)
-    repository.create(
-        RunSpec(run_id, "arc.companion.build.v1", {})
+    class PausingHandler:
+        name = "arc.companion.build.v1"
+
+        def execute(self, _context):
+            return Paused(
+                Awaiting(ResumeReason.EXTERNAL_CONDITION, "resume", False)
+            )
+
+    RunEngine(repository).execute(
+        RunSpec(run_id, PausingHandler.name, {}), PausingHandler()
     )
-    repository.request_cancel(run_id, reason="prepared fixture")
 
     assert main(
         ["status", "--project-dir", str(project.root), "--json"]
-    ) == 3
+    ) == 2
     status = json.loads(capsys.readouterr().out)
-    assert status["schema_version"] == "arc.command_result.v1"
-    assert status["status"] == "cancelled"
+    assert status["schema_version"] == "arc.command_result.v2"
+    assert status["status"] == "paused"
     assert status["warnings"] == [
         {
             "code": "source_diagnostic",
@@ -158,18 +174,77 @@ def test_status_persists_source_diagnostics_and_cancel_uses_protocol(
         }
     ]
 
+    stopped: list[tuple[str, str | None]] = []
+
+    def fake_stop(self, received_run_id, *, reason=None):
+        stopped.append((received_run_id, reason))
+        return self.inspect(received_run_id)
+
+    monkeypatch.setattr("arc_companion.cli.CompanionService.stop", fake_stop)
     assert main(
         [
-            "cancel",
+            "stop",
             "--project-dir",
             str(project.root),
             "--reason",
             "user requested",
             "--json",
         ]
-    ) == 3
-    cancelled = json.loads(capsys.readouterr().out)
-    assert cancelled["status"] == "cancelled"
+    ) == 0
+    stopped_result = json.loads(capsys.readouterr().out)
+    assert stopped_result["status"] == "completed"
+    assert stopped_result["data"]["run"] == {
+        "status": "paused",
+        "attempt": 1,
+        "stop_requested": False,
+    }
+    assert stopped == [(run_id, "user requested")]
+
+
+def test_stop_acknowledges_a_running_attempt_before_it_pauses(
+    tmp_path: Path, capsys
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    run_id = "companion-running-stop"
+    project.select_run(run_id)
+    repository = RunRepository(project.jobs_root)
+    started = threading.Event()
+    release = threading.Event()
+    snapshots = []
+
+    class BlockingHandler:
+        name = "arc.companion.build.v1"
+
+        def execute(self, context):
+            started.set()
+            assert release.wait(timeout=5)
+            context.checkpoint()
+            raise AssertionError("stopped attempt must not complete")
+
+    thread = threading.Thread(
+        target=lambda: snapshots.append(
+            RunEngine(repository).execute(
+                RunSpec(run_id, BlockingHandler.name, {}), BlockingHandler()
+            )
+        )
+    )
+    thread.start()
+    assert started.wait(timeout=5)
+
+    assert main(["stop", "--project-dir", str(project.root), "--reason", "pause"]) == 0
+    acknowledgement = json.loads(capsys.readouterr().out)
+    assert acknowledgement["status"] == "completed"
+    assert acknowledgement["run"]["id"] == run_id
+    assert acknowledgement["data"]["run"] == {
+        "status": "running",
+        "attempt": 1,
+        "stop_requested": True,
+    }
+
+    release.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert snapshots[0].status is RunStatus.PAUSED
 
 
 def test_release_is_immutable_reused_and_current_updates_last(
@@ -333,7 +408,7 @@ def test_cli_rejects_build_and_resume_worker_bounds(
     assert main(argv) == 1
 
     result = json.loads(capsys.readouterr().out)
-    assert result["schema_version"] == "arc.command_result.v1"
+    assert result["schema_version"] == "arc.command_result.v2"
     assert result["status"] == "failed"
     assert result["error"]["code"] == "invalid_request"
     assert result["error"]["message"] == "--workers must be between 1 and 24"
@@ -368,7 +443,7 @@ def test_cli_rejects_missing_pdf_before_source_or_project_import(
     ) == 1
 
     result = json.loads(capsys.readouterr().out)
-    assert result["schema_version"] == "arc.command_result.v1"
+    assert result["schema_version"] == "arc.command_result.v2"
     assert result["status"] == "failed"
     assert result["error"]["code"] == "invalid_request"
     assert result["error"]["message"] == (

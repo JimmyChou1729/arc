@@ -55,7 +55,7 @@ def test_execute_routed_only_passes_matching_resume_input(monkeypatch):
 
 
 def test_outer_resume_input_decodes_or_uses_caller_error_code():
-    resume_input = ResumeInput(resume_key="resume-key", action=ResumeAction.CANCEL)
+    resume_input = ResumeInput(resume_key="resume-key", action=ResumeAction.CONTINUE)
     context = SimpleNamespace(resume_input=resume_input_to_document(resume_input))
     assert _llm.outer_resume_input(context, error_code="domain_resume_invalid") == resume_input
     assert _llm.outer_resume_input(SimpleNamespace(resume_input=None), error_code="unused") is None

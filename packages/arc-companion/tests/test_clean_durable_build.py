@@ -692,7 +692,7 @@ def test_unsafe_review_patch_pauses_once_and_can_be_discarded(
     protocol = json.loads(
         command_result_json(command_result_from_snapshot(paused))
     )
-    assert protocol["schema_version"] == "arc.command_result.v1"
+    assert protocol["schema_version"] == "arc.command_result.v2"
     request_ref = paused.awaiting.request_ref
     assert request_ref is not None
     resume = protocol["resume"]
@@ -937,7 +937,7 @@ def test_malformed_arc_llm_resume_input_fails_strictly(
     failed = service.resume(
         paused.run_id,
         input={
-            "schema_version": "arc.llm.resume_input.v1",
+            "schema_version": "arc.llm.resume_input.v2",
             "resume_key": "fake-provider-ready",
         },
         execution=CompanionExecutionOptions(workers=1),

@@ -163,7 +163,7 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
     warnings: list[str] = []
     if excluded_loops:
         warnings.append(
-            "WARNING: EXCLUDED NON-USABLE LOOPS — failed, cancelled, or incomplete loops were not ranked: "
+            "WARNING: EXCLUDED NON-USABLE LOOPS — failed or incomplete loops were not ranked: "
             + ", ".join(f"{item['loop_id']} ({item['status']})" for item in excluded_loops)
         )
     top_three: list[dict[str, Any]] = []

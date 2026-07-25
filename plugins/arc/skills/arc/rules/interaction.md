@@ -29,7 +29,7 @@ runtime switch. Direct ARC tool tasks do not create an extra state file; use
 the latest explicit instruction in the current session.
 
 An `auto` to `interactive` switch takes effect at the next safe, controllable
-boundary. Do not cancel a provider call, CLI command, or background job already
+boundary. Do not stop a provider call, CLI command, or background job already
 submitted. An `interactive` to `auto` switch while awaiting ordinary milestone
 confirmation also approves that checkpoint and continues.
 

@@ -53,7 +53,7 @@ from .generation_validation import (
 from .llm_runtime import (
     CompanionLLMError,
     awaiting_from_pause,
-    ensure_not_cancelled,
+    ensure_not_stopped,
     execute_task,
     outer_resume_input,
     run_error_from_failure,
@@ -261,7 +261,7 @@ class CompanionBuildHandler:
             return Paused(awaiting_from_pause(outcome))
         if isinstance(outcome, LLMFailed):
             return Failed(run_error_from_failure(outcome))
-        ensure_not_cancelled(outcome, "source-language detection")
+        ensure_not_stopped(outcome, "source-language detection")
         raise RuntimeError("unknown language outcome")
 
     def _plans(
@@ -334,7 +334,7 @@ class CompanionBuildHandler:
                     "failed",
                     error=run_error_from_failure(outcome),
                 )
-            ensure_not_cancelled(outcome, f"chapter plan {chapter.chapter_id}")
+            ensure_not_stopped(outcome, f"chapter plan {chapter.chapter_id}")
             raise RuntimeError("unknown chapter-plan outcome")
 
         result = context.run_group(
@@ -515,7 +515,7 @@ class CompanionBuildHandler:
             return Paused(awaiting_from_pause(outcome))
         if isinstance(outcome, LLMFailed):
             return Failed(run_error_from_failure(outcome))
-        ensure_not_cancelled(outcome, "book glossary")
+        ensure_not_stopped(outcome, "book glossary")
         raise RuntimeError("unknown glossary outcome")
 
     def _chapters(
@@ -644,7 +644,7 @@ class CompanionBuildHandler:
                     "failed",
                     error=run_error_from_failure(outcome),
                 )
-            ensure_not_cancelled(outcome, f"chapter draft {chapter.chapter_id}")
+            ensure_not_stopped(outcome, f"chapter draft {chapter.chapter_id}")
             assert isinstance(outcome, LLMCompleted)
             draft_value = _mapping(outcome.value, "chapter draft")
             draft_value["translations"] = translations
@@ -692,7 +692,7 @@ class CompanionBuildHandler:
                     "failed",
                     error=run_error_from_failure(review_outcome),
                 )
-            ensure_not_cancelled(
+            ensure_not_stopped(
                 review_outcome, f"chapter review {chapter.chapter_id}"
             )
             assert isinstance(review_outcome, LLMCompleted)
@@ -881,7 +881,7 @@ class CompanionBuildHandler:
                 return Paused(awaiting_from_pause(outcome))
             if isinstance(outcome, LLMFailed):
                 return run_error_from_failure(outcome)
-            ensure_not_cancelled(
+            ensure_not_stopped(
                 outcome,
                 f"translation window {chapter.chapter_id}/{ordinal}",
             )

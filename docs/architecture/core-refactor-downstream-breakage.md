@@ -26,7 +26,7 @@ be restored as shims.
 
 `arc-jobs` owns durable execution, run state, and generic control operations.
 `arc-llm` owns provider selection and durable typed LLM tasks. Its supported
-CLI is `generate`, `resume`, `status`, `cancel`, and `doctor`; prior direct
+CLI is `generate`, `resume`, `status`, `stop`, and `doctor`; prior direct
 runner and controller surfaces are retired.
 
 `arc-proposer-reviewer` owns typed multi-worker proposer/reviewer batches. Its

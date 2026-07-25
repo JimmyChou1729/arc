@@ -39,7 +39,7 @@ manifest must be regenerated before cross-domain work.
 
 Proceed only when the domain-build handoff status is `completed` or `degraded`.
 For a degraded handoff, print its warnings and use only the verified domain
-material; a failed or cancelled handoff must be resolved before idea generation.
+material; a failed or paused handoff must be resolved before idea generation.
 
 Step 4: Keep `variant_glob` as `ideas-*.variant.json`. The release package
 runs only enabled variants, then selects only the enabled variant applicable
@@ -68,8 +68,8 @@ python3 <skill-dir>/scripts/run-ideas.py \
 LLM calls have no absolute runtime limit and stop after 30 minutes with no
 substantive provider output. The foreground runner streams start/finish progress
 JSON to stderr. Keep its terminal session active; do not interrupt merely
-because the run is long. `SIGINT`, `SIGTERM`, and ordinary durable cancellation
-remain available.
+because the run is long. `SIGINT`, `SIGTERM`, and ordinary durable stop remain
+available; a stop pauses the current attempt for same-run resume.
 
 Step 2: Treat the runner result as the public batch handoff. It materializes
 one `BatchRequest` and executes it through `ProposerReviewerHandler` in the
@@ -88,7 +88,7 @@ proposal and its review envelope. The scientific review is the envelope's
 fails, print its `WARNING:` and do not rank or reconstruct output from files.
 
 Step 3: Print any returned `WARNING:` messages. Rank only loops whose public
-lifecycle is `succeeded`; failed, cancelled, pending, running, paused, and
+lifecycle is `succeeded`; failed, pending, running, paused, and
 integrity-error loops remain visible in inspection but are excluded from the
 formal ranking. For loop concurrency and durable pause/resume behavior, see
 `manuals/arc-llm.md`.

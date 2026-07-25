@@ -1,7 +1,7 @@
 # ARC Jobs
 
 `arc-jobs` is ARC's protocol-neutral persistent job runner. Use it for slow
-CLI work, concurrency, status inspection, cancellation, and report export.
+CLI work, concurrency, status inspection, stop control, and report export.
 It does not require or start MCP.
 
 ## Submit And Watch
@@ -16,7 +16,7 @@ arc-jobs submit --job-type <type> --cwd <project-dir> --json -- \
 
 `arc-domain build` already owns its durable run, artifact replay, resume, and
 publication. Start it directly with `arc-domain build ...`; do not wrap it in a
-second `arc-jobs submit` job. Use `arc-domain status`, `resume`, `cancel`, and
+second `arc-jobs submit` job. Use `arc-domain status`, `resume`, `stop`, and
 `validate` for its run controls.
 
 The accepted response contains `job_id`, `status=job_running`, and
@@ -29,17 +29,17 @@ arc-jobs status <job-id> --json
 arc-jobs watch <job-id> --progress-jsonl --json
 arc-jobs watch <job-id> --until-review --after-review-sequence 0 --json
 arc-jobs result <job-id> --json
-arc-jobs cancel <job-id> --json
+arc-jobs stop <job-id> --json
 ```
 
 Terminal statuses include successful `done`, `completed`, `degraded`,
-`stopped`, and `needs_llm`, plus unsuccessful `failed` and `cancelled`.
+`stopped`, and `needs_llm`, plus unsuccessful `failed`.
 `degraded` preserves usable work, failure counts, and warnings; it is not
 equivalent to a clean completion. A command is successful only when its process exit status is zero
-and the returned JSON does not report `ok: false`. Do not cancel a job merely
+and the returned JSON does not report `ok: false`. Do not stop a job merely
 because it is slow.
-Status and cancellation calls use `ok=true` when the control operation itself
-succeeds; `arc-jobs status` still exits nonzero for a failed or cancelled job,
+Status and stop calls use `ok=true` when the control operation itself
+succeeds; `arc-jobs status` still exits nonzero for a failed job,
 and `result` carries the command's success or failure envelope.
 
 `ARC_JOBS_DIR` overrides the persistent job root; legacy `ARC_JOBS_CACHE`
@@ -61,7 +61,7 @@ last substantive excerpt, artifact paths, and validated progress events when the
 child CLI supplies them. `watch --progress-jsonl` streams those events without
 changing the run. `watch --until-review --after-review-sequence N` returns
 successfully after the next `review_due` sequence greater than `N`; returning
-does not pause or cancel the job. Provider-local review numbers are retained as
+does not pause or stop the job. Provider-local review numbers are retained as
 `provider_review_sequence` in events, while `review_sequence` is ARC Jobs' strictly
 increasing cursor across all provider calls in the job.
 
@@ -77,12 +77,13 @@ At each review checkpoint, inspect the latest excerpt and artifacts. When there
 is a concrete result, new evidence, a completed step, a reusable artifact, or a
 meaningfully narrowed problem, set `cursor` to the returned `review_sequence`
 and run the command again. For repeated heartbeats or errors, off-task work, or
-output with no substantive progress, run `arc-jobs cancel <job-id> --json`.
-Never cancel solely because total runtime is long. A terminal result is returned
+output with no substantive progress, run `arc-jobs stop <job-id> --json`.
+Never stop solely because total runtime is long. A stop pauses the current
+attempt and the owning workflow resumes the same run. A terminal result is returned
 normally by watch and ends this loop.
 
-`SIGINT`, `SIGTERM`, and `arc-jobs cancel` request cancellation and terminate
-the full provider process group before the job reaches terminal `cancelled`.
+`SIGINT`, `SIGTERM`, and `arc-jobs stop` request a stop and terminate
+the full provider process group before the run pauses for resume.
 An `idle_timeout` is terminal for the current call and does not automatically
 start another paid call. Resume only through the owning workflow's explicit
 checkpoint/session continuation path.

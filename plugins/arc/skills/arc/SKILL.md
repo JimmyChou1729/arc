@@ -52,10 +52,11 @@ long-running job, start with
 `arc-jobs watch <job-id> --until-review --after-review-sequence 0 --json`.
 At each review, continue by running the same command with the returned job-level
 `review_sequence` as the new cursor when the agent reports concrete results,
-evidence, artifacts, or a meaningfully narrowed problem. Cancel repetitive
+evidence, artifacts, or a meaningfully narrowed problem. Stop repetitive
 heartbeats, repeated errors, off-task work, or activity with no reusable result.
-A terminal result returns normally and ends the loop; do not cancel merely
-because the call is long. Explicit cancellation remains available throughout.
+A terminal result returns normally and ends the loop; do not stop merely
+because the call is long. An explicit stop pauses the current attempt for
+same-run resume.
 
 ## Required References
 
@@ -87,7 +88,7 @@ not optional.
 - Research field/domain construction, foundation-paper selection, domain
   networks, evidence packs, graph HTML, or field briefings: read
   `manuals/arc-domain.md`.
-- Any background job, job watcher, timeout, cancellation, or asynchronous
+- Any background job, job watcher, timeout, stop request, or asynchronous
   report export: read `manuals/arc-jobs.md`.
 - Host LLM/provider detection, model choice, direct prompt tests, or provider
   troubleshooting: read `manuals/arc-llm.md`.
@@ -144,7 +145,7 @@ the detected `ARC_AGENT_HOST` for CLI and detached-job provider selection.
 ## Workflow
 
 Follow the workflow step by step. Do not skip any step, and do not kill or
-cancel any job because it is slow or time consuming.
+stop any job because it is slow or time consuming.
 
 ### Phase 1: Setup
 

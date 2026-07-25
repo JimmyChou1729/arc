@@ -111,7 +111,7 @@ def test_cli_stdout_is_exactly_one_command_result(
 
     assert len(lines) == 1
     value = json.loads(lines[0])
-    assert value["schema_version"] == "arc.command_result.v1"
+    assert value["schema_version"] == "arc.command_result.v2"
     assert value["status"] == expected_status
 
 
@@ -340,7 +340,7 @@ def test_cli_delegates_generic_run_status_to_arc_jobs(
         ["status", "--run-root", str(tmp_path), "--run-id", "paper-run"]
     ) == 0
     value = json.loads(capsys.readouterr().out)
-    assert value["schema_version"] == "arc.command_result.v1"
+    assert value["schema_version"] == "arc.command_result.v2"
     assert value["run"]["id"] == "paper-run"
 
 

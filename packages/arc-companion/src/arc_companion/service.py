@@ -39,7 +39,7 @@ class CompanionServiceError(RuntimeError):
 
 
 class CompanionService:
-    """Build, resume, inspect, cancel, and load one Companion lineage."""
+    """Build, resume, inspect, stop, and load one Companion lineage."""
 
     def __init__(self, repository: RunRepository | str | Path) -> None:
         self.repository = (
@@ -94,8 +94,8 @@ class CompanionService:
     def inspect(self, run_id: str) -> RunView:
         return self.repository.inspect(run_id)
 
-    def cancel(self, run_id: str, *, reason: str | None = None) -> RunView:
-        return self.repository.request_cancel(run_id, reason=reason)
+    def stop(self, run_id: str, *, reason: str | None = None) -> RunView:
+        return self.repository.request_stop(run_id, reason=reason)
 
     def accepted_book(self, run_id: str) -> AcceptedBook:
         snapshot = self.repository.inspect(run_id).snapshot

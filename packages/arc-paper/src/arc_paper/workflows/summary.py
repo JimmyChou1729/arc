@@ -9,7 +9,7 @@ from typing import Any, Mapping, TypeAlias
 
 from arc_jobs import (
     ArtifactSourceRef,
-    CancelledError,
+    StoppedError,
     Failed,
     FailureMode,
     GroupResult,
@@ -28,7 +28,7 @@ from arc_jobs import (
 )
 from arc_llm import (
     JsonOutput,
-    LLMCancelled,
+    LLMStopped,
     LLMCompleted,
     LLMFailed,
     LLMInputArtifact,
@@ -147,7 +147,7 @@ class PaperSummaryCompleted:
 
 
 PaperSummaryOutcome: TypeAlias = (
-    PaperSummaryCompleted | LLMPaused | LLMFailed | LLMCancelled
+    PaperSummaryCompleted | LLMPaused | LLMFailed | LLMStopped
 )
 
 
@@ -376,8 +376,8 @@ class SummaryBatchHandler:
                     "failed",
                     error=run_error_from_failure(outcome),
                 )
-            if isinstance(outcome, LLMCancelled):
-                raise CancelledError("summary LLM task cancelled")
+            if isinstance(outcome, LLMStopped):
+                raise StoppedError("summary LLM task stopped")
             raise RuntimeError("unknown paper-summary outcome")
 
         result = context.run_group(

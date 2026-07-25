@@ -33,7 +33,7 @@ def _document(tmp_path: Path):
 
 def _result(capsys) -> dict:
     result = json.loads(capsys.readouterr().out)
-    assert result["schema_version"] == "arc.command_result.v1"
+    assert result["schema_version"] == "arc.command_result.v2"
     return result
 
 

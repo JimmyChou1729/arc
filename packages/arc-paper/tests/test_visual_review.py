@@ -16,6 +16,7 @@ from arc_jobs import (
     RunRepository,
     RunSpec,
     RunStatus,
+    StoppedError,
 )
 from arc_llm import (
     DeliveryState,
@@ -25,6 +26,7 @@ from arc_llm import (
     LLMCompleted,
     LLMFailed,
     LLMPaused,
+    LLMStopped,
     LLMTaskService,
     ModelSelection,
     ProviderCapabilities,
@@ -112,7 +114,7 @@ class ManifestAwareAdapter:
             usage=UsageAvailability.UNAVAILABLE,
             config_isolation=IsolationMode.ISOLATED,
             tool_isolation=IsolationMode.ISOLATED,
-            cooperative_cancel=True,
+            cooperative_stop=True,
             provider_persistence=True,
             input_delivery={
                 "image/png": InputDeliveryMode.NATIVE_ATTACHMENT,
@@ -124,8 +126,8 @@ class ManifestAwareAdapter:
     def doctor(self) -> ProviderDiagnostic:
         return ProviderDiagnostic(self.name, True, "fake-codex")
 
-    def start(self, request, observer, cancel) -> ProviderExecution:
-        del cancel
+    def start(self, request, observer, stop) -> ProviderExecution:
+        del stop
         self.start_calls += 1
         self.requests.append(request)
         observer.before_delivery()
@@ -162,9 +164,9 @@ class ManifestAwareAdapter:
             (CandidateMaterial(value=value, terminal=True),),
         )
 
-    def resume(self, handle, request, observer, cancel) -> ProviderExecution:
+    def resume(self, handle, request, observer, stop) -> ProviderExecution:
         del handle
-        return self.start(request, observer, cancel)
+        return self.start(request, observer, stop)
 
 
 class ScriptedLLM:
@@ -421,6 +423,29 @@ def test_paused_page_is_unreviewed_and_later_pages_continue(tmp_path: Path) -> N
     )
     assert span_entry.status is ReconciliationStatus.UNREVIEWED
     assert any("paused" in warning for warning in outcome.warnings)
+
+
+def test_stopped_page_propagates_to_the_outer_durable_run(tmp_path: Path) -> None:
+    sources = SourceRepository(tmp_path / "sources")
+    markdown = _store(sources, b"# Notes\n$x$.\n", SourceFormat.MARKDOWN)
+    pdf = _store(sources, b"%PDF stop fixture", SourceFormat.PDF)
+    parser = PaperParserService(
+        sources, pdf_text_extractor=FakePDFTextExtractor(("one",))
+    )
+    primary = parser.parse_source(markdown)
+    parsed_pdf = parser.parse_source(pdf)
+    llm = ScriptedLLM([LLMStopped()])
+
+    with pytest.raises(StoppedError, match="visual review LLM task stopped"):
+        VisualReviewService(FakeRenderer(1), llm=llm).review(
+            _context(tmp_path),
+            primary,
+            parsed_pdf,
+            markdown_bytes=sources.read_bytes(markdown),
+            pdf_bytes=sources.read_bytes(pdf),
+        )
+
+    assert len(llm.requests) == 1
 
 
 def test_unreviewed_page_terminal_survives_crash_before_parse_commit_without_calls(
@@ -730,6 +755,34 @@ def test_public_runner_reaches_default_markdown_pdf_full_page_review(
     )
     assert result["schema_version"] == "arc.paper.parse_outcome.v1"
     assert result["report"]["policy"] == "visual_all_pages"
+
+
+def test_public_runner_pauses_when_visual_llm_is_stopped(tmp_path: Path) -> None:
+    sources = SourceRepository(tmp_path / "sources")
+    markdown = _store(sources, b"# Notes\n$x$.\n", SourceFormat.MARKDOWN)
+    pdf = _store(sources, b"%PDF stopped runner fixture", SourceFormat.PDF)
+    jobs = RunRepository(tmp_path / "jobs")
+    llm = ScriptedLLM([LLMStopped()])
+    runner = MarkdownPDFVisualParseRunner(
+        jobs,
+        sources,
+        renderer=FakeRenderer(1),
+        pdf_text_extractor=FakePDFTextExtractor(("one",)),
+        llm=llm,
+    )
+
+    snapshot = runner.execute(
+        "visual-runner-stopped",
+        markdown,
+        pdf,
+        model=ModelSelection("codex"),
+    )
+
+    assert snapshot.status is RunStatus.PAUSED
+    assert snapshot.awaiting is not None
+    assert snapshot.awaiting.reason is ResumeReason.EXECUTION_STOPPED
+    assert snapshot.result_ref is None
+    assert len(llm.requests) == 1
 
 
 def test_renderer_failure_with_zero_text_pages_marks_spans_unreviewed(

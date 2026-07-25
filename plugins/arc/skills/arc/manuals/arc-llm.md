@@ -4,8 +4,8 @@
 should use their owning package or workflow, such as `arc-domain`; use this
 manual for a bounded structured task, provider diagnosis, or durable recovery.
 
-The CLI writes one `arc.command_result.v1` JSON document to stdout. Do not add
-`--json`. Its only command surface is `generate`, `resume`, `status`, `cancel`,
+The CLI writes one `arc.command_result.v2` JSON document to stdout. Do not add
+`--json`. Its only command surface is `generate`, `resume`, `status`, `stop`,
 and `doctor`.
 
 ## Source-Sensitive Preflight
@@ -126,7 +126,7 @@ bounded diagnostic evidence only; they must not create a second model call or
 silently override the final message. ARC applies the declared local schema
 validation/repair before reporting completion.
 
-### Step 3: Resume or cancel only that run
+### Step 3: Resume or stop only that run
 
 ```bash
 arc-llm resume \
@@ -134,14 +134,14 @@ arc-llm resume \
   --run-id <stable-run-id> \
   --input <resume-input.json>
 
-arc-llm cancel \
+arc-llm stop \
   --run-root <project-dir>/context/arc-llm \
   --run-id <stable-run-id> \
   --reason "superseded by corrected evidence"
 ```
 
 Omit `--input` only when the paused run does not require one. A resume input is
-a complete `arc.llm.resume_input.v1` document tied to the returned resume key.
+a complete `arc.llm.resume_input.v2` document tied to the returned resume key.
 Never retry by creating a same-purpose unrelated run: durable replay and resume
 preserve provider accounting and the audit trail.
 
@@ -149,7 +149,7 @@ preserve provider accounting and the audit trail.
 
 Transport and temporary provider failures may be resumable; authentication,
 quota, and unavailable-provider failures remain paused for external resolution.
-Cancellation is terminal for the caller's run. A failed command exits one;
+Stop pauses the current attempt; resume continues the same durable run. A failed command exits one;
 invalid CLI/request input exits two.
 
 The request capability policy is explicit. Normal ARC workflows leave internet

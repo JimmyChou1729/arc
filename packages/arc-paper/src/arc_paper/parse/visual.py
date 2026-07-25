@@ -10,10 +10,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
-from arc_jobs import ArtifactSourceRef, RunContext
+from arc_jobs import ArtifactSourceRef, RunContext, StoppedError
 from arc_llm import (
     JsonOutput,
-    LLMCancelled,
+    LLMStopped,
     LLMCompleted,
     LLMFailed,
     LLMInputArtifact,
@@ -406,12 +406,8 @@ class VisualReviewService:
                             f"PDF page {page.page_number} visual review was unreviewed "
                             f"(paused:{outcome.reason.value})"
                         )
-                    elif isinstance(outcome, LLMCancelled):
-                        review = None
-                        warning = (
-                            f"PDF page {page.page_number} visual review was unreviewed "
-                            "(cancelled)"
-                        )
+                    elif isinstance(outcome, LLMStopped):
+                        raise StoppedError("visual review LLM task stopped")
                     else:  # pragma: no cover - closed typed outcome union
                         review = None
                         warning = (

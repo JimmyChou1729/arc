@@ -84,7 +84,7 @@ closed v1 policy JSON document. Explicit policy flags override its four
 selectable limits; the persisted request always contains the complete resolved
 policy.
 `--run-id` may name the durable run explicitly. Build output uses the
-`arc.command_result.v1` envelope and reports the run and domain IDs.
+`arc.command_result.v2` envelope and reports the run and domain IDs.
 
 Step 3: For a fixed canonical origin and a strict citer time window, promote to
 v2 explicitly:
@@ -111,13 +111,13 @@ Do not use `init`, `identify-foundation`, `build-network`, `build-evidence`,
 `build-paper-json-pack`, `summarize`, or any `llm-*` alias. They are not
 supported command surfaces.
 
-### Phase 2: Resume, Inspect, or Cancel
+### Phase 2: Resume, Inspect, or Stop
 
 Step 1: Resume only the same durable run after a pause.
 
 ```bash
 arc-domain resume <run-id>
-arc-domain cancel <run-id>
+arc-domain stop <run-id>
 arc-domain validate <run-id>
 ```
 
@@ -143,7 +143,7 @@ arc-domain get-summary --domain-id <domain-id>
 arc-domain get-graph --domain-id <domain-id>
 ```
 
-Successful, paused, cancelled, and query commands exit zero; a failed run exits
+Successful, paused, and query commands exit zero; a failed run exits
 one and invalid CLI input exits two.
 
 ## Durable Artifacts And Exports
@@ -188,7 +188,7 @@ For multiple exported packages, its `write-domain-manifest.py` helper uses one
 typed `LLMClient.generate` pair-classification request with a deterministic task
 ID and a project-local `domain/field-grouping-llm` run root. Invalid grouping
 content degrades conservatively to one field with a warning; a typed pause,
-failure, or cancellation stops the handoff instead. The helper has no legacy
+failure, or stop pauses the handoff instead. The helper has no legacy
 runner, controller, or private-artifact reading surface.
 
 ## MCP Status

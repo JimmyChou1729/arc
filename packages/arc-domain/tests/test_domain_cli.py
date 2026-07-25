@@ -12,7 +12,6 @@ from arc_domain.paths import DomainPaths
 from arc_llm import ResumeAction, ResumeInput, resume_input_to_document
 from arc_jobs import (
     Awaiting,
-    CancelledError,
     CommandResult,
     CommandStatus,
     ImmutableArtifactStore,
@@ -83,11 +82,13 @@ class _PausedDomainHandler:
         )
 
 
-class _CancelledDomainHandler:
+class _StoppedDomainHandler:
     name = "arc.domain.build.v1"
 
     def execute(self, _context):
-        raise CancelledError("cancelled for CLI test")
+        from arc_jobs import StoppedError
+
+        raise StoppedError("stopped for CLI test")
 
 
 def _succeeded_snapshot(
@@ -107,7 +108,7 @@ def _snapshot_with_status(
     handler = (
         _PausedDomainHandler()
         if status is RunStatus.PAUSED
-        else _CancelledDomainHandler()
+        else _StoppedDomainHandler()
     )
     snapshot = RunEngine(repository).execute(
         RunSpec(run_id, handler.name, {"request": run_id}), handler
@@ -133,7 +134,7 @@ def _envelope(capsys) -> dict:
     lines = captured.out.splitlines()
     assert len(lines) == 1
     value = json.loads(lines[0])
-    assert value["schema_version"] == "arc.command_result.v1"
+    assert value["schema_version"] == "arc.command_result.v2"
     return value
 
 
@@ -267,7 +268,7 @@ def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
     monkeypatch.setattr(cli, "DomainBuildRunner", RecordingRunner)
 
     resume_input = resume_input_to_document(
-        ResumeInput("resume-key", ResumeAction.CANCEL)
+        ResumeInput("resume-key", ResumeAction.CONTINUE)
     )
     assert (
         cli.main(
@@ -346,7 +347,7 @@ def test_get_rejects_an_active_export_with_a_corrupt_digest(
     assert envelope["status"] == "failed"
 
 
-def test_cancel_and_validate_delegate_to_root_run_control(
+def test_stop_and_validate_delegate_to_root_run_control(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:
     calls: list[list[str]] = []
@@ -358,12 +359,12 @@ def test_cancel_and_validate_delegate_to_root_run_control(
 
     monkeypatch.setattr(cli, "run_control_main", fake_run_control)
 
-    assert cli.main(["cancel", "run-1", "--reason", "user", "--cache-root", str(tmp_path)]) == 0
+    assert cli.main(["stop", "run-1", "--reason", "user", "--cache-root", str(tmp_path)]) == 0
     _envelope(capsys)
     assert cli.main(["validate", "run-2", "--cache-root", str(tmp_path)]) == 0
     _envelope(capsys)
     assert calls == [
-        ["cancel", "--run-root", str(tmp_path), "--run-id", "run-1", "--reason", "user"],
+        ["stop", "--run-root", str(tmp_path), "--run-id", "run-1", "--reason", "user"],
         ["validate", "--run-root", str(tmp_path), "--run-id", "run-2"],
     ]
 
@@ -522,7 +523,6 @@ def test_completed_run_with_failed_publication_is_command_failure(
     ("status", "expected_command_status"),
     [
         (RunStatus.PAUSED, "paused"),
-        (RunStatus.CANCELLED, "cancelled"),
     ],
 )
 def test_noncompleted_build_snapshots_return_success_without_publication(

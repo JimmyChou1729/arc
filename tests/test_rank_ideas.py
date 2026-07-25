@@ -496,27 +496,6 @@ def test_ranker_excludes_failed_and_incomplete_lifecycle_states(tmp_path: Path) 
         }
     ]
 
-    cancelled_root = tmp_path / "cancelled-runs"
-    cancelled_repository = RunRepository(cancelled_root)
-    cancelled_repository.create(
-        RunSpec(
-            "cancelled-run",
-            ProposerReviewerHandler.name,
-            encode_batch_request(_request(_single_loop("cancelled", max_rounds=1))),
-        )
-    )
-    cancelled_repository.request_cancel("cancelled-run", reason="test")
-    cancelled_payload = ranker.rank_run(cancelled_root, "cancelled-run")
-    assert cancelled_payload["ranking"] == []
-    assert cancelled_payload["excluded_loops"] == [
-        {
-            "loop_id": "cancelled",
-            "status": "cancelled",
-            "reason": "loop_lifecycle_cancelled",
-        }
-    ]
-
-
 def test_ranker_has_no_legacy_layout_reader_and_cli_uses_durable_identifiers(
     tmp_path: Path,
 ) -> None:

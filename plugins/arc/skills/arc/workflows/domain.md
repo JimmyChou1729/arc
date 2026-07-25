@@ -152,12 +152,13 @@ If several domain IDs are distinct, their builds may run concurrently. Record
 every returned `run_id` and `domain_id`. A paused result must be continued only
 with `arc-domain resume <run-id>`. When its resume descriptor requires input,
 pass the matching document with `--input '<resume-input-json-document>'`. Inspect progress with
-`arc-domain status --run-id <run-id>`, cancel with `arc-domain cancel <run-id>`,
+`arc-domain status --run-id <run-id>`, stop with `arc-domain stop <run-id>`,
 and validate with `arc-domain validate <run-id>`.
 
-Step 3: Inspect every `arc.command_result.v1` body. Do not treat an exit code
+Step 3: Inspect every `arc.command_result.v2` body. Do not treat an exit code
 alone as success. Continue only when every build has succeeded and published an
-active export generation. If any build is paused, failed, or cancelled, print
+active export generation. A stop pauses its current attempt and must be
+resumed with the same run ID. If any build is paused or failed, print
 `WARNING:` with the run ID and stop before exporting project-local artifacts.
 
 For domain package boundaries and `paper_json_pack.json`, see
@@ -323,7 +324,7 @@ manifest records `domain/field-grouping.json` as its grouping artifact.
 
 An invalid grouping payload or inconsistent pair classification is a
 conservative single-field fallback with a warning. A typed LLM pause, failure,
-or cancellation is not a fallback: print `WARNING:` and stop before ideas so
+or stop is not a fallback: print `WARNING:` and stop before ideas so
 the caller can resolve the provider state or rerun the manifest helper. Do not
 invent a grouping result or inspect private LLM artifacts.
 

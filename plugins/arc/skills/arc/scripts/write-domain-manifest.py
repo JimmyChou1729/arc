@@ -357,7 +357,7 @@ def _llm_grouping(
 ) -> dict[str, Any]:
     from arc_llm import (
         JsonOutput,
-        LLMCancelled,
+        LLMStopped,
         LLMCompleted,
         LLMFailed,
         LLMPaused,
@@ -409,8 +409,8 @@ def _llm_grouping(
             "semantic field grouping failed: "
             f"{outcome.error.code.value}: {outcome.error}"
         )
-    if isinstance(outcome, LLMCancelled):
-        raise GroupingLLMRunError("semantic field grouping was cancelled")
+    if isinstance(outcome, LLMStopped):
+        raise GroupingLLMRunError("semantic field grouping was stopped")
     raise GroupingLLMRunError("semantic field grouping returned no typed outcome")
 
 

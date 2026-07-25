@@ -14,7 +14,7 @@ commands live in the package-specific references.
 - The `arc` plugin is CLI-only and does not register or ship an MCP server.
 - For user choices and confirmations, use
   `rules/interaction.md`.
-- Do not cancel a job unless the user explicitly asks.
+- Do not stop a job unless the user explicitly asks.
 - Report cache paths or artifact paths when they help the user inspect results.
 - The scientific integrity and robustness rules in
   `rules/integrity.md` apply to all ARC workflows.

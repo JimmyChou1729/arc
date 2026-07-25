@@ -14,6 +14,7 @@ from arc_jobs import (
     CommandArtifact,
     CommandError,
     CommandResult,
+    CommandRun,
     CommandStatus,
     CommandWarning,
     RunStatus,
@@ -88,10 +89,10 @@ def _parser() -> _Parser:
     resume.add_argument("--workers", type=int, default=4)
     resume.add_argument("--json", action="store_true")
 
-    cancel = commands.add_parser("cancel")
-    cancel.add_argument("--project-dir", required=True)
-    cancel.add_argument("--reason")
-    cancel.add_argument("--json", action="store_true")
+    stop = commands.add_parser("stop")
+    stop.add_argument("--project-dir", required=True)
+    stop.add_argument("--reason")
+    stop.add_argument("--json", action="store_true")
 
     render = commands.add_parser("render")
     render.add_argument("--project-dir", required=True)
@@ -137,8 +138,8 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
         return _status(args)
     if args.command == "resume":
         return _resume(args)
-    if args.command == "cancel":
-        return _cancel(args)
+    if args.command == "stop":
+        return _stop(args)
     if args.command == "render":
         return _render(args)
     if args.command == "validate":
@@ -241,13 +242,23 @@ def _status(args: argparse.Namespace) -> CommandResult:
     )
 
 
-def _cancel(args: argparse.Namespace) -> CommandResult:
+def _stop(args: argparse.Namespace) -> CommandResult:
     paths = CompanionProjectPaths.load(args.project_dir)
     run_id = _current_run(paths)
-    view = CompanionService(paths.jobs_root).cancel(
+    view = CompanionService(paths.jobs_root).stop(
         run_id, reason=args.reason
     )
-    return command_result_from_snapshot(view.snapshot)
+    return CommandResult(
+        CommandStatus.COMPLETED,
+        CommandRun(view.snapshot.run_id, view.snapshot.revision),
+        {
+            "run": {
+                "status": view.snapshot.status.value,
+                "attempt": view.snapshot.attempt,
+                "stop_requested": view.stop_request is not None,
+            }
+        },
+    )
 
 
 def _render(args: argparse.Namespace) -> CommandResult:
@@ -437,7 +448,6 @@ def _exit_code(result: CommandResult) -> int:
     return {
         CommandStatus.COMPLETED: 0,
         CommandStatus.PAUSED: 2,
-        CommandStatus.CANCELLED: 3,
         CommandStatus.FAILED: 1,
     }[result.status]
 

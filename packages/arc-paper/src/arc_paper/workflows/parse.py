@@ -13,6 +13,7 @@ from arc_jobs import (
     RunRepository,
     RunSnapshot,
     RunSpec,
+    StoppedError,
     Succeeded,
 )
 from arc_llm import LLMTaskService, ModelSelection
@@ -167,6 +168,8 @@ class MarkdownPDFVisualParseHandler:
                     markdown_bytes=markdown_bytes,
                     pdf_bytes=self.sources.read_bytes(self.pdf_validator),
                 )
+            except StoppedError:
+                raise
             except Exception as exc:
                 message = (
                     "PDF visual review was unavailable "

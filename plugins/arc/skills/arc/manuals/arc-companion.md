@@ -41,11 +41,12 @@ and anchored to source block IDs.
 ```bash
 arc-companion status --project-dir DIR --json
 arc-companion resume --project-dir DIR [--input JSON_OR_FILE] --json
-arc-companion cancel --project-dir DIR [--reason TEXT] --json
+arc-companion stop --project-dir DIR [--reason TEXT] --json
 ```
 
 Resume input must match the opaque key and closed contract in the current
-pause descriptor. Completed child LLM tasks and accepted chapter artifacts
+pause descriptor. Stop pauses the current attempt; `resume` continues this
+same run. Completed child LLM tasks and accepted chapter artifacts
 replay within the same run lineage; changing workers does not invalidate them.
 
 ## Rendering

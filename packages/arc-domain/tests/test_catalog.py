@@ -111,7 +111,7 @@ def _with_creation_times(
         view = original_inspect(run_id)
         return RunView(
             snapshot=replace(view.snapshot, created_at=times[run_id]),
-            cancel_request=view.cancel_request,
+            stop_request=view.stop_request,
         )
 
     monkeypatch.setattr(repository, "inspect", inspect)

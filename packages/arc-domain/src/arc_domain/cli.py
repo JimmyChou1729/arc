@@ -92,10 +92,10 @@ def _parser() -> _Parser:
         command.add_argument("--domain-id", required=True)
         command.add_argument("--cache-root")
 
-    cancel = commands.add_parser("cancel")
-    cancel.add_argument("run_id")
-    cancel.add_argument("--cache-root")
-    cancel.add_argument("--reason")
+    stop = commands.add_parser("stop")
+    stop.add_argument("run_id")
+    stop.add_argument("--cache-root")
+    stop.add_argument("--reason")
 
     validate = commands.add_parser("validate")
     validate.add_argument("run_id")
@@ -373,7 +373,7 @@ def _resume_input(value: str | None) -> dict[str, Any] | None:
 def _run_control(args: argparse.Namespace, *, command: str) -> int:
     paths = _paths(args.cache_root)
     argv = [command, "--run-root", str(paths.root), "--run-id", args.run_id]
-    if command == "cancel" and args.reason is not None:
+    if command == "stop" and args.reason is not None:
         argv.extend(["--reason", args.reason])
     # arc-jobs owns these controls and writes the sole command envelope itself.
     return run_control_main(argv)
@@ -394,7 +394,7 @@ def _dispatch(args: argparse.Namespace) -> tuple[CommandResult, int] | int:
         return _get(args, filename="summary.json", data_name="summary"), 0
     if args.command == "get-graph":
         return _get(args, filename="graph.json", data_name="graph"), 0
-    if args.command in {"cancel", "validate"}:
+    if args.command in {"stop", "validate"}:
         return _run_control(args, command=args.command)
     raise AssertionError(args.command)
 

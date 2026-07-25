@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from arc_jobs import Awaiting, RunContext, RunError
+from arc_jobs import Awaiting, RunContext, RunError, StoppedError
 from arc_llm import (
-    LLMCancelled,
+    LLMStopped,
     LLMExecutionOptions,
     LLMFailed,
     LLMPaused,
@@ -29,7 +29,7 @@ def outer_resume_input(context: RunContext) -> ResumeInput | None:
     try:
         return decode_resume_input(context.resume_input)
     except Exception as exc:
-        if context.resume_input.get("schema_version") == "arc.llm.resume_input.v1":
+        if context.resume_input.get("schema_version") == "arc.llm.resume_input.v2":
             raise CompanionLLMError(
                 "companion_llm_resume_input_invalid",
                 "Malformed arc-llm resume input.",
@@ -73,17 +73,15 @@ def run_error_from_failure(outcome: LLMFailed) -> RunError:
     )
 
 
-def ensure_not_cancelled(outcome: LLMTaskOutcome, description: str) -> None:
-    if isinstance(outcome, LLMCancelled):
-        from arc_jobs import CancelledError
-
-        raise CancelledError(f"{description} cancelled")
+def ensure_not_stopped(outcome: LLMTaskOutcome, description: str) -> None:
+    if isinstance(outcome, LLMStopped):
+        raise StoppedError(f"{description} stopped")
 
 
 __all__ = [
     "CompanionLLMError",
     "awaiting_from_pause",
-    "ensure_not_cancelled",
+    "ensure_not_stopped",
     "execute_task",
     "outer_resume_input",
     "run_error_from_failure",

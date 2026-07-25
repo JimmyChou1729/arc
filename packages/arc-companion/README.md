@@ -12,7 +12,7 @@ the searchable PDF and responsive static Web reader.
 
 ## Commands
 
-All commands write one `arc.command_result.v1` JSON document:
+All commands write one `arc.command_result.v2` JSON document:
 
 ```bash
 arc-companion build SOURCE --project-dir DIR \
@@ -21,7 +21,7 @@ arc-companion build SOURCE --project-dir DIR \
 
 arc-companion status --project-dir DIR --json
 arc-companion resume --project-dir DIR --input response.json --json
-arc-companion cancel --project-dir DIR --json
+arc-companion stop --project-dir DIR --json
 arc-companion render --project-dir DIR --format all --json
 arc-companion validate --project-dir DIR --json
 ```

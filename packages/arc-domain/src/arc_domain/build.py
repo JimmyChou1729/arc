@@ -8,7 +8,6 @@ from datetime import date
 from typing import Any, Callable, Mapping
 
 from arc_jobs import (
-    CancelledError,
     Failed,
     FailureMode,
     GroupResult,
@@ -21,13 +20,14 @@ from arc_jobs import (
     RunSnapshot,
     RunSpec,
     Succeeded,
+    StoppedError,
     UnitResult,
     WorkUnit,
     canonical_json_bytes,
 )
 from arc_llm import (
     JsonOutput,
-    LLMCancelled,
+    LLMStopped,
     LLMCompleted,
     LLMFailed,
     LLMPaused,
@@ -355,8 +355,8 @@ class DomainBuildHandler:
                     "foundation",
                 )
             )
-        elif isinstance(audit_outcome, LLMCancelled):
-            raise CancelledError("foundation audit cancelled")
+        elif isinstance(audit_outcome, LLMStopped):
+            raise StoppedError("foundation audit stopped")
         else:
             raise RuntimeError("unknown foundation-audit outcome")
 
@@ -404,8 +404,8 @@ class DomainBuildHandler:
                         "foundation",
                     )
                 )
-            elif isinstance(reference_outcome, LLMCancelled):
-                raise CancelledError("reference inference cancelled")
+            elif isinstance(reference_outcome, LLMStopped):
+                raise StoppedError("reference inference stopped")
             else:
                 raise RuntimeError("unknown reference-inference outcome")
 
@@ -459,8 +459,8 @@ class DomainBuildHandler:
                     "foundation",
                 )
             )
-        elif isinstance(selection_outcome, LLMCancelled):
-            raise CancelledError("foundation selection cancelled")
+        elif isinstance(selection_outcome, LLMStopped):
+            raise StoppedError("foundation selection stopped")
         else:
             raise RuntimeError("unknown foundation-selection outcome")
         if self.request.policy.foundation_mode == "fixed_seed":
@@ -611,8 +611,8 @@ class DomainBuildHandler:
                         "network",
                     )
                 )
-            elif isinstance(ranking_outcome, LLMCancelled):
-                raise CancelledError("intent ranking cancelled")
+            elif isinstance(ranking_outcome, LLMStopped):
+                raise StoppedError("intent ranking stopped")
             else:
                 raise RuntimeError("unknown intent-ranking outcome")
         context.artifacts.publish_json("network/intent-ranking", ranking)
@@ -882,8 +882,8 @@ class DomainBuildHandler:
             )
             warnings.append(warning)
             return None, None
-        if isinstance(outcome, LLMCancelled):
-            raise CancelledError("domain summary cancelled")
+        if isinstance(outcome, LLMStopped):
+            raise StoppedError("domain summary stopped")
         raise RuntimeError("unknown domain-summary outcome")
 
     def _group_values(
@@ -905,7 +905,7 @@ class DomainBuildHandler:
             paper_id = by_unit[unit.unit_id]
             try:
                 return operation(paper_id)
-            except CancelledError:
+            except StoppedError:
                 raise
             except Exception as exc:
                 return UnitResult(

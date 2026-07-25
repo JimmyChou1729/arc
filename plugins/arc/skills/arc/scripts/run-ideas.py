@@ -124,7 +124,7 @@ def run_ideas(
     evidence_resolver: ArcPaperEvidenceResolver | None = None,
     base_env: Mapping[str, str] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
-    cancel_check: Callable[[], bool] | None = None,
+    stop_check: Callable[[], bool] | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Materialize and run one typed proposer-reviewer ideas batch.
@@ -160,14 +160,14 @@ def run_ideas(
             max_concurrent=max_concurrent,
         )
 
-    if cancel_check is not None and cancel_check():
+    if stop_check is not None and stop_check():
         return _not_started_result(
             ideas_config,
             request=request,
             ideas=ideas,
             warnings=warnings,
             max_concurrent=max_concurrent,
-            status="cancelled",
+            status="stopped",
         )
 
     resolver = evidence_resolver or ArcPaperEvidenceResolver()
@@ -989,16 +989,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    cancel_event = threading.Event()
+    stop_event = threading.Event()
     installed_handlers: dict[int, Any] = {}
 
-    def request_cancel(_signum: int, _frame: Any) -> None:
-        cancel_event.set()
+    def request_stop(_signum: int, _frame: Any) -> None:
+        stop_event.set()
 
     for signum in (signal.SIGINT, signal.SIGTERM):
         try:
             installed_handlers[signum] = signal.getsignal(signum)
-            signal.signal(signum, request_cancel)
+            signal.signal(signum, request_stop)
         except (ValueError, OSError):
             pass
     try:
@@ -1006,7 +1006,7 @@ def main(argv: list[str] | None = None) -> int:
             _read_config_file(args.config),
             dry_run=args.dry_run,
             progress_callback=_foreground_progress_callback(),
-            cancel_check=cancel_event.is_set,
+            stop_check=stop_event.is_set,
         )
     finally:
         for signum, handler in installed_handlers.items():
@@ -1020,7 +1020,7 @@ def main(argv: list[str] | None = None) -> int:
         table = result.get("round_score_table", {}).get("markdown")
         if table:
             print(table)
-    return 1 if result.get("status") in {"failed", "cancelled", "paused"} else 0
+    return 1 if result.get("status") in {"failed", "stopped", "paused"} else 0
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, TypeAlias
 
 from arc_jobs import (
-    CancelledError,
+    StoppedError,
     Failed,
     JsonValue,
     Paused,
@@ -23,7 +23,7 @@ from arc_jobs import (
 from arc_llm import (
     CapabilityPolicy,
     JsonOutput,
-    LLMCancelled,
+    LLMStopped,
     LLMCompleted,
     LLMFailed,
     LLMPaused,
@@ -131,7 +131,7 @@ class ReferenceInferenceCompleted:
 
 
 ReferenceInferenceOutcome: TypeAlias = (
-    ReferenceInferenceCompleted | LLMPaused | LLMFailed | LLMCancelled
+    ReferenceInferenceCompleted | LLMPaused | LLMFailed | LLMStopped
 )
 
 
@@ -273,8 +273,8 @@ class ReferenceInferenceHandler:
             return Paused(awaiting_from_pause(outcome))
         if isinstance(outcome, LLMFailed):
             return Failed(run_error_from_failure(outcome))
-        if isinstance(outcome, LLMCancelled):
-            raise CancelledError("reference-inference LLM task cancelled")
+        if isinstance(outcome, LLMStopped):
+            raise StoppedError("reference-inference LLM task stopped")
         raise RuntimeError("unknown reference-inference outcome")
 
 

@@ -368,7 +368,7 @@ def test_runtime_automation_steering_semantics_are_explicit() -> None:
     assert "`continue`, `resume`, or approval at one checkpoint" in interaction
     assert "does not change the automation level" in interaction
     assert "next safe, controllable boundary" in interaction
-    assert "Do not cancel a provider call, CLI command, or background job already submitted" in interaction
+    assert "Do not stop a provider call, CLI command, or background job already submitted" in interaction
     assert "also approves that checkpoint and continues" in interaction
     assert "update that field in place after a runtime switch" in interaction
     assert "Direct ARC tool tasks do not create an extra state file" in interaction
@@ -1019,7 +1019,7 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     assert "field_id" in domain
     assert "LLMClient.generate" in domain
     assert "field-grouping-llm" in domain
-    assert "typed LLM pause, failure,\nor cancellation" in domain
+    assert "typed LLM pause, failure,\nor stop" in domain
     assert "run_json" not in domain
     assert "LLMAbortScope" not in domain
     assert "LLMClient.generate" in manual
@@ -1301,7 +1301,7 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
     assert "multiple seed-specific packages" in ideas
     assert "field_id" in ideas
     assert "lifecycle is `succeeded`" in ideas
-    assert "failed, cancelled, pending, running, paused" in ideas
+    assert "failed, pending, running, paused" in ideas
     for text in (skill,):
         assert "no absolute runtime limit" in text
         assert "--idle-timeout-seconds" in text
@@ -1317,9 +1317,9 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
     for text in (skill,):
         assert "review_sequence" in text
         assert "terminal result" in text
-    assert "cancellation" in skill
-    assert "cancellation" in domain
-    assert "cancellation" in ideas
+    assert "stop" in skill
+    assert "stop" in domain
+    assert "stop" in ideas
 
 
 def test_domain_origin_resolution_keeps_the_seed_date_unbounded() -> None:
@@ -1375,7 +1375,7 @@ def test_arc_llm_manual_uses_only_the_current_durable_cli() -> None:
         "arc-llm generate",
         "arc-llm resume",
         "arc-llm status",
-        "arc-llm cancel",
+        "arc-llm stop",
         "arc-llm doctor --provider auto",
     ):
         assert command in manual
