@@ -540,10 +540,10 @@ def _whitespace_equivalent_range(
 ) -> tuple[int, int] | None:
     """Locate a direct child projection embedded in a parent projection.
 
-    Legacy HTML/ar5iv parsed sections may contain the complete projection of a
+    Hierarchical HTML/ar5iv sections may contain the complete projection of a
     nested child section. Matching complete whitespace-delimited token
-    sequences keeps this compatibility rule narrow: equal prose in unrelated
-    or sibling sections remains independently searchable.
+    sequences keeps duplicate suppression narrow: equal prose in unrelated or
+    sibling sections remains independently searchable.
     """
 
     projection_tokens = tuple(projection.split())

@@ -99,8 +99,16 @@ def test_markdown_rich_parse_preserves_blocks_links_math_and_assets(tmp_path):
         RichBlockKind.FIGURE,
     ]
     paragraph = document.blocks[1]
-    assert paragraph.payload["links"][0]["target"] == "https://example.test/notes"
-    assert paragraph.payload["inline_math"][0]["tex"] == "E=mc^2"
+    link_span = next(
+        item for item in paragraph.payload["inline_spans"]
+        if item["kind"] == "link"
+    )
+    math_span = next(
+        item for item in paragraph.payload["inline_spans"]
+        if item["kind"] == "math"
+    )
+    assert link_span["target"] == "https://example.test/notes"
+    assert math_span["tex"] == "E=mc^2"
     assert [item["kind"] for item in paragraph.payload["inline_spans"]] == [
         "text",
         "link",
@@ -203,9 +211,9 @@ def test_rich_markdown_projection_has_canonical_encoded_output(tmp_path):
     document = RichDocumentParserService(repository).parse_source(artifact)
 
     assert rich_document_to_document(document) == {
-        "schema_version": "arc.paper.rich_document.v1",
+        "schema_version": "arc.paper.rich_document.v2",
         "document_digest": (
-            "1c6ad6b327f29f911bd8a8445b0880a8241226850e050534fdb41e2e2ebed3c7"
+            "68b2729b7021a049975a7509b49102a8a1d3d7eccafe3115a27af71e44a0872f"
         ),
         "source": {
             "source_format": "markdown",
@@ -233,7 +241,7 @@ def test_rich_markdown_projection_has_canonical_encoded_output(tmp_path):
                 "payload": {"text": "Golden", "level": 1},
             },
             {
-                "block_id": "block-13493e2675229f5af83cb89a",
+                "block_id": "block-cda30770f0706802d2f48c51",
                 "ordinal": 1,
                 "kind": "paragraph",
                 "section_path": ["sec-0c239875f2148884c1ab"],
@@ -248,8 +256,6 @@ def test_rich_markdown_projection_has_canonical_encoded_output(tmp_path):
                 },
                 "payload": {
                     "text": "Before $x+y$.",
-                    "links": [],
-                    "inline_math": [{"tex": "x+y", "source": "$x+y$"}],
                     "inline_spans": [
                         {
                             "kind": "text",
@@ -370,7 +376,11 @@ def test_html_rich_parse_preserves_equation_table_figure_and_selector(tmp_path):
         RichBlockKind.FIGURE,
     ]
     assert document.blocks[0].locator.selector == "#intro"
-    assert document.blocks[1].payload["inline_math"][0]["tex"] == "a+b"
+    assert next(
+        item["tex"]
+        for item in document.blocks[1].payload["inline_spans"]
+        if item["kind"] == "math"
+    ) == "a+b"
     assert [item["kind"] for item in document.blocks[1].payload["inline_spans"]] == [
         "text",
         "link",
@@ -702,7 +712,11 @@ def test_flattened_tex_rich_parse_and_multifile_rejection(tmp_path):
         RichBlockKind.EQUATION,
         RichBlockKind.LIST,
     ]
-    assert document.blocks[1].payload["links"][0]["target"] == "https://example.test"
+    assert next(
+        item["target"]
+        for item in document.blocks[1].payload["inline_spans"]
+        if item["kind"] == "link"
+    ) == "https://example.test"
     assert document.blocks[2].payload["label"] == "energy"
     assert document.blocks[3].payload["ordered"] is True
 
@@ -888,7 +902,9 @@ def test_rich_document_and_block_codecs_are_strict_and_path_free(tmp_path):
                 **encoded_block,
                 "payload": {
                     **encoded_block["payload"],
-                    "links": tuple(encoded_block["payload"]["links"]),
+                    "inline_spans": tuple(
+                        encoded_block["payload"]["inline_spans"]
+                    ),
                 },
             }
         )
@@ -992,8 +1008,6 @@ def test_rich_integer_fields_reject_booleans():
             locator=locator,
             payload={
                 "text": "x",
-                "links": [],
-                "inline_math": [],
                 "inline_spans": [
                     {"kind": "text", "start": 0, "end": 1, "text": "x"}
                 ],

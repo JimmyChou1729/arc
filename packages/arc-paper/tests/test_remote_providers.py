@@ -333,7 +333,7 @@ def test_inspire_metadata_cache_is_atomic_integrity_checked_and_concurrent(tmp_p
     assert {value["title"] for value in values} == {"Cached paper"}
 
     manifest = next(
-        (tmp_path / "remote-request-cache" / "v1" / "json").glob(
+        (tmp_path / "remote-request-cache" / "v2" / "json").glob(
             "inspire-record/*/*/manifest.json"
         )
     )
@@ -373,7 +373,7 @@ def test_json_refresh_interruption_preserves_previous_manifest_generation(
     ) == {"generation": "old"}
 
     manifest_path = next(
-        (tmp_path / "remote-request-cache" / "v1" / "json").glob(
+        (tmp_path / "remote-request-cache" / "v2" / "json").glob(
             "metadata/*/*/manifest.json"
         )
     )

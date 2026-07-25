@@ -417,32 +417,6 @@ _MATH_SPAN_SCHEMA = _object(
         "source_label",
     ),
 )
-_EQUATION_SCHEMA = _object(
-    {
-        "id": _NONEMPTY_STRING,
-        "equation": _NONEMPTY_STRING,
-        "normalized_latex": _NONEMPTY_STRING,
-        "before": _STRING,
-        "after": _STRING,
-        "source_line_start": _NULLABLE_POSITION,
-        "source_line_end": _NULLABLE_POSITION,
-        "source_column_start": _NULLABLE_POSITION,
-        "source_column_end": _NULLABLE_POSITION,
-        "tex_label": _STRING,
-    },
-    required=(
-        "id",
-        "equation",
-        "normalized_latex",
-        "before",
-        "after",
-        "source_line_start",
-        "source_line_end",
-        "source_column_start",
-        "source_column_end",
-        "tex_label",
-    ),
-)
 _PARSED_DOCUMENT_SCHEMA = _object(
     {
         "source": _SOURCE_ARTIFACT_SCHEMA,
@@ -462,7 +436,6 @@ _PARSED_DOCUMENT_SCHEMA = _object(
         "metadata": {"type": "object"},
         "schema_version": {"const": "arc.paper.parsed_document.v2"},
         "document_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "equations": {"type": "array", "items": _EQUATION_SCHEMA},
     },
     required=(
         "source",
@@ -473,7 +446,6 @@ _PARSED_DOCUMENT_SCHEMA = _object(
         "metadata",
         "schema_version",
         "document_digest",
-        "equations",
     ),
 )
 _RECONCILIATION_ENTRY_SCHEMA = _object(
@@ -635,17 +607,14 @@ _CACHE_COMPONENT_SCHEMA = _object(
     {
         "name": _NONEMPTY_STRING,
         "cached_at": _NONEMPTY_STRING,
-        "time_basis": {
-            "enum": ["recorded_utc", "legacy_file_mtime", "unreadable"]
-        },
         "storage_entry_ids": {"type": "array", "items": _NONEMPTY_STRING},
     },
-    required=("name", "cached_at", "time_basis", "storage_entry_ids"),
+    required=("name", "cached_at", "storage_entry_ids"),
 )
 _CACHE_ENTRY_SCHEMA = _object(
     {
         "entry_id": _NONEMPTY_STRING,
-        "kind": {"enum": ["paper", "local", "opaque"]},
+        "kind": {"enum": ["paper", "local"]},
         "paper_id": {"type": ["string", "null"]},
         "local_source_identity": {
             "anyOf": [_CACHE_LOCAL_IDENTITY_SCHEMA, {"type": "null"}]
@@ -1136,6 +1105,7 @@ _OPERATIONS = (
             ),
         ),
         effects=frozenset({OperationEffect.CACHE_ADMIN}),
+        version=2,
     ),
     _spec(
         "cache-remove",
@@ -1168,6 +1138,7 @@ _OPERATIONS = (
         effects=frozenset(
             {OperationEffect.CACHE_ADMIN, OperationEffect.DESTRUCTIVE}
         ),
+        version=2,
     ),
     _spec(
         "cache-update",
@@ -1209,6 +1180,7 @@ _OPERATIONS = (
                 OperationEffect.CACHE_WRITE,
             }
         ),
+        version=2,
     ),
 )
 

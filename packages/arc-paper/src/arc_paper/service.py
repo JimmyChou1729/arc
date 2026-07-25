@@ -361,31 +361,26 @@ class ArcPaperService:
         warnings: list[str] = []
         for entry in selected:
             changed = False
-            if entry.kind == "opaque":
-                changed = self.cache_administrator.remote.remove_admin_entry(
+            changed = (
+                self.cache_administrator.term_inventory.remove_admin_entry(
                     entry.entry_id
                 )
-            else:
-                changed = (
-                    self.cache_administrator.term_inventory.remove_admin_entry(
-                        entry.entry_id
-                    )
-                    or changed
-                )
-                for component in entry.components:
-                    for storage_entry_id in component.storage_entry_ids:
-                        if storage_entry_id.startswith("remote:"):
-                            changed = (
-                                self.cache_administrator.remote.remove_admin_entry(
-                                    storage_entry_id
-                                )
-                                or changed
+                or changed
+            )
+            for component in entry.components:
+                for storage_entry_id in component.storage_entry_ids:
+                    if storage_entry_id.startswith("remote:"):
+                        changed = (
+                            self.cache_administrator.remote.remove_admin_entry(
+                                storage_entry_id
                             )
-                changed = (
-                    self.cache_administrator.catalog.remove_admin_entry(entry.entry_id)
-                    or changed
-                )
-                changed = self.cache_index.remove(entry.entry_id) or changed
+                            or changed
+                        )
+            changed = (
+                self.cache_administrator.catalog.remove_admin_entry(entry.entry_id)
+                or changed
+            )
+            changed = self.cache_index.remove(entry.entry_id) or changed
             if changed:
                 removed.append(entry.entry_id)
             else:
@@ -786,7 +781,6 @@ class ArcPaperService:
                 paper_id,
                 component,
                 cached_at=entry.cached_at,
-                time_basis=entry.time_basis,
                 storage_entry_ids=(entry.entry_id,),
             )
         except (OSError, TypeError, ValueError):
@@ -807,7 +801,6 @@ class ArcPaperService:
             self.cache_index.record_local(
                 source,
                 cached_at=entry.cached_at,
-                time_basis=entry.time_basis,
             )
         except (OSError, StopIteration, TypeError, ValueError):
             return

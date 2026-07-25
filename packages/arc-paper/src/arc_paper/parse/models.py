@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
@@ -100,32 +100,9 @@ class ParsedPage:
             raise ValueError("parsed page number must be positive")
 
 
-def equation_compatibility_view(span: MathSpan) -> Mapping[str, Any]:
-    """Return the legacy display-equation view without making it authoritative."""
-
-    return MappingProxyType(
-        {
-            "id": span.span_id,
-            "equation": span.normalized_tex,
-            "normalized_latex": span.normalized_tex,
-            "before": span.context_before,
-            "after": span.context_after,
-            "source_line_start": span.source_line_start,
-            "source_line_end": span.source_line_end,
-            "source_column_start": span.source_column_start,
-            "source_column_end": span.source_column_end,
-            "tex_label": span.source_label,
-        }
-    )
-
-
 @dataclass(frozen=True)
-class ParsedDocument(Mapping[str, Any]):
-    """Format-neutral deterministic parse result.
-
-    The mapping interface is a read-only compatibility view for existing
-    callers. New code should use the typed attributes.
-    """
+class ParsedDocument:
+    """Format-neutral deterministic parse result."""
 
     source: SourceArtifact
     sections: tuple[ParsedSection, ...] = ()
@@ -135,7 +112,6 @@ class ParsedDocument(Mapping[str, Any]):
     metadata: Mapping[str, Any] = field(default_factory=dict)
     schema_version: str = PARSED_DOCUMENT_SCHEMA
     document_digest: str = field(init=False)
-    equations: tuple[Mapping[str, Any], ...] = field(init=False)
 
     def __post_init__(self) -> None:
         if self.schema_version != PARSED_DOCUMENT_SCHEMA:
@@ -151,11 +127,6 @@ class ParsedDocument(Mapping[str, Any]):
             raise ValueError("parsed section ordinals must be contiguous")
         if tuple(item.page_number for item in pages) != tuple(range(1, len(pages) + 1)):
             raise ValueError("parsed page numbers must be contiguous")
-        equations = tuple(
-            equation_compatibility_view(item)
-            for item in spans
-            if item.kind is MathSpanKind.DISPLAY
-        )
         metadata = MappingProxyType(dict(self.metadata))
         material = {
             "schema": self.schema_version,
@@ -189,36 +160,11 @@ class ParsedDocument(Mapping[str, Any]):
         object.__setattr__(self, "pages", pages)
         object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "metadata", metadata)
-        object.__setattr__(self, "equations", equations)
         object.__setattr__(self, "document_digest", digest)
 
     @property
     def source_format(self) -> SourceFormat:
         return self.source.source_format
-
-    def _compatibility(self) -> Mapping[str, Any]:
-        compatibility = {
-            "schema_version": self.schema_version,
-            "source": self.source,
-            "source_hash": self.source.artifact_digest,
-            "document_hash": self.document_digest,
-            "sections": self.sections,
-            "math_spans": self.math_spans,
-            "equations": self.equations,
-            "pages": self.pages,
-            "warnings": self.warnings,
-            "metadata": self.metadata,
-        }
-        return compatibility
-
-    def __getitem__(self, key: str) -> Any:
-        return self._compatibility()[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._compatibility())
-
-    def __len__(self) -> int:
-        return len(self._compatibility())
 
 _DOCUMENT_FIELDS = {
     "schema_version",
@@ -468,7 +414,6 @@ __all__ = [
     "ParsedPage",
     "ParsedSection",
     "VisualPageReviewInput",
-    "equation_compatibility_view",
     "parsed_document_from_document",
     "parsed_document_to_document",
 ]

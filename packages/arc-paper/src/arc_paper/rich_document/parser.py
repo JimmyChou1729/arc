@@ -98,7 +98,7 @@ def parse_rich_artifact_bytes(
     *,
     asset_importer: AssetImporter | None = None,
 ) -> RichSourceParseResult:
-    """Parse one rich primary source without changing the legacy parser."""
+    """Parse one rich primary source independently of the standard parser."""
 
     if artifact.source_format not in {
         SourceFormat.MARKDOWN,
@@ -1613,8 +1613,6 @@ def _inline_payload(parts: list[dict[str, str]]) -> dict[str, Any]:
         normalized = [item for item in normalized if item["text"]]
     text = "".join(item["text"] for item in normalized)
     spans: list[dict[str, Any]] = []
-    links: list[dict[str, str]] = []
-    inline_math: list[dict[str, str]] = []
     cursor = 0
     for part in normalized:
         end = cursor + len(part["text"])
@@ -1626,19 +1624,13 @@ def _inline_payload(parts: list[dict[str, str]]) -> dict[str, Any]:
         }
         if part["kind"] == "link":
             span["target"] = part["target"]
-            links.append({"text": part["text"], "target": part["target"]})
         elif part["kind"] == "math":
             span["tex"] = part["tex"]
             span["source"] = part["source"]
-            inline_math.append(
-                {"tex": part["tex"], "source": part["source"]}
-            )
         spans.append(span)
         cursor = end
     return {
         "text": text,
-        "links": links,
-        "inline_math": inline_math,
         "inline_spans": spans,
     }
 

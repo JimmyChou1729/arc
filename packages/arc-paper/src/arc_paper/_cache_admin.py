@@ -20,7 +20,7 @@ from .providers.remote_cache import RemoteCacheAdminEntry, RemoteRequestCache
 from .sources import SourceArtifact
 
 
-CACHE_INDEX_SCHEMA = "arc.paper.cache_index.v1"
+CACHE_INDEX_SCHEMA = "arc.paper.cache_index.v2"
 _INDEX_FIELDS = {
     "schema_version",
     "entry_id",
@@ -31,7 +31,6 @@ _INDEX_FIELDS = {
 }
 _COMPONENT_FIELDS = {
     "cached_at",
-    "time_basis",
     "storage_entry_ids",
 }
 
@@ -40,7 +39,6 @@ _COMPONENT_FIELDS = {
 class CacheComponent:
     name: str
     cached_at: str
-    time_basis: str
     storage_entry_ids: tuple[str, ...] = ()
 
 
@@ -98,7 +96,6 @@ class PaperCacheIndex:
         component: str,
         *,
         cached_at: str,
-        time_basis: str,
         storage_entry_ids: Sequence[str] = (),
     ) -> CacheEntry:
         normalized = normalize_paper_id(paper_id)
@@ -112,7 +109,6 @@ class PaperCacheIndex:
             local_source_identity=None,
             component=component,
             cached_at=cached_at,
-            time_basis=time_basis,
             storage_entry_ids=storage_entry_ids,
         )
 
@@ -121,7 +117,6 @@ class PaperCacheIndex:
         source: SourceArtifact,
         *,
         cached_at: str,
-        time_basis: str,
     ) -> CacheEntry:
         identity = {
             "source_format": source.source_format.value,
@@ -139,11 +134,10 @@ class PaperCacheIndex:
             local_source_identity=identity,
             component=f"full-text:{source.source_format.value}",
             cached_at=cached_at,
-            time_basis=time_basis,
         )
 
     def entries(self) -> tuple[CacheEntry, ...]:
-        entries_root = self.root / "cache-admin" / "v1" / "entries"
+        entries_root = self.root / "cache-admin" / "v2" / "entries"
         if not entries_root.is_dir():
             return ()
         entries: list[CacheEntry] = []
@@ -175,17 +169,10 @@ class PaperCacheIndex:
         local_source_identity: Mapping[str, Any] | None,
         component: str,
         cached_at: str,
-        time_basis: str,
         storage_entry_ids: Sequence[str] = (),
     ) -> CacheEntry:
         if not component.strip():
             raise ValueError("cache component is required")
-        if time_basis not in {
-            "recorded_utc",
-            "legacy_file_mtime",
-            "unreadable",
-        }:
-            raise ValueError("cache component time_basis is invalid")
         _parse_utc(cached_at)
         path = self._entry_path(entry_id)
         with self._entry_lock(entry_id):
@@ -212,11 +199,9 @@ class PaperCacheIndex:
                 ids.update(existing.storage_entry_ids)
                 if _parse_utc(existing.cached_at) > _parse_utc(cached_at):
                     cached_at = existing.cached_at
-                    time_basis = existing.time_basis
             by_name[component] = CacheComponent(
                 component,
                 cached_at,
-                time_basis,
                 tuple(sorted(ids)),
             )
             entry = _make_entry(
@@ -234,7 +219,7 @@ class PaperCacheIndex:
         return (
             self.root
             / "cache-admin"
-            / "v1"
+            / "v2"
             / "entries"
             / digest[:2]
             / digest
@@ -245,7 +230,7 @@ class PaperCacheIndex:
     def _entry_lock(self, entry_id: str) -> Iterator[None]:
         digest = hashlib.sha256(entry_id.encode("utf-8")).hexdigest()
         with exclusive_file_lock(
-            self.root / "cache-admin" / "v1" / "locks" / f"{digest}.lock"
+            self.root / "cache-admin" / "v2" / "locks" / f"{digest}.lock"
         ):
             yield
 
@@ -300,7 +285,6 @@ class CacheAdministrator:
                 component=CacheComponent(
                     "full-text",
                     item.cached_at,
-                    item.time_basis,
                     (item.entry_id,),
                 ),
             )
@@ -315,12 +299,10 @@ class CacheAdministrator:
                 component=CacheComponent(
                     "term-inventory",
                     item.cached_at,
-                    item.time_basis,
                     (item.entry_id,),
                 ),
             )
 
-        opaque: list[CacheEntry] = []
         for item in self.remote.admin_entries():
             if item.entry_id in claimed_remote_ids:
                 continue
@@ -336,27 +318,9 @@ class CacheAdministrator:
                     component=CacheComponent(
                         component,
                         item.cached_at,
-                        item.time_basis,
                         (item.entry_id,),
                     ),
                 )
-                continue
-            opaque.append(
-                _make_entry(
-                    entry_id=item.entry_id,
-                    kind="opaque",
-                    paper_id=None,
-                    local_source_identity=None,
-                    components=(
-                        CacheComponent(
-                            f"remote:{item.namespace}",
-                            item.cached_at,
-                            item.time_basis,
-                            (item.entry_id,),
-                        ),
-                    ),
-                )
-            )
 
         requested_papers = {
             normalized
@@ -364,7 +328,7 @@ class CacheAdministrator:
             if (normalized := normalize_paper_id(item))
         }
         requested_entries = {str(item) for item in entry_ids if str(item)}
-        values = [*merged.values(), *opaque]
+        values = list(merged.values())
         if requested_papers or requested_entries:
             values = [
                 item
@@ -384,25 +348,18 @@ class CacheAdministrator:
                 item.entry_id,
             )
         )
-        warnings = tuple(
-            f"cache_timestamp_unreadable:{item.entry_id}"
-            for item in values
-            if any(component.time_basis == "unreadable" for component in item.components)
-        )
         return CacheListResult(
             as_of=_format_utc(as_of),
             since_seconds=since_seconds,
             threshold_at=_format_utc(threshold) if threshold is not None else None,
             entries=tuple(values),
-            warnings=warnings,
+            warnings=(),
         )
 
 
 def _paper_component_from_remote(
     entry: RemoteCacheAdminEntry,
 ) -> tuple[str | None, str]:
-    if entry.request_key is None:
-        return None, ""
     if entry.namespace == "inspire-record":
         paper_id = normalize_paper_id(entry.request_key)
         return (paper_id or None), "inspire-record"
@@ -436,14 +393,12 @@ def _merge_component(
             component = CacheComponent(
                 component.name,
                 existing.cached_at,
-                existing.time_basis,
                 storage_ids,
             )
         else:
             component = CacheComponent(
                 component.name,
                 component.cached_at,
-                component.time_basis,
                 storage_ids,
             )
     by_name[component.name] = component
@@ -499,7 +454,6 @@ def _entry_document(entry: CacheEntry) -> dict[str, Any]:
         "components": {
             item.name: {
                 "cached_at": item.cached_at,
-                "time_basis": item.time_basis,
                 "storage_entry_ids": list(item.storage_entry_ids),
             }
             for item in entry.components
@@ -532,8 +486,6 @@ def _entry_from_document(value: object) -> CacheEntry:
             or not isinstance(document, Mapping)
             or set(document) != _COMPONENT_FIELDS
             or not isinstance(document.get("cached_at"), str)
-            or document.get("time_basis")
-            not in {"recorded_utc", "legacy_file_mtime", "unreadable"}
             or not isinstance(document.get("storage_entry_ids"), list)
             or not all(
                 isinstance(item, str)
@@ -546,7 +498,6 @@ def _entry_from_document(value: object) -> CacheEntry:
             CacheComponent(
                 name,
                 document["cached_at"],
-                document["time_basis"],
                 tuple(document["storage_entry_ids"]),
             )
         )

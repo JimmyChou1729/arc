@@ -13,7 +13,7 @@ from typing import Any
 from ..sources import SourceArtifact, SourceFormat, SourceOrigin, SourceOriginKind
 
 
-RICH_DOCUMENT_SCHEMA = "arc.paper.rich_document.v1"
+RICH_DOCUMENT_SCHEMA = "arc.paper.rich_document.v2"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
@@ -29,7 +29,7 @@ class RichBlockKind(str, Enum):
 
 _PAYLOAD_FIELDS = {
     RichBlockKind.HEADING: {"text", "level"},
-    RichBlockKind.PARAGRAPH: {"text", "links", "inline_math", "inline_spans"},
+    RichBlockKind.PARAGRAPH: {"text", "inline_spans"},
     RichBlockKind.LIST: {"ordered", "items"},
     RichBlockKind.CODE: {"text", "language"},
     RichBlockKind.EQUATION: {"tex", "display", "label"},
@@ -494,13 +494,9 @@ def _validate_payload(kind: RichBlockKind, payload: dict[str, Any]) -> None:
         _expect_integer(payload["level"], "heading level", minimum=1)
     elif kind is RichBlockKind.PARAGRAPH:
         _expect_string(payload["text"], "paragraph text")
-        _validate_links(payload["links"])
-        _validate_inline_math(payload["inline_math"])
         _validate_inline_spans(
             payload["inline_spans"],
             text=payload["text"],
-            links=payload["links"],
-            inline_math=payload["inline_math"],
         )
     elif kind is RichBlockKind.LIST:
         if not isinstance(payload["ordered"], bool):
@@ -508,15 +504,11 @@ def _validate_payload(kind: RichBlockKind, payload: dict[str, Any]) -> None:
         items = _expect_list(payload["items"], "list items")
         for item in items:
             value = _mapping(item, "list item")
-            _require_fields(value, {"text", "links", "inline_math", "inline_spans"}, "list item")
+            _require_fields(value, {"text", "inline_spans"}, "list item")
             _expect_string(value["text"], "list item text")
-            _validate_links(value["links"])
-            _validate_inline_math(value["inline_math"])
             _validate_inline_spans(
                 value["inline_spans"],
                 text=value["text"],
-                links=value["links"],
-                inline_math=value["inline_math"],
             )
     elif kind is RichBlockKind.CODE:
         _expect_string(payload["text"], "code text")
@@ -558,34 +550,14 @@ def _validate_payload(kind: RichBlockKind, payload: dict[str, Any]) -> None:
             raise ValueError("unimported figure cannot claim asset metadata")
 
 
-def _validate_links(value: Any) -> None:
-    for link in _expect_list(value, "links"):
-        item = _mapping(link, "link")
-        _require_fields(item, {"text", "target"}, "link")
-        _expect_string(item["text"], "link text")
-        _expect_string(item["target"], "link target")
-
-
-def _validate_inline_math(value: Any) -> None:
-    for expression in _expect_list(value, "inline_math"):
-        item = _mapping(expression, "inline math")
-        _require_fields(item, {"tex", "source"}, "inline math")
-        _expect_string(item["tex"], "inline math TeX")
-        _expect_string(item["source"], "inline math source")
-
-
 def _validate_inline_spans(
     value: Any,
     *,
     text: str,
-    links: Any,
-    inline_math: Any,
 ) -> None:
     spans = _expect_list(value, "inline spans")
     cursor = 0
     reconstructed: list[str] = []
-    derived_links: list[dict[str, str]] = []
-    derived_math: list[dict[str, str]] = []
     for raw in spans:
         item = _mapping(raw, "inline span")
         kind = item.get("kind")
@@ -608,17 +580,11 @@ def _validate_inline_spans(
         cursor = end
         if kind == "link":
             _expect_string(item["target"], "inline span target")
-            derived_links.append({"text": item["text"], "target": item["target"]})
         elif kind == "math":
             _expect_string(item["tex"], "inline span TeX")
             _expect_string(item["source"], "inline span math source")
-            derived_math.append({"tex": item["tex"], "source": item["source"]})
     if "".join(reconstructed) != text:
         raise ValueError("inline spans do not reconstruct text")
-    if list(links) != derived_links:
-        raise ValueError("inline link compatibility field differs from spans")
-    if list(inline_math) != derived_math:
-        raise ValueError("inline math compatibility field differs from spans")
 
 
 def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -720,7 +686,7 @@ def _validate_codec_payload_lists(
 ) -> None:
     list_fields: tuple[str, ...] = ()
     if kind is RichBlockKind.PARAGRAPH:
-        list_fields = ("links", "inline_math", "inline_spans")
+        list_fields = ("inline_spans",)
     elif kind is RichBlockKind.LIST:
         list_fields = ("items",)
     elif kind is RichBlockKind.TABLE:
@@ -731,9 +697,8 @@ def _validate_codec_payload_lists(
     if kind is RichBlockKind.LIST:
         for item in payload["items"]:
             if isinstance(item, Mapping):
-                for key in ("links", "inline_math", "inline_spans"):
-                    if not isinstance(item.get(key), list):
-                        raise ValueError(f"list item {key} must be a list")
+                if not isinstance(item.get("inline_spans"), list):
+                    raise ValueError("list item inline_spans must be a list")
     if kind is RichBlockKind.TABLE and any(
         not isinstance(row, list) for row in payload["rows"]
     ):

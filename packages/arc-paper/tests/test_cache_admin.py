@@ -46,19 +46,16 @@ def test_list_since_uses_inclusive_rolling_utc_and_latest_first(
         "0911.3380",
         "inspire-record",
         cached_at="2026-07-24T12:00:00Z",
-        time_basis="recorded_utc",
     )
     index.record_paper_component(
         "1201.0001",
         "inspire-record",
         cached_at="2026-07-24T11:59:59Z",
-        time_basis="recorded_utc",
     )
     index.record_paper_component(
         "1301.0001",
         "inspire-record",
         cached_at="2026-07-25T11:00:00Z",
-        time_basis="recorded_utc",
     )
 
     result = CacheAdministrator(tmp_path).list(
@@ -81,43 +78,63 @@ def test_list_combines_paper_and_entry_selectors_as_a_union(
         "0911.3380",
         "inspire-record",
         cached_at="2026-07-25T12:00:00Z",
-        time_basis="recorded_utc",
+    )
+    index.record_paper_component(
+        "1201.0001",
+        "inspire-record",
+        cached_at="2026-07-25T11:00:00Z",
     )
     cache = RemoteRequestCache(tmp_path)
-    cache.fetch_json("inspire-search", "opaque query", fetch=lambda: {"hits": []})
-    opaque = cache.admin_entries()[0]
-    entry_dir = (
-        tmp_path
-        / "remote-request-cache"
-        / "v1"
-        / opaque.kind
-        / opaque.namespace
-        / opaque.request_digest[:2]
-        / opaque.request_digest
-    )
-    (entry_dir / "admin.json").unlink()
+    cache.fetch_json("inspire-search", "unmapped query", fetch=lambda: {"hits": []})
 
     result = CacheAdministrator(tmp_path).list(
         paper_ids=("0911.3380",),
-        entry_ids=(opaque.entry_id,),
+        entry_ids=("paper:arXiv:1201.0001",),
     )
 
     assert {entry.entry_id for entry in result.entries} == {
         "paper:arXiv:0911.3380",
-        opaque.entry_id,
+        "paper:arXiv:1201.0001",
     }
+    assert all(entry.kind in {"paper", "local"} for entry in result.entries)
 
 
-def test_legacy_remote_mapping_without_admin_sidecar_is_opaque(
+def test_v1_remote_layout_is_ignored(
     tmp_path: Path,
 ) -> None:
     cache = RemoteRequestCache(tmp_path)
     cache.fetch_json("inspire-search", "query", fetch=lambda: {"hits": []})
+    current_root = tmp_path / "remote-request-cache" / "v2"
+    current_root.rename(current_root.with_name("v1"))
+
+    assert cache.admin_entries() == ()
+    assert CacheAdministrator(tmp_path).list().entries == ()
+
+
+def test_v1_cache_index_layout_is_ignored(tmp_path: Path) -> None:
+    index = PaperCacheIndex(tmp_path)
+    index.record_paper_component(
+        "0911.3380",
+        "inspire-record",
+        cached_at="2026-07-25T12:00:00Z",
+    )
+    current_root = tmp_path / "cache-admin" / "v2"
+    current_root.rename(current_root.with_name("v1"))
+
+    assert index.entries() == ()
+    assert CacheAdministrator(tmp_path).list().entries == ()
+
+
+def test_current_remote_mapping_requires_admin_and_fetch_repairs_it(
+    tmp_path: Path,
+) -> None:
+    cache = RemoteRequestCache(tmp_path)
+    cache.fetch_json("inspire-record", "arXiv:0911.3380", fetch=lambda: {"v": 1})
     entry = cache.admin_entries()[0]
     entry_dir = (
         tmp_path
         / "remote-request-cache"
-        / "v1"
+        / "v2"
         / entry.kind
         / entry.namespace
         / entry.request_digest[:2]
@@ -125,12 +142,15 @@ def test_legacy_remote_mapping_without_admin_sidecar_is_opaque(
     )
     (entry_dir / "admin.json").unlink()
 
-    listed = CacheAdministrator(tmp_path).list()
-
-    assert len(listed.entries) == 1
-    assert listed.entries[0].kind == "opaque"
-    assert listed.entries[0].entry_id == entry.entry_id
-    assert listed.entries[0].updateable is False
+    assert cache.admin_entries() == ()
+    assert CacheAdministrator(tmp_path).list().entries == ()
+    assert cache.fetch_json(
+        "inspire-record",
+        "arXiv:0911.3380",
+        fetch=lambda: {"v": 2},
+    ) == {"v": 2}
+    assert cache.get_json("inspire-record", "arXiv:0911.3380") == {"v": 2}
+    assert len(cache.admin_entries()) == 1
 
 
 def test_remote_remove_deletes_mapping_and_source_object(tmp_path: Path) -> None:
@@ -218,7 +238,7 @@ def test_fetch_json_repairs_payload_corruption_but_not_manifest_contract(
     entry_dir = (
         tmp_path
         / "remote-request-cache"
-        / "v1"
+        / "v2"
         / entry.kind
         / entry.namespace
         / entry.request_digest[:2]
@@ -254,7 +274,7 @@ def test_local_remove_previews_then_removes_locator_and_cache_objects(
     service = ArcPaperService(cache_root=tmp_path / "cache")
     source = service.import_source(source_path)
     entry = service.list_cache().entries[0]
-    assert {item.time_basis for item in entry.components} == {"recorded_utc"}
+    assert {item.name for item in entry.components} == {"full-text", "full-text:markdown"}
     cached_at = entry.cached_at
 
     service.parser.parse_source(source)
@@ -285,7 +305,6 @@ def test_update_runs_all_fixed_components_and_collects_failure(
         "0911.3380",
         "inspire-record",
         cached_at="2026-07-25T00:00:00Z",
-        time_basis="recorded_utc",
     )
     calls: list[tuple[str, object]] = []
 
@@ -350,6 +369,11 @@ def test_cache_registry_effects_are_excluded_from_safe_projection() -> None:
             OperationEffect.CACHE_WRITE,
         }
     )
+    assert OPERATION_REGISTRY["cache-list"].operation_id == "arc-paper.cache-list.v2"
+    component_schema = OPERATION_REGISTRY["cache-list"].output_codec.schema[
+        "properties"
+    ]["entries"]["items"]["properties"]["components"]["items"]
+    assert "time_basis" not in component_schema["properties"]
 
 
 @pytest.mark.parametrize("duration", ["0d", "-1d", "1.5h", "1 day", "1D", "1h30m"])
@@ -389,7 +413,7 @@ def test_cli_cache_list_and_remove_preview_are_nested_protocol_commands(
                 "cache",
                 "remove",
                 "--entry-id",
-                "opaque-id",
+                "paper:arXiv:missing",
                 "--cache-root",
                 str(tmp_path),
             ]

@@ -104,7 +104,7 @@ class RichDocumentParserService:
                 warnings=parsed.warnings + (PDF_VALIDATOR_MISSING_WARNING,),
             )
 
-        legacy_primary = self.standard_parser.parse_source(bundle.primary)
+        standard_primary = self.standard_parser.parse_source(bundle.primary)
         validator = bundle.validators[0]
         try:
             parsed_validator = self.standard_parser.parse_source(validator)
@@ -120,7 +120,7 @@ class RichDocumentParserService:
                 "PDF validator has no extractable text layer",
             )
         entries, reconciliation_warnings = reconcile_validator(
-            legacy_primary, parsed_validator
+            standard_primary, parsed_validator
         )
         entries = _reconcile_synthetic_section(
             parsed.document, entries, parsed_validator.pages
@@ -152,7 +152,7 @@ class RichDocumentParserService:
         page_map = _build_page_map(
             parsed.document,
             entries,
-            legacy_primary.sections,
+            standard_primary.sections,
             parsed_validator.pages,
         )
         document = RichDocument(
@@ -222,11 +222,11 @@ class RichDocumentParserService:
 def _build_page_map(
     document: RichDocument,
     entries: tuple[ReconciliationEntry, ...],
-    legacy_sections,
+    standard_sections,
     pages,
 ) -> tuple[RichPageMapEntry, ...]:
     entries_by_subject = {entry.subject_id: entry for entry in entries}
-    unused_legacy = list(legacy_sections)
+    unmatched_standard = list(standard_sections)
     heading_page_by_section: dict[str, int] = {}
     for section in document.sections:
         starts_with_heading = (
@@ -241,16 +241,16 @@ def _build_page_map(
         match_index = next(
             (
                 index
-                for index, legacy in enumerate(unused_legacy)
-                if legacy.title == section.title
-                and legacy.level == section.level
+                for index, standard in enumerate(unmatched_standard)
+                if standard.title == section.title
+                and standard.level == section.level
             ),
             None,
         )
         if match_index is None:
             continue
-        legacy = unused_legacy.pop(match_index)
-        entry = entries_by_subject.get(f"section:{legacy.section_id}")
+        standard = unmatched_standard.pop(match_index)
+        entry = entries_by_subject.get(f"section:{standard.section_id}")
         if entry is None or entry.status is not ReconciliationStatus.VERIFIED:
             continue
         evidence_pages = entry.provenance.get("page_candidates")

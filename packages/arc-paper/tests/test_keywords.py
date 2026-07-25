@@ -13,6 +13,7 @@ from arc_llm import LLMCompleted, ModelSelection
 
 from arc_paper import (
     ArcPaperService,
+    KeywordExtractionService,
     KeywordExtractionRunner,
     KeywordTextUnit,
     ParsedDocument,
@@ -42,6 +43,10 @@ from arc_paper.workflows.keywords import (
     _chapter_allocations,
     _lineage as workflow_lineage,
 )
+
+
+def test_keyword_service_has_no_deprecated_extract_alias() -> None:
+    assert not hasattr(KeywordExtractionService, "extract")
 
 
 class FakeKeywordTasks:
@@ -448,8 +453,6 @@ def test_inventory_merge_is_atomic_and_rich_lists_use_visible_text(
             "items": [
                 {
                     "text": "Visible concept appears.",
-                    "links": [],
-                    "inline_math": [],
                     "inline_spans": [
                         {
                             "kind": "text",

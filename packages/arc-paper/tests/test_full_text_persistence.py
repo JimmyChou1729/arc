@@ -265,7 +265,7 @@ def test_catalog_refreshes_format_pointer_and_keeps_arxiv_representations_separa
     assert by_format["html"].document_digest != stale_document.document_digest
     assert by_format["pdf"].document_digest == pdf_document.document_digest
     locator_text = next(
-        (repository.root / "full-text-catalog" / "v1").glob(
+        (repository.root / "full-text-catalog" / "v2").glob(
             "entries/*/*/locator.json"
         )
     ).read_text(encoding="utf-8")
@@ -273,6 +273,50 @@ def test_catalog_refreshes_format_pointer_and_keeps_arxiv_representations_separa
     assert "New title" not in locator_text
     assert "document.json" not in locator_text
     assert str(repository.root) not in locator_text
+
+
+def test_v1_catalog_layout_is_ignored(tmp_path: Path) -> None:
+    repository = SourceRepository(tmp_path / "cache")
+    source = _store(
+        repository,
+        b"# Current title\nbody\n",
+        SourceFormat.MARKDOWN,
+    )
+    PaperParserService(repository).parse_source(source)
+    current_root = repository.root / "full-text-catalog" / "v2"
+    current_root.rename(current_root.with_name("v1"))
+
+    catalog = FullTextCatalog(repository.root)
+    assert catalog.current_entries() == ()
+    assert catalog.admin_entries() == ()
+
+
+def test_current_catalog_requires_admin_and_parse_repairs_it(
+    tmp_path: Path,
+) -> None:
+    repository = SourceRepository(tmp_path / "cache")
+    source = _store(
+        repository,
+        b"# Current title\nbody\n",
+        SourceFormat.MARKDOWN,
+    )
+    service = PaperParserService(repository)
+    service.parse_source(source)
+    locator = next(
+        (repository.root / "full-text-catalog" / "v2").glob(
+            "entries/*/*/locator.json"
+        )
+    )
+    (locator.parent / "admin.json").unlink()
+
+    catalog = FullTextCatalog(repository.root)
+    assert catalog.current_entries() == ()
+    assert catalog.admin_entries() == ()
+
+    service.parse_source(source)
+
+    assert len(catalog.current_entries()) == 1
+    assert len(catalog.admin_entries()) == 1
 
 
 def test_catalog_entry_lock_preserves_concurrent_html_and_pdf_updates(

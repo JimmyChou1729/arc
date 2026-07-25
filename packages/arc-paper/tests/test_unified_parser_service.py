@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Mapping
 
 import pytest
 
@@ -93,10 +94,15 @@ def test_public_parser_service_reads_all_formats_from_repository(
     ).parse(SourceBundle(primary=artifact))
 
     assert isinstance(outcome.document, ParsedDocument)
+    assert not isinstance(outcome.document, Mapping)
+    assert not hasattr(outcome.document, "equations")
     assert outcome.document.source.content_identity == artifact.content_identity
     assert outcome.document.sections[0].title == "Intro"
     assert outcome.document.math_spans[0].normalized_tex == expected_tex
-    assert outcome.document.equations
+    assert any(
+        item.kind is MathSpanKind.DISPLAY
+        for item in outcome.document.math_spans
+    )
     assert extractor.calls == ([payload] if source_format is SourceFormat.PDF else [])
 
 
@@ -553,7 +559,11 @@ def test_markdown_math_manifest_covers_inline_and_display_with_stable_positions(
     assert [span.span_id for span in first.math_spans] == [
         span.span_id for span in second.math_spans
     ]
-    assert [item["id"] for item in first.equations] == [display.span_id]
+    assert [
+        item.span_id
+        for item in first.math_spans
+        if item.kind is MathSpanKind.DISPLAY
+    ] == [display.span_id]
 
 
 def test_markdown_indented_code_blocks_are_excluded_from_math_manifest(tmp_path):

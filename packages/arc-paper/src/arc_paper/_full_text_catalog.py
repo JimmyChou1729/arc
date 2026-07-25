@@ -28,8 +28,8 @@ if TYPE_CHECKING:
     from .parse.models import ParsedDocument
 
 
-FULL_TEXT_CATALOG_SCHEMA = "arc.paper.full_text_catalog.v1"
-FULL_TEXT_CATALOG_ADMIN_SCHEMA = "arc.paper.full_text_catalog_admin.v1"
+FULL_TEXT_CATALOG_SCHEMA = "arc.paper.full_text_catalog.v2"
+FULL_TEXT_CATALOG_ADMIN_SCHEMA = "arc.paper.full_text_catalog_admin.v2"
 _ENTRY_FIELDS = {
     "schema_version",
     "kind",
@@ -135,7 +135,6 @@ class FullTextCatalogAdminEntry:
     entry_id: str
     entry: FullTextCatalogEntry
     cached_at: str
-    time_basis: str = "legacy_file_mtime"
 
 
 class FullTextCatalog:
@@ -196,8 +195,7 @@ class FullTextCatalog:
                 unchanged = path.read_bytes() == payload
             except OSError:
                 unchanged = False
-            if not unchanged:
-                atomic_write_bytes(path, payload)
+            if not unchanged or self._read_admin(path.parent) is None:
                 atomic_write_bytes(
                     path.parent / "admin.json",
                     _canonical_json_bytes(
@@ -207,12 +205,13 @@ class FullTextCatalog:
                         }
                     ),
                 )
+                atomic_write_bytes(path, payload)
             return entry
 
     def current_entries(self) -> tuple[FullTextCatalogEntry, ...]:
-        """Return only strict, current v1 locators; damaged entries are ignored."""
+        """Return only strict current locators; damaged entries are ignored."""
 
-        entries_root = self.root / "full-text-catalog" / "v1" / "entries"
+        entries_root = self.root / "full-text-catalog" / "v2" / "entries"
         if not entries_root.is_dir():
             return ()
         entries = tuple(
@@ -225,7 +224,7 @@ class FullTextCatalog:
     def admin_entries(self) -> tuple[FullTextCatalogAdminEntry, ...]:
         """Return current locators with their last successful publication time."""
 
-        entries_root = self.root / "full-text-catalog" / "v1" / "entries"
+        entries_root = self.root / "full-text-catalog" / "v2" / "entries"
         if not entries_root.is_dir():
             return ()
         entries: list[FullTextCatalogAdminEntry] = []
@@ -233,41 +232,14 @@ class FullTextCatalog:
             entry = self._read_path(path)
             if entry is None:
                 continue
-            try:
-                value = json.loads(
-                    (path.parent / "admin.json").read_text(encoding="utf-8")
-                )
-                if (
-                    not isinstance(value, dict)
-                    or set(value) != _ADMIN_FIELDS
-                    or value.get("schema_version")
-                    != FULL_TEXT_CATALOG_ADMIN_SCHEMA
-                    or not isinstance(value.get("cached_at"), str)
-                    or not value["cached_at"]
-                    or not _is_utc_timestamp(value["cached_at"])
-                ):
-                    raise ValueError("invalid full-text catalog admin metadata")
-                cached_at = value["cached_at"]
-                time_basis = "recorded_utc"
-            except (
-                OSError,
-                UnicodeError,
-                json.JSONDecodeError,
-                TypeError,
-                ValueError,
-            ):
-                try:
-                    cached_at = _timestamp_from_mtime(path)
-                    time_basis = "legacy_file_mtime"
-                except OSError:
-                    cached_at = "1970-01-01T00:00:00Z"
-                    time_basis = "unreadable"
+            cached_at = self._read_admin(path.parent)
+            if cached_at is None:
+                continue
             entries.append(
                 FullTextCatalogAdminEntry(
                     entry_id=_admin_entry_id(entry),
                     entry=entry,
                     cached_at=cached_at,
-                    time_basis=time_basis,
                 )
             )
         return tuple(sorted(entries, key=lambda item: item.entry_id))
@@ -312,6 +284,8 @@ class FullTextCatalog:
 
     def _read_path(self, path: Path) -> FullTextCatalogEntry | None:
         try:
+            if self._read_admin(path.parent) is None:
+                return None
             value = json.loads(path.read_text(encoding="utf-8"))
             entry = _entry_from_document(value)
             if path.parent.name not in _locator_keys(entry):
@@ -320,11 +294,37 @@ class FullTextCatalog:
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _read_admin(entry_dir: Path) -> str | None:
+        try:
+            value = json.loads(
+                (entry_dir / "admin.json").read_text(encoding="utf-8")
+            )
+            if (
+                not isinstance(value, dict)
+                or set(value) != _ADMIN_FIELDS
+                or value.get("schema_version")
+                != FULL_TEXT_CATALOG_ADMIN_SCHEMA
+                or not isinstance(value.get("cached_at"), str)
+                or not value["cached_at"]
+                or not _is_utc_timestamp(value["cached_at"])
+            ):
+                return None
+            return value["cached_at"]
+        except (
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ):
+            return None
+
     def _entry_path(self, locator_key: str) -> Path:
         return (
             self.root
             / "full-text-catalog"
-            / "v1"
+            / "v2"
             / "entries"
             / locator_key[:2]
             / locator_key
@@ -336,7 +336,7 @@ class FullTextCatalog:
         path = (
             self.root
             / "full-text-catalog"
-            / "v1"
+            / "v2"
             / "locks"
             / f"{locator_key}.lock"
         )
@@ -493,12 +493,6 @@ def _admin_entry_id(entry: FullTextCatalogEntry) -> str:
     return (
         f"local:{identity.get('source_format', '')}:"
         f"{identity.get('artifact_digest', '')}"
-    )
-
-
-def _timestamp_from_mtime(path: Path) -> str:
-    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat().replace(
-        "+00:00", "Z"
     )
 
 

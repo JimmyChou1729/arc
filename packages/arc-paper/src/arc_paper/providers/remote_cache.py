@@ -16,9 +16,9 @@ from ..source_repository import SourceRepository, SourceRepositoryError
 from ..sources import SourceArtifact, SourceFormat, SourceOrigin
 
 
-REMOTE_SOURCE_CACHE_SCHEMA = "arc.paper.remote_source_cache.v1"
-REMOTE_JSON_CACHE_SCHEMA = "arc.paper.remote_json_cache.v1"
-REMOTE_CACHE_ADMIN_SCHEMA = "arc.paper.remote_cache_admin.v1"
+REMOTE_SOURCE_CACHE_SCHEMA = "arc.paper.remote_source_cache.v2"
+REMOTE_JSON_CACHE_SCHEMA = "arc.paper.remote_json_cache.v2"
+REMOTE_CACHE_ADMIN_SCHEMA = "arc.paper.remote_cache_admin.v2"
 _SOURCE_FIELDS = {
     "schema_version",
     "namespace",
@@ -61,13 +61,8 @@ class RemoteCacheAdminEntry:
     kind: str
     namespace: str
     request_digest: str
-    request_key: str | None
+    request_key: str
     cached_at: str
-    time_basis: str
-
-    @property
-    def opaque(self) -> bool:
-        return self.request_key is None
 
 
 def default_cache_root() -> Path:
@@ -124,6 +119,14 @@ class RemoteRequestCache:
                 "remote_cache_manifest_invalid",
                 "remote source cache manifest does not match its request key",
             )
+        self._require_admin(
+            manifest_path.parent,
+            kind="source",
+            namespace=namespace,
+            request_key=request_key,
+            digest=digest,
+            corruption_code="remote_cache_source_corrupt",
+        )
         artifact_digest = value.get("artifact_digest")
         size = value.get("size")
         if (
@@ -208,15 +211,15 @@ class RemoteRequestCache:
                 "artifact_digest": artifact.artifact_digest,
                 "size": artifact.size,
             }
-            self._atomic_write(
-                entry_dir / "manifest.json", _canonical_json_bytes(manifest)
-            )
             self._write_admin(
                 entry_dir,
                 kind="source",
                 namespace=namespace,
                 request_key=request_key,
                 request_digest=digest,
+            )
+            self._atomic_write(
+                entry_dir / "manifest.json", _canonical_json_bytes(manifest)
             )
             return artifact
 
@@ -242,6 +245,14 @@ class RemoteRequestCache:
                 "remote_cache_manifest_invalid",
                 "remote JSON cache manifest does not match its request key",
             )
+        self._require_admin(
+            entry_dir,
+            kind="json",
+            namespace=namespace,
+            request_key=request_key,
+            digest=digest,
+            corruption_code="remote_cache_json_corrupt",
+        )
         artifact_digest = value.get("artifact_digest")
         size = value.get("size")
         payload_file = value.get("payload_file")
@@ -310,15 +321,15 @@ class RemoteRequestCache:
                 "artifact_digest": artifact_digest,
                 "size": len(payload),
             }
-            self._atomic_write(
-                entry_dir / "manifest.json", _canonical_json_bytes(manifest)
-            )
             self._write_admin(
                 entry_dir,
                 kind="json",
                 namespace=namespace,
                 request_key=request_key,
                 request_digest=digest,
+            )
+            self._atomic_write(
+                entry_dir / "manifest.json", _canonical_json_bytes(manifest)
             )
             return value
 
@@ -334,28 +345,17 @@ class RemoteRequestCache:
         entry_dir = self._entry_dir(kind, namespace, digest)
         if not (entry_dir / "manifest.json").is_file():
             return None
-        entry = self._admin_entry_from_dir(
+        return self._admin_entry_from_dir(
             entry_dir,
             kind=kind,
-            namespace=_safe_namespace(namespace),
+            path_namespace=_safe_namespace(namespace),
             digest=digest,
         )
-        if entry.request_key is None:
-            return RemoteCacheAdminEntry(
-                entry.entry_id,
-                entry.kind,
-                entry.namespace,
-                entry.request_digest,
-                request_key,
-                entry.cached_at,
-                entry.time_basis,
-            )
-        return entry
 
     def admin_entries(self) -> tuple[RemoteCacheAdminEntry, ...]:
-        """Enumerate request mappings, including legacy opaque mappings."""
+        """Enumerate strict current request mappings."""
 
-        root = self.root / "remote-request-cache" / "v1"
+        root = self.root / "remote-request-cache" / "v2"
         entries: list[RemoteCacheAdminEntry] = []
         for kind in ("json", "source"):
             kind_root = root / kind
@@ -366,14 +366,14 @@ class RemoteRequestCache:
                 digest = entry_dir.name
                 if len(digest) != 64:
                     continue
-                entries.append(
-                    self._admin_entry_from_dir(
-                        entry_dir,
-                        kind=kind,
-                        namespace=entry_dir.parents[1].name,
-                        digest=digest,
-                    )
+                entry = self._admin_entry_from_dir(
+                    entry_dir,
+                    kind=kind,
+                    path_namespace=entry_dir.parents[1].name,
+                    digest=digest,
                 )
+                if entry is not None:
+                    entries.append(entry)
         return tuple(sorted(entries, key=lambda item: item.entry_id))
 
     def remove(self, kind: str, namespace: str, request_key: str) -> bool:
@@ -385,7 +385,7 @@ class RemoteRequestCache:
         )
 
     def remove_admin_entry(self, entry_id: str) -> bool:
-        """Remove one exact enumerated mapping, including a legacy opaque entry."""
+        """Remove one exact current mapping."""
 
         selected = next(
             (item for item in self.admin_entries() if item.entry_id == entry_id),
@@ -396,9 +396,9 @@ class RemoteRequestCache:
         entry_dir = (
             self.root
             / "remote-request-cache"
-            / "v1"
+            / "v2"
             / selected.kind
-            / selected.namespace
+            / _safe_namespace(selected.namespace)
             / selected.request_digest[:2]
             / selected.request_digest
         )
@@ -454,46 +454,95 @@ class RemoteRequestCache:
         entry_dir: Path,
         *,
         kind: str,
-        namespace: str,
+        path_namespace: str,
         digest: str,
-    ) -> RemoteCacheAdminEntry:
-        request_key: str | None = None
-        cached_at = ""
-        time_basis = "legacy_file_mtime"
+    ) -> RemoteCacheAdminEntry | None:
         try:
             value = json.loads((entry_dir / "admin.json").read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                return None
+            namespace = value.get("namespace")
+            request_key = value.get("request_key")
             if (
-                isinstance(value, dict)
-                and set(value) == _ADMIN_FIELDS
+                set(value) == _ADMIN_FIELDS
                 and value.get("schema_version") == REMOTE_CACHE_ADMIN_SCHEMA
                 and value.get("kind") == kind
-                and _safe_namespace(str(value.get("namespace") or "")) == namespace
+                and isinstance(namespace, str)
+                and _safe_namespace(namespace) == path_namespace
                 and value.get("request_digest") == digest
-                and isinstance(value.get("request_key"), str)
-                and value["request_key"]
+                and isinstance(request_key, str)
+                and request_key
+                and _request_digest(namespace, request_key) == digest
                 and isinstance(value.get("cached_at"), str)
                 and value["cached_at"]
                 and _is_utc_timestamp(value["cached_at"])
+                and self._manifest_contract_is_current(
+                    entry_dir / "manifest.json",
+                    kind=kind,
+                    namespace=namespace,
+                    digest=digest,
+                )
             ):
-                request_key = value["request_key"]
-                cached_at = value["cached_at"]
-                time_basis = "recorded_utc"
+                return RemoteCacheAdminEntry(
+                    entry_id=_remote_entry_id(kind, path_namespace, digest),
+                    kind=kind,
+                    namespace=namespace,
+                    request_digest=digest,
+                    request_key=request_key,
+                    cached_at=value["cached_at"],
+                )
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
             pass
-        if not cached_at:
-            try:
-                cached_at = _timestamp_from_mtime(entry_dir / "manifest.json")
-            except OSError:
-                cached_at = "1970-01-01T00:00:00Z"
-                time_basis = "unreadable"
-        return RemoteCacheAdminEntry(
-            entry_id=_remote_entry_id(kind, namespace, digest),
+        return None
+
+    def _require_admin(
+        self,
+        entry_dir: Path,
+        *,
+        kind: str,
+        namespace: str,
+        request_key: str,
+        digest: str,
+        corruption_code: str,
+    ) -> None:
+        entry = self._admin_entry_from_dir(
+            entry_dir,
             kind=kind,
-            namespace=namespace,
-            request_digest=digest,
-            request_key=request_key,
-            cached_at=cached_at,
-            time_basis=time_basis,
+            path_namespace=_safe_namespace(namespace),
+            digest=digest,
+        )
+        if entry is None or entry.request_key != request_key:
+            raise RemoteCacheError(
+                corruption_code,
+                "remote cache mapping has no valid current admin metadata",
+            )
+
+    def _manifest_contract_is_current(
+        self,
+        path: Path,
+        *,
+        kind: str,
+        namespace: str,
+        digest: str,
+    ) -> bool:
+        try:
+            value = self._read_manifest(path)
+        except RemoteCacheError:
+            return False
+        if kind == "source":
+            fields = _SOURCE_FIELDS
+            schema = REMOTE_SOURCE_CACHE_SCHEMA
+        elif kind == "json":
+            fields = _JSON_FIELDS
+            schema = REMOTE_JSON_CACHE_SCHEMA
+        else:
+            return False
+        return (
+            isinstance(value, dict)
+            and set(value) == fields
+            and value.get("schema_version") == schema
+            and value.get("namespace") == namespace
+            and value.get("request_digest") == digest
         )
 
     def _entry_dir(self, kind: str, namespace: str, digest: str) -> Path:
@@ -501,7 +550,7 @@ class RemoteRequestCache:
         return (
             self.root
             / "remote-request-cache"
-            / "v1"
+            / "v2"
             / kind
             / safe_namespace
             / digest[:2]
@@ -515,7 +564,7 @@ class RemoteRequestCache:
         path = (
             self.root
             / "remote-request-cache"
-            / "v1"
+            / "v2"
             / "locks"
             / kind
             / _safe_namespace(namespace)
@@ -591,12 +640,6 @@ def _payload_matches(path: Path, digest: str, size: int) -> bool:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _timestamp_from_mtime(path: Path) -> str:
-    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat().replace(
-        "+00:00", "Z"
-    )
 
 
 def _is_utc_timestamp(value: str) -> bool:

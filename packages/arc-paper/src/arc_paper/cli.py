@@ -308,7 +308,11 @@ def _cache_selector_arguments(parser: argparse.ArgumentParser) -> None:
         "--id", dest="paper_ids", action="append", default=[], help="paper ID; repeat as needed"
     )
     parser.add_argument(
-        "--entry-id", dest="entry_ids", action="append", default=[], help="opaque cache entry ID"
+        "--entry-id",
+        dest="entry_ids",
+        action="append",
+        default=[],
+        help="exact cache entry ID",
     )
     parser.add_argument("--cache-root", help="override the paper cache directory")
 

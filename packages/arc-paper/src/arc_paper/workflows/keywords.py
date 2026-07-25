@@ -291,25 +291,6 @@ class KeywordInventoryService:
             warnings=cache_warnings,
         )
 
-    def extract(
-        self,
-        context: RunContext,
-        document: KeywordDocument,
-        *,
-        approx_count: int = 50,
-        model: ModelSelection = ModelSelection(tier="medium"),
-        resume_input: Mapping[str, JsonValue] | None = None,
-    ) -> KeywordResult | Paused | Failed:
-        """Compatibility spelling for callers written during the split."""
-
-        return self.extract_keywords(
-            context,
-            document,
-            approx_count=approx_count,
-            model=model,
-            resume_input=resume_input,
-        )
-
     def _review_explicit_fields(
         self,
         context: RunContext,
