@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -13,6 +12,7 @@ from _arc_workflows.workflow_io import (
     read_json_object,
     require_safe_id,
 )
+from _arc_workflows.source_checkout import validate_strict_checkout_path
 
 
 IDEAS_CONFIG_SCHEMA = "arc.workflow.ideas.config.v1"
@@ -198,20 +198,12 @@ def _configured_manifest_path(data: Mapping[str, Any], *, project_dir: Path) -> 
 
 
 def _validate_strict_variant_config_dir(path: Path) -> None:
-    required_root = str(os.environ.get("ARC_REQUIRE_REPO_ROOT", "")).strip()
-    if not required_root:
-        return
-    root = Path(required_root).expanduser().resolve()
-    expected = (root / "plugins/arc/skills/arc/workflows/json").resolve()
-    try:
-        resolved = path.resolve(strict=True)
-    except (OSError, RuntimeError) as exc:
-        raise ConfigError(f"strict ARC source mode cannot resolve variant_config_dir: {path}") from exc
-    if resolved != expected:
-        raise ConfigError(
-            "strict ARC source mode requires variant_config_dir from the required checkout: "
-            f"expected {expected}, got {resolved}"
-        )
+    validate_strict_checkout_path(
+        path,
+        expected_relative_path="plugins/arc/skills/arc/workflows/json",
+        field_name="variant_config_dir",
+        error_type=ConfigError,
+    )
 
 
 def _load_domain_manifest(path: Path, *, required: bool) -> tuple[dict[str, Any] | None, str, list[str]]:
