@@ -152,9 +152,11 @@ def _object(
     return schema
 
 
-def _codec(name: str, schema: Mapping[str, Any]) -> JsonCodec[Mapping[str, Any]]:
+def _codec(
+    name: str, schema: Mapping[str, Any], *, version: int
+) -> JsonCodec[Mapping[str, Any]]:
     return JsonCodec(
-        f"arc.paper.{name}.parameters.v1",
+        f"arc.paper.{name}.parameters.v{version}",
         schema,
         lambda value: dict(value),
         to_json_value,
@@ -168,14 +170,15 @@ def _spec(
     *,
     output_schema: Mapping[str, Any],
     effects: frozenset[OperationEffect] = frozenset(),
+    version: int = 1,
 ) -> OperationSpec[Any]:
     return OperationSpec(
-        operation_id=f"arc-paper.{name}.v1",
-        version=1,
+        operation_id=f"arc-paper.{name}.v{version}",
+        version=version,
         name=name,
-        input_codec=_codec(name, schema),
+        input_codec=_codec(name, schema, version=version),
         output_codec=JsonOutputCodec(
-            f"arc.paper.{name}.result.v1", output_schema, to_json_value
+            f"arc.paper.{name}.result.v{version}", output_schema, to_json_value
         ),
         callable=callable,
         effect_flags=effects,
@@ -193,6 +196,7 @@ _STRING = {"type": "string"}
 _NONEMPTY_STRING = {"type": "string", "minLength": 1}
 _INTEGER = {"type": "integer"}
 _NULLABLE_INTEGER = {"type": ["integer", "null"]}
+_NULLABLE_POSITION = {"type": ["integer", "null"], "minimum": 1}
 _STRING_ARRAY = {"type": "array", "items": _STRING}
 _SOURCE_ORIGIN_SCHEMA = _object(
     {
@@ -391,10 +395,10 @@ _MATH_SPAN_SCHEMA = _object(
     {
         "span_id": _NONEMPTY_STRING,
         "kind": {"enum": ["inline", "display"]},
-        "source_line_start": {"type": "integer", "minimum": 1},
-        "source_column_start": {"type": "integer", "minimum": 1},
-        "source_line_end": {"type": "integer", "minimum": 1},
-        "source_column_end": {"type": "integer", "minimum": 1},
+        "source_line_start": _NULLABLE_POSITION,
+        "source_column_start": _NULLABLE_POSITION,
+        "source_line_end": _NULLABLE_POSITION,
+        "source_column_end": _NULLABLE_POSITION,
         "normalized_tex": _NONEMPTY_STRING,
         "context_before": _STRING,
         "context_after": _STRING,
@@ -420,10 +424,10 @@ _EQUATION_SCHEMA = _object(
         "normalized_latex": _NONEMPTY_STRING,
         "before": _STRING,
         "after": _STRING,
-        "source_line_start": {"type": "integer", "minimum": 1},
-        "source_line_end": {"type": "integer", "minimum": 1},
-        "source_column_start": {"type": "integer", "minimum": 1},
-        "source_column_end": {"type": "integer", "minimum": 1},
+        "source_line_start": _NULLABLE_POSITION,
+        "source_line_end": _NULLABLE_POSITION,
+        "source_column_start": _NULLABLE_POSITION,
+        "source_column_end": _NULLABLE_POSITION,
         "tex_label": _STRING,
     },
     required=(
@@ -456,7 +460,7 @@ _PARSED_DOCUMENT_SCHEMA = _object(
         },
         "warnings": _STRING_ARRAY,
         "metadata": {"type": "object"},
-        "schema_version": {"const": "arc.paper.parsed_document.v1"},
+        "schema_version": {"const": "arc.paper.parsed_document.v2"},
         "document_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "equations": {"type": "array", "items": _EQUATION_SCHEMA},
     },
@@ -594,10 +598,10 @@ _EQUATION_MATCH_SCHEMA = _object(
         "kind": {"enum": ["inline", "display"]},
         "normalized_tex": _NONEMPTY_STRING,
         "source_label": _STRING,
-        "source_line_start": {"type": "integer", "minimum": 1},
-        "source_column_start": {"type": "integer", "minimum": 1},
-        "source_line_end": {"type": "integer", "minimum": 1},
-        "source_column_end": {"type": "integer", "minimum": 1},
+        "source_line_start": _NULLABLE_POSITION,
+        "source_column_start": _NULLABLE_POSITION,
+        "source_line_end": _NULLABLE_POSITION,
+        "source_column_end": _NULLABLE_POSITION,
         "context_before": _STRING,
         "context_after": _STRING,
         "matched_in": _NONEMPTY_STRING,
@@ -867,6 +871,7 @@ _OPERATIONS = (
             required=("provenance", "entries", "warnings"),
         ),
         effects=_NETWORK_CACHE,
+        version=2,
     ),
     _spec(
         "get-arxiv-section",
@@ -904,6 +909,7 @@ _OPERATIONS = (
             ),
         ),
         effects=_NETWORK_CACHE,
+        version=2,
     ),
     _spec(
         "search-arxiv-full-text",
@@ -950,6 +956,7 @@ _OPERATIONS = (
             ),
         ),
         effects=_NETWORK_CACHE,
+        version=2,
     ),
     _spec(
         "search-arxiv-equations",
@@ -985,6 +992,7 @@ _OPERATIONS = (
             ),
         ),
         effects=_NETWORK_CACHE,
+        version=2,
     ),
     _spec(
         "fetch-arxiv-auto",
@@ -1071,6 +1079,7 @@ _OPERATIONS = (
         effects=frozenset(
             {OperationEffect.CACHE_WRITE, OperationEffect.ARBITRARY_LOCAL_PATH}
         ),
+        version=2,
     ),
     _spec(
         "extract-keywords",

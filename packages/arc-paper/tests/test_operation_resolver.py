@@ -77,7 +77,7 @@ def test_resolver_reuses_service_normalizes_ids_and_uses_registry_codecs() -> No
     assert service.parse_count == 1
     assert results[0].to_document() == {
         "ok": True,
-        "operation_id": "arc-paper.get-arxiv-section.v1",
+        "operation_id": "arc-paper.get-arxiv-section.v2",
         "parameters": {
             "arxiv_id": "arXiv:0911.3380",
             "selector": "Introduction",
@@ -95,7 +95,7 @@ def test_resolver_reuses_service_normalizes_ids_and_uses_registry_codecs() -> No
         },
         "provenance": {
             "source": "arc-paper",
-            "operation_id": "arc-paper.get-arxiv-section.v1",
+            "operation_id": "arc-paper.get-arxiv-section.v2",
             "parameters": {
                 "arxiv_id": "arXiv:0911.3380",
                 "selector": "Introduction",

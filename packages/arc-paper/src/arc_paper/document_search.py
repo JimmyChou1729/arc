@@ -79,10 +79,10 @@ class EquationMatch:
     kind: MathSpanKind
     normalized_tex: str
     source_label: str
-    source_line_start: int
-    source_column_start: int
-    source_line_end: int
-    source_column_end: int
+    source_line_start: int | None
+    source_column_start: int | None
+    source_line_end: int | None
+    source_column_end: int | None
     context_before: str
     context_after: str
     matched_in: str

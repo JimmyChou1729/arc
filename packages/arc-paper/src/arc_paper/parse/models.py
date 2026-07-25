@@ -11,7 +11,7 @@ from typing import Any
 from ..sources import SourceArtifact, SourceFormat, SourceOrigin, SourceOriginKind
 
 
-PARSED_DOCUMENT_SCHEMA = "arc.paper.parsed_document.v1"
+PARSED_DOCUMENT_SCHEMA = "arc.paper.parsed_document.v2"
 
 
 class MathSpanKind(str, Enum):
@@ -29,10 +29,10 @@ class MathSpan:
 
     span_id: str
     kind: MathSpanKind
-    source_line_start: int
-    source_column_start: int
-    source_line_end: int
-    source_column_end: int
+    source_line_start: int | None
+    source_column_start: int | None
+    source_line_end: int | None
+    source_column_end: int | None
     normalized_tex: str
     context_before: str = ""
     context_after: str = ""
@@ -40,13 +40,31 @@ class MathSpan:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kind", MathSpanKind(self.kind))
-        if self.source_line_start < 1 or self.source_column_start < 1:
-            raise ValueError("math span start position must be positive")
-        if (self.source_line_end, self.source_column_end) < (
-            self.source_line_start,
-            self.source_column_start,
+        lines = (self.source_line_start, self.source_line_end)
+        columns = (self.source_column_start, self.source_column_end)
+        if (lines[0] is None) != (lines[1] is None):
+            raise ValueError("math span line positions must be paired")
+        if (columns[0] is None) != (columns[1] is None):
+            raise ValueError("math span column positions must be paired")
+        if lines[0] is None and columns[0] is not None:
+            raise ValueError("math span columns require line positions")
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 1
+            for value in (*lines, *columns)
+            if value is not None
         ):
-            raise ValueError("math span end cannot precede its start")
+            raise ValueError("math span positions must be positive integers")
+        if lines[0] is not None and lines[1] < lines[0]:
+            raise ValueError("math span end line cannot precede its start")
+        if (
+            lines[0] is not None
+            and lines[0] == lines[1]
+            and columns[0] is not None
+            and columns[1] < columns[0]
+        ):
+            raise ValueError("math span end column cannot precede its start")
         if not self.span_id or not self.normalized_tex:
             raise ValueError("math span requires an ID and normalized TeX")
 
@@ -120,6 +138,8 @@ class ParsedDocument(Mapping[str, Any]):
     equations: tuple[Mapping[str, Any], ...] = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.schema_version != PARSED_DOCUMENT_SCHEMA:
+            raise ValueError("unsupported parsed document schema")
         sections = tuple(self.sections)
         spans = tuple(self.math_spans)
         pages = tuple(self.pages)
@@ -189,9 +209,6 @@ class ParsedDocument(Mapping[str, Any]):
             "warnings": self.warnings,
             "metadata": self.metadata,
         }
-        legacy = self.metadata.get("legacy_view")
-        if isinstance(legacy, Mapping):
-            compatibility.update(legacy)
         return compatibility
 
     def __getitem__(self, key: str) -> Any:
@@ -202,15 +219,6 @@ class ParsedDocument(Mapping[str, Any]):
 
     def __len__(self) -> int:
         return len(self._compatibility())
-
-    @classmethod
-    def from_legacy(
-        cls, value: Mapping[str, Any], *, source: SourceArtifact
-    ) -> "ParsedDocument":
-        """Narrow construction helper for callers crossing the v1 boundary."""
-
-        return cls(source=source, metadata={"legacy_view": dict(value)})
-
 
 _DOCUMENT_FIELDS = {
     "schema_version",
@@ -296,7 +304,7 @@ def parsed_document_to_document(parsed: ParsedDocument) -> dict[str, Any]:
 
 
 def parsed_document_from_document(value: Mapping[str, Any]) -> ParsedDocument:
-    """Decode the strict v1 artifact contract and revalidate its digest."""
+    """Decode the strict v2 artifact contract and revalidate its digest."""
 
     _require_fields(value, _DOCUMENT_FIELDS, "parsed document")
     if value.get("schema_version") != PARSED_DOCUMENT_SCHEMA:
@@ -339,10 +347,10 @@ def parsed_document_from_document(value: Mapping[str, Any]) -> ParsedDocument:
             MathSpan(
                 span_id=_string(item, "span_id"),
                 kind=MathSpanKind(_string(item, "kind")),
-                source_line_start=_integer(item, "source_line_start"),
-                source_column_start=_integer(item, "source_column_start"),
-                source_line_end=_integer(item, "source_line_end"),
-                source_column_end=_integer(item, "source_column_end"),
+                source_line_start=_optional_integer(item, "source_line_start"),
+                source_column_start=_optional_integer(item, "source_column_start"),
+                source_line_end=_optional_integer(item, "source_line_end"),
+                source_column_end=_optional_integer(item, "source_column_end"),
                 normalized_tex=_string(item, "normalized_tex"),
                 context_before=_string(item, "context_before"),
                 context_after=_string(item, "context_after"),

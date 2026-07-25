@@ -118,7 +118,7 @@ def test_bundle_normalizes_validators_and_rejects_duplicates(tmp_path):
         SourceBundle(primary=primary, validators=(primary,))
 
 
-def test_parse_outcome_keeps_non_fatal_warnings(tmp_path):
+def test_parse_outcome_rejects_untyped_legacy_document(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     artifact = repository.store_bytes(
         b"# paper",
@@ -130,14 +130,12 @@ def test_parse_outcome_keeps_non_fatal_warnings(tmp_path):
         policy=ValidationPolicy.VISUAL_ALL_PAGES,
     )
 
-    outcome = ParseOutcome(
-        document={"equations": []},
-        report=report,
-        warnings=("PDF page 2 was unreviewed",),
-    )
-
-    assert outcome.document["equations"] == []
-    assert outcome.warnings == ("PDF page 2 was unreviewed",)
+    with pytest.raises(TypeError, match="must be a ParsedDocument"):
+        ParseOutcome(
+            document={"equations": []},  # type: ignore[arg-type]
+            report=report,
+            warnings=("PDF page 2 was unreviewed",),
+        )
 
 
 def test_manifest_is_strict_and_payload_corruption_is_detected(tmp_path):

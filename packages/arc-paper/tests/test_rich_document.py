@@ -127,6 +127,71 @@ def test_markdown_rich_parse_preserves_blocks_links_math_and_assets(tmp_path):
     assert all(block.section_path == document.sections[0].path for block in document.blocks)
 
 
+def test_markdown_rich_parse_supports_setext_headings(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        b"Primary\n=======\n\nSecondary\n---------\n",
+        SourceFormat.MARKDOWN,
+    )
+
+    document = RichDocumentParserService(repository).parse(
+        SourceBundle(primary=artifact)
+    ).document
+
+    assert [
+        (block.payload["level"], block.payload["text"])
+        for block in document.blocks
+        if block.kind is RichBlockKind.HEADING
+    ] == [(1, "Primary"), (2, "Secondary")]
+
+
+def test_markdown_rich_parse_excludes_front_matter_from_body_blocks(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        (
+            b"---\n"
+            b"keywords: [alpha, beta]\n"
+            b"hidden_heading: '# Hidden'\n"
+            b"unclosed_math: '$$'\n"
+            b"- yaml-list-value\n"
+            b"---\n"
+            b"Scientific body.\n"
+        ),
+        SourceFormat.MARKDOWN,
+    )
+
+    document = RichDocumentParserService(repository).parse_source(artifact)
+
+    assert [block.kind for block in document.blocks] == [
+        RichBlockKind.PARAGRAPH
+    ]
+    assert document.blocks[0].payload["text"] == "Scientific body."
+    assert document.metadata["explicit_term_fields"][0]["entries"] == (
+        "alpha",
+        "beta",
+    )
+
+
+def test_markdown_rich_parse_checks_fence_before_setext(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        b"```text\n---\n```\nAfter.\n",
+        SourceFormat.MARKDOWN,
+    )
+
+    document = RichDocumentParserService(repository).parse_source(artifact)
+
+    assert [block.kind for block in document.blocks] == [
+        RichBlockKind.CODE,
+        RichBlockKind.PARAGRAPH,
+    ]
+    assert document.blocks[0].payload["text"] == "---"
+    assert document.blocks[1].payload["text"] == "After."
+
+
 def test_rich_markdown_projection_has_canonical_encoded_output(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     artifact = _store(

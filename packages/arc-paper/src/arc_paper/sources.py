@@ -156,9 +156,7 @@ class ParseOutcome:
 
         document = self.document
         if not isinstance(document, ParsedDocument):
-            if not isinstance(document, Mapping):
-                raise TypeError("ParseOutcome.document must be a ParsedDocument")
-            document = ParsedDocument.from_legacy(document, source=self.report.primary)
+            raise TypeError("ParseOutcome.document must be a ParsedDocument")
         if document.source.content_identity != self.report.primary.content_identity:
             raise ValueError("parsed document source does not match report primary")
         object.__setattr__(self, "document", document)

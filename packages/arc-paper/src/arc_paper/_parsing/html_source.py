@@ -3,14 +3,8 @@ from __future__ import annotations
 from bs4 import BeautifulSoup, Tag
 
 
-def standard_html_root(soup: BeautifulSoup) -> Tag | BeautifulSoup:
-    """Return the standard parser's current single-root projection."""
-
-    return soup.select_one("article") or soup.body or soup
-
-
-def rich_html_roots(soup: BeautifulSoup) -> list[Tag | BeautifulSoup]:
-    """Return the Rich parser's current ordered roots without nested repeats."""
+def html_roots(soup: BeautifulSoup) -> list[Tag | BeautifulSoup]:
+    """Return ordered content roots without repeating nested articles."""
 
     articles = [
         node
@@ -20,19 +14,10 @@ def rich_html_roots(soup: BeautifulSoup) -> list[Tag | BeautifulSoup]:
     return articles or [soup.body or soup]
 
 
-def legacy_html_source_line(text: str, node: Tag, ordinal: int) -> int:
-    """Preserve the standard parser's current serialized-node line lookup."""
-
-    serialized = str(node)
-    if serialized in text:
-        return text[: text.find(serialized)].count("\n") + 1
-    return ordinal + 1
-
-
-def rich_html_source_position(
+def html_source_position(
     node: Tag,
 ) -> tuple[int | None, int | None, int | None, int | None]:
-    """Return the Rich parser's current opening-tag point anchor."""
+    """Return a real opening-tag point anchor when the parser provides one."""
 
     source_line = getattr(node, "sourceline", None)
     source_position = getattr(node, "sourcepos", None)
@@ -58,9 +43,7 @@ def rich_html_selector(node: Tag, ordinal: int) -> str:
 
 
 __all__ = [
-    "legacy_html_source_line",
-    "rich_html_roots",
+    "html_roots",
+    "html_source_position",
     "rich_html_selector",
-    "rich_html_source_position",
-    "standard_html_root",
 ]

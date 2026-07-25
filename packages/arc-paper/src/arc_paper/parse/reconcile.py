@@ -374,7 +374,7 @@ def _context_fingerprint(span: MathSpan) -> str:
     return _fingerprint(f"{span.context_before} {span.context_after}")
 
 
-def _position(span: MathSpan) -> dict[str, int]:
+def _position(span: MathSpan) -> dict[str, int | None]:
     return {
         "line_start": span.source_line_start,
         "column_start": span.source_column_start,

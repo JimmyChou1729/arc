@@ -12,18 +12,25 @@ from bs4 import BeautifulSoup, Tag
 
 from .._parsing import ParseError, normalize_tex
 from .._parsing.html_source import (
-    legacy_html_source_line,
-    standard_html_root,
+    html_roots,
+    html_source_position,
 )
 from .._parsing.markdown_lex import (
     markdown_column_width as _markdown_column_width,
+    markdown_front_matter_end as _markdown_front_matter_end,
     markdown_indent_width as _markdown_indent_width,
     markdown_math_end as _markdown_math_end,
     markdown_quote_content as _markdown_quote_content,
     match_atx_heading,
     match_fence,
+    match_setext_heading,
 )
-from .._parsing.tex_lex import tex_without_comments as _tex_without_comments
+from .._parsing.tex_lex import (
+    scan_tex_heading as _scan_tex_heading,
+    scan_tex_balanced_text as _scan_tex_balanced_text,
+    skip_tex_whitespace as _skip_tex_whitespace,
+    tex_structural_text as _tex_structural_text,
+)
 from ..sources import SourceArtifact, SourceFormat
 from .models import (
     MathSpan,
@@ -150,10 +157,10 @@ def _span_id(
     artifact: SourceArtifact,
     *,
     kind: MathSpanKind,
-    start_line: int,
-    start_column: int,
-    end_line: int,
-    end_column: int,
+    start_line: int | None,
+    start_column: int | None,
+    end_line: int | None,
+    end_column: int | None,
     tex: str,
 ) -> str:
     material = "\0".join(
@@ -180,6 +187,7 @@ def _make_span(
     end_line: int,
     end_column: int,
     raw: str,
+    precise_columns: bool = True,
 ) -> MathSpan | None:
     tex = normalize_tex(raw)
     if not tex:
@@ -193,21 +201,23 @@ def _make_span(
     before = before or _nearest_context(lines, start_line - 2, -1)
     after = after or _nearest_context(lines, end_line, 1)
     label_match = re.search(r"\\(?:label|tag)\s*\{([^{}]+)\}", raw)
+    source_column_start = start_column if precise_columns else None
+    source_column_end = end_column if precise_columns else None
     return MathSpan(
         span_id=_span_id(
             artifact,
             kind=kind,
             start_line=start_line,
-            start_column=start_column,
+            start_column=source_column_start,
             end_line=end_line,
-            end_column=end_column,
+            end_column=source_column_end,
             tex=tex,
         ),
         kind=kind,
         source_line_start=start_line,
-        source_column_start=start_column,
+        source_column_start=source_column_start,
         source_line_end=end_line,
-        source_column_end=end_column,
+        source_column_end=source_column_end,
         normalized_tex=tex,
         context_before=before,
         context_after=after,
@@ -260,8 +270,11 @@ def _parse_markdown(artifact: SourceArtifact, text: str) -> ParsedDocument:
     headings: list[tuple[int, int, str]] = []
     fenced_lines: set[int] = set()
     active_fence: tuple[int, str] | None = None
+    front_matter_end = _markdown_front_matter_end(lines)
     for index, line in enumerate(lines, 1):
         content, quote_depth = _markdown_quote_content(line)
+        if front_matter_end and index <= front_matter_end:
+            continue
         fence_match = match_fence(content)
         if active_fence is not None and quote_depth < active_fence[0]:
             active_fence = None
@@ -284,12 +297,34 @@ def _parse_markdown(artifact: SourceArtifact, text: str) -> ParsedDocument:
         heading = match_atx_heading(content)
         if heading:
             headings.append((index, len(heading.group(1)), heading.group(2)))
+            continue
+        setext = match_setext_heading(content)
+        if (
+            setext
+            and index > 1
+            and index - 1 not in fenced_lines
+        ):
+            previous, previous_depth = _markdown_quote_content(lines[index - 2])
+            if (
+                previous_depth == quote_depth
+                and previous.strip()
+                and _markdown_indent_width(previous) < 4
+                and match_atx_heading(previous) is None
+                and match_fence(previous) is None
+            ):
+                headings.append(
+                    (index - 1, 1 if setext.group(1)[0] == "=" else 2, previous.strip())
+                )
     indented_code_lines = _markdown_indented_code_lines(lines, fenced_lines)
+    front_matter_lines = (
+        set(range(1, front_matter_end + 1)) if front_matter_end else set()
+    )
     spans = _scan_delimited_math(
         artifact,
         lines,
-        excluded_lines=fenced_lines | indented_code_lines,
+        excluded_lines=fenced_lines | indented_code_lines | front_matter_lines,
         include_tex_environments=True,
+        precise_columns=False,
     )
     metadata: dict[str, object] = {"format": "markdown"}
     explicit_fields = _markdown_explicit_term_fields(text)
@@ -297,7 +332,14 @@ def _parse_markdown(artifact: SourceArtifact, text: str) -> ParsedDocument:
         metadata["explicit_term_fields"] = explicit_fields
     return ParsedDocument(
         source=artifact,
-        sections=_sections_from_headings(headings, lines, artifact),
+        sections=_sections_from_headings(
+            headings,
+            [
+                "" if line_number in front_matter_lines else line
+                for line_number, line in enumerate(lines, 1)
+            ],
+            artifact,
+        ),
         math_spans=spans,
         metadata=metadata,
     )
@@ -378,11 +420,23 @@ def _scan_delimited_math(
     *,
     excluded_lines: set[int],
     include_tex_environments: bool,
+    precise_columns: bool = True,
 ) -> tuple[MathSpan, ...]:
+    _validate_display_math(
+        artifact,
+        lines,
+        excluded_lines=excluded_lines,
+        include_tex_environments=include_tex_environments,
+    )
     spans: list[MathSpan] = []
     occupied: set[tuple[int, int]] = set()
     environment_names = "equation|align|gather|multline|eqnarray"
-    joined = "\n".join(lines)
+    scan_lines = (
+        [_mask_markdown_inline_code(line) for line in lines]
+        if artifact.source_format is SourceFormat.MARKDOWN
+        else lines
+    )
+    joined = "\n".join(scan_lines)
     offsets = _line_offsets(lines)
     patterns: list[tuple[MathSpanKind, re.Pattern[str]]] = [
         (MathSpanKind.DISPLAY, re.compile(r"\$\$(.+?)\$\$", re.DOTALL)),
@@ -424,6 +478,7 @@ def _scan_delimited_math(
                 end_line=end_line,
                 end_column=end_column,
                 raw=match.group(0),
+                precise_columns=precise_columns,
             )
             if span:
                 spans.append(span)
@@ -459,6 +514,7 @@ def _scan_delimited_math(
                     end_line=line_number,
                     end_column=match.end(),
                     raw=match.group(0),
+                    precise_columns=precise_columns,
                 )
                 if span:
                     spans.append(span)
@@ -467,12 +523,77 @@ def _scan_delimited_math(
         sorted(
             spans,
             key=lambda item: (
-                item.source_line_start,
-                item.source_column_start,
-                item.source_line_end,
-                item.source_column_end,
+                item.source_line_start or 0,
+                item.source_column_start or 0,
+                item.source_line_end or 0,
+                item.source_column_end or 0,
             ),
         )
+    )
+
+
+def _validate_display_math(
+    artifact: SourceArtifact,
+    lines: list[str],
+    *,
+    excluded_lines: set[int],
+    include_tex_environments: bool,
+) -> None:
+    active = "\n".join(
+        (
+            ""
+            if line_number in excluded_lines
+            else (
+                _mask_markdown_inline_code(line)
+                if artifact.source_format is SourceFormat.MARKDOWN
+                else line
+            )
+        )
+        for line_number, line in enumerate(lines, 1)
+    )
+    if len(re.findall(r"(?<!\\)\$\$", active)) % 2:
+        raise ParseError(
+            "unclosed_rich_block",
+            "unclosed display-math delimiter $$",
+            artifact=artifact,
+        )
+    bracket_depth = 0
+    for token in re.finditer(r"\\\[|\\\]", active):
+        if token.group(0) == r"\[":
+            bracket_depth += 1
+        elif bracket_depth:
+            bracket_depth -= 1
+    if bracket_depth:
+        raise ParseError(
+            "unclosed_rich_block",
+            r"unclosed display-math delimiter \[",
+            artifact=artifact,
+        )
+    if not include_tex_environments:
+        return
+    stack: list[str] = []
+    for token in re.finditer(
+        r"\\(?P<kind>begin|end)\{(?P<env>equation|align|gather|multline|eqnarray)\*?\}",
+        active,
+    ):
+        environment = token.group("env")
+        if token.group("kind") == "begin":
+            stack.append(environment)
+        elif stack and stack[-1] == environment:
+            stack.pop()
+    if stack:
+        raise ParseError(
+            "unclosed_rich_block",
+            f"unclosed {stack[-1]} environment",
+            artifact=artifact,
+        )
+
+
+def _mask_markdown_inline_code(value: str) -> str:
+    return re.sub(
+        r"`+[^`]*`+",
+        lambda match: " " * len(match.group(0)),
+        value,
     )
 
 
@@ -493,7 +614,7 @@ def _offset_position(offsets: list[int], offset: int) -> tuple[int, int]:
 
 
 def _parse_tex(artifact: SourceArtifact, text: str) -> ParsedDocument:
-    active = _tex_without_comments(text)
+    active = _tex_structural_text(text)
     if re.search(r"\\(?:input|include)(?![A-Za-z@])\s*(?:\{|[^\s])", active):
         raise ParseError(
             "unsupported_tex_project",
@@ -503,14 +624,28 @@ def _parse_tex(artifact: SourceArtifact, text: str) -> ParsedDocument:
     lines = active.splitlines()
     headings: list[tuple[int, int, str]] = []
     levels = {"section": 1, "subsection": 2, "subsubsection": 3}
-    for index, line in enumerate(lines, 1):
-        match = re.search(
-            r"\\(section|subsection|subsubsection)\*?\s*\{([^{}]*)\}", line
-        )
-        if match:
-            headings.append((index, levels[match.group(1)], match.group(2)))
+    index = 0
+    while index < len(lines):
+        cursor = 0
+        while True:
+            heading = _scan_tex_heading(
+                lines, index, artifact, cursor=cursor
+            )
+            if heading is None:
+                break
+            start = index
+            end, cursor, command, title = heading
+            headings.append(
+                (start + 1, levels[command], _tex_heading_text(title))
+            )
+            index = end
+        index += 1
     spans = _scan_delimited_math(
-        artifact, lines, excluded_lines=set(), include_tex_environments=True
+        artifact,
+        lines,
+        excluded_lines=set(),
+        include_tex_environments=True,
+        precise_columns=False,
     )
     metadata: dict[str, object] = {"format": "tex", "single_file": True}
     explicit_fields = _tex_explicit_term_fields(active)
@@ -524,11 +659,56 @@ def _parse_tex(artifact: SourceArtifact, text: str) -> ParsedDocument:
     )
 
 
+def _tex_heading_text(value: str) -> str:
+    cursor = 0
+    output: list[str] = []
+    marker = r"\texorpdfstring"
+    while True:
+        start = value.find(marker, cursor)
+        if start < 0:
+            output.append(value[cursor:])
+            break
+        output.append(value[cursor:start])
+        argument = _skip_tex_whitespace(value, start + len(marker))
+        if argument >= len(value) or value[argument] != "{":
+            output.append(marker)
+            cursor = start + len(marker)
+            continue
+        first, after_first = _scan_tex_balanced_text(
+            value, argument, opening="{", closing="}"
+        )
+        second_start = _skip_tex_whitespace(value, after_first)
+        if second_start >= len(value) or value[second_start] != "{":
+            output.append(value[start:after_first])
+            cursor = after_first
+            continue
+        _, after_second = _scan_tex_balanced_text(
+            value, second_start, opening="{", closing="}"
+        )
+        output.append(first)
+        cursor = after_second
+    title = "".join(output)
+    title = title.replace(r"\{", "\0OPEN\0").replace(r"\}", "\0CLOSE\0")
+    title = re.sub(
+        r"\\(?:textbf|textit|emph|mathrm|mathbf|mathcal)\{([^{}]*)\}",
+        r"\1",
+        title,
+    )
+    title = re.sub(r"\\[A-Za-z@]+\*?(?:\[[^\]]*\])?", "", title)
+    title = title.replace("{", "").replace("}", "")
+    return " ".join(
+        title.replace("\0OPEN\0", "{").replace("\0CLOSE\0", "}").split()
+    )
+
+
 def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
-    soup = BeautifulSoup(text, "lxml")
-    root = standard_html_root(soup)
+    soup = BeautifulSoup(text, "html.parser")
+    roots = html_roots(soup)
     headings = [
-        tag for tag in root.find_all(re.compile(r"^h[1-6]$")) if isinstance(tag, Tag)
+        tag
+        for root in roots
+        for tag in root.find_all(re.compile(r"^h[1-6]$"))
+        if isinstance(tag, Tag)
     ]
     sections: list[ParsedSection] = []
     if headings:
@@ -554,19 +734,25 @@ def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
                     ordinal=ordinal,
                 )
             )
-    elif root.get_text(" ", strip=True):
+    elif any(root.get_text(" ", strip=True) for root in roots):
+        visible_text = "\n".join(
+            root.get_text(" ", strip=True)
+            for root in roots
+            if root.get_text(" ", strip=True)
+        )
         sections.append(
             ParsedSection(
                 section_id=f"sec-{artifact.artifact_digest[:20]}",
                 title="Document",
                 level=1,
-                text=root.get_text(" ", strip=True),
+                text=visible_text,
                 ordinal=0,
             )
         )
     spans: list[MathSpan] = []
     math_nodes = [
         node
+        for root in roots
         for node in root.select("math, .ltx_equation, .ltx_Math")
         if isinstance(node, Tag)
         and not (
@@ -586,7 +772,9 @@ def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
         if not tex:
             continue
         display = node.name != "math" or str(node.get("display") or "").casefold() == "block"
-        line = legacy_html_source_line(text, node, ordinal)
+        line_start, column_start, line_end, column_end = (
+            html_source_position(node)
+        )
         source_key = str(node.get("id") or ordinal)
         span_id = (
             f"math-{hashlib.sha256((artifact.artifact_digest + source_key + tex).encode()).hexdigest()[:24]}"
@@ -595,10 +783,10 @@ def _parse_html(artifact: SourceArtifact, text: str) -> ParsedDocument:
             MathSpan(
                 span_id=span_id,
                 kind=MathSpanKind.DISPLAY if display else MathSpanKind.INLINE,
-                source_line_start=line,
-                source_column_start=1,
-                source_line_end=line,
-                source_column_end=max(1, len(tex)),
+                source_line_start=line_start,
+                source_column_start=column_start,
+                source_line_end=line_end,
+                source_column_end=column_end,
                 normalized_tex=tex,
                 context_before=_html_neighbor_text(node, previous=True),
                 context_after=_html_neighbor_text(node, previous=False),
@@ -634,14 +822,10 @@ def _markdown_explicit_term_fields(text: str) -> list[dict[str, object]]:
     """Extract only syntactically explicit front-matter term fields."""
 
     lines = text.splitlines()
-    if len(lines) < 3 or lines[0].strip() != "---":
+    front_matter_end = _markdown_front_matter_end(lines)
+    if not front_matter_end:
         return []
-    end = next(
-        (index for index, line in enumerate(lines[1:], 1) if line.strip() == "---"),
-        None,
-    )
-    if end is None:
-        return []
+    end = front_matter_end - 1
     output: list[dict[str, object]] = []
     index = 1
     while index < end:

@@ -7,12 +7,14 @@ import pytest
 from arc_paper import (
     ArcPaperService,
     MathSpanKind,
+    ParseError,
     PDFTextLayer,
     PaperInputError,
     PaperParserService,
     PdftotextExtractor,
     ParsedDocument,
     ReconciliationStatus,
+    RichDocumentParserService,
     SourceBundle,
     SourceFormat,
     SourceOrigin,
@@ -98,6 +100,221 @@ def test_public_parser_service_reads_all_formats_from_repository(
     assert extractor.calls == ([payload] if source_format is SourceFormat.PDF else [])
 
 
+def test_standard_html_uses_ordered_top_level_articles_and_real_tag_positions(
+    tmp_path,
+):
+    payload = b"\n".join(
+        (
+            b"<nav><h1>Navigation</h1><math alttext='outside'></math></nav>",
+            b"<article id='first'>",
+            b"<h1 data-kind='x' id='h1'>First</h1>",
+            b"<math class='formula' alttext='x' display='block'></math>",
+            b"<article><h2>Nested</h2><math alttext='y'></math></article>",
+            b"</article>",
+            b"<article id='second'>",
+            b"<h1>Second</h1>",
+            b"<math display='block' alttext='z'></math>",
+            b"</article>",
+        )
+    )
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, SourceFormat.HTML)
+
+    document = PaperParserService(repository).parse_source(artifact)
+
+    assert [section.title for section in document.sections] == [
+        "First",
+        "Nested",
+        "Second",
+    ]
+    assert [span.normalized_tex for span in document.math_spans] == ["x", "y", "z"]
+    assert [
+        (
+            span.source_line_start,
+            span.source_column_start,
+            span.source_line_end,
+            span.source_column_end,
+        )
+        for span in document.math_spans
+    ] == [(4, 1, 4, 1), (5, 25, 5, 25), (9, 1, 9, 1)]
+
+
+def test_standard_html_does_not_invent_unavailable_source_positions(
+    tmp_path, monkeypatch
+):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        b"<article><math alttext='x'></math></article>",
+        SourceFormat.HTML,
+    )
+    monkeypatch.setattr(
+        "arc_paper.parse.parser.html_source_position",
+        lambda node: (None, None, None, None),
+    )
+
+    span = PaperParserService(repository).parse_source(artifact).math_spans[0]
+
+    assert (
+        span.source_line_start,
+        span.source_column_start,
+        span.source_line_end,
+        span.source_column_end,
+    ) == (None, None, None, None)
+
+
+def test_standard_markdown_supports_setext_and_commonmark_atx_closing(
+    tmp_path,
+):
+    payload = b"Setext\n======\n\n## Kept#\n\n### Trimmed ###\n"
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, SourceFormat.MARKDOWN)
+
+    document = PaperParserService(repository).parse_source(artifact)
+
+    assert [(item.level, item.title) for item in document.sections] == [
+        (1, "Setext"),
+        (2, "Kept#"),
+        (3, "Trimmed"),
+    ]
+
+
+def test_standard_markdown_ignores_display_delimiters_in_inline_code(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(
+        repository,
+        b"# Code\nThe literal `$$` is not display math.\n",
+        SourceFormat.MARKDOWN,
+    )
+
+    document = PaperParserService(repository).parse_source(artifact)
+
+    assert document.math_spans == ()
+
+
+def test_standard_markdown_excludes_front_matter_from_all_body_projections(
+    tmp_path,
+):
+    payload = (
+        b"---\n"
+        b"keywords: [alpha, beta]\n"
+        b"hidden_heading: '# Hidden'\n"
+        b"unclosed_math: '$$'\n"
+        b"- yaml-list-value\n"
+        b"---\n"
+        b"Scientific body.\n"
+    )
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, SourceFormat.MARKDOWN)
+
+    document = PaperParserService(repository).parse_source(artifact)
+
+    assert document.math_spans == ()
+    assert [(item.title, item.text) for item in document.sections] == [
+        ("Document", "Scientific body.")
+    ]
+    assert document.metadata["explicit_term_fields"][0]["entries"] == [
+        "alpha",
+        "beta",
+    ]
+
+
+def test_markdown_explicit_terms_accept_yaml_document_end(tmp_path):
+    payload = b"---\nkeywords: [alpha, beta]\n...\nScientific body.\n"
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, SourceFormat.MARKDOWN)
+
+    standard = PaperParserService(repository).parse_source(artifact)
+    rich = RichDocumentParserService(repository).parse_source(artifact)
+
+    assert standard.metadata["explicit_term_fields"][0]["entries"] == [
+        "alpha",
+        "beta",
+    ]
+    assert rich.metadata["explicit_term_fields"][0]["entries"] == (
+        "alpha",
+        "beta",
+    )
+
+
+def test_standard_tex_balanced_headings_respect_body_comments_and_literals(
+    tmp_path,
+):
+    payload = "\n".join(
+        (
+            r"\section{Preamble}",
+            r"\begin{document}",
+            r"\section*",
+            r"[Short {Title}]",
+            r"{Outer {Nested} \texorpdfstring{TeX}{PDF} \{brace\}}",
+            r"\begin{verbatim}",
+            r"\subsection{Literal}",
+            r"\begin{equation} hidden \end{equation}",
+            r"\end{verbatim}",
+            r"% \subsection{Comment}",
+            r"\begin{equation}x=y\end{equation}",
+            r"\subsection{Visible}",
+            r"\end{document}",
+            r"\section{After}",
+        )
+    ).encode()
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, SourceFormat.TEX)
+
+    document = PaperParserService(repository).parse_source(artifact)
+
+    assert [(item.level, item.title) for item in document.sections] == [
+        (1, "Outer Nested TeX {brace}"),
+        (2, "Visible"),
+    ]
+    assert [span.normalized_tex for span in document.math_spans] == ["x=y"]
+    assert document.math_spans[0].source_line_start == 11
+    assert document.math_spans[0].source_column_start is None
+
+
+def test_tex_parsers_preserve_multiple_headings_on_one_source_line(tmp_path):
+    payload = (
+        br"\begin{document}"
+        br"\section{First}\subsection{Second}"
+        br"\end{document}"
+    )
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, SourceFormat.TEX)
+
+    standard = PaperParserService(repository).parse_source(artifact)
+    rich = RichDocumentParserService(repository).parse_source(artifact)
+
+    assert [(item.level, item.title) for item in standard.sections] == [
+        (1, "First"),
+        (2, "Second"),
+    ]
+    assert [(item.level, item.title) for item in rich.sections] == [
+        (1, "First"),
+        (2, "Second"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source_format", "payload"),
+    (
+        (SourceFormat.MARKDOWN, b"# Heading\n$$\nunclosed\n"),
+        (SourceFormat.MARKDOWN, b"# Heading\n\\[\nunclosed\n"),
+        (SourceFormat.TEX, br"\section{Unclosed" b"\n"),
+        (SourceFormat.TEX, br"\begin{equation}unclosed" b"\n"),
+    ),
+)
+def test_standard_parser_rejects_unclosed_rich_blocks(
+    tmp_path, source_format, payload
+):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, source_format)
+
+    with pytest.raises(ParseError) as error:
+        PaperParserService(repository).parse_source(artifact)
+
+    assert error.value.code == "unclosed_rich_block"
+
+
 def test_standard_markdown_projection_has_canonical_encoded_output(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     artifact = _store(
@@ -109,9 +326,9 @@ def test_standard_markdown_projection_has_canonical_encoded_output(tmp_path):
     document = PaperParserService(repository).parse_source(artifact)
 
     assert parsed_document_to_document(document) == {
-        "schema_version": "arc.paper.parsed_document.v1",
+        "schema_version": "arc.paper.parsed_document.v2",
         "document_digest": (
-            "04147356935f48839d523c49200a26263553aa736b2903285e02a542ddd06ed1"
+            "875350b1793dc1d67ba26f55144318f81b31b2712e36761c766db6024a2e1b42"
         ),
         "source": {
             "source_format": "markdown",
@@ -134,24 +351,24 @@ def test_standard_markdown_projection_has_canonical_encoded_output(tmp_path):
         ],
         "math_spans": [
             {
-                "span_id": "math-0fdd2cfeec4932e0842059a7",
+                "span_id": "math-e5f282db9a837a130a6337c3",
                 "kind": "inline",
                 "source_line_start": 2,
-                "source_column_start": 8,
+                "source_column_start": None,
                 "source_line_end": 2,
-                "source_column_end": 12,
+                "source_column_end": None,
                 "normalized_tex": "x+y",
                 "context_before": "Before",
                 "context_after": ".",
                 "source_label": "",
             },
             {
-                "span_id": "math-acdec12f8a953f76d2b05527",
+                "span_id": "math-62931744711492423c0e5088",
                 "kind": "display",
                 "source_line_start": 4,
-                "source_column_start": 1,
+                "source_column_start": None,
                 "source_line_end": 6,
-                "source_column_end": 2,
+                "source_column_end": None,
                 "normalized_tex": "z = 1",
                 "context_before": "Before $x+y$.",
                 "context_after": "",
@@ -325,10 +542,12 @@ def test_markdown_math_manifest_covers_inline_and_display_with_stable_positions(
         MathSpanKind.DISPLAY,
     ]
     inline, display = first.math_spans
-    assert (inline.source_line_start, inline.source_column_start) == (2, 15)
+    assert (inline.source_line_start, inline.source_column_start) == (2, None)
     assert inline.normalized_tex == "E = mc^2"
     assert display.source_line_start == 5
     assert display.source_line_end == 7
+    assert display.source_column_start is None
+    assert display.source_column_end is None
     assert display.context_before == "Before display."
     assert display.context_after == "After display."
     assert [span.span_id for span in first.math_spans] == [
@@ -730,6 +949,9 @@ def test_parsed_document_codec_round_trips_and_rejects_unknown_fields(tmp_path):
     encoded = parsed_document_to_document(parsed)
     decoded = parsed_document_from_document(encoded)
 
+    assert encoded["schema_version"] == "arc.paper.parsed_document.v2"
+    assert encoded["math_spans"][0]["source_column_start"] is None
+    assert decoded.math_spans[0].source_column_start is None
     assert decoded.document_digest == parsed.document_digest
     assert decoded.source.content_identity == parsed.source.content_identity
     invalid = {**encoded, "unknown": True}
@@ -743,6 +965,10 @@ def test_parsed_document_codec_round_trips_and_rejects_unknown_fields(tmp_path):
     }
     with pytest.raises(ValueError, match="digest"):
         parsed_document_from_document(corrupt)
+    with pytest.raises(ValueError, match="unsupported parsed document schema"):
+        parsed_document_from_document(
+            {**encoded, "schema_version": "arc.paper.parsed_document.v1"}
+        )
 
 
 def test_single_file_tex_rejects_input_include(tmp_path):

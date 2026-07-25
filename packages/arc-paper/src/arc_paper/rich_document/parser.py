@@ -12,13 +12,19 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 from .._parsing import ParseError, normalize_tex
 from .._parsing.html_source import (
-    rich_html_roots,
+    html_roots,
+    html_source_position,
     rich_html_selector,
-    rich_html_source_position,
 )
-from .._parsing.markdown_lex import match_atx_heading, match_fence
+from .._parsing.markdown_lex import (
+    markdown_front_matter_end,
+    markdown_indent_width,
+    match_atx_heading,
+    match_fence,
+    match_setext_heading,
+)
 from .._parsing.tex_lex import (
-    scan_rich_tex_heading as _tex_heading,
+    scan_tex_heading as _tex_heading,
     scan_tex_balanced as _scan_tex_balanced,
     scan_tex_balanced_text as _scan_tex_balanced_text,
     skip_tex_whitespace as _skip_tex_whitespace,
@@ -181,7 +187,8 @@ def _parse_markdown(
 ) -> list[_RawBlock]:
     lines = text.splitlines()
     output: list[_RawBlock] = []
-    index = 0
+    front_matter_end = markdown_front_matter_end(lines)
+    index = front_matter_end
     while index < len(lines):
         line = lines[index]
         if not line.strip():
@@ -230,6 +237,26 @@ def _parse_markdown(
                     {"text": "\n".join(code), "language": language},
                 )
             )
+            continue
+        if (
+            index + 1 < len(lines)
+            and markdown_indent_width(line) < 4
+            and (setext := match_setext_heading(lines[index + 1]))
+            and not _markdown_starts_block(lines, index, artifact)
+        ):
+            output.append(
+                _raw(
+                    artifact,
+                    RichBlockKind.HEADING,
+                    index + 1,
+                    index + 2,
+                    {
+                        "text": _markdown_plain_text(line.strip()),
+                        "level": 1 if setext.group(1)[0] == "=" else 2,
+                    },
+                )
+            )
+            index += 2
             continue
         equation = _markdown_display_equation(lines, index, artifact)
         if equation is not None:
@@ -769,7 +796,7 @@ def _parse_html(
     import_asset: AssetImporter,
 ) -> list[_RawBlock]:
     soup = BeautifulSoup(text, "html.parser")
-    roots = rich_html_roots(soup)
+    roots = html_roots(soup)
     if any(getattr(root, "name", "") == "article" for root in roots):
         events: list[Tag | _HTMLFallback] = _html_explicit_candidates(roots)
     else:
@@ -778,7 +805,7 @@ def _parse_html(
     for ordinal, event in enumerate(events):
         node = event.locator_node if isinstance(event, _HTMLFallback) else event
         line_start, column_start, line_end, column_end = (
-            rich_html_source_position(node)
+            html_source_position(node)
         )
         locator = SourceLocator(
             source_format=artifact.source_format,
@@ -1214,22 +1241,28 @@ def _parse_tex(
         if not stripped:
             index += 1
             continue
-        heading = _tex_heading(lines, index, artifact)
+        heading = _tex_heading(lines, index, artifact, cursor=0)
         if heading:
-            end, command, title = heading
-            output.append(
-                _raw(
-                    artifact,
-                    RichBlockKind.HEADING,
-                    index + 1,
-                    end + 1,
-                    {
-                        "text": _tex_heading_text(title),
-                        "level": levels[command],
-                    },
+            while heading is not None:
+                start = index
+                end, cursor, command, title = heading
+                output.append(
+                    _raw(
+                        artifact,
+                        RichBlockKind.HEADING,
+                        start + 1,
+                        end + 1,
+                        {
+                            "text": _tex_heading_text(title),
+                            "level": levels[command],
+                        },
+                    )
                 )
-            )
-            index = end + 1
+                index = end
+                heading = _tex_heading(
+                    lines, index, artifact, cursor=cursor
+                )
+            index += 1
             continue
         figure_environment = re.search(r"\\begin\{figure\*?\}", line)
         if figure_environment:
