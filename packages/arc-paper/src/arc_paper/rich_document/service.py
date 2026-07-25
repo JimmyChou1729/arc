@@ -94,7 +94,6 @@ class RichDocumentParserService:
             payload,
             asset_importer=self._asset_importer(bundle.primary.origin.locator),
         )
-        legacy_primary = self.standard_parser.parse_source(bundle.primary)
         if not bundle.validators:
             return RichParseOutcome(
                 document=parsed.document,
@@ -105,6 +104,7 @@ class RichDocumentParserService:
                 warnings=parsed.warnings + (PDF_VALIDATOR_MISSING_WARNING,),
             )
 
+        legacy_primary = self.standard_parser.parse_source(bundle.primary)
         validator = bundle.validators[0]
         try:
             parsed_validator = self.standard_parser.parse_source(validator)

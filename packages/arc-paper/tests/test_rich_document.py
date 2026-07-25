@@ -243,7 +243,7 @@ def test_rich_markdown_projection_has_canonical_encoded_output(tmp_path):
     }
 
 
-def test_rich_service_materializes_standard_primary_before_validator_branch(
+def test_rich_service_skips_unused_standard_primary_without_validator(
     tmp_path,
     monkeypatch,
 ):
@@ -255,17 +255,16 @@ def test_rich_service_materializes_standard_primary_before_validator_branch(
     )
     service = RichDocumentParserService(repository)
     calls = []
-    parse_standard = service.standard_parser.parse_source
 
     def record_standard_call(source):
         calls.append(source.content_identity)
-        return parse_standard(source)
+        raise AssertionError("standard projection is unused without a validator")
 
     monkeypatch.setattr(service.standard_parser, "parse_source", record_standard_call)
 
     outcome = service.parse(SourceBundle(primary=artifact))
 
-    assert calls == [artifact.content_identity]
+    assert calls == []
     assert outcome.report.primary.content_identity == artifact.content_identity
     assert outcome.warnings == (PDF_VALIDATOR_MISSING_WARNING,)
 
