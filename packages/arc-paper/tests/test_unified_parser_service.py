@@ -960,6 +960,33 @@ def test_pdf_section_title_preserves_genuine_numeric_source_title(tmp_path):
     assert entry.provenance["matching_method"] == "normalized_exact_line"
 
 
+def test_pdf_section_title_rejects_ambiguous_numeric_title_prefix(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# Results\nText.\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf = _store(repository, b"%PDF ambiguous numeric prefix", SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {b"%PDF ambiguous numeric prefix": PDFTextLayer(("2024 Results\nText.",))}
+    )
+
+    outcome = PaperParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+    section_id = outcome.document.sections[0].section_id
+    entry = next(
+        item
+        for item in outcome.report.entries
+        if item.subject_id == f"section:{section_id}"
+    )
+
+    assert entry.status is ReconciliationStatus.MISSING
+    assert entry.provenance["page_candidates"] == []
+    assert entry.provenance["matching_method"] == "none"
+
+
 def test_pdf_section_title_falls_back_to_page_substring_or_reports_missing(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     primary = _store(

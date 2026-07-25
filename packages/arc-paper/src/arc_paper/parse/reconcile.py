@@ -258,15 +258,12 @@ def _reconcile_pdf(
     entries: list[ReconciliationEntry] = []
     warnings: list[str] = []
     raw_pages = [page.text for page in validator.pages]
-    page_fingerprints = [_fingerprint(page.text) for page in validator.pages]
     for section in primary.sections:
         title = _fingerprint(section.title)
         exact_matching_pages = _pages_for_exact_section_title(raw_pages, section.title)
-        substring_matching_pages = [
-            index
-            for index, page in enumerate(page_fingerprints, 1)
-            if title and title in page
-        ]
+        substring_matching_pages = _pages_for_section_title_substrings(
+            raw_pages, title
+        )
         matching_pages = exact_matching_pages or substring_matching_pages
         method = (
             "normalized_exact_line"
@@ -340,8 +337,8 @@ def _pages_for_exact_section_title(pages: list[str], title: str) -> list[int]:
     section title.  Treating the whole extracted line as evidence therefore
     prefers a rendered heading over a TOC mention without requiring layout
     metadata from the PDF extractor.  A source title is authoritative: only
-    after an exact source-title match fails may a PDF-only section number be
-    ignored.
+    after an exact source-title match fails may a conventional PDF-only
+    section number be ignored.
     """
 
     needle = _fingerprint(title)
@@ -358,21 +355,49 @@ def _pages_for_exact_section_title(pages: list[str], title: str) -> list[int]:
         page_number
         for page_number, page in enumerate(pages, 1)
         if any(
-            _fingerprint(_without_pdf_section_prefix(line)) == needle
+            _fingerprint(_without_conventional_pdf_section_prefix(line)) == needle
             for line in page.splitlines()
         )
     ]
 
 
-_PDF_SECTION_PREFIX = re.compile(
-    r"^\s*(?:\d+(?:\s*\.\s*\d+)*|[IVXLCDM]+)\s*[.)]?\s+(?=\S)"
+_PDF_CONVENTIONAL_SECTION_PREFIX = re.compile(
+    r"^\s*(?:\d{1,2}(?:\s*\.\s*\d{1,2})+|\d{1,2}\s*[.)]|[IVXLCDM]+\s*[.)])\s+(?=\S)"
+)
+_PDF_NUMERIC_PREFIX = re.compile(
+    r"^\s*\d+(?:\s*\.\s*\d+)*\s*[.)]?\s+(?=\S)"
 )
 
 
-def _without_pdf_section_prefix(value: str) -> str:
+def _pages_for_section_title_substrings(pages: list[str], title: str) -> list[int]:
+    """Find page-level title evidence without accepting an ambiguous numeric line."""
+
+    if not title:
+        return []
+    return [
+        page_number
+        for page_number, page in enumerate(pages, 1)
+        if title in _fingerprint(page)
+        and not _contains_ambiguous_numeric_title_prefix(page, title)
+    ]
+
+
+def _contains_ambiguous_numeric_title_prefix(page: str, title: str) -> bool:
+    """Reject a bare numeric prefix that could be a title rather than a label."""
+
+    for line in page.splitlines():
+        if _PDF_CONVENTIONAL_SECTION_PREFIX.match(line):
+            continue
+        remainder = _PDF_NUMERIC_PREFIX.sub("", line, count=1)
+        if remainder != line and _fingerprint(remainder) == title:
+            return True
+    return False
+
+
+def _without_conventional_pdf_section_prefix(value: str) -> str:
     """Remove one conventional decimal or uppercase-Roman PDF section label."""
 
-    return _PDF_SECTION_PREFIX.sub("", value, count=1)
+    return _PDF_CONVENTIONAL_SECTION_PREFIX.sub("", value, count=1)
 
 
 def _pages_for_printed_label(pages: list[str], label: str) -> list[int]:
