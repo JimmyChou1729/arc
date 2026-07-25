@@ -858,13 +858,22 @@ class DomainBuildHandler:
             self.task_service, context, request, resume_input=resume_input
         )
         if isinstance(outcome, LLMCompleted):
-            summary = normalize_summary_output(
-                outcome.value,
-                graph=graph,
-                evidence=evidence,
-                selection=selection,
-                intent=self.request.intent,
-            )
+            try:
+                summary = normalize_summary_output(
+                    outcome.value,
+                    graph=graph,
+                    evidence=evidence,
+                    selection=selection,
+                    intent=self.request.intent,
+                )
+            except ValueError as exc:
+                return Failed(
+                    RunError(
+                        "domain_summary_invalid",
+                        str(exc),
+                        {"stage": "summary"},
+                    )
+                )
             summary_ref = context.artifacts.publish_json(_SUMMARY_ARTIFACT, summary)
             markdown_ref = context.artifacts.publish_bytes(
                 _SUMMARY_MARKDOWN_ARTIFACT,

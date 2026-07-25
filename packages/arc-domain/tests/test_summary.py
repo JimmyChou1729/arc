@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 
 import pytest
@@ -77,6 +78,29 @@ def _payload() -> dict:
     }
 
 
+def _payload_with_all_paper_paths() -> dict:
+    payload = _payload()
+    payload["known_solved_cases"] = [
+        {
+            "solved_case": "A benchmark limit.",
+            "why_it_is_solved": "The coefficient is known.",
+            "transferable_form": "Use the same normalization check.",
+            "forbidden_reuse": "Do not claim the full problem is solved.",
+            "valid_new_axes": ["Change the boundary condition."],
+            "papers": [REFERENCE_ID],
+        }
+    ]
+    payload["open_axes_for_new_work"] = [
+        {
+            "axis": "Alternative boundary data.",
+            "guidance": "Keep the controlled limit.",
+            "example_variations": ["A second boundary condition."],
+            "papers": [REFERENCE_ID],
+        }
+    ]
+    return payload
+
+
 def test_normalize_summary_output_returns_only_closed_v5_payload():
     graph, evidence, selection = _context()
     payload = _payload()
@@ -137,14 +161,140 @@ def test_normalize_summary_output_preserves_empty_authoritative_intent():
     assert payload["task_focus"]["user_intent"] == "Find a controlled calculation."
 
 
-def test_normalize_summary_output_rejects_unknown_opportunity_target():
+def test_normalize_summary_output_accepts_equivalent_ids_across_all_paper_paths():
     graph, evidence, selection = _context()
-    payload = _payload()
-    payload["mathematical_opportunities"]["well_defined_problems"][0]["target_domain_papers"] = [
-        "arXiv:9999.99999"
+    graph["nodes"][1]["identifiers"] = {
+        "arxiv": "2401.00002v3",
+        "doi": "10.1234/REFERENCE",
+        "inspire_recid": "12345",
+    }
+    selection["best_reference_paper"]["paper_id"] = "inspire:12345"
+    payload = _payload_with_all_paper_paths()
+    payload["foundation_paper"]["paper_id"] = (
+        "https://arxiv.org/abs/2401.00001v4"
+    )
+    payload["best_reference_paper"]["paper_id"] = (
+        "https://doi.org/10.1234/REFERENCE"
+    )
+    payload["methodology"][0]["papers"] = ["doi:10.1234/reference"]
+    payload["mathematical_opportunities"]["well_defined_problems"][0][
+        "target_domain_papers"
+    ] = ["recid:12345"]
+    payload["known_solved_cases"][0]["papers"] = ["arXiv:2401.00002v8"]
+    payload["open_axes_for_new_work"][0]["papers"] = [
+        "https://doi.org/10.1234/reference"
     ]
 
-    with pytest.raises(ValueError, match="domain_summary_unknown_target_domain_papers"):
+    normalized = summary.normalize_summary_output(
+        payload,
+        graph=graph,
+        evidence=evidence,
+        selection=selection,
+        intent="Find a controlled calculation.",
+    )
+
+    assert normalized == payload
+
+
+@pytest.mark.parametrize(
+    ("container_path", "expected_path"),
+    [
+        (("methodology", 0, "papers"), "$.methodology[0].papers[0]"),
+        (
+            (
+                "mathematical_opportunities",
+                "well_defined_problems",
+                0,
+                "target_domain_papers",
+            ),
+            "$.mathematical_opportunities.well_defined_problems"
+            "[0].target_domain_papers[0]",
+        ),
+        (
+            ("known_solved_cases", 0, "papers"),
+            "$.known_solved_cases[0].papers[0]",
+        ),
+        (
+            ("open_axes_for_new_work", 0, "papers"),
+            "$.open_axes_for_new_work[0].papers[0]",
+        ),
+    ],
+)
+def test_normalize_summary_output_rejects_unknown_ids_at_every_list_path(
+    container_path: tuple[object, ...],
+    expected_path: str,
+):
+    graph, evidence, selection = _context()
+    payload = _payload_with_all_paper_paths()
+    container = payload
+    for key in container_path:
+        container = container[key]
+    container[0] = "arXiv:9999.99999"
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "domain_summary_provenance_invalid: "
+            + re.escape(expected_path)
+        ),
+    ):
+        summary.normalize_summary_output(
+            payload,
+            graph=graph,
+            evidence=evidence,
+            selection=selection,
+            intent="Find a controlled calculation.",
+        )
+
+
+@pytest.mark.parametrize(
+    ("summary_key", "wrong_id", "expected_selection"),
+    [
+        ("foundation_paper", REFERENCE_ID, "selected_foundation"),
+        ("best_reference_paper", PAPER_ID, "best_reference_paper"),
+    ],
+)
+def test_normalize_summary_output_requires_authoritative_selected_papers(
+    summary_key: str,
+    wrong_id: str,
+    expected_selection: str,
+):
+    graph, evidence, selection = _context()
+    payload = _payload()
+    payload[summary_key]["paper_id"] = wrong_id
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "domain_summary_provenance_invalid: "
+            + re.escape(f"$.{summary_key}.paper_id")
+            + f".*{expected_selection}"
+        ),
+    ):
+        summary.normalize_summary_output(
+            payload,
+            graph=graph,
+            evidence=evidence,
+            selection=selection,
+            intent="Find a controlled calculation.",
+        )
+
+
+@pytest.mark.parametrize("summary_key", ["foundation_paper", "best_reference_paper"])
+def test_normalize_summary_output_requires_authoritative_selected_titles(
+    summary_key: str,
+):
+    graph, evidence, selection = _context()
+    payload = _payload()
+    payload[summary_key]["title"] = "Model-invented title"
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "domain_summary_provenance_invalid: "
+            + re.escape(f"$.{summary_key}.title")
+        ),
+    ):
         summary.normalize_summary_output(
             payload,
             graph=graph,

@@ -133,7 +133,7 @@ def _selection(paper_id: str) -> dict:
 def _summary_payload(*, user_intent: str) -> dict:
     choice = {
         "paper_id": FOUNDATION,
-        "title": "Selected foundation",
+        "title": "Foundation",
         "reason": "fake selection",
     }
     return {
@@ -379,6 +379,38 @@ def test_successful_summary_binds_request_intent_and_replays_without_llm(
     replayed_result, _ = _result(repository, replayed)
     assert replayed_result.summary == result.summary
     assert replayed_result.summary_markdown == result.summary_markdown
+
+
+def test_invalid_summary_provenance_is_a_typed_terminal_failure(
+    tmp_path: Path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs")
+    payload = _summary_payload(user_intent=_request().intent)
+    payload["methodology"] = [
+        {
+            "claim": "Unsupported method attribution.",
+            "papers": ["doi:10.9999/not-in-domain"],
+        }
+    ]
+
+    snapshot = DomainBuildRunner(repository).execute(
+        _request(),
+        paper_access=FakePaperAccess(),
+        task_service=DomainTaskService(summary_value=payload),
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert snapshot.status is RunStatus.FAILED
+    assert snapshot.awaiting is None
+    assert snapshot.error is not None
+    assert snapshot.error.code == "domain_summary_invalid"
+    assert "$.methodology[0].papers[0]" in snapshot.error.message
+    assert snapshot.error.details == {"stage": "summary"}
+    store = ImmutableArtifactStore(
+        repository.run_directory(snapshot.run_id), repository_root=repository.root
+    )
+    assert store.find("summary/json") is None
+    assert store.find("summary/markdown") is None
 
 
 def test_verified_reference_inference_candidate_is_available_to_selection(

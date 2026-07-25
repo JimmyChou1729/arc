@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Iterator, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
+from arc_paper import normalize_paper_id
 from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema import validate as validate_json_schema
 from jsonschema.exceptions import SchemaError as JsonSchemaError
@@ -32,6 +35,61 @@ SUMMARY_FALLBACK_ABSTRACT_CHAR_LIMIT = 800
 SUMMARY_FALLBACK_CONCLUSION_CHAR_LIMIT = 800
 SUMMARY_MATHEMATICAL_OPPORTUNITY_LIMIT = 6
 SUMMARY_SYSTEMATIC_METHOD_LIMIT = 3
+
+
+@dataclass(frozen=True)
+class _SummaryPaperReference:
+    path: str
+    paper_id: str
+    authoritative_selection_key: str | None = None
+    title_path: str | None = None
+    title: str | None = None
+
+
+class _PaperIdentityIndex:
+    """Resolve equivalent identifiers exposed by graph/evidence paper records."""
+
+    def __init__(self, records: Iterator[Mapping[str, Any]]) -> None:
+        self._parent: dict[str, str] = {}
+        for record in records:
+            aliases = sorted(_paper_record_aliases(record))
+            if not aliases:
+                continue
+            first = aliases[0]
+            self._parent.setdefault(first, first)
+            for alias in aliases[1:]:
+                self._parent.setdefault(alias, alias)
+                self._union(first, alias)
+
+    def contains(self, paper_id: str) -> bool:
+        return _normalized_paper_id(paper_id) in self._parent
+
+    def equivalent(self, left: str, right: str) -> bool:
+        normalized_left = _normalized_paper_id(left)
+        normalized_right = _normalized_paper_id(right)
+        if not normalized_left or not normalized_right:
+            return False
+        if normalized_left == normalized_right:
+            return True
+        if normalized_left not in self._parent or normalized_right not in self._parent:
+            return False
+        return self._find(normalized_left) == self._find(normalized_right)
+
+    def _find(self, paper_id: str) -> str:
+        parent = self._parent[paper_id]
+        if parent != paper_id:
+            self._parent[paper_id] = self._find(parent)
+        return self._parent[paper_id]
+
+    def _union(self, left: str, right: str) -> None:
+        left_root = self._find(left)
+        right_root = self._find(right)
+        if left_root == right_root:
+            return
+        if left_root < right_root:
+            self._parent[right_root] = left_root
+        else:
+            self._parent[left_root] = right_root
 
 
 DOMAIN_SUMMARY_SCHEMA: dict[str, Any] = {
@@ -257,35 +315,25 @@ def normalize_summary_output(
     selection: dict[str, Any],
     intent: str,
 ) -> dict[str, Any]:
-    """Validate and bind one model response to its authoritative user intent.
+    """Validate and bind one model response to authoritative build inputs.
 
-    A malformed output is an error for the caller to handle.  The task-focus
-    intent is the one exception to preserving the model payload exactly: it is
-    request context, not model-authored analysis, so the validated payload is
-    copied and bound to the normalized durable request value.
+    A malformed or ungrounded output is an error for the caller to handle.
+    Paper identifiers are compared through graph/evidence alias sets while the
+    model's representation is preserved.  The task-focus intent is request
+    context, not model-authored analysis, so the validated payload is copied
+    and bound to the normalized durable request value.
     """
     error = _schema_error(payload, DOMAIN_SUMMARY_SCHEMA)
     if error is not None:
         raise ValueError(f"domain_summary_schema_invalid: {error}")
     assert isinstance(payload, dict)  # guaranteed by the schema above
 
-    allowed_paper_ids = _allowed_target_domain_paper_ids(
+    _validate_summary_paper_provenance(
+        payload,
         graph=graph,
         evidence=evidence,
         selection=selection,
     )
-    unknown_ids = sorted(
-        {
-            paper_id
-            for problem in payload["mathematical_opportunities"]["well_defined_problems"]
-            for paper_id in problem["target_domain_papers"]
-            if paper_id not in allowed_paper_ids
-        }
-    )
-    if unknown_ids:
-        raise ValueError(
-            "domain_summary_unknown_target_domain_papers: " + ", ".join(unknown_ids)
-        )
     normalized = deepcopy(payload)
     normalized["task_focus"]["user_intent"] = intent
     error = _schema_error(normalized, DOMAIN_SUMMARY_SCHEMA)
@@ -294,25 +342,175 @@ def normalize_summary_output(
     return normalized
 
 
-def _allowed_target_domain_paper_ids(
+def _validate_summary_paper_provenance(
+    payload: Mapping[str, Any],
     *,
-    graph: dict[str, Any],
-    evidence: dict[str, Any],
-    selection: dict[str, Any],
-) -> set[str]:
-    graph_nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
-    evidence_papers = evidence.get("papers") if isinstance(evidence.get("papers"), list) else []
-    paper_ids = {
-        str(item.get("paper_id") or item.get("id") or "").strip()
-        for item in [*graph_nodes, *evidence_papers]
-        if isinstance(item, dict)
-    }
-    for key in ("selected_foundation", "best_reference_paper"):
-        item = selection.get(key)
-        if isinstance(item, dict):
-            paper_ids.add(str(item.get("paper_id") or item.get("id") or "").strip())
-    paper_ids.add(str(graph.get("foundation_paper") or "").strip())
-    return {paper_id for paper_id in paper_ids if paper_id}
+    graph: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    selection: Mapping[str, Any],
+) -> None:
+    identities = _PaperIdentityIndex(_paper_records(graph=graph, evidence=evidence))
+    for reference in _summary_paper_references(payload):
+        if reference.authoritative_selection_key is None:
+            if not identities.contains(reference.paper_id):
+                _raise_provenance_error(
+                    reference.path,
+                    f"paper id {_quoted(reference.paper_id)} is absent from graph/evidence",
+                )
+            continue
+
+        authoritative = selection.get(reference.authoritative_selection_key)
+        if not isinstance(authoritative, Mapping):
+            _raise_provenance_error(
+                reference.path,
+                "authoritative selection entry is missing or invalid",
+            )
+        expected_id = authoritative.get("paper_id") or authoritative.get("id")
+        if not isinstance(expected_id, str) or not _normalized_paper_id(expected_id):
+            _raise_provenance_error(
+                reference.path,
+                "authoritative selection paper id is missing or invalid",
+            )
+        if not identities.equivalent(reference.paper_id, expected_id):
+            _raise_provenance_error(
+                reference.path,
+                "paper id "
+                f"{_quoted(reference.paper_id)} does not match authoritative "
+                f"{reference.authoritative_selection_key} {_quoted(expected_id)}",
+            )
+
+        expected_title = authoritative.get("title")
+        if not isinstance(expected_title, str):
+            _raise_provenance_error(
+                reference.title_path or reference.path,
+                "authoritative selection title is missing or invalid",
+            )
+        if reference.title != expected_title:
+            _raise_provenance_error(
+                reference.title_path or reference.path,
+                f"title {_quoted(reference.title)} does not match authoritative "
+                f"title {_quoted(expected_title)}",
+            )
+
+
+def _paper_records(
+    *,
+    graph: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+) -> Iterator[Mapping[str, Any]]:
+    for document in (graph, evidence):
+        foundation_paper = document.get("foundation_paper")
+        if isinstance(foundation_paper, str) and foundation_paper.strip():
+            yield {"paper_id": foundation_paper}
+        papers = document.get("nodes") if document is graph else document.get("papers")
+        if not isinstance(papers, list):
+            continue
+        for paper in papers:
+            if isinstance(paper, Mapping):
+                yield paper
+
+
+def _summary_paper_references(
+    payload: Mapping[str, Any],
+) -> Iterator[_SummaryPaperReference]:
+    for summary_key, selection_key in (
+        ("foundation_paper", "selected_foundation"),
+        ("best_reference_paper", "best_reference_paper"),
+    ):
+        choice = payload[summary_key]
+        yield _SummaryPaperReference(
+            path=f"$.{summary_key}.paper_id",
+            paper_id=choice["paper_id"],
+            authoritative_selection_key=selection_key,
+            title_path=f"$.{summary_key}.title",
+            title=choice["title"],
+        )
+
+    for index, methodology in enumerate(payload["methodology"]):
+        for paper_index, paper_id in enumerate(methodology["papers"]):
+            yield _SummaryPaperReference(
+                path=f"$.methodology[{index}].papers[{paper_index}]",
+                paper_id=paper_id,
+            )
+
+    problems = payload["mathematical_opportunities"]["well_defined_problems"]
+    for index, problem in enumerate(problems):
+        for paper_index, paper_id in enumerate(problem["target_domain_papers"]):
+            yield _SummaryPaperReference(
+                path=(
+                    "$.mathematical_opportunities.well_defined_problems"
+                    f"[{index}].target_domain_papers[{paper_index}]"
+                ),
+                paper_id=paper_id,
+            )
+
+    for index, solved_case in enumerate(payload["known_solved_cases"]):
+        for paper_index, paper_id in enumerate(solved_case["papers"]):
+            yield _SummaryPaperReference(
+                path=f"$.known_solved_cases[{index}].papers[{paper_index}]",
+                paper_id=paper_id,
+            )
+
+    for index, axis in enumerate(payload["open_axes_for_new_work"]):
+        for paper_index, paper_id in enumerate(axis["papers"]):
+            yield _SummaryPaperReference(
+                path=f"$.open_axes_for_new_work[{index}].papers[{paper_index}]",
+                paper_id=paper_id,
+            )
+
+
+def _paper_record_aliases(record: Mapping[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    for key in (
+        "paper_id",
+        "id",
+        "upi",
+        "arxiv",
+        "arxiv_id",
+        "inspire",
+        "inspire_recid",
+        "doi",
+    ):
+        if alias := _normalized_identifier_field(key, record.get(key)):
+            aliases.add(alias)
+    identifiers = record.get("identifiers")
+    if isinstance(identifiers, Mapping):
+        for key in (
+            "paper_id",
+            "id",
+            "upi",
+            "arxiv",
+            "arxiv_id",
+            "inspire",
+            "inspire_recid",
+            "doi",
+        ):
+            if alias := _normalized_identifier_field(key, identifiers.get(key)):
+                aliases.add(alias)
+    return aliases
+
+
+def _normalized_identifier_field(key: str, value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if key in {"arxiv", "arxiv_id"} and ":" not in text and "://" not in text:
+        text = f"arXiv:{text}"
+    elif key in {"inspire", "inspire_recid"} and text.isdigit():
+        text = f"inspire:{text}"
+    return _normalized_paper_id(text)
+
+
+def _normalized_paper_id(value: Any) -> str:
+    return normalize_paper_id(str(value or "").strip())
+
+
+def _quoted(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _raise_provenance_error(path: str, message: str) -> None:
+    raise ValueError(f"domain_summary_provenance_invalid: {path}: {message}")
 
 
 def summary_prompt(
