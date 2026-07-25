@@ -8,8 +8,8 @@ commands live in the package-specific references.
 - Prefer cache reads first; generate or refresh only when needed.
 - Use structured CLI output when available.
 - Paper IDs may omit the `arXiv:` prefix.
-- For slow or large work, use the protocol-neutral background-job procedure in
-  `manuals/arc-jobs.md`.
+- For slow or large work, use the owning package's durable controls and the
+  host's background-command facility; see `manuals/arc-jobs.md`.
 - Use the package CLI with structured output by default.
 - The `arc` plugin is CLI-only and does not register or ship an MCP server.
 - For user choices and confirmations, use
@@ -25,7 +25,8 @@ commands live in the package-specific references.
 Step 1: For single-paper work, read `manuals/arc-paper.md`.
 Step 2: For domain or research-field work, read
 `manuals/arc-domain.md`.
-Step 3: For background jobs, read `manuals/arc-jobs.md`.
+Step 3: For durable run inspection or stop requests, read
+`manuals/arc-jobs.md`.
 Step 4: For provider/model/runtime diagnosis, read
 `manuals/arc-llm.md`.
 

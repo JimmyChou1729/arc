@@ -46,8 +46,8 @@ selection or requested planning/calculation; Check pauses after main-agent
 preflight and before the planning handoff; Plan pauses after the work note
 passes internal review and before requested calculation; Calculate pauses after
 each accepted step or coherent chunk and before the next; Companion uses
-`--stop-after-first-chapter` and pauses only after the complete first chapter is
-rendered and validated. Direct tool orchestration pauses only between major
+its durable stop/resume boundary when the user requests a checkpoint. Direct
+tool orchestration pauses only between major
 user-requested stages, such as after collection/filtering and before batch
 summarization or export, never after every underlying call.
 For example, stop after domain construction when domain construction was the
@@ -59,7 +59,7 @@ Direct ARC tool tasks default to automatic execution
 with safe defaults unless the user explicitly asks to review or confirm steps.
 Direct tasks may include several ARC calls, such as collecting citers,
 filtering papers by date, generating summaries, using summary batches, looking
-up sections or equations, translating named reports, or exporting requested
+up sections or equations, or exporting requested
 non-evaluative paper-data outputs. Direct tasks must not produce
 recommendations, research directions, scientific rankings, ARC reports, or
 project-local workflow artifacts.

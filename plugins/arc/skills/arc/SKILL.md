@@ -36,7 +36,7 @@ Direct ARC tool tasks use the same default-auto and explicit-review policy. Thes
 bounded paper facts such as title, authors, abstract, citation count, section
 text, or equation context, plus user-directed tool orchestration such as
 collecting citers or references, filtering papers by date, generating paper
-summaries or summary batches, translating named reports, or combining those
+summaries or summary batches, or combining those
 steps into a non-evaluative paper-data output. Direct tasks must not produce
 recommendations, research directions, scientific rankings, ARC reports, or
 project-local workflow artifacts; route those through the owning managed
@@ -46,17 +46,11 @@ papers that cited 0911.3380 since 2024 and create a full summary of these
 papers` is direct ARC tool orchestration, not a managed workflow mode prompt.
 
 ARC LLM calls have no absolute runtime limit. They stop after 30 minutes with
-no substantive provider output, using `--idle-timeout-seconds` or an applicable
-`ARC_*_IDLE_TIMEOUT_SECONDS` variable when an override is needed. For a
-long-running job, start with
-`arc-jobs watch <job-id> --until-review --after-review-sequence 0 --json`.
-At each review, continue by running the same command with the returned job-level
-`review_sequence` as the new cursor when the agent reports concrete results,
-evidence, artifacts, or a meaningfully narrowed problem. Stop repetitive
-heartbeats, repeated errors, off-task work, or activity with no reusable result.
-A terminal result returns normally and ends the loop; do not stop merely
-because the call is long. An explicit stop pauses the current attempt for
-same-run resume.
+no substantive provider output, using the applicable owning-command option or
+`ARC_*_IDLE_TIMEOUT_SECONDS` variable when an override is needed. Use the
+owning package's status command or the host's background-command facility for
+long-running work. Do not stop merely because the call is long. An explicit
+stop pauses the current attempt for same-run resume.
 
 ## Required References
 
@@ -88,8 +82,8 @@ not optional.
 - Research field/domain construction, foundation-paper selection, domain
   networks, evidence packs, graph HTML, or field briefings: read
   `manuals/arc-domain.md`.
-- Any background job, job watcher, timeout, stop request, or asynchronous
-  report export: read `manuals/arc-jobs.md`.
+- Durable run inspection, validation, or stop requests: read
+  `manuals/arc-jobs.md`.
 - Host LLM/provider detection, model choice, direct prompt tests, or provider
   troubleshooting: read `manuals/arc-llm.md`.
 - Typed proposer-reviewer batch construction, resume, or safe observation of
@@ -140,7 +134,7 @@ ARC caches under a lock. Verified duplicates are deduplicated, conflicts are
 preserved under `migration-conflicts/`, and a failed migration stops startup
 instead of splitting state. `doctor` reports resolved paths, migration status,
 detected host, and provider. After runtime preparation the launcher exports
-the detected `ARC_AGENT_HOST` for CLI and detached-job provider selection.
+the detected `ARC_AGENT_HOST` for CLI provider selection.
 
 ## Workflow
 
@@ -300,9 +294,8 @@ Case 5: Generate a companion-reading PDF.
 Use only when the user explicitly requests a companion reading or asks for the
 original paper to be split into semantic units with interleaved translation
 and commentary.
-Read and execute `workflows/companion.md`. The default deliverable is one PDF;
-never generate a reproducibility package unless the user explicitly requests
-it.
+Read and execute `workflows/companion.md`. The default deliverables are the
+validated PDF and static Web release.
 
 ### Phase 3: Self-Reflection
 

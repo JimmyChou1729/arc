@@ -87,8 +87,8 @@ python3 <skill-dir>/scripts/run-calculate.py \
 ```
 
 Inspect the returned JSON and saved calculation state. Large or slow runs are
-runtime facts, not workflow blocks. Use package status or watcher commands
-instead of manual polling when available.
+runtime facts, not workflow blocks. Use the owning package's status command or
+the host's background-command facility instead of frequent manual polling.
 
 When a completed attempt needs durable inspection, use only the public proposer-reviewer inspection surface with the returned batch run ID:
 

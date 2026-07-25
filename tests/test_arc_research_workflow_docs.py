@@ -117,8 +117,8 @@ def test_arc_skill_references_pdf_export_manuals() -> None:
     assert "`rules/math_typeset.md`" in text
     assert "`manuals/arc-jobs.md`" in text
     assert "canonical pandoc/xelatex command" in manual
-    assert "ordinary blocking command" in manual_flat
-    assert "rather than an `arc-jobs submit` job" in manual_flat
+    assert "ordinary command" in manual_flat
+    assert "instead of routing it through `arc-jobs`" in manual_flat
     assert "md2pdf" not in manual
     assert "markdown report" in manual
     assert "print `warning:`" in manual_flat
@@ -286,9 +286,13 @@ def test_manuals_do_not_hardcode_checkout_cache_paths() -> None:
         assert "/arc-dev/cache/" not in text
     paper = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
     assert "doctor-cache" not in paper
-    assert "There is no cache list, delete, or administration command." in paper
+    assert "arc-paper cache list --since 1d" in paper
+    assert "arc-paper cache remove --id arXiv:0911.3380 --yes" in paper
+    assert "arc-paper cache update --id arXiv:0911.3380" in paper
     assert "Controlled read-only" in paper
-    assert "ARC_JOBS_CACHE" in (SKILL / "manuals/arc-jobs.md").read_text(encoding="utf-8")
+    assert "ARC_JOBS_CACHE" not in (
+        SKILL / "manuals/arc-jobs.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_arc_paper_manual_documents_cache_first_arxiv_queries() -> None:
@@ -334,6 +338,29 @@ def test_arc_paper_docs_define_bounded_cached_full_text_search() -> None:
     assert "1–500" in manual
     assert "at most 20 occurrences" in manual
     assert "at most 400 characters" in manual
+
+
+def test_arc_paper_docs_define_cache_administration_contract() -> None:
+    manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    readme = (ROOT / "packages/arc-paper/README.md").read_text(encoding="utf-8")
+
+    for text in (manual, readme):
+        compact = " ".join(text.split())
+        assert "arc-paper cache list --since 1d" in compact
+        assert "rolling UTC window" in compact
+        assert "Ordinary" in compact and "reads" in compact
+        assert "arc-paper cache remove --id arXiv:0911.3380 --yes" in compact
+        assert "physically deletes" in compact
+        assert "shared content-addressed source" in compact
+        assert "remote read" in compact and "fetching the source again" in compact
+        assert "local source" in compact.lower()
+        assert "not recoverable" in compact
+        assert "arc-paper cache update --id arXiv:0911.3380" in compact
+        assert "mostrecent" in compact
+        assert "mostcited" in compact
+        assert "limit 1000" in compact
+        assert "ar5iv HTML" in compact
+        assert "arXiv PDF" in compact
 
 
 def test_ideas_workflow_guides_one_multi_term_cached_search_request() -> None:
@@ -433,7 +460,7 @@ def test_runtime_steering_preserves_hard_gates_and_major_milestones() -> None:
         "after main-agent preflight",
         "after the work note passes internal review",
         "after each accepted step or coherent chunk",
-        "`--stop-after-first-chapter`",
+        '"stop after the first chapter"',
         "Direct tool orchestration pauses only between major",
     ]:
         assert phrase in interaction
@@ -1069,6 +1096,37 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     assert "source domain may contribute a mature method" in ideas
 
 
+def test_single_domain_ideas_document_optional_interdisciplinary_discovery() -> None:
+    ideas = (WF / "ideas.md").read_text(encoding="utf-8")
+    compact = " ".join(ideas.split()).lower()
+
+    assert "cross-disciplinary transfer is entirely optional" in compact
+    assert "no idea, loop, or batch is required to include one" in compact
+    assert "there is no interdisciplinary quota" in compact
+    assert "receives no ranking reward" in compact
+    assert "judge same-domain and cross-disciplinary candidates by the same" in compact
+    assert "otherwise record the external method as not used" in compact
+    assert "arc and web search are complementary discovery surfaces" in compact
+    assert "neither has a fixed priority" in compact
+    assert "after shortlisting an arc-resolvable paper" in compact
+    for forced_wording in (
+        "at least one interdisciplinary",
+        "must consider an interdisciplinary",
+        "must include an interdisciplinary",
+        "must propose an interdisciplinary",
+    ):
+        assert forced_wording not in compact
+
+
+def test_retired_cross_domain_partner_selection_artifacts_are_absent() -> None:
+    assert not (
+        SKILL / "scripts" / "write-cross-domain-pair-manifest.py"
+    ).exists()
+    assert not (
+        WJ / "cross-domain-partner-critic.schema.json"
+    ).exists()
+
+
 def test_ideas_worker_templates_default_to_high_model_tier() -> None:
     domain_variant = json.loads((WJ / "ideas-domain.variant.json").read_text(encoding="utf-8"))
     no_info_variant = json.loads((WJ / "ideas-no-info.variant.json").read_text(encoding="utf-8"))
@@ -1298,6 +1356,7 @@ def test_root_plugin_manifests_use_canonical_arc_skill_tree() -> None:
 def test_arc_runtime_and_job_docs_cover_unified_context_and_lifecycle() -> None:
     skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     jobs = (SKILL / "manuals/arc-jobs.md").read_text(encoding="utf-8")
+    llm = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
 
     for value in (
         "ARC_HOME",
@@ -1312,17 +1371,48 @@ def test_arc_runtime_and_job_docs_cover_unified_context_and_lifecycle() -> None:
     assert "migration status" in skill
     assert "detected host" in skill
     assert "provider" in skill
-    assert "1800 seconds" in jobs
-    assert "no absolute runtime deadline" in jobs
-    assert "worker_idle_timeout_seconds" in jobs
-    assert "--progress-jsonl" in jobs
-    assert "--until-review" in jobs
-    assert "last substantive excerpt" in jobs
-    assert "provider_review_sequence" in jobs
-    assert "returned `review_sequence`" in jobs
-    assert "`degraded`" in jobs
-    assert "full provider process group" in jobs
-    assert "tokens, API keys" in jobs
+    assert "arc-jobs status" in jobs
+    assert "arc-jobs stop" in jobs
+    assert "arc-jobs validate" in jobs
+    assert "does not submit commands" in jobs
+    assert "owning package" in jobs
+    assert "background-command facility" in jobs
+    assert "no absolute runtime limit" in skill
+    assert "30 minutes" in skill
+    assert "credentials" in llm
+    for retired in ("arc-jobs submit", "arc-jobs list", "arc-jobs watch", "arc-jobs result"):
+        assert retired not in jobs
+
+
+def test_docs_do_not_advertise_retired_job_or_companion_commands() -> None:
+    active_docs = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "README.md",
+            SKILL / "SKILL.md",
+            SKILL / "rules/interaction.md",
+            SKILL / "rules/operating.md",
+            WF / "calculate.md",
+            WF / "domain.md",
+        )
+    )
+    for retired in (
+        "arc-jobs submit",
+        "arc-jobs list",
+        "arc-jobs watch",
+        "arc-jobs result",
+        "--stop-after-first-chapter",
+        "arc-companion package",
+        "arc-companion render-web",
+        "arc-companion reference-translation",
+        "arc-companion regenerate-segment",
+    ):
+        assert retired not in active_docs
+
+    companion = (SKILL / "manuals/arc-companion.md").read_text(encoding="utf-8")
+    for command in ("build", "status", "resume", "stop", "render", "validate"):
+        assert f"arc-companion {command}" in companion
+    assert "There is no v1 `package`, `gc`, or\n`render-web` command." in companion
 
 
 def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> None:
@@ -1344,19 +1434,16 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
     assert "failed, pending, running, paused" in ideas
     for text in (skill,):
         assert "no absolute runtime limit" in text
-        assert "--idle-timeout-seconds" in text
         assert "ARC_*_IDLE_TIMEOUT_SECONDS" in text
         assert "30-minute" in text or "30 minutes" in text
     assert "no absolute runtime limit" in ideas
     assert "30 minutes" in ideas
-    for text in (skill,):
-        assert "--until-review --after-review-sequence 0 --json" in text
+    assert "owning package's status command" in skill
+    assert "background-command facility" in skill
     assert "streams start/finish progress\nJSON to" in ideas
     assert "stderr" in ideas
     assert "SIGINT" in ideas and "SIGTERM" in ideas
-    for text in (skill,):
-        assert "review_sequence" in text
-        assert "terminal result" in text
+    assert "same-run resume" in skill
     assert "stop" in skill
     assert "stop" in domain
     assert "stop" in ideas
@@ -1495,7 +1582,7 @@ def test_readme_documents_marketplace_first_install() -> None:
 def test_readme_examples_use_the_ignored_run_tree_not_reference_material() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "0_ref/" not in text
-    assert "--project-dir ./arc-tests/companion/0911.3380" in text
+    assert "--project-dir ./local/companion/0911.3380" in text
 
 
 def test_interaction_reference_allows_portable_typed_fallback() -> None:

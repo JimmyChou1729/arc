@@ -116,8 +116,8 @@ visible workflow note. Link each build seed to its explicit-anchor or validated
 origin-selection record.
 
 Step 2: For each distinct build seed, start one durable domain build.
-`arc-domain build` owns its own `arc-jobs` run; do not wrap it in
-`arc-jobs submit`. For a date-limited field with an explicit or selected
+`arc-domain build` owns its own durable run; start it directly. For a
+date-limited field with an explicit or selected
 canonical origin, use v2 fixed-seed/strict-window mode:
 
 ```bash
