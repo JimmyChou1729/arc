@@ -136,7 +136,7 @@ class SourceRepository:
 
         with self._content_lock(resolved_format, digest):
             if manifest_path.exists():
-                artifact = self._read_verified(
+                artifact, _ = self._read_verified_unlocked(
                     resolved_format, digest, origin=origin
                 )
                 if (
@@ -168,7 +168,10 @@ class SourceRepository:
                     separators=(",", ":"),
                 ).encode("utf-8"),
             )
-            return self._read_verified(resolved_format, digest, origin=origin)
+            artifact, _ = self._read_verified_unlocked(
+                resolved_format, digest, origin=origin
+            )
+            return artifact
 
     def import_asset_path(
         self,
@@ -263,19 +266,20 @@ class SourceRepository:
         )
 
     def read_bytes(self, artifact: SourceArtifact) -> bytes:
-        verified = self._read_verified(
-            artifact.source_format,
-            artifact.artifact_digest,
-            origin=artifact.origin,
-        )
-        if verified.content_identity != artifact.content_identity:
-            raise SourceRepositoryError(
-                "source_artifact_mismatch",
-                "source artifact metadata does not match repository content",
-            )
-        return (self._object_dir(
+        with self._content_lock(
             artifact.source_format, artifact.artifact_digest
-        ) / "source").read_bytes()
+        ):
+            verified, payload = self._read_verified_unlocked(
+                artifact.source_format,
+                artifact.artifact_digest,
+                origin=artifact.origin,
+            )
+            if verified.content_identity != artifact.content_identity:
+                raise SourceRepositoryError(
+                    "source_artifact_mismatch",
+                    "source artifact metadata does not match repository content",
+                )
+            return payload
 
     def remove(
         self,
@@ -305,6 +309,23 @@ class SourceRepository:
         *,
         origin: SourceOrigin,
     ) -> SourceArtifact:
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise SourceRepositoryError(
+                "invalid_artifact_digest", "artifact digest must be a SHA-256 digest"
+            )
+        with self._content_lock(source_format, digest):
+            artifact, _ = self._read_verified_unlocked(
+                source_format, digest, origin=origin
+            )
+            return artifact
+
+    def _read_verified_unlocked(
+        self,
+        source_format: SourceFormat,
+        digest: str,
+        *,
+        origin: SourceOrigin,
+    ) -> tuple[SourceArtifact, bytes]:
         if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise SourceRepositoryError(
                 "invalid_artifact_digest", "artifact digest must be a SHA-256 digest"
@@ -348,16 +369,25 @@ class SourceRepository:
             raise SourceRepositoryError(
                 "source_manifest_invalid", "source manifest metadata is invalid"
             )
-        if not self._payload_matches(payload_path, digest, size):
+        try:
+            payload = payload_path.read_bytes()
+        except OSError as exc:
+            raise SourceRepositoryError(
+                "source_corrupt", "source bytes do not match the manifest"
+            ) from exc
+        if len(payload) != size or hashlib.sha256(payload).hexdigest() != digest:
             raise SourceRepositoryError(
                 "source_corrupt", "source bytes do not match the manifest"
             )
-        return SourceArtifact(
-            source_format=source_format,
-            artifact_digest=digest,
-            size=size,
-            media_type=media_type,
-            origin=origin,
+        return (
+            SourceArtifact(
+                source_format=source_format,
+                artifact_digest=digest,
+                size=size,
+                media_type=media_type,
+                origin=origin,
+            ),
+            payload,
         )
 
     def _object_dir(self, source_format: SourceFormat, digest: str) -> Path:

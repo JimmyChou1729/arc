@@ -4,7 +4,10 @@ import hashlib
 import json
 import multiprocessing
 import errno
+import threading
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from arc_paper import _file_lock
@@ -199,6 +202,131 @@ def test_concurrent_same_key_imports_publish_one_valid_object(tmp_path):
 
     assert len({item.content_identity for item in artifacts}) == 1
     assert repository.read_bytes(artifacts[0]) == payload
+
+
+def test_read_bytes_holds_content_lock_until_payload_is_returned(
+    tmp_path, monkeypatch
+):
+    repository = SourceRepository(tmp_path / "cache")
+    payload = b"serialized source"
+    artifact = repository.store_bytes(
+        payload,
+        source_format=SourceFormat.MARKDOWN,
+        origin=SourceOrigin(SourceOriginKind.LOCAL_IMPORT),
+    )
+    payload_path = (
+        repository._object_dir(  # noqa: SLF001 - concurrency fixture
+            artifact.source_format, artifact.artifact_digest
+        )
+        / "source"
+    )
+    reader_at_payload = threading.Barrier(2)
+    allow_reader = threading.Event()
+    remover_at_lock = threading.Barrier(2)
+    remove_finished = threading.Event()
+    original_read_bytes = Path.read_bytes
+    original_content_lock = repository._content_lock  # noqa: SLF001
+
+    def gated_read_bytes(path):
+        if (
+            path == payload_path
+            and threading.current_thread().name == "source-reader"
+        ):
+            reader_at_payload.wait(timeout=5)
+            assert allow_reader.wait(timeout=5)
+        return original_read_bytes(path)
+
+    @contextmanager
+    def observed_content_lock(source_format, digest):
+        if threading.current_thread().name == "source-remover":
+            remover_at_lock.wait(timeout=5)
+        with original_content_lock(source_format, digest):
+            yield
+
+    monkeypatch.setattr(Path, "read_bytes", gated_read_bytes)
+    monkeypatch.setattr(repository, "_content_lock", observed_content_lock)
+    results = {}
+
+    def read():
+        try:
+            results["payload"] = repository.read_bytes(artifact)
+        except Exception as exc:  # pragma: no cover - asserted below
+            results["read_error"] = exc
+
+    def remove():
+        try:
+            results["removed"] = repository.remove(
+                artifact.source_format, artifact.artifact_digest
+            )
+        except Exception as exc:  # pragma: no cover - asserted below
+            results["remove_error"] = exc
+        finally:
+            remove_finished.set()
+
+    reader = threading.Thread(target=read, name="source-reader")
+    remover = threading.Thread(target=remove, name="source-remover")
+    reader.start()
+    reader_at_payload.wait(timeout=5)
+    remover.start()
+    remover_at_lock.wait(timeout=5)
+    assert not remove_finished.wait(timeout=0.2)
+    allow_reader.set()
+    reader.join(timeout=5)
+    remover.join(timeout=5)
+
+    assert not reader.is_alive()
+    assert not remover.is_alive()
+    assert results == {"payload": payload, "removed": True}
+
+
+def test_read_bytes_checks_the_exact_payload_read_during_tamper(
+    tmp_path, monkeypatch
+):
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = repository.store_bytes(
+        b"original",
+        source_format=SourceFormat.MARKDOWN,
+        origin=SourceOrigin(SourceOriginKind.LOCAL_IMPORT),
+    )
+    payload_path = (
+        repository._object_dir(  # noqa: SLF001 - corruption fixture
+            artifact.source_format, artifact.artifact_digest
+        )
+        / "source"
+    )
+    reader_at_payload = threading.Barrier(2)
+    tamper_complete = threading.Barrier(2)
+    original_read_bytes = Path.read_bytes
+
+    def gated_read_bytes(path):
+        if (
+            path == payload_path
+            and threading.current_thread().name == "source-reader"
+        ):
+            reader_at_payload.wait(timeout=5)
+            tamper_complete.wait(timeout=5)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", gated_read_bytes)
+    results = {}
+
+    def read():
+        try:
+            results["payload"] = repository.read_bytes(artifact)
+        except Exception as exc:
+            results["error"] = exc
+
+    reader = threading.Thread(target=read, name="source-reader")
+    reader.start()
+    reader_at_payload.wait(timeout=5)
+    payload_path.write_bytes(b"tampered")
+    tamper_complete.wait(timeout=5)
+    reader.join(timeout=5)
+
+    assert not reader.is_alive()
+    assert "payload" not in results
+    assert isinstance(results.get("error"), SourceRepositoryError)
+    assert results["error"].code == "source_corrupt"
 
 
 def test_two_processes_publish_same_content_with_one_valid_manifest(tmp_path):
