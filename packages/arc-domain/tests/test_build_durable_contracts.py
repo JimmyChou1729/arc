@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from collections import deque
 import json
 from pathlib import Path
 
 import pytest
 
-from arc_domain.build import DomainBuildRunner, _task_id
+from arc_domain.build import (
+    DomainBuildHandler,
+    DomainBuildRunner,
+    _task_id,
+    domain_build_run_id,
+)
 from arc_domain.contracts import (
     DOMAIN_BUILD_POLICY_SCHEMA_VERSION_V2,
     DomainBuildPolicy,
@@ -13,16 +19,34 @@ from arc_domain.contracts import (
     decode_domain_build_result,
 )
 from arc_domain.paths import domain_id_for
-from arc_jobs import ImmutableArtifactStore, RunRepository, RunStatus
+from arc_jobs import (
+    ImmutableArtifactStore,
+    RunContext,
+    RunRepository,
+    RunSpec,
+    RunStatus,
+)
 from arc_llm import (
     DeliveryState,
     FailureCategory,
+    InputDeliveryMode,
+    IsolationMode,
     JsonOutput,
     LLMStopped,
     LLMCompleted,
     LLMFailed,
+    LLMRequest,
+    LLMTaskService,
+    ProviderCapabilities,
+    ProviderDiagnostic,
+    ProviderExecution,
     ProviderFailure,
+    ProviderRegistry,
+    ProviderTerminalKind,
+    StructuredOutputMode,
+    UsageAvailability,
 )
+from arc_llm.output import CandidateMaterial
 from arc_paper import ReferenceInferenceCompleted, ReferenceInferenceResult
 
 
@@ -254,6 +278,47 @@ class DomainTaskService:
         raise AssertionError(f"unhandled stage {stage}")
 
 
+class ScriptedDomainProvider:
+    name = "codex"
+    compatibility_version = "domain-upgrade-test-v1"
+
+    def __init__(self, values: list[dict]) -> None:
+        self.values = deque(values)
+        self.start_calls = 0
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            native_resume=False,
+            structured_output=StructuredOutputMode.NATIVE,
+            usage=UsageAvailability.UNAVAILABLE,
+            config_isolation=IsolationMode.ISOLATED,
+            tool_isolation=IsolationMode.ISOLATED,
+            cooperative_stop=True,
+            provider_persistence=False,
+            input_delivery={
+                "application/json": InputDeliveryMode.READ_TOOL,
+            },
+        )
+
+    def doctor(self) -> ProviderDiagnostic:
+        return ProviderDiagnostic(self.name, True, "fake-codex")
+
+    def start(self, request, observer, stop) -> ProviderExecution:
+        del request, stop
+        self.start_calls += 1
+        observer.before_delivery()
+        if not self.values:
+            raise AssertionError("fake provider script exhausted")
+        return ProviderExecution(
+            ProviderTerminalKind.COMPLETED,
+            (CandidateMaterial(value=self.values.popleft(), terminal=True),),
+        )
+
+    def resume(self, handle, request, observer, stop) -> ProviderExecution:
+        del handle
+        return self.start(request, observer, stop)
+
+
 class ForbiddenReferenceService:
     def infer(self, *args, **kwargs):
         raise AssertionError("candidate expansion should not run")
@@ -379,6 +444,88 @@ def test_successful_summary_binds_request_intent_and_replays_without_llm(
     replayed_result, _ = _result(repository, replayed)
     assert replayed_result.summary == result.summary
     assert replayed_result.summary_markdown == result.summary_markdown
+
+
+def test_real_task_service_ignores_legacy_summary_state_and_replays_parent(
+    tmp_path: Path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs")
+    request = _request()
+    adapter = ScriptedDomainProvider(
+        [
+            {"legacy": True},
+            _audit(),
+            _selection(FOUNDATION),
+            {
+                "ranked_paper_ids": [DOMAIN_PAPER],
+                "reasoning": "fake ranking",
+            },
+            _summary_payload(user_intent=request.intent),
+        ]
+    )
+    registry = ProviderRegistry()
+    registry.register("codex", lambda: adapter)
+    task_service = LLMTaskService(registry=registry)
+    handler = DomainBuildHandler(
+        request,
+        paper_access=FakePaperAccess(),
+        task_service=task_service,
+        reference_service=ForbiddenReferenceService(),
+    )
+    run_id = domain_build_run_id(request)
+    snapshot = repository.create(
+        RunSpec(run_id, handler.name, handler.semantic_input())
+    )
+    context = RunContext(
+        repository,
+        snapshot,
+        resume_input=None,
+        execution_slice=None,
+    )
+    task_identity = domain_id_for(request.seed_paper, request.intent)
+    legacy_task_id = _task_id(
+        "domain-summary", task_identity, request.intent
+    )
+    legacy = task_service.execute(
+        context,
+        LLMRequest(
+            legacy_task_id,
+            "Return the legacy marker.",
+            JsonOutput(
+                {
+                    "type": "object",
+                    "properties": {"legacy": {"type": "boolean"}},
+                    "required": ["legacy"],
+                    "additionalProperties": False,
+                }
+            ),
+            request.model,
+        ),
+    )
+    assert isinstance(legacy, LLMCompleted)
+
+    completed = DomainBuildRunner(repository).execute(
+        request,
+        paper_access=FakePaperAccess(),
+        task_service=task_service,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert adapter.start_calls == 5
+    result, _ = _result(repository, completed)
+    assert result.summary is not None
+
+    replayed = DomainBuildRunner(repository).execute(
+        request,
+        paper_access=FakePaperAccess(),
+        task_service=task_service,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert replayed.status is RunStatus.SUCCEEDED
+    assert replayed.result_ref == completed.result_ref
+    assert adapter.start_calls == 5
 
 
 def test_invalid_summary_provenance_is_a_typed_terminal_failure(
