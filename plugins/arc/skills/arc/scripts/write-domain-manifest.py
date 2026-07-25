@@ -7,13 +7,19 @@ import itertools
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
+
+bootstrap_arc_pythonpath()
 
 
 SCHEMA_VERSION = "arc.workflow.domain_manifest.v2"
 GROUPING_SCHEMA_VERSION = "arc.workflow.domain_field_grouping.v1"
 HARD_SEPARATION_CONFIDENCE = 0.80
 SUMMARY_SUFFIX = "_domain_summary.json"
+GROUPING_LLM_RUN_DIRNAME = "field-grouping-llm"
+GroupingRunner = Callable[[Any, Path], Any]
 
 
 class ManifestError(ValueError):
@@ -22,6 +28,16 @@ class ManifestError(ValueError):
 
 class GroupingConstraintError(ManifestError):
     pass
+
+
+class GroupingLLMRunError(RuntimeError):
+    """A typed LLM outcome that must stop manifest generation."""
+
+
+def _default_grouping_runner(request: Any, run_root: Path) -> Any:
+    from arc_llm import LLMClient
+
+    return LLMClient().generate(request, run_root=run_root)
 
 
 def build_domain_manifest(project_dir: Path, *, grouping_result: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -154,7 +170,12 @@ def build_domain_manifest(project_dir: Path, *, grouping_result: dict[str, Any] 
     }
 
 
-def write_domain_manifest(project_dir: Path, output: Path | None = None) -> Path:
+def write_domain_manifest(
+    project_dir: Path,
+    output: Path | None = None,
+    *,
+    grouping_runner: GroupingRunner | None = None,
+) -> Path:
     project_dir = project_dir.expanduser().resolve()
     destination = output.expanduser().resolve() if output else project_dir / "domain" / "domain-manifest.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -163,22 +184,18 @@ def write_domain_manifest(project_dir: Path, output: Path | None = None) -> Path
         if preliminary["package_count"] == 1:
             payload = build_domain_manifest(project_dir, grouping_result={"pairs": []})
         else:
-            grouping_result = _llm_grouping(preliminary["domain_packages"], preliminary["user_intent"])
+            grouping_result = _llm_grouping(
+                preliminary["domain_packages"],
+                preliminary["user_intent"],
+                run_root=project_dir / "domain" / GROUPING_LLM_RUN_DIRNAME,
+                runner=grouping_runner or _default_grouping_runner,
+            )
             payload = build_domain_manifest(project_dir, grouping_result=grouping_result)
-    except Exception as exc:
-        # Schema/classification failures conservatively merge fields, but an
-        # account-wide LLM failure must stop the workflow before ideas starts.
-        try:
-            from arc_llm.providers.base import LLMAbortScope, failure_disposition
-
-            disposition = failure_disposition(exc)
-        except ImportError:
-            disposition = None
-        if disposition is not None and disposition.abort_scope in {
-            LLMAbortScope.BATCH,
-            LLMAbortScope.PROVIDER,
-        }:
-            raise
+    except GroupingLLMRunError:
+        raise
+    except Exception:
+        # Invalid model output and local grouping checks degrade safely to one
+        # field. Typed non-terminal LLM outcomes are handled above and stop.
         payload = build_domain_manifest(project_dir)
     destination.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return destination
@@ -331,8 +348,23 @@ def _build_field_groups(packages: list[dict[str, Any]], pairs: list[dict[str, An
     return result
 
 
-def _llm_grouping(packages: list[dict[str, Any]], intent: str) -> dict[str, Any]:
-    from arc_llm import run_json
+def _llm_grouping(
+    packages: list[dict[str, Any]],
+    intent: str,
+    *,
+    run_root: Path,
+    runner: GroupingRunner,
+) -> dict[str, Any]:
+    from arc_llm import (
+        JsonOutput,
+        LLMCancelled,
+        LLMCompleted,
+        LLMFailed,
+        LLMPaused,
+        LLMRequest,
+        ModelSelection,
+    )
+
     schema = {"type": "object", "additionalProperties": False, "required": ["pairs"], "properties": {"pairs": {
         "type": "array", "items": {"type": "object", "additionalProperties": False,
         "required": ["package_a", "package_b", "classification", "confidence", "reason", "evidence"], "properties": {
@@ -341,10 +373,45 @@ def _llm_grouping(packages: list[dict[str, Any]], intent: str) -> dict[str, Any]
             "confidence": {"type": "number", "minimum": 0, "maximum": 1}, "reason": {"type": "string"},
             "evidence": {"type": "object", "additionalProperties": False, "required": ["semantic", "paper_overlap", "citation_overlap"],
                 "properties": {"semantic": {"type": "string"}, "paper_overlap": {"type": "string"}, "citation_overlap": {"type": "string"}}}
-        }}}}}
+    }}}}}
     compact = [{key: item[key] for key in ("domain_package_id", "seed_paper", "foundation_paper_ids", "title", "overview", "task_focus", "methodology", "paper_ids", "citation_edges")} for item in packages]
     prompt = f"Classify every unordered package pair as same_field, distinct_field, or uncertain. Exact intent: {intent}\nPackages: {json.dumps(compact, ensure_ascii=False)}"
-    return run_json(prompt, schema=schema, provider="auto", model_tier="medium")
+    task_material = json.dumps(
+        {"packages": compact, "intent": intent},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    task_id = "domain-field-grouping-" + hashlib.sha256(
+        task_material.encode("utf-8")
+    ).hexdigest()[:24]
+    result = runner(
+        LLMRequest(
+            task_id=task_id,
+            prompt=prompt,
+            output=JsonOutput(schema),
+            model=ModelSelection(provider="auto", tier="medium"),
+        ),
+        run_root,
+    )
+    outcome = getattr(result, "outcome", None)
+    if isinstance(outcome, LLMCompleted):
+        if not isinstance(outcome.value, dict):
+            raise ManifestError("semantic field grouping returned a non-object result")
+        return dict(outcome.value)
+    if isinstance(outcome, LLMPaused):
+        raise GroupingLLMRunError(
+            "semantic field grouping is paused: "
+            f"{outcome.reason.value} ({outcome.resume_key})"
+        )
+    if isinstance(outcome, LLMFailed):
+        raise GroupingLLMRunError(
+            "semantic field grouping failed: "
+            f"{outcome.error.code.value}: {outcome.error}"
+        )
+    if isinstance(outcome, LLMCancelled):
+        raise GroupingLLMRunError("semantic field grouping was cancelled")
+    raise GroupingLLMRunError("semantic field grouping returned no typed outcome")
 
 
 def _read_object(path: Path) -> dict[str, Any]:

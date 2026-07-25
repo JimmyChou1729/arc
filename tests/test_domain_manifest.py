@@ -4,12 +4,14 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "plugins/arc/skills/arc/workflows/scripts/write-domain-manifest.py"
+SCRIPT = ROOT / "plugins/arc/skills/arc/scripts/write-domain-manifest.py"
+SCRIPTS = SCRIPT.parent
 
 
 def _load_module():
@@ -18,9 +20,11 @@ def _load_module():
     module = importlib.util.module_from_spec(spec)
     old_dont_write_bytecode = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
+    sys.path.insert(0, str(SCRIPTS))
     try:
         spec.loader.exec_module(module)
     finally:
+        sys.path.remove(str(SCRIPTS))
         sys.dont_write_bytecode = old_dont_write_bytecode
     return module
 
@@ -48,6 +52,15 @@ def _write_domain(
     )
     (domain / f"{prefix}_domain_summary.md").write_text("# Domain\n", encoding="utf-8")
     (domain / f"{prefix}_paper_json_pack.json").write_text("{}\n", encoding="utf-8")
+
+
+def test_manifest_helper_uses_source_bootstrap_and_typed_llm_contract() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "bootstrap_arc_pythonpath()" in source
+    assert "LLMClient().generate" in source
+    assert "run_json" not in source
+    assert "LLMAbortScope" not in source
 
 
 def test_manifest_uses_distinct_domain_ids_and_relative_paths(tmp_path: Path) -> None:
@@ -235,3 +248,104 @@ def test_manifest_requires_companion_artifacts(tmp_path: Path) -> None:
 
     with pytest.raises(module.ManifestError, match="required domain artifact"):
         module.build_domain_manifest(project)
+
+
+def test_write_manifest_uses_injected_typed_llm_runner(tmp_path: Path) -> None:
+    from arc_llm import LLMCompleted
+
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text(
+        json.dumps({"user_intent": "bridge", "seed_paper_list": ["seed:a", "seed:b"]}),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", "seed:a")
+    _write_domain(project, "b", "domain-b", "seed:b")
+    calls = []
+
+    def runner(request, run_root):
+        calls.append((request, run_root))
+        return SimpleNamespace(
+            outcome=LLMCompleted(
+                value={
+                    "pairs": [
+                        {
+                            "package_a": "domain-a",
+                            "package_b": "domain-b",
+                            "classification": "distinct_field",
+                            "confidence": 0.9,
+                            "reason": "different objects",
+                            "evidence": {
+                                "semantic": "different",
+                                "paper_overlap": "none",
+                                "citation_overlap": "none",
+                            },
+                        }
+                    ]
+                },
+                provider="test",
+                model="test-model",
+                session=None,
+                usage=None,
+            )
+        )
+
+    destination = module.write_domain_manifest(project, grouping_runner=runner)
+
+    assert destination == project / "domain" / "domain-manifest.json"
+    assert len(calls) == 1
+    request, run_root = calls[0]
+    assert request.task_id.startswith("domain-field-grouping-")
+    assert request.model.provider == "auto"
+    assert request.model.tier == "medium"
+    assert run_root == project / "domain" / "field-grouping-llm"
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    assert payload["field_count"] == 2
+    assert payload["research_scope"] == "cross_domain"
+
+
+def test_write_manifest_single_package_does_not_call_llm_runner(tmp_path: Path) -> None:
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text(
+        json.dumps({"user_intent": "one field", "seed_paper_list": ["seed:a"]}),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", "seed:a")
+
+    def unexpected_runner(*_args):
+        raise AssertionError("single-package grouping must not invoke an LLM")
+
+    destination = module.write_domain_manifest(project, grouping_runner=unexpected_runner)
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    assert payload["field_count"] == 1
+    assert payload["grouping_method"] == "llm_semantic_pair_classification"
+
+
+def test_write_manifest_stops_for_typed_llm_pause(tmp_path: Path) -> None:
+    from arc_jobs import ResumeReason
+    from arc_llm import LLMPaused
+
+    module = _load_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "context.json").write_text(
+        json.dumps({"user_intent": "bridge", "seed_paper_list": ["seed:a", "seed:b"]}),
+        encoding="utf-8",
+    )
+    _write_domain(project, "a", "domain-a", "seed:a")
+    _write_domain(project, "b", "domain-b", "seed:b")
+
+    def paused_runner(*_args):
+        return SimpleNamespace(
+            outcome=LLMPaused(
+                ResumeReason.EXTERNAL_CONDITION,
+                "provider-unavailable",
+            )
+        )
+
+    with pytest.raises(module.GroupingLLMRunError, match="paused"):
+        module.write_domain_manifest(project, grouping_runner=paused_runner)

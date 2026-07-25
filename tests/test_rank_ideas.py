@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+
+from arc_jobs import RunEngine, RunRepository, RunSpec, RunStatus
+from arc_llm import InvalidRequestError, LLMCompleted, LLMFailed
+from arc_proposer_reviewer import (
+    BatchFailurePolicy,
+    BatchRequest,
+    LoopSpec,
+    ProposerReviewerHandler,
+    ProposerReviewerService,
+    WorkerSpec,
+)
+from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
+from arc_proposer_reviewer.protocol import encode_batch_request
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "plugins/arc/skills/arc/workflows/scripts/rank-ideas.py"
+SCRIPT = ROOT / "plugins/arc/skills/arc/scripts/rank-ideas.py"
+PROPOSAL_SCHEMA = {"type": "object", "additionalProperties": True}
 
 
 def _load_rank_module() -> Any:
@@ -29,818 +45,79 @@ def _load_rank_module() -> Any:
     return module
 
 
-def test_markdown_summary_uses_round_marks_by_idea_format(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "decoherence_bell" / "idea_loops"
-    (tmp_path / "decoherence_bell.config.json").write_text(
-        json.dumps({"user_intent": "suggest research directions about decoherence and Bell inequality test in cosmology"}),
-        encoding="utf-8",
-    )
-    _write_round(
-        run_root,
-        "domain_idea_001",
-        1,
-        title="Lower scoring idea",
-        marks={
-            "user_intent_relevance": 20,
-            "novelty": 8,
-            "confidence_of_novelty": 7,
-            "scientific_value": 9,
-            "planning": 10,
-            "problem_well_definedness": 10,
-            "total_score": 64,
-        },
-    )
-    _write_round(
-        run_root,
-        "domain_idea_002",
-        1,
-        title="Higher scoring idea",
-        marks={
-            "user_intent_relevance": 24,
-            "novelty": 10,
-            "confidence_of_novelty": 8,
-            "scientific_value": 12,
-            "planning": 14,
-            "problem_well_definedness": 14,
-            "total_score": 82,
-        },
-    )
-    _write_round(
-        run_root,
-        "domain_idea_002",
-        2,
-        title="Higher scoring idea",
-        marks={
-            "user_intent_relevance": 25,
-            "novelty": 10,
-            "confidence_of_novelty": 8,
-            "scientific_value": 12,
-            "planning": 14,
-            "problem_well_definedness": 14,
-            "total_score": 83,
-        },
-    )
-    _write_round(
-        run_root,
-        "domain_idea_003",
-        1,
-        title="Intent-bearing idea",
-        marks={
-            "user_intent_relevance": 25,
-            "novelty": 10,
-            "confidence_of_novelty": 8,
-            "scientific_value": 12,
-            "planning": 14,
-            "problem_well_definedness": 14,
-            "total_score": 84,
-        },
-    )
-
-    markdown = ranker.markdown_table(ranker.rank_run(run_root))
-    first_section = markdown.split("# Appendix: Idea Details", 1)[0]
-
-    assert first_section.startswith(
-        "# Ideas\n\n"
-        "Abbreviations:\n\n"
-        "IR=intent relevance, N=novelty, CN=confidence of novelty, SV=scientific value, "
-        "PL=planning, WD=well-definedness, T=total.\n\n"
-        "## `domain_idea_001`\n\n"
-        "Lower scoring idea\n\n"
-        "| Round | IR | N | CN | SV | PL | WD | T |\n"
-        "|---:|---:|---:|---:|---:|---:|---:|---:|\n"
-        "| 1 | 20 | 8 | 7 | 9 | 10 | 10 | 64 |\n\n"
-        "## `domain_idea_002`\n\n"
-        "Higher scoring idea\n\n"
-        "| Round | IR | N | CN | SV | PL | WD | T |\n"
-        "|---:|---:|---:|---:|---:|---:|---:|---:|\n"
-        "| 1 | 24 | 10 | 8 | 12 | 14 | 14 | 82 |\n"
-        "| 2 | 25 | 10 | 8 | 12 | 14 | 14 | 83 |\n\n"
-        "## `domain_idea_003`\n\n"
-        "Intent-bearing idea\n\n"
-        "| Round | IR | N | CN | SV | PL | WD | T |\n"
-        "|---:|---:|---:|---:|---:|---:|---:|---:|\n"
-        "| 1 | 25 | 10 | 8 | 12 | 14 | 14 | 84 |"
-    )
-    assert markdown.startswith("# Ideas\n")
-    assert "Higher scoring idea (Mark: 83)" not in first_section
-    assert "\n# Ranked Ideas and Details\n" not in markdown
-    assert "\n# Appendix: Idea Details\n" in markdown
-    details_section = markdown.split("# Appendix: Idea Details", 1)[1]
-    assert details_section.index("### 1. Intent-bearing idea") < details_section.index("### 2. Higher scoring idea")
-    assert details_section.index("### 2. Higher scoring idea") < details_section.index("### 3. Lower scoring idea")
-    assert "#### Full Idea Verbatim" in markdown
-    assert "```text" not in markdown
-    assert "Title: Higher scoring idea" in markdown
-    assert "Idea Summary: summary" in markdown
-    assert "Calculation Plan: Compute $ρ_{E}=⟨T_{ab}⟩u^a u^b$." in markdown
-    assert "Raw $T_{ab}$, $η_{SL}$, and $G^a_{b}$." in markdown
-    assert "Geometry $δ_{ij}$ and $α ∈ {0,0.3}$." in markdown
-    assert "Explicit commands $\\rho_{E}$ and $\\partial^a T_{ab}=0$ stay unchanged." in markdown
-    assert "$$\nT_{kk}(t,ρ,z)=A q(t/τ) sech(z/L)\n$$" in markdown
-    assert "$$\nΔT(0,b_{ref}) = -4 G ∫ d^4x T_{kk}(x)\n$$" in markdown
-    assert "$$\nE(α,β;N)=E_diag(N)+2\\,\\Re[z]\n$$" in markdown
-    assert "$$\n$$\nE(α,β;N)" not in markdown
-    assert "\\operatorname" not in markdown
-
-
-def test_rank_run_zeroes_major_recovered_reviewer_marks(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001"
-    _write_round(
-        run_root,
-        "domain_idea_001",
-        1,
-        title="Clean lower round",
-        marks={
-            "user_intent_relevance": 20,
-            "novelty": 8,
-            "confidence_of_novelty": 7,
-            "scientific_value": 9,
-            "planning": 10,
-            "problem_well_definedness": 10,
-            "total_score": 64,
-        },
-    )
-    _write_round(
-        run_root,
-        "domain_idea_001",
-        2,
-        title="Recovered high round",
-        marks={
-            "user_intent_relevance": 25,
-            "novelty": 10,
-            "confidence_of_novelty": 10,
-            "scientific_value": 15,
-            "planning": 15,
-            "problem_well_definedness": 15,
-            "total_score": 90,
-        },
-        review_extra={
-            "arc_llm_call_record": {
-                "structured_output": {"mode": "recovered", "severity": "major"}
-            }
-        },
-    )
-
-    entry = ranker.rank_run(run_root)["ranking"][0]
-    recovered_round = next(item for item in entry["rounds"] if item["round"] == 2)
-
-    assert entry["round"] == 1
-    assert recovered_round["marks"]["total_score"] == 0
-    assert all(value == 0 for value in recovered_round["marks"].values())
-
-
-def test_rank_run_zeroes_major_recovered_proposer_marks(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001"
-    _write_round(
-        run_root,
-        "domain_idea_001",
-        1,
-        title="Clean lower round",
-        marks={
-            "user_intent_relevance": 20,
-            "novelty": 8,
-            "confidence_of_novelty": 7,
-            "scientific_value": 9,
-            "planning": 10,
-            "problem_well_definedness": 10,
-            "total_score": 64,
-        },
-    )
-    _write_round(
-        run_root,
-        "domain_idea_001",
-        2,
-        title="Recovered proposer high round",
-        marks={
-            "user_intent_relevance": 25,
-            "novelty": 10,
-            "confidence_of_novelty": 10,
-            "scientific_value": 15,
-            "planning": 15,
-            "problem_well_definedness": 15,
-            "total_score": 90,
-        },
-        proposer_extra={
-            "arc_llm_call_record": {
-                "structured_output": {"mode": "recovered", "severity": "major"}
-            }
-        },
-    )
-
-    entry = ranker.rank_run(run_root)["ranking"][0]
-    recovered_round = next(item for item in entry["rounds"] if item["round"] == 2)
-
-    assert entry["round"] == 1
-    assert recovered_round["marks"]["total_score"] == 0
-    assert all(value == 0 for value in recovered_round["marks"].values())
-
-
-def test_rank_run_includes_unstructured_round_without_marks(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001"
-    round_root = run_root / "loops/domain_idea_001/rounds/round_001"
-    proposer_dir = round_root / "proposer_outputs"
-    review_dir = round_root / "reviews"
-    proposer_dir.mkdir(parents=True)
-    review_dir.mkdir(parents=True)
-    (run_root / "loops/domain_idea_001/state.json").write_text(
-        json.dumps({"status": "completed"}), encoding="utf-8"
-    )
-    (proposer_dir / "proposer_001.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "arc.llm.unstructured_output.v1",
-                "warning": "Output did not satisfy the requested JSON schema.",
-                "raw_text": "Recovered natural-language idea",
-            }
-        ),
-        encoding="utf-8",
-    )
-    (review_dir / "reviewer_001.json").write_text(
-        json.dumps({"review_payload": {"comments": "marks missing"}}),
-        encoding="utf-8",
-    )
-
-    entry = ranker.rank_run(run_root)["ranking"][0]
-
-    assert entry["title"] == "Output did not satisfy the requested JSON schema."
-    assert entry["marks"]["total_score"] == 0
-    assert all(value == 0 for value in entry["marks"].values())
-
-
-def test_rank_run_admits_degraded_and_excludes_failed_loops(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001"
-    marks = {"user_intent_relevance": 1, "novelty": 1, "confidence_of_novelty": 1,
-             "scientific_value": 1, "planning": 1, "problem_well_definedness": 1, "total_score": 6}
-    _write_round(run_root, "degraded", 1, title="usable", marks=marks)
-    _write_round(run_root, "failed", 1, title="must not rank", marks={**marks, "total_score": 99})
-    (run_root / "loops/degraded/state.json").write_text(json.dumps({"status": "degraded"}), encoding="utf-8")
-    (run_root / "loops/failed/state.json").write_text(json.dumps({"status": "failed", "error": "reviewer failed"}), encoding="utf-8")
-
-    payload = ranker.rank_run(run_root)
-
-    assert [item["loop_id"] for item in payload["ranking"]] == ["degraded"]
-    assert payload["degraded_loops"] == ["degraded"]
-    assert payload["excluded_loops"][0]["status"] == "failed"
-    assert "DEGRADED IDEAS BATCH" in ranker.markdown_table(payload)
-
-
-def test_single_domain_rank_uses_feasibility_gate_before_score(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    _write_single_config(run_root, ["domain_idea_001", "domain_idea_002"], requires_assessment=True)
-    _write_single_round(
-        run_root,
-        "domain_idea_001",
-        1,
-        title="Important but blocked",
-        total=96,
-        assessment=_single_assessment(
-            problem_importance="high",
-            feasibility_status="infeasible",
-            bounded_first_calculation_ready=False,
-            blocking_feasibility_failures=["Required boundary data do not exist."],
-        ),
-    )
-    _write_single_round(
-        run_root,
-        "domain_idea_001",
-        2,
-        title="Feasible lower score",
-        total=78,
-        assessment=_single_assessment(problem_importance="substantive"),
-    )
-    _write_single_round(
-        run_root,
-        "domain_idea_002",
-        1,
-        title="Unverified imported method",
-        total=99,
-        assessment=_single_assessment(external_method_status="uncertain"),
-    )
-
-    payload = ranker.rank_run(run_root)
-
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v3"
-    assert payload["ranking"][0]["title"] == "Feasible lower score"
-    assert payload["ranking"][0]["round"] == 2
-    blocked_round = next(entry for entry in payload["ranking"][0]["rounds"] if entry["round"] == 1)
-    assert "first_calculation_is_not_feasible" in blocked_round["qualification_reasons"]
-    assert "bounded_first_calculation_is_not_ready" in blocked_round["qualification_reasons"]
-    assert "blocking_feasibility_failures" in blocked_round["qualification_reasons"]
-    assert payload["unqualified"][0]["title"] == "Unverified imported method"
-    assert "external_method_must_be_not_used_or_valid" in payload["unqualified"][0]["qualification_reasons"]
-    assert payload["warnings"]
-    markdown = ranker.markdown_table(payload)
-    assert "# Appendix: Unqualified Single-Domain Candidates" in markdown
-    assert "Important but blocked" not in markdown.split("# Appendix: Idea Details", 1)[0]
-
-
-def test_single_domain_importance_is_scored_but_not_a_hard_gate(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    _write_single_config(run_root, ["domain_idea_001", "domain_idea_002"], requires_assessment=True)
-    _write_single_round(
-        run_root,
-        "domain_idea_001",
-        1,
-        title="Limited but feasible",
-        total=61,
-        assessment=_single_assessment(problem_importance="limited"),
-    )
-    _write_single_round(
-        run_root,
-        "domain_idea_002",
-        1,
-        title="Higher-value feasible idea",
-        total=85,
-        assessment=_single_assessment(problem_importance="high"),
-    )
-
-    payload = ranker.rank_run(run_root)
-
-    assert [entry["title"] for entry in payload["ranking"]] == [
-        "Higher-value feasible idea",
-        "Limited but feasible",
+def _single_scheme() -> dict[str, Any]:
+    marks = [
+        ("user_intent_relevance", "Intent Relevance"),
+        ("novelty", "Novelty"),
+        ("confidence_of_novelty", "Confidence"),
+        ("scientific_value", "Scientific Value"),
+        ("planning", "Planning"),
+        ("problem_well_definedness", "Well-definedness"),
     ]
-    assert [entry["title"] for entry in payload["summary_order"]] == [
-        "Higher-value feasible idea",
-        "Limited but feasible",
-    ]
-    assert payload["unqualified"] == []
-    assert {entry["problem_importance"] for entry in payload["diagnostics"]["candidates"]} == {
-        "high",
-        "limited",
+    return {
+        "schema_version": "arc.workflow.ideas.marking_scheme.v1",
+        "marks": [
+            {"field": field, "label": label, "minimum": 0, "maximum": 20}
+            for field, label in marks
+        ],
+        "total_score": {"field": "total_score", "label": "Total"},
+        "tie_break_order": ["total_score", "novelty"],
     }
 
 
-def test_single_domain_named_risk_requires_manageable_risk(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    _write_single_config(run_root, ["domain_idea_001", "domain_idea_002"], requires_assessment=True)
-    _write_single_round(
-        run_root,
-        "domain_idea_001",
-        1,
-        title="Named manageable risk",
-        total=80,
-        assessment=_single_assessment(
-            feasibility_status="feasible_with_named_risk",
-            manageable_feasibility_risks=["A convergence test may require a finer grid."],
-        ),
-    )
-    _write_single_round(
-        run_root,
-        "domain_idea_002",
-        1,
-        title="Unnamed risk",
-        total=90,
-        assessment=_single_assessment(feasibility_status="feasible_with_named_risk"),
-    )
-
-    payload = ranker.rank_run(run_root)
-
-    assert [entry["title"] for entry in payload["ranking"]] == ["Named manageable risk"]
-    assert "feasible_with_named_risk_requires_named_manageable_risk" in payload["unqualified"][0][
-        "qualification_reasons"
+def _cross_scheme() -> dict[str, Any]:
+    marks = [
+        ("user_intent_relevance", "Intent Relevance"),
+        ("cross_domain_transfer_quality", "Transfer"),
+        ("substantive_target_contribution", "Target Contribution"),
+        ("novelty", "Novelty"),
+        ("confidence_of_novelty", "Confidence"),
+        ("scientific_value", "Scientific Value"),
+        ("calculation_feasibility", "Feasibility"),
+        ("problem_well_definedness", "Well-definedness"),
     ]
-
-
-def test_single_domain_partially_defined_problem_can_remain_qualified_for_refinement(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    _write_single_config(run_root, ["domain_idea_001"], requires_assessment=True)
-    _write_single_round(
-        run_root,
-        "domain_idea_001",
-        1,
-        title="Defined enough for a bounded first calculation",
-        total=72,
-        assessment=_single_assessment(mathematical_well_definedness="partially_defined"),
-    )
-
-    payload = ranker.rank_run(run_root)
-
-    assert [entry["title"] for entry in payload["ranking"]] == [
-        "Defined enough for a bounded first calculation"
-    ]
-    assert payload["unqualified"] == []
-
-
-def test_single_domain_cli_writes_diagnostics(tmp_path: Path) -> None:
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    _write_single_config(run_root, ["domain_idea_001"], requires_assessment=True)
-    _write_single_round(
-        run_root,
-        "domain_idea_001",
-        1,
-        title="Qualified",
-        total=80,
-        assessment=_single_assessment(),
-    )
-
-    completed = subprocess.run(
-        [sys.executable, str(SCRIPT), str(run_root), "--format", "json"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    diagnostics = json.loads((run_root.parent / "single-domain-diagnostics.json").read_text(encoding="utf-8"))
-    assert diagnostics["schema_version"] == "arc.ideas.single_domain_diagnostics.v1"
-    assert diagnostics["qualified_count"] == 1
-
-
-def test_legacy_single_domain_artifacts_remain_rankable_with_warning(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    _write_single_config(run_root, ["domain_idea_001"], requires_assessment=False)
-    _write_round(
-        run_root,
-        "domain_idea_001",
-        1,
-        title="Legacy idea",
-        marks=_single_marks(70),
-    )
-
-    payload = ranker.rank_run(run_root)
-
-    assert [entry["title"] for entry in payload["ranking"]] == ["Legacy idea"]
-    assert payload["ranking"][0]["qualification_policy"] == "legacy_no_feasibility_gate"
-    assert "legacy_no_feasibility_gate" in payload["warnings"][0]
-
-
-def test_cross_domain_rank_uses_qualification_before_score(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    _write_cross_config(run_root, ["cross_domain_idea_001", "cross_domain_idea_002"])
-    _write_cross_round(
-        run_root,
-        "cross_domain_idea_001",
-        1,
-        title="Decorative high score",
-        total=96,
-        assessment=_cross_assessment(transfer_status="decorative"),
-    )
-    _write_cross_round(
-        run_root,
-        "cross_domain_idea_001",
-        2,
-        title="Genuine lower score",
-        total=75,
-        assessment=_cross_assessment(signature_suffix="one"),
-    )
-    _write_cross_round(
-        run_root,
-        "cross_domain_idea_002",
-        1,
-        title="Incremental target",
-        total=99,
-        assessment=_cross_assessment(target_contribution_status="incremental", signature_suffix="two"),
-    )
-
-    payload = ranker.rank_run(run_root)
-
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v2"
-    assert payload["ranking"][0]["title"] == "Genuine lower score"
-    assert payload["ranking"][0]["round"] == 2
-    assert payload["unqualified"][0]["title"] == "Incremental target"
-    assert "target_contribution_must_be_substantial_or_transformative" in payload["unqualified"][0][
-        "qualification_reasons"
-    ]
-    assert payload["warnings"]
-    markdown = ranker.markdown_table(payload)
-    assert "# Appendix: Unqualified Cross-Domain Candidates" in markdown
-    assert "Decorative high score" not in markdown.split("# Appendix: Idea Details", 1)[0]
-
-
-def test_cross_domain_top_three_requires_distinct_transfer_signatures(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    loop_ids = [f"cross_domain_idea_{index:03d}" for index in range(1, 5)]
-    _write_cross_config(run_root, loop_ids)
-    signatures = ["same", "same", "different-a", "different-b"]
-    for index, (loop_id, signature) in enumerate(zip(loop_ids, signatures), start=1):
-        _write_cross_round(
-            run_root,
-            loop_id,
-            1,
-            title=f"Idea {index}",
-            total=90 - index,
-            assessment=_cross_assessment(signature_suffix=signature),
-        )
-
-    payload = ranker.rank_run(run_root)
-
-    assert [entry["title"] for entry in payload["top_three"]] == ["Idea 1", "Idea 3", "Idea 4"]
-    assert [entry["title"] for entry in payload["ranking"][:3]] == ["Idea 1", "Idea 3", "Idea 4"]
-    assert payload["diagnostics"]["distinct_qualified_transfer_signatures"] == 3
-
-
-def test_cross_domain_cli_writes_diagnostics(tmp_path: Path) -> None:
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    _write_cross_config(run_root, ["cross_domain_idea_001"])
-    _write_cross_round(
-        run_root,
-        "cross_domain_idea_001",
-        1,
-        title="Qualified",
-        total=80,
-        assessment=_cross_assessment(),
-    )
-
-    completed = subprocess.run(
-        [sys.executable, str(SCRIPT), str(run_root), "--format", "json"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    diagnostics_path = run_root.parent / "cross-domain-diagnostics.json"
-    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
-    assert diagnostics["schema_version"] == "arc.ideas.cross_domain_diagnostics.v1"
-    assert diagnostics["qualified_count"] == 1
-
-
-def test_cross_domain_portfolio_caps_one_central_mechanism_at_two(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    loop_ids = [f"cross_domain_idea_{index:03d}" for index in range(1, 4)]
-    _write_cross_config(run_root, loop_ids)
-    for index, loop_id in enumerate(loop_ids, start=1):
-        assessment = _cross_assessment(signature_suffix=f"result-{index}")
-        assessment["transfer_signature"]["transferred_ingredient"] = "same central ingredient"
-        _write_cross_round(
-            run_root,
-            loop_id,
-            1,
-            title=f"Mechanism idea {index}",
-            total=91 - index,
-            assessment=assessment,
-        )
-
-    payload = ranker.rank_run(run_root)
-
-    assert [entry["title"] for entry in payload["ranking"]] == ["Mechanism idea 1", "Mechanism idea 2"]
-    assert [entry["title"] for entry in payload["portfolio_excluded"]] == ["Mechanism idea 3"]
-    assert payload["diagnostics"]["portfolio_excluded_count"] == 1
-
-
-def test_cross_domain_manageable_compatibility_risk_does_not_block_qualification(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    _write_cross_config(run_root, ["cross_domain_idea_001"])
-    _write_cross_round(
-        run_root,
-        "cross_domain_idea_001",
-        1,
-        title="Feasible with a bounded risk",
-        total=82,
-        assessment=_cross_assessment(
-            feasibility_status="feasible_with_named_risk",
-            manageable_compatibility_risks=["The first calculation must test the translation regime."],
-        ),
-    )
-
-    payload = ranker.rank_run(run_root)
-
-    assert [entry["title"] for entry in payload["ranking"]] == ["Feasible with a bounded risk"]
-    assert payload["ranking"][0]["compatibility_classification"] == {
-        "policy": "explicit_blocking_and_manageable_v2",
-        "blocking_failures": [],
-        "manageable_risks": ["The first calculation must test the translation regime."],
+    return {
+        "schema_version": "arc.workflow.ideas.marking_scheme.v1",
+        "marks": [
+            {"field": field, "label": label, "minimum": 0, "maximum": 20}
+            for field, label in marks
+        ],
+        "total_score": {"field": "total_score", "label": "Total"},
+        "tie_break_order": ["total_score", "substantive_target_contribution"],
     }
-
-
-def test_cross_domain_blocking_compatibility_failure_remains_a_hard_gate(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    _write_cross_config(run_root, ["cross_domain_idea_001"])
-    _write_cross_round(
-        run_root,
-        "cross_domain_idea_001",
-        1,
-        title="Physically incompatible",
-        total=95,
-        assessment=_cross_assessment(
-            feasibility_status="feasible_with_named_risk",
-            blocking_compatibility_failures=["The source and target regimes contradict a conservation law."],
-            manageable_compatibility_risks=["A numerical coefficient remains uncertain."],
-        ),
-    )
-
-    payload = ranker.rank_run(run_root)
-
-    assert payload["ranking"] == []
-    assert payload["unqualified"][0]["title"] == "Physically incompatible"
-    assert "blocking_compatibility_failures" in payload["unqualified"][0]["qualification_reasons"]
-
-
-def test_cross_domain_legacy_compatibility_field_uses_feasibility_status(tmp_path: Path) -> None:
-    ranker = _load_rank_module()
-    run_root = tmp_path / "ideas" / "run_001" / "idea_loops"
-    loop_ids = ["cross_domain_idea_001", "cross_domain_idea_002"]
-    _write_cross_config(run_root, loop_ids)
-    legacy_risk = ["Legacy reviewer named a calculation-bounded compatibility risk."]
-    _write_cross_round(
-        run_root,
-        loop_ids[0],
-        1,
-        title="Legacy named risk",
-        total=82,
-        assessment=_cross_assessment(
-            feasibility_status="feasible_with_named_risk",
-            legacy_compatibility_failures=legacy_risk,
-            signature_suffix="legacy-risk",
-        ),
-    )
-    _write_cross_round(
-        run_root,
-        loop_ids[1],
-        1,
-        title="Legacy blocking failure",
-        total=90,
-        assessment=_cross_assessment(
-            feasibility_status="feasible",
-            legacy_compatibility_failures=["Legacy unresolved incompatibility."],
-            signature_suffix="legacy-blocking",
-        ),
-    )
-
-    payload = ranker.rank_run(run_root)
-
-    assert [entry["title"] for entry in payload["ranking"]] == ["Legacy named risk"]
-    assert payload["ranking"][0]["compatibility_classification"] == {
-        "policy": "legacy_compatibility_failures_as_named_risks",
-        "blocking_failures": [],
-        "manageable_risks": legacy_risk,
-    }
-    failed = payload["unqualified"][0]
-    assert failed["title"] == "Legacy blocking failure"
-    assert failed["compatibility_classification"]["policy"] == "legacy_compatibility_failures_as_blocking"
-    assert "blocking_compatibility_failures" in failed["qualification_reasons"]
-
-
-def _write_single_config(run_root: Path, loop_ids: list[str], *, requires_assessment: bool) -> None:
-    run_root.mkdir(parents=True, exist_ok=True)
-    review_required = ["marks", "idea_assessment"] if requires_assessment else ["marks"]
-    (run_root / "config.json").write_text(
-        json.dumps(
-            {
-                "loops": [
-                    {
-                        "loop_id": loop_id,
-                        "caller_context": {"variant_id": "domain"},
-                        "reviewers": [
-                            {
-                                "output_schema": {
-                                    "properties": {
-                                        "review_payload": {"required": review_required}
-                                    }
-                                }
-                            }
-                        ],
-                    }
-                    for loop_id in loop_ids
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
 
 
 def _single_marks(total: int) -> dict[str, int]:
     return {
-        "user_intent_relevance": 20,
-        "novelty": 10,
-        "confidence_of_novelty": 10,
-        "scientific_value": 10,
-        "planning": 10,
-        "problem_well_definedness": 10,
+        "user_intent_relevance": 15,
+        "novelty": 12,
+        "confidence_of_novelty": 12,
+        "scientific_value": 15,
+        "planning": 15,
+        "problem_well_definedness": 15,
         "total_score": total,
     }
 
 
 def _single_assessment(
     *,
-    problem_importance: str = "substantive",
-    mathematical_well_definedness: str = "well_defined",
     feasibility_status: str = "feasible",
     bounded_first_calculation_ready: bool = True,
-    blocking_feasibility_failures: list[str] | None = None,
-    manageable_feasibility_risks: list[str] | None = None,
-    external_method_status: str = "not_used",
 ) -> dict[str, Any]:
     return {
-        "problem_importance": problem_importance,
-        "importance_rationale": "The target-domain payoff is evidence-backed.",
-        "mathematical_well_definedness": mathematical_well_definedness,
+        "problem_importance": "substantive",
+        "importance_rationale": "The result changes a concrete target-domain prediction.",
+        "mathematical_well_definedness": "well_defined",
         "feasibility_status": feasibility_status,
         "bounded_first_calculation_ready": bounded_first_calculation_ready,
-        "blocking_feasibility_failures": blocking_feasibility_failures or [],
-        "manageable_feasibility_risks": manageable_feasibility_risks or [],
-        "external_method_status": external_method_status,
-        "external_method_rationale": "No external method is needed.",
+        "blocking_feasibility_failures": [],
+        "manageable_feasibility_risks": [],
+        "external_method_status": "not_used",
     }
 
 
-def _write_single_round(
-    run_root: Path,
-    loop_id: str,
-    round_number: int,
-    *,
-    title: str,
-    total: int,
-    assessment: dict[str, Any],
-) -> None:
-    marks = _single_marks(total)
-    _write_round(
-        run_root,
-        loop_id,
-        round_number,
-        title=title,
-        marks=marks,
-        review_extra={"review_payload": {"marks": marks, "idea_assessment": assessment}},
-    )
-
-
-def _write_cross_config(run_root: Path, loop_ids: list[str]) -> None:
-    run_root.mkdir(parents=True, exist_ok=True)
-    cards = [{"field_id": "field-a"}, {"field_id": "field-b"}]
-    (run_root / "config.json").write_text(
-        json.dumps(
-            {
-                "loops": [
-                    {
-                        "loop_id": loop_id,
-                        "caller_context": {
-                            "variant_id": "cross_domain",
-                            "generation_mode": "cross_domain",
-                            "domain_cards": cards,
-                        },
-                    }
-                    for loop_id in loop_ids
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-def _cross_assessment(
-    *,
-    transfer_status: str = "genuine",
-    target_contribution_status: str = "substantial",
-    feasibility_status: str = "feasible",
-    signature_suffix: str = "default",
-    blocking_compatibility_failures: list[str] | None = None,
-    manageable_compatibility_risks: list[str] | None = None,
-    legacy_compatibility_failures: list[str] | None = None,
-) -> dict[str, Any]:
-    assessment = {
-        "source_field_id": "field-a",
-        "target_field_id": "field-b",
-        "transfer_status": transfer_status,
-        "target_contribution_status": target_contribution_status,
-        "source_ingredient_validity": "valid",
-        "target_adaptation_validity": "valid",
-        "resulting_new_capability": "new capability",
-        "feasibility_status": feasibility_status,
-        "blocking_compatibility_failures": blocking_compatibility_failures or [],
-        "manageable_compatibility_risks": manageable_compatibility_risks or [],
-        "novelty_coverage": {"source_domain": True, "target_domain": True, "intersection": True},
-        "disqualifying_reasons": [],
-        "recommended_action": "refine_current",
-        "transfer_signature": {
-            "direction": "domain-a to domain-b",
-            "transferred_ingredient": f"ingredient {signature_suffix}",
-            "target_result": f"result {signature_suffix}",
-            "first_calculation": f"calculation {signature_suffix}",
-        },
-    }
-    if legacy_compatibility_failures is not None:
-        assessment.pop("blocking_compatibility_failures")
-        assessment.pop("manageable_compatibility_risks")
-        assessment["compatibility_failures"] = legacy_compatibility_failures
-    return assessment
-
-
-def _write_cross_round(
-    run_root: Path,
-    loop_id: str,
-    round_number: int,
-    *,
-    title: str,
-    total: int,
-    assessment: dict[str, Any],
-) -> None:
-    marks = {
+def _cross_marks(total: int) -> dict[str, int]:
+    return {
         "user_intent_relevance": 12,
         "cross_domain_transfer_quality": 12,
         "substantive_target_contribution": 16,
@@ -851,59 +128,455 @@ def _write_cross_round(
         "problem_well_definedness": 7,
         "total_score": total,
     }
-    _write_round(
-        run_root,
-        loop_id,
-        round_number,
-        title=title,
-        marks=marks,
-        proposer_extra={
-            "domain_roles": {
-                "source_field_id": "field-a",
-                "target_field_id": "field-b",
-                "supporting_field_ids": [],
-            }
+
+
+def _cross_assessment(*, transfer_status: str = "genuine") -> dict[str, Any]:
+    return {
+        "source_field_id": "field-a",
+        "target_field_id": "field-b",
+        "transfer_status": transfer_status,
+        "target_contribution_status": "substantial",
+        "source_ingredient_validity": "valid",
+        "target_adaptation_validity": "valid",
+        "feasibility_status": "feasible",
+        "blocking_compatibility_failures": [],
+        "manageable_compatibility_risks": [],
+        "novelty_coverage": {
+            "source_domain": True,
+            "target_domain": True,
+            "intersection": True,
         },
-        review_extra={"review_payload": {"marks": marks, "cross_domain_assessment": assessment}},
-    )
-
-
-def _write_round(
-    run_root: Path,
-    loop_id: str,
-    round_number: int,
-    *,
-    title: str,
-    marks: dict[str, int],
-    proposer_extra: dict[str, Any] | None = None,
-    review_extra: dict[str, Any] | None = None,
-) -> None:
-    round_root = run_root / "loops" / loop_id / "rounds" / f"round_{round_number:03d}"
-    state_path = run_root / "loops" / loop_id / "state.json"
-    proposer_dir = round_root / "proposer_outputs"
-    review_dir = round_root / "reviews"
-    proposer_dir.mkdir(parents=True, exist_ok=True)
-    review_dir.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(
-        json.dumps({"status": "completed", "loop_id": loop_id, "rounds_completed": round_number}),
-        encoding="utf-8",
-    )
-    proposer_payload = {
-        "title": title,
-        "idea_summary": "summary",
-        "calculation_plan": (
-            "Compute `ρ_E=⟨T_ab⟩u^a u^b`. Raw T_ab, η_SL, and G^a_b. "
-            "Geometry `δ_ij` and `α ∈ {0,0.3}`. "
-            "Explicit commands `\\rho_E` and `\\partial^a T_ab=0` stay unchanged.\n\n"
-            "T_kk(t,ρ,z)=A q(t/τ) sech(z/L)\n\n"
-            "ΔT(0,b_ref) = -4 G ∫ d^4x T_kk(x),\n\n"
-            "$$\nE(α,β;N)=E_diag(N)+2\\,\\Re[z]\n$$"
-        ),
+        "disqualifying_reasons": [],
+        "transfer_signature": {
+            "direction": "field-a to field-b",
+            "transferred_ingredient": "a controlled asymptotic expansion",
+            "target_result": "a target-domain bound",
+            "first_calculation": "evaluate the leading coefficient",
+        },
     }
-    if proposer_extra:
-        proposer_payload.update(proposer_extra)
-    (proposer_dir / "proposer_001.json").write_text(json.dumps(proposer_payload), encoding="utf-8")
-    review_payload = {"review_payload": {"marks": marks}}
-    if review_extra:
-        review_payload.update(review_extra)
-    (review_dir / "reviewer_001.json").write_text(json.dumps(review_payload), encoding="utf-8")
+
+
+def _single_loop(
+    loop_id: str,
+    *,
+    max_rounds: int = 2,
+    requires_assessment: bool = True,
+) -> LoopSpec:
+    context = {
+        "user_intent": "Find a well-defined theoretical-physics research direction.",
+        "variant_id": "domain",
+        "marking_scheme": _single_scheme(),
+    }
+    reviewer_schema = {
+        "type": "object",
+        "required": (
+            ["marks", "idea_assessment"]
+            if requires_assessment
+            else ["marks"]
+        ),
+        "additionalProperties": True,
+    }
+    return LoopSpec(
+        loop_id=loop_id,
+        context=context,
+        proposers=(WorkerSpec(f"{loop_id}-p", "Propose an idea.", PROPOSAL_SCHEMA),),
+        reviewer=WorkerSpec(f"{loop_id}-r", "Review the idea.", reviewer_schema),
+        max_rounds=max_rounds,
+        allow_early_stop=False,
+    )
+
+
+def _cross_loop(loop_id: str) -> LoopSpec:
+    context = {
+        "user_intent": "Find a substantive cross-domain theoretical-physics direction.",
+        "variant_id": "cross_domain",
+        "generation_mode": "cross_domain",
+        "domain_cards": [{"field_id": "field-a"}, {"field_id": "field-b"}],
+        "marking_scheme": _cross_scheme(),
+    }
+    reviewer_schema = {
+        "type": "object",
+        "required": ["marks", "cross_domain_assessment"],
+        "additionalProperties": True,
+    }
+    return LoopSpec(
+        loop_id=loop_id,
+        context=context,
+        proposers=(WorkerSpec(f"{loop_id}-p", "Propose a bridge.", PROPOSAL_SCHEMA),),
+        reviewer=WorkerSpec(f"{loop_id}-r", "Review the bridge.", reviewer_schema),
+        max_rounds=1,
+        allow_early_stop=False,
+    )
+
+
+class _ScriptedLLM:
+    def __init__(
+        self,
+        *,
+        proposals: Mapping[tuple[str, int], Mapping[str, Any]],
+        reviews: Mapping[tuple[str, int], Mapping[str, Any]],
+        failed_loops: set[str] | None = None,
+    ) -> None:
+        self.proposals = proposals
+        self.reviews = reviews
+        self.failed_loops = failed_loops or set()
+
+    def execute(self, context, request, *, options):
+        task = _round_task(request.prompt)
+        loop_id = task["loop_id"]
+        round_number = task["round"]
+        if "one proposer" in request.prompt:
+            if loop_id in self.failed_loops:
+                return LLMFailed(InvalidRequestError("deliberate proposer failure"))
+            return LLMCompleted(
+                self.proposals[(loop_id, round_number)],
+                "fake",
+                "fake-model",
+                None,
+                None,
+            )
+        feedback_schema = request.output.schema["properties"]["feedback"]
+        feedback = {
+            worker_id: "Recompute from the published evidence."
+            for worker_id in feedback_schema["required"]
+        }
+        return LLMCompleted(
+            {
+                "schema_version": "arc.proposer_reviewer.review.v1",
+                "action": "stop",
+                "reason": "The scripted assessment is complete.",
+                "feedback": feedback,
+                "payload": self.reviews[(loop_id, round_number)],
+            },
+            "fake",
+            "fake-model",
+            None,
+            None,
+        )
+
+
+def _round_task(prompt: str) -> dict[str, Any]:
+    return json.loads(prompt.rsplit("## Round task\n", 1)[1])
+
+
+def _execute(
+    root: Path,
+    request: BatchRequest,
+    llm: _ScriptedLLM,
+    *,
+    run_id: str = "ideas-run",
+) -> RunRepository:
+    repository = RunRepository(root)
+    handler = ProposerReviewerHandler(ProposerReviewerService(llm))  # type: ignore[arg-type]
+    snapshot = RunEngine(repository).execute(
+        RunSpec(run_id, handler.name, encode_batch_request(request)), handler
+    )
+    assert snapshot.status is RunStatus.SUCCEEDED
+    return repository
+
+
+def _request(*loops: LoopSpec) -> BatchRequest:
+    return BatchRequest(
+        BATCH_SCHEMA_VERSION,
+        "ideas-ranking",
+        loops,
+        BatchFailurePolicy.COLLECT,
+    )
+
+
+def _proposal(title: str, *, cross: bool = False) -> dict[str, Any]:
+    proposal = {
+        "title": title,
+        "idea_summary": "A concrete, evidence-aware proposal.",
+        "calculation_plan": "Evaluate the bounded leading-order calculation.",
+    }
+    if cross:
+        proposal["domain_roles"] = {
+            "source_field_id": "field-a",
+            "target_field_id": "field-b",
+        }
+    return proposal
+
+
+def test_ranker_uses_committed_review_payload_and_best_completed_round(
+    tmp_path: Path,
+) -> None:
+    ranker = _load_rank_module()
+    loop = _single_loop("idea-a")
+    repository = _execute(
+        tmp_path / "runs",
+        _request(loop),
+        _ScriptedLLM(
+            proposals={
+                ("idea-a", 1): _proposal("Best first-round idea"),
+                ("idea-a", 2): _proposal("Lower-scoring final idea"),
+            },
+            reviews={
+                ("idea-a", 1): {
+                    "marks": _single_marks(91),
+                    "idea_assessment": _single_assessment(),
+                },
+                ("idea-a", 2): {
+                    "marks": _single_marks(72),
+                    "idea_assessment": _single_assessment(),
+                },
+            },
+        ),
+    )
+
+    payload = ranker.rank_run(repository.root, "ideas-run")
+
+    assert payload["ranking"][0]["title"] == "Best first-round idea"
+    assert payload["ranking"][0]["round"] == 1
+    assert [round_entry["round"] for round_entry in payload["ranking"][0]["rounds"]] == [1, 2]
+    selected = payload["ranking"][0]
+    assert selected["proposer_artifact"]["artifact_id"].startswith("proposer-reviewer/")
+    assert len(selected["proposer_artifact"]["sha256"]) == 64
+    assert len(selected["review_artifact"]["sha256"]) == 64
+    rendered = json.dumps(payload)
+    assert "relative_path" not in rendered
+    assert str(repository.run_directory("ideas-run")) not in rendered
+    markdown = ranker.markdown_table(payload)
+    assert "# Ideas" in markdown
+    assert "Proposer artifact:" in markdown
+    assert "Review artifact:" in markdown
+
+
+def test_ranker_preserves_cross_domain_qualification_before_score(tmp_path: Path) -> None:
+    ranker = _load_rank_module()
+    genuine = _cross_loop("genuine")
+    decorative = _cross_loop("decorative")
+    repository = _execute(
+        tmp_path / "runs",
+        _request(genuine, decorative),
+        _ScriptedLLM(
+            proposals={
+                ("genuine", 1): _proposal("Genuine lower score", cross=True),
+                ("decorative", 1): _proposal("Decorative high score", cross=True),
+            },
+            reviews={
+                ("genuine", 1): {
+                    "marks": _cross_marks(76),
+                    "cross_domain_assessment": _cross_assessment(),
+                },
+                ("decorative", 1): {
+                    "marks": _cross_marks(96),
+                    "cross_domain_assessment": _cross_assessment(
+                        transfer_status="decorative"
+                    ),
+                },
+            },
+        ),
+    )
+
+    payload = ranker.rank_run(repository.root, "ideas-run")
+
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v2"
+    assert [entry["title"] for entry in payload["ranking"]] == ["Genuine lower score"]
+    assert payload["unqualified"][0]["title"] == "Decorative high score"
+    assert "transfer_status_must_be_genuine" in payload["unqualified"][0][
+        "qualification_reasons"
+    ]
+
+
+def test_ranker_preserves_single_domain_feasibility_gate(tmp_path: Path) -> None:
+    ranker = _load_rank_module()
+    loop = _single_loop("single-gate")
+    repository = _execute(
+        tmp_path / "runs",
+        _request(loop),
+        _ScriptedLLM(
+            proposals={
+                ("single-gate", 1): _proposal("High-score blocked idea"),
+                ("single-gate", 2): _proposal("Feasible lower-score idea"),
+            },
+            reviews={
+                ("single-gate", 1): {
+                    "marks": _single_marks(96),
+                    "idea_assessment": _single_assessment(
+                        feasibility_status="infeasible",
+                        bounded_first_calculation_ready=False,
+                    ),
+                },
+                ("single-gate", 2): {
+                    "marks": _single_marks(78),
+                    "idea_assessment": _single_assessment(),
+                },
+            },
+        ),
+    )
+
+    payload = ranker.rank_run(repository.root, "ideas-run")
+
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v3"
+    assert payload["ranking"][0]["title"] == "Feasible lower-score idea"
+    blocked = next(
+        entry
+        for entry in payload["ranking"][0]["rounds"]
+        if entry["round"] == 1
+    )
+    assert "first_calculation_is_not_feasible" in blocked["qualification_reasons"]
+    assert "bounded_first_calculation_is_not_ready" in blocked["qualification_reasons"]
+
+
+def test_no_assessment_summary_order_follows_ranking(tmp_path: Path) -> None:
+    ranker = _load_rank_module()
+    lower = _single_loop("lower", max_rounds=1, requires_assessment=False)
+    higher = _single_loop("higher", max_rounds=1, requires_assessment=False)
+    repository = _execute(
+        tmp_path / "runs",
+        _request(lower, higher),
+        _ScriptedLLM(
+            proposals={
+                ("lower", 1): _proposal("Lower no-assessment idea"),
+                ("higher", 1): _proposal("Higher no-assessment idea"),
+            },
+            reviews={
+                ("lower", 1): {"marks": _single_marks(61)},
+                ("higher", 1): {"marks": _single_marks(84)},
+            },
+        ),
+    )
+
+    payload = ranker.rank_run(repository.root, "ideas-run")
+
+    assert [entry["title"] for entry in payload["ranking"]] == [
+        "Higher no-assessment idea",
+        "Lower no-assessment idea",
+    ]
+    assert payload["summary_order"] == payload["ranking"]
+    assert "no_assessment policy" in payload["warnings"][0]
+
+
+def test_ranker_excludes_failed_and_incomplete_lifecycle_states(tmp_path: Path) -> None:
+    ranker = _load_rank_module()
+    usable = _single_loop("usable", max_rounds=1)
+    failed = _single_loop("failed", max_rounds=1)
+    repository = _execute(
+        tmp_path / "completed-runs",
+        _request(usable, failed),
+        _ScriptedLLM(
+            proposals={("usable", 1): _proposal("Usable idea")},
+            reviews={
+                ("usable", 1): {
+                    "marks": _single_marks(80),
+                    "idea_assessment": _single_assessment(),
+                }
+            },
+            failed_loops={"failed"},
+        ),
+    )
+
+    completed_payload = ranker.rank_run(repository.root, "ideas-run")
+    assert [entry["loop_id"] for entry in completed_payload["ranking"]] == ["usable"]
+    assert completed_payload["excluded_loops"] == [
+        {
+            "loop_id": "failed",
+            "status": "failed",
+            "reason": "loop_lifecycle_failed",
+        }
+    ]
+
+    pending_root = tmp_path / "pending-runs"
+    pending_repository = RunRepository(pending_root)
+    pending_repository.create(
+        RunSpec(
+            "pending-run",
+            ProposerReviewerHandler.name,
+            encode_batch_request(_request(_single_loop("pending", max_rounds=1))),
+        )
+    )
+    pending_payload = ranker.rank_run(pending_root, "pending-run")
+    assert pending_payload["ranking"] == []
+    assert pending_payload["excluded_loops"] == [
+        {
+            "loop_id": "pending",
+            "status": "pending",
+            "reason": "loop_is_incomplete",
+        }
+    ]
+
+    cancelled_root = tmp_path / "cancelled-runs"
+    cancelled_repository = RunRepository(cancelled_root)
+    cancelled_repository.create(
+        RunSpec(
+            "cancelled-run",
+            ProposerReviewerHandler.name,
+            encode_batch_request(_request(_single_loop("cancelled", max_rounds=1))),
+        )
+    )
+    cancelled_repository.request_cancel("cancelled-run", reason="test")
+    cancelled_payload = ranker.rank_run(cancelled_root, "cancelled-run")
+    assert cancelled_payload["ranking"] == []
+    assert cancelled_payload["excluded_loops"] == [
+        {
+            "loop_id": "cancelled",
+            "status": "cancelled",
+            "reason": "loop_lifecycle_cancelled",
+        }
+    ]
+
+
+def test_ranker_has_no_legacy_layout_reader_and_cli_uses_durable_identifiers(
+    tmp_path: Path,
+) -> None:
+    ranker = _load_rank_module()
+    source = inspect.getsource(ranker)
+    for legacy_layout_token in (
+        "state.json",
+        "transcript.jsonl",
+        "proposer_outputs",
+        "review_path",
+        ".iterdir(",
+        ".glob(",
+    ):
+        assert legacy_layout_token not in source
+
+    loop = _single_loop("cli", max_rounds=1)
+    repository = _execute(
+        tmp_path / "runs",
+        _request(loop),
+        _ScriptedLLM(
+            proposals={("cli", 1): _proposal("CLI idea")},
+            reviews={
+                ("cli", 1): {
+                    "marks": _single_marks(80),
+                    "idea_assessment": _single_assessment(),
+                }
+            },
+        ),
+    )
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "ARC_REQUIRE_REPO_ROOT": str(ROOT),
+    }
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--run-root",
+            str(repository.root),
+            "--run-id",
+            "ideas-run",
+            "--format",
+            "json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["ranking"][0]["title"] == "CLI idea"
+
+    help_result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert help_result.returncode == 0
+    assert "--run-root RUN_ROOT" in help_result.stdout
+    assert "--run-id RUN_ID" in help_result.stdout

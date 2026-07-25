@@ -10,21 +10,28 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
+from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 
-WORKFLOW_DIR = Path(__file__).resolve().parents[1]
-if str(WORKFLOW_DIR) not in sys.path:
-    sys.path.insert(0, str(WORKFLOW_DIR))
+bootstrap_arc_pythonpath()
 
-from ideas_marking import (  # noqa: E402
-    load_marking_scheme,
+from arc_jobs import RunRepository
+from arc_proposer_reviewer import (
+    BatchRequest,
+    BatchProjectionIntegrityError,
+    LoopSpec,
+    inspect_batch,
+    read_batch_round,
+    read_batch_trace,
+)
+from arc_proposer_reviewer.protocol import decode_batch_request
+
+from _arc_workflows.ideas_marking import (
     normalized_marks,
     rank_key_from_marks,
     report_columns,
     score_fields,
 )
 
-
-CROSS_MARKING_SCHEME = WORKFLOW_DIR / "json" / "ideas-cross-domain-marking-scheme.json"
 CROSS_REPORT_COLUMNS = [
     ("IR", "user_intent_relevance"),
     ("TR", "cross_domain_transfer_quality"),
@@ -42,100 +49,121 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Select each loop's highest-marked round and rank task-to-be-planned candidates."
     )
-    parser.add_argument("run_root", type=Path, help="ideas run artifact root")
+    parser.add_argument("--run-root", required=True, type=Path, help="durable ARC run repository root")
+    parser.add_argument("--run-id", required=True, help="durable proposer-reviewer run ID")
     parser.add_argument("--format", choices=["json", "markdown"], default="markdown")
     args = parser.parse_args()
 
-    payload = rank_run(args.run_root)
-    if payload.get("cross_domain"):
-        diagnostics_path = args.run_root.resolve().parent / "cross-domain-diagnostics.json"
-        diagnostics_path.write_text(
-            json.dumps(payload["diagnostics"], indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-    elif payload.get("single_domain_qualification"):
-        diagnostics_path = args.run_root.resolve().parent / "single-domain-diagnostics.json"
-        diagnostics_path.write_text(
-            json.dumps(payload["diagnostics"], indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+    payload = rank_run(args.run_root, args.run_id)
     if args.format == "json":
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         print(markdown_table(payload))
 
 
-def rank_run(run_root: Path) -> dict[str, Any]:
-    run_root = run_root.resolve()
-    loops_root = run_root / "loops"
-    if not loops_root.is_dir():
-        raise SystemExit(f"missing loops directory: {loops_root}")
+def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
+    """Rank verified committed rounds without exposing run-directory layout."""
+    repository = RunRepository(run_root)
+    request = _batch_request(repository, run_id)
+    inspection = inspect_batch(repository, run_id)
+    try:
+        trace = read_batch_trace(repository, run_id)
+    except BatchProjectionIntegrityError as exc:
+        raise SystemExit(
+            "cannot rank ideas because the committed proposer-reviewer trace failed integrity verification"
+        ) from exc
 
-    cross_contexts = _cross_domain_contexts(run_root)
+    contexts = {loop.loop_id: _loop_context(loop) for loop in request.loops}
+    cross_contexts = {
+        loop_id: context
+        for loop_id, context in contexts.items()
+        if _is_cross_domain_context(context)
+    }
     cross_domain = bool(cross_contexts)
-    single_contexts = {} if cross_domain else _single_domain_contexts(run_root)
+    single_contexts = (
+        {}
+        if cross_domain
+        else {
+            loop.loop_id: {
+                **contexts[loop.loop_id],
+                "requires_idea_assessment": _loop_requires_idea_assessment(loop),
+            }
+            for loop in request.loops
+        }
+    )
     single_domain_qualification = any(
         context.get("requires_idea_assessment") is True for context in single_contexts.values()
     )
-    legacy_single_domain = bool(single_contexts) and not single_domain_qualification
-    scheme = load_marking_scheme(CROSS_MARKING_SCHEME) if cross_domain else None
-    selected = []
-    unqualified = []
+    single_domain_without_assessment = (
+        bool(single_contexts) and not single_domain_qualification
+    )
+    selected: list[dict[str, Any]] = []
+    unqualified: list[dict[str, Any]] = []
     excluded_loops: list[dict[str, str]] = []
-    degraded_loops: list[str] = []
-    for loop_root in sorted(path for path in loops_root.iterdir() if path.is_dir()):
-        loop_state = _loop_state(loop_root)
-        loop_status = str(loop_state.get("status", "missing")).strip()
-        if loop_status not in {"completed", "stopped", "degraded"}:
+    trace_by_loop = {loop.loop_id: loop for loop in trace.loops}
+    inspection_by_loop = {loop.loop_id: loop for loop in inspection.loops}
+    for loop in request.loops:
+        loop_inspection = inspection_by_loop[loop.loop_id]
+        loop_trace = trace_by_loop[loop.loop_id]
+        lifecycle = loop_inspection.lifecycle
+        if lifecycle != "succeeded":
             excluded_loops.append(
                 {
-                    "loop_id": loop_root.name,
-                    "status": loop_status or "missing",
-                    "reason": str(loop_state.get("error") or "loop has no formally usable terminal state"),
+                    "loop_id": loop.loop_id,
+                    "status": lifecycle,
+                    "reason": _exclusion_reason(loop_inspection),
                 }
             )
             continue
-        if loop_status == "degraded":
-            degraded_loops.append(loop_root.name)
-        loop_context = cross_contexts.get(loop_root.name, {})
-        single_context = single_contexts.get(loop_root.name, {})
-        loop_rounds = [
-            _round_entry(
-                loop_root,
-                round_root,
-                scheme=scheme,
-                cross_context=loop_context if cross_domain else None,
-                single_context=single_context if single_contexts else None,
+        loop_context = contexts[loop.loop_id]
+        scheme = _marking_scheme(loop_context, loop.loop_id)
+        loop_rounds = []
+        for round_ref in loop_trace.rounds:
+            try:
+                committed = read_batch_round(
+                    repository, run_id, loop.loop_id, round_ref.round_number
+                )
+            except BatchProjectionIntegrityError as exc:
+                raise SystemExit(
+                    "cannot rank ideas because a committed round failed integrity verification"
+                ) from exc
+            loop_rounds.append(
+                _round_entry(
+                    loop,
+                    committed,
+                    scheme=scheme,
+                    cross_context=loop_context if cross_domain else None,
+                    single_context=single_contexts.get(loop.loop_id) if single_contexts else None,
+                )
             )
-            for round_root in _round_dirs(loop_root)
-        ]
-        loop_rounds = [entry for entry in loop_rounds if entry is not None]
         if not loop_rounds:
+            excluded_loops.append(
+                {
+                    "loop_id": loop.loop_id,
+                    "status": lifecycle,
+                    "reason": "no_committed_rounds",
+                }
+            )
             continue
         if cross_domain or single_domain_qualification:
             qualified_rounds = [entry for entry in loop_rounds if entry.get("qualified")]
             if not qualified_rounds:
-                best_failed = dict(max(loop_rounds, key=lambda item: _rank_key(item, scheme=scheme)))
+                best_failed = dict(max(loop_rounds, key=_rank_key))
                 best_failed["rounds"] = loop_rounds
                 unqualified.append(best_failed)
                 continue
-            best = dict(max(qualified_rounds, key=lambda item: _rank_key(item, scheme=scheme)))
+            best = dict(max(qualified_rounds, key=_rank_key))
         else:
             best = dict(max(loop_rounds, key=_rank_key))
         best["rounds"] = loop_rounds
-        best["loop_status"] = loop_status
+        best["loop_lifecycle"] = lifecycle
         selected.append(best)
 
-    ranking = sorted(selected, key=lambda item: _rank_key(item, scheme=scheme), reverse=True)
+    ranking = sorted(selected, key=_rank_key, reverse=True)
     warnings: list[str] = []
-    if degraded_loops:
-        warnings.append(
-            "WARNING: DEGRADED IDEAS BATCH — formally ranking usable output from degraded loops: "
-            + ", ".join(degraded_loops)
-        )
     if excluded_loops:
         warnings.append(
-            "WARNING: EXCLUDED NON-USABLE LOOPS — failed/cancelled/skipped or incomplete loops were not ranked: "
+            "WARNING: EXCLUDED NON-USABLE LOOPS — failed, cancelled, or incomplete loops were not ranked: "
             + ", ".join(f"{item['loop_id']} ({item['status']})" for item in excluded_loops)
         )
     top_three: list[dict[str, Any]] = []
@@ -177,20 +205,22 @@ def rank_run(run_root: Path) -> dict[str, Any]:
                 f"WARNING: only {len(top_three)} qualified single-domain candidates are available; "
                 "the top three were not padded with infeasible candidates."
             )
-    elif legacy_single_domain:
+    elif single_domain_without_assessment:
         warnings.append(
-            "WARNING: legacy single-domain reviews do not contain idea_assessment; "
-            "ranking used the legacy_no_feasibility_gate policy."
+            "WARNING: single-domain reviews do not contain idea_assessment; "
+            "ranking used the no_assessment policy."
         )
     for index, entry in enumerate(ranking, start=1):
         entry["rank"] = index
     payload = {
         "schema_version": "arc.ideas.selected_rounds.v1",
-        "run_root": str(run_root),
-        "user_intent": _run_user_intent(run_root),
-        "summary_order": ranking if cross_domain else selected,
+        "run_id": run_id,
+        "run_lifecycle": inspection.run_lifecycle,
+        "run_revision": inspection.run_revision,
+        "loop_revisions": dict(trace.loop_revisions),
+        "user_intent": _run_user_intent(contexts),
+        "summary_order": ranking,
         "ranking": ranking,
-        "degraded_loops": degraded_loops,
         "excluded_loops": excluded_loops,
         "warnings": warnings,
     }
@@ -203,7 +233,7 @@ def rank_run(run_root: Path) -> dict[str, Any]:
                 "unqualified": unqualified,
                 "portfolio_excluded": portfolio_excluded,
                 "diagnostics": _cross_diagnostics(
-                    run_root,
+                    run_id,
                     ranking=ranking,
                     top_three=top_three,
                     unqualified=unqualified,
@@ -221,7 +251,7 @@ def rank_run(run_root: Path) -> dict[str, Any]:
                 "top_three": top_three,
                 "unqualified": unqualified,
                 "diagnostics": _single_domain_diagnostics(
-                    run_root,
+                    run_id,
                     ranking=ranking,
                     top_three=top_three,
                     unqualified=unqualified,
@@ -232,66 +262,51 @@ def rank_run(run_root: Path) -> dict[str, Any]:
     return payload
 
 
-def _loop_state(loop_root: Path) -> dict[str, Any]:
-    path = loop_root / "state.json"
-    if not path.is_file():
-        return {"status": "missing", "error": f"missing loop state: {path}"}
-    try:
-        return _read_json(path)
-    except (OSError, json.JSONDecodeError, SystemExit) as exc:
-        return {"status": "invalid", "error": f"invalid loop state: {exc}"}
-
-
-def _round_dirs(loop_root: Path) -> list[Path]:
-    rounds_root = loop_root / "rounds"
-    if not rounds_root.is_dir():
-        return []
-    return sorted(path for path in rounds_root.iterdir() if path.is_dir() and path.name.startswith("round_"))
-
-
 def _round_entry(
-    loop_root: Path,
-    round_root: Path,
+    loop: LoopSpec,
+    committed: Any,
     *,
-    scheme: Mapping[str, Any] | None = None,
+    scheme: Mapping[str, Any],
     cross_context: Mapping[str, Any] | None = None,
     single_context: Mapping[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    proposer_output_path = _first_json(round_root / "proposer_outputs")
-    review_path = _first_json(round_root / "reviews")
-    if proposer_output_path is None or review_path is None:
-        return None
-
-    proposer_output = _read_json(proposer_output_path)
-    proposer_output_text = proposer_output_path.read_text(encoding="utf-8")
-    review = _read_json(review_path)
-    marks = review.get("review_payload", {}).get("marks", {})
-    recovered = _major_recovered(review) or _major_recovered(proposer_output)
+) -> dict[str, Any]:
+    proposer_id = next(
+        (worker.worker_id for worker in loop.proposers if worker.worker_id in committed.proposals),
+        None,
+    )
+    if proposer_id is None:
+        raise SystemExit(
+            f"committed round {committed.round_number} for {loop.loop_id} has no configured proposer output"
+        )
+    proposer_output = _json_object(committed.proposals[proposer_id])
+    review = _json_object(committed.review)
+    review_payload = _json_object(review.get("payload"))
+    marks = review_payload.get("marks", {})
     if "total_score" not in marks:
         marks = {field: 0 for field in score_fields(scheme)}
         marks["total_score"] = 0
-    if recovered:
-        marks = {field: 0 for field in score_fields(scheme)}
 
-    relative = lambda path: str(path.relative_to(loop_root.parents[1]))
     entry = {
-        "loop_id": loop_root.name,
-        "round": _round_number(round_root),
+        "loop_id": loop.loop_id,
+        "round": committed.round_number,
         "title": str(proposer_output.get("title") or proposer_output.get("warning") or "Recovered / unstructured idea"),
         "marks": normalized_marks(marks, scheme),
         "proposer_output": proposer_output,
-        "proposer_output_text": proposer_output_text,
-        "proposer_output_path": relative(proposer_output_path),
-        "review_path": relative(review_path),
+        "proposer_id": proposer_id,
+        "proposer_artifact": _safe_artifact_ref(committed.proposal_refs[proposer_id]),
+        "review_artifact": _safe_artifact_ref(committed.review_ref),
+        "transcript_artifacts": [
+            _safe_artifact_ref(ref) for ref in committed.transcript_refs
+        ],
+        "marking_scheme": dict(scheme),
     }
     if cross_context is not None:
-        assessment = review.get("review_payload", {}).get("cross_domain_assessment", {})
+        assessment = review_payload.get("cross_domain_assessment", {})
         qualified, reasons, signature, compatibility = _cross_qualification(
             proposer_output,
             assessment,
             entry["marks"],
             cross_context=cross_context,
-            recovered=recovered,
         )
         entry.update(
             {
@@ -306,9 +321,9 @@ def _round_entry(
             }
         )
     elif single_context is not None:
-        assessment = review.get("review_payload", {}).get("idea_assessment")
+        assessment = review_payload.get("idea_assessment")
         if single_context.get("requires_idea_assessment") is True or isinstance(assessment, Mapping):
-            qualified, reasons, feasibility = _single_domain_qualification(assessment, recovered=recovered)
+            qualified, reasons, feasibility = _single_domain_qualification(assessment)
             entry.update(
                 {
                     "qualified": qualified,
@@ -319,133 +334,84 @@ def _round_entry(
                 }
             )
         else:
-            entry["qualification_policy"] = "legacy_no_feasibility_gate"
+            entry["qualification_policy"] = "single_domain_no_assessment"
     return entry
 
-def _first_json(root: Path) -> Path | None:
-    if not root.is_dir():
-        return None
-    return next(iter(sorted(root.glob("*.json"))), None)
+
+def _batch_request(repository: RunRepository, run_id: str) -> BatchRequest:
+    try:
+        return decode_batch_request(repository.read_spec(run_id).semantic_input)
+    except Exception as exc:
+        raise SystemExit(
+            f"run {run_id!r} does not contain a valid proposer-reviewer BatchRequest"
+        ) from exc
 
 
-def _major_recovered(payload: dict[str, Any]) -> bool:
-    record = payload.get("arc_llm_call_record")
-    if not isinstance(record, dict):
-        return False
-    structured = record.get("structured_output")
-    if not isinstance(structured, dict):
-        return False
-    return structured.get("mode") == "recovered" and structured.get("severity") in {"major", "fatal"}
+def _loop_context(loop: LoopSpec) -> dict[str, Any]:
+    if not isinstance(loop.context, Mapping):
+        raise SystemExit(f"loop {loop.loop_id!r} has no caller context")
+    return dict(loop.context)
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as handle:
-        data = json.load(handle)
-    if not isinstance(data, dict):
-        raise SystemExit(f"expected JSON object: {path}")
-    return data
+def _marking_scheme(context: Mapping[str, Any], loop_id: str) -> Mapping[str, Any]:
+    scheme = context.get("marking_scheme")
+    if not isinstance(scheme, Mapping):
+        raise SystemExit(f"loop {loop_id!r} has no public marking_scheme in its caller context")
+    try:
+        score_fields(scheme)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"loop {loop_id!r} has an invalid public marking_scheme") from exc
+    return scheme
 
 
-def _run_user_intent(run_root: Path) -> str:
-    candidates = [
-        run_root.parent.parent / f"{run_root.parent.name}.config.json",
-        run_root.parent / "config.json",
-    ]
-    for path in candidates:
-        if not path.is_file():
-            continue
-        try:
-            intent = _read_json(path).get("user_intent", "")
-        except (OSError, json.JSONDecodeError, SystemExit):
-            continue
+def _run_user_intent(contexts: Mapping[str, Mapping[str, Any]]) -> str:
+    for context in contexts.values():
+        intent = context.get("user_intent")
         if isinstance(intent, str) and intent.strip():
             return intent.strip()
     return ""
 
 
-def _cross_domain_contexts(run_root: Path) -> dict[str, dict[str, Any]]:
-    candidates = [run_root / "config.json", run_root.parent / "ideas_batch_config.json"]
-    for path in candidates:
-        if not path.is_file():
-            continue
-        try:
-            payload = _read_json(path)
-        except (OSError, json.JSONDecodeError, SystemExit):
-            continue
-        loops = payload.get("loops")
-        if not isinstance(loops, list):
-            continue
-        contexts: dict[str, dict[str, Any]] = {}
-        for loop in loops:
-            if not isinstance(loop, dict):
-                continue
-            context = loop.get("caller_context")
-            if not isinstance(context, dict):
-                continue
-            if context.get("generation_mode") != "cross_domain" and context.get("variant_id") != "cross_domain":
-                continue
-            loop_id = str(loop.get("loop_id", "")).strip()
-            if loop_id:
-                contexts[loop_id] = context
-        if contexts:
-            return contexts
-    return {}
+def _is_cross_domain_context(context: Mapping[str, Any]) -> bool:
+    return (
+        context.get("generation_mode") == "cross_domain"
+        or context.get("variant_id") == "cross_domain"
+    )
 
 
-def _single_domain_contexts(run_root: Path) -> dict[str, dict[str, Any]]:
-    candidates = [run_root / "config.json", run_root.parent / "ideas_batch_config.json"]
-    for path in candidates:
-        if not path.is_file():
-            continue
-        try:
-            payload = _read_json(path)
-        except (OSError, json.JSONDecodeError, SystemExit):
-            continue
-        loops = payload.get("loops")
-        if not isinstance(loops, list):
-            continue
-        contexts: dict[str, dict[str, Any]] = {}
-        for loop in loops:
-            if not isinstance(loop, dict):
-                continue
-            context = loop.get("caller_context")
-            if not isinstance(context, dict) or context.get("variant_id") != "domain":
-                continue
-            loop_id = str(loop.get("loop_id", "")).strip()
-            if not loop_id:
-                continue
-            contexts[loop_id] = {
-                **context,
-                "requires_idea_assessment": _loop_requires_idea_assessment(loop),
-            }
-        if contexts:
-            return contexts
-    return {}
-
-
-def _loop_requires_idea_assessment(loop: Mapping[str, Any]) -> bool:
-    reviewers = loop.get("reviewers")
-    if not isinstance(reviewers, list) or not reviewers or not isinstance(reviewers[0], Mapping):
-        return False
-    schema = reviewers[0].get("output_schema")
+def _loop_requires_idea_assessment(loop: LoopSpec) -> bool:
+    schema = loop.reviewer.output_schema
     if not isinstance(schema, Mapping):
         return False
-    properties = schema.get("properties")
-    if not isinstance(properties, Mapping):
-        return False
-    review_payload = properties.get("review_payload", {})
-    required = review_payload.get("required") if isinstance(review_payload, Mapping) else None
+    required = schema.get("required")
     return isinstance(required, list) and "idea_assessment" in required
+
+
+def _exclusion_reason(loop_inspection: Any) -> str:
+    if loop_inspection.lifecycle == "integrity_error":
+        return "loop_integrity_error"
+    if loop_inspection.lifecycle in {"pending", "running", "paused"}:
+        return "loop_is_incomplete"
+    return f"loop_lifecycle_{loop_inspection.lifecycle}"
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _safe_artifact_ref(ref: Any) -> dict[str, Any]:
+    return {
+        "artifact_id": ref.artifact_id,
+        "sha256": ref.sha256,
+        "size_bytes": ref.size_bytes,
+        "media_type": ref.media_type,
+    }
 
 
 def _single_domain_qualification(
     assessment: Any,
-    *,
-    recovered: bool,
 ) -> tuple[bool, list[str], dict[str, Any]]:
     reasons: list[str] = []
-    if recovered:
-        reasons.append("proposer_or_reviewer_has_major_or_fatal_structured_recovery")
     if not isinstance(assessment, Mapping):
         return False, [*reasons, "missing_idea_assessment"], _empty_single_feasibility_classification()
 
@@ -504,11 +470,8 @@ def _cross_qualification(
     marks: Mapping[str, Any],
     *,
     cross_context: Mapping[str, Any],
-    recovered: bool,
 ) -> tuple[bool, list[str], str, dict[str, Any]]:
     reasons: list[str] = []
-    if recovered:
-        reasons.append("proposer_or_reviewer_has_major_or_fatal_structured_recovery")
     if not isinstance(assessment, Mapping):
         return False, [*reasons, "missing_cross_domain_assessment"], "", _empty_compatibility_classification()
 
@@ -637,7 +600,7 @@ def _normalized_central_mechanism(raw: Any) -> str:
 
 
 def _cross_diagnostics(
-    run_root: Path,
+    run_id: str,
     *,
     ranking: list[dict[str, Any]],
     top_three: list[dict[str, Any]],
@@ -681,7 +644,7 @@ def _cross_diagnostics(
         )
     return {
         "schema_version": "arc.ideas.cross_domain_diagnostics.v1",
-        "run_root": str(run_root),
+        "run_id": run_id,
         "qualified_count": len(ranking),
         "unqualified_count": len(unqualified),
         "portfolio_excluded_count": len(portfolio_excluded),
@@ -695,7 +658,7 @@ def _cross_diagnostics(
 
 
 def _single_domain_diagnostics(
-    run_root: Path,
+    run_id: str,
     *,
     ranking: list[dict[str, Any]],
     top_three: list[dict[str, Any]],
@@ -728,7 +691,7 @@ def _single_domain_diagnostics(
             )
     return {
         "schema_version": "arc.ideas.single_domain_diagnostics.v1",
-        "run_root": str(run_root),
+        "run_id": run_id,
         "qualified_count": len(ranking),
         "unqualified_count": len(unqualified),
         "top_three_count": len(top_three),
@@ -737,19 +700,12 @@ def _single_domain_diagnostics(
     }
 
 
-def _round_number(round_root: Path) -> int:
-    try:
-        return int(round_root.name.split("_", 1)[1])
-    except (IndexError, ValueError):
-        return -1
-
-
-def _rank_key(
-    entry: dict[str, Any],
-    *,
-    scheme: Mapping[str, Any] | None = None,
-) -> tuple[float, ...]:
-    return rank_key_from_marks(entry["marks"], round_number=entry["round"], scheme=scheme)
+def _rank_key(entry: dict[str, Any]) -> tuple[float, ...]:
+    return rank_key_from_marks(
+        entry["marks"],
+        round_number=entry["round"],
+        scheme=entry["marking_scheme"],
+    )
 
 
 def markdown_table(payload: dict[str, Any]) -> str:
@@ -905,13 +861,23 @@ def _compact_cross_marks_table(entry: dict[str, Any]) -> str:
 
 
 def _appendix_section(entry: dict[str, Any]) -> list[str]:
+    proposer_artifact = entry["proposer_artifact"]
+    review_artifact = entry["review_artifact"]
     return [
         f"### {entry['rank']}. {_heading_text(entry['title'])}",
         "",
         f"- Loop: `{entry['loop_id']}`",
         f"- Selected round: `{entry['round']}`",
-        f"- Proposer output: `{entry['proposer_output_path']}`",
-        f"- Review output: `{entry['review_path']}`",
+        (
+            "- Proposer artifact: "
+            f"`{proposer_artifact['artifact_id']}` "
+            f"(sha256 `{proposer_artifact['sha256']}`)"
+        ),
+        (
+            "- Review artifact: "
+            f"`{review_artifact['artifact_id']}` "
+            f"(sha256 `{review_artifact['sha256']}`)"
+        ),
         "",
         "#### Referee Marks by Round",
         "",
@@ -927,7 +893,7 @@ def _round_marks_table(entry: dict[str, Any]) -> str:
     if "cross_domain_assessment" in entry:
         columns = [{"label": label, "field": field} for label, field in CROSS_REPORT_COLUMNS]
     else:
-        columns = report_columns()
+        columns = report_columns(entry["marking_scheme"])
     mark_headers = " | ".join(column["label"] for column in columns)
     mark_separator = "|".join("---:" for _ in columns)
     lines = [

@@ -17,7 +17,7 @@ from typing import Any, Sequence
 # cannot write into the portable Skill or package source trees.
 sys.dont_write_bytecode = True
 
-from _arc_script_bootstrap import (
+from _arc_workflows._arc_script_bootstrap import (
     ARC_PACKAGE_MODULES,
     ARC_REQUIRE_REPO_ROOT,
     bootstrap_arc_pythonpath,
@@ -190,9 +190,7 @@ def _module_provenance(root: Path) -> dict[str, dict[str, str]]:
 
 def _workflow_files(root: Path, extra_files: Sequence[str]) -> list[dict[str, Any]]:
     skill_dir = (root / SKILL_RELATIVE_PATH).resolve()
-    expected_script = (
-        skill_dir / "workflows" / "scripts" / "verify-source-runtime.py"
-    ).resolve()
+    expected_script = (skill_dir / "scripts" / "verify-source-runtime.py").resolve()
     if Path(__file__).resolve() != expected_script:
         raise RuntimeError(
             "Source verifier itself is not running from the required ARC checkout: "
@@ -259,7 +257,7 @@ def build_provenance(
 
 
 def _runtime_python(*, launcher: Path | None = None) -> Path:
-    launcher = launcher or Path(__file__).resolve().parents[2] / "scripts" / "arc-runtime"
+    launcher = launcher or Path(__file__).resolve().parents[1] / "scripts" / "arc-runtime"
     if not launcher.is_file():
         raise RuntimeError(f"Cannot locate the ARC Skill runtime launcher: {launcher}")
     completed = subprocess.run(

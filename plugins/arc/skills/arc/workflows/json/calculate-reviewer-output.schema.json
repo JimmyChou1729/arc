@@ -1,52 +1,8 @@
 {
   "type": "object",
-  "required": [
-    "schema_version",
-    "controller",
-    "proposer_messages",
-    "review_payload"
-  ],
+  "required": ["consensus"],
   "properties": {
-    "schema_version": {
-      "type": "string",
-      "const": "arc.llm.review_envelope.v1"
-    },
-    "controller": {
-      "type": "object",
-      "required": [
-        "message",
-        "stop_requested",
-        "stop_reason"
-      ],
-      "properties": {
-        "message": {
-          "type": "string"
-        },
-        "stop_requested": {
-          "type": "boolean"
-        },
-        "stop_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "proposer_messages": {
-      "type": "object",
-      "required": [],
-      "properties": {},
-      "additionalProperties": false
-    },
-    "review_payload": {
-      "type": "object",
-      "required": [
-        "consensus"
-      ],
-      "properties": {
-        "consensus": {
+    "consensus": {
           "type": "object",
           "required": [
             "status",
@@ -80,7 +36,7 @@
                 "validity_scope",
                 "selected_proposer_id",
                 "reference_claim_status",
-                "source_proposer_output_path"
+                "source_proposer_id"
               ],
               "properties": {
                 "summary": {"type": "string"},
@@ -92,7 +48,7 @@
                   "type": "string",
                   "enum": ["agrees", "disagrees", "not_applicable"]
                 },
-                "source_proposer_output_path": {"type": "string"}
+                "source_proposer_id": {"type": "string"}
               },
               "additionalProperties": false
             },
@@ -290,9 +246,6 @@
             }
           },
           "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
     }
   },
   "additionalProperties": false

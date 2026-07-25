@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "plugins/arc/skills/arc/workflows/scripts/resolve-project-dir.py"
+SCRIPT = ROOT / "plugins/arc/skills/arc/scripts/resolve-project-dir.py"
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:

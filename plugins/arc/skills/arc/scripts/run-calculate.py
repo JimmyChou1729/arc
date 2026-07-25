@@ -2,25 +2,37 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
+import os
 import re
+import tempfile
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from _arc_script_bootstrap import bootstrap_arc_pythonpath
+from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 
 bootstrap_arc_pythonpath()
 
-from arc_llm.paper_access_policy import resolve_arc_paper_access
-from arc_llm.proposers_reviewer.artifacts import RunPaths, atomic_write_json
-from arc_llm.proposers_reviewer.config import ConfigError, SAFE_ID_RE
-from arc_llm.proposers_reviewer.runner import JsonRunner, run_proposers_reviewer_batch
+from arc_jobs import RunEngine, RunRepository, RunSpec, RunStatus
+from arc_llm import CapabilityPolicy, LLMTaskService, ModelSelection
+from arc_proposer_reviewer import (
+    BatchFailurePolicy,
+    BatchRequest,
+    CommittedRound,
+    LoopSpec,
+    ProposerFailurePolicy,
+    ProposerReviewerHandler,
+    ProposerReviewerService,
+    WorkerSpec,
+    read_batch_round,
+)
+from arc_proposer_reviewer.protocol import encode_batch_request
 
 
 CALCULATE_CONFIG_SCHEMA = "arc.workflow.calculate.config.v1"
 CALCULATE_RESULT_SCHEMA = "arc.workflow.calculate.result.v1"
-REVIEW_ENVELOPE_SCHEMA = "arc.llm.review_envelope.v1"
 DEFAULT_HUMAN_GATE_PAUSE_STATUSES = (
     "reference_disagrees",
     "two_agree",
@@ -37,23 +49,24 @@ SOURCE_DISCREPANCY_STATUSES = {
 }
 LEGACY_ALLOWED_CONTEXT_KEYS = {"foundation_file", "allowed_foundation", "target_equation_id"}
 CALLER_ALLOWED_CONTEXT_OMIT_KEYS = {
+    "cache_path",
+    "path",
+    "reviewer_reference_claim",
+    "source_path",
     "source_commands",
     "shell_commands",
     "mcp_call_instructions",
     "cli_invocations",
 }
 
-BatchRunner = Callable[..., dict[str, Any]]
+SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
-def _relaxed_output_recovery_config() -> dict[str, Any]:
-    return {
-        "enabled": True,
-        "mode": "warn",
-        "allow_natural_language": True,
-        "schema_violation_policy": "peer_visible",
-        "reviewer_validation_retries": 0,
-    }
+class ConfigError(ValueError):
+    """Invalid calculate-workflow configuration."""
+
+
+BatchExecutor = Callable[[BatchRequest, Path, str], CommittedRound]
 
 
 @dataclass(frozen=True)
@@ -154,21 +167,18 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
 def run_calculation(
     config: CalculateConfig | Mapping[str, Any],
     *,
-    batch_runner: BatchRunner | None = None,
-    json_runner: JsonRunner | None = None,
-    base_env: Mapping[str, str] | None = None,
-    process_chain: list[str] | None = None,
+    batch_executor: BatchExecutor | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     calculation = config if isinstance(config, CalculateConfig) else load_calculation_config(config)
-    paths = RunPaths(run_dir=calculation.run_dir, run_id=calculation.run_id)
+    run_root = calculation.run_dir / calculation.run_id
     if dry_run:
-        return _dry_run_result(calculation, paths)
+        return _dry_run_result(calculation, run_root)
 
-    paths.run_root.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(paths.config, _jsonable(calculation))
+    run_root.mkdir(parents=True, exist_ok=True)
+    _write_json(run_root / "config.json", _jsonable(calculation))
 
-    runner = batch_runner or run_proposers_reviewer_batch
+    executor = batch_executor or _execute_public_batch
     step_results: list[dict[str, Any]] = []
     accepted_step_outputs: dict[str, Any] = {}
     overall_status = "completed"
@@ -176,11 +186,8 @@ def run_calculation(
         step_result = _run_calculation_step(
             calculation,
             step,
-            runner=runner,
-            json_runner=json_runner,
-            base_env=base_env,
-            process_chain=process_chain,
-            run_root=paths.run_root,
+            executor=executor,
+            run_root=run_root,
             accepted_step_outputs=accepted_step_outputs,
         )
         step_results.append(step_result)
@@ -197,14 +204,14 @@ def run_calculation(
         "schema_version": CALCULATE_RESULT_SCHEMA,
         "status": overall_status,
         "run_id": calculation.run_id,
-        "run_root": str(paths.run_root),
+        "run_root": str(run_root),
         "proposer_count": calculation.proposer_count,
         "max_recalculations": calculation.max_recalculations,
         "human_gate": copy.deepcopy(calculation.human_gate),
         "steps": step_results,
         "warnings_summary": _aggregate_warnings_summary(step_results),
     }
-    atomic_write_json(paths.state, result)
+    _write_json(run_root / "state.json", result)
     return result
 
 
@@ -212,10 +219,7 @@ def _run_calculation_step(
     config: CalculateConfig,
     step: CalculateStep,
     *,
-    runner: BatchRunner,
-    json_runner: JsonRunner | None,
-    base_env: Mapping[str, str] | None,
-    process_chain: list[str] | None,
+    executor: BatchExecutor,
     run_root: Path,
     accepted_step_outputs: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -228,49 +232,48 @@ def _run_calculation_step(
 
     for attempt_number in range(1, max_attempts + 1):
         try:
-            batch_config = _attempt_batch_config(
+            request = _attempt_batch_request(
                 config,
                 step,
                 attempt_number=attempt_number,
                 active_proposer_ids=active_proposer_ids,
                 locked_outputs=locked_outputs,
                 retry_feedback=retry_feedback,
-                run_root=run_root,
                 accepted_step_outputs=accepted_step_outputs,
             )
         except Exception as exc:
             return _failed_step_result(config, step, attempts=attempts, error=str(exc))
-        batch_result = runner(
-            batch_config,
-            json_runner=json_runner,
-            base_env=base_env,
-            process_chain=process_chain,
-            dry_run=False,
-            max_concurrent_loops=1,
-        )
-        attempt_paths = _attempt_paths(batch_config)
+        attempt_id = _attempt_id(step.step_id, attempt_number)
+        batch_run_id = _batch_run_id(config.run_id, attempt_id)
+        try:
+            committed_round = executor(request, run_root / "attempt-batches", batch_run_id)
+        except Exception as exc:
+            attempts.append(
+                {
+                    "attempt_number": attempt_number,
+                    "active_proposer_ids": list(active_proposer_ids),
+                    "batch_run_id": batch_run_id,
+                    "batch_loop_id": attempt_id,
+                    "error": str(exc),
+                    "warnings_summary": _empty_warnings_summary(),
+                }
+            )
+            return _failed_step_result(config, step, attempts=attempts, error=str(exc))
         attempt_record = {
             "attempt_number": attempt_number,
             "active_proposer_ids": list(active_proposer_ids),
-            "batch_run_id": batch_config["run_id"],
-            "batch_loop_id": batch_config["loops"][0]["loop_id"],
-            "batch_root": str(attempt_paths["run_root"]),
-            "review_path": str(attempt_paths["review_path"]),
-            "warnings_summary": _batch_warnings_summary(batch_result),
+            "batch_run_id": batch_run_id,
+            "batch_loop_id": attempt_id,
+            "warnings_summary": _empty_warnings_summary(),
         }
-        if batch_result.get("status") != "completed":
-            attempt_record["batch_result"] = batch_result
-            attempts.append(attempt_record)
-            return _failed_step_result(
-                config,
-                step,
-                attempts=attempts,
-                error="attempt batch did not complete",
-            )
 
         try:
-            review = _read_json(attempt_paths["review_path"])
-            proposer_outputs = _read_proposer_outputs(attempt_paths["round_root"], active_proposer_ids)
+            review = _review_from_committed_round(committed_round)
+            proposer_outputs = {
+                proposer_id: output
+                for proposer_id, output in committed_round.proposals.items()
+                if proposer_id in active_proposer_ids
+            }
             review_consensus = _review_consensus(
                 review,
                 active_proposer_ids=active_proposer_ids,
@@ -284,18 +287,7 @@ def _run_calculation_step(
             attempts.append(attempt_record)
             return _failed_step_result(config, step, attempts=attempts, error=str(exc))
         attempt_record["consensus"] = review_consensus
-        attempt_record["proposer_output_paths"] = {
-            proposer_id: str(attempt_paths["round_root"] / "proposer_outputs" / f"{proposer_id}.json")
-            for proposer_id in active_proposer_ids
-        }
         attempts.append(attempt_record)
-
-        if _reviewer_output_requires_manual_block(review):
-            return _structured_recovery_blocked_step_result(
-                step,
-                attempts=attempts,
-                consensus=review_consensus,
-            )
 
         status = str(review_consensus.get("status", "unresolved"))
         retryable_status = status in RETRYABLE_CONSENSUS_STATUSES
@@ -328,6 +320,7 @@ def _run_calculation_step(
                     review,
                     review_consensus,
                     attempt_number=attempt_number,
+                    blind_reference=step.reviewer_reference_claim is not None,
                 )
             )
             if status == "two_agree":
@@ -391,9 +384,8 @@ def _run_calculation_step(
     raise AssertionError("unreachable calculation loop exit")
 
 
-def _batch_warnings_summary(batch_result: Mapping[str, Any]) -> dict[str, Any]:
-    summary = batch_result.get("warnings_summary")
-    return dict(summary) if isinstance(summary, Mapping) else {
+def _empty_warnings_summary() -> dict[str, Any]:
+    return {
         "structured_output_warning_count": 0,
         "structured_output_warnings_path": "",
         "cache_warning_count": 0,
@@ -427,7 +419,7 @@ def _aggregate_warnings_summary(step_results: list[dict[str, Any]]) -> dict[str,
     }
 
 
-def _attempt_batch_config(
+def _attempt_batch_request(
     config: CalculateConfig,
     step: CalculateStep,
     *,
@@ -435,10 +427,11 @@ def _attempt_batch_config(
     active_proposer_ids: list[str],
     locked_outputs: dict[str, Any],
     retry_feedback: list[dict[str, Any]],
-    run_root: Path,
     accepted_step_outputs: Mapping[str, Any],
-) -> dict[str, Any]:
-    attempt_id = f"{step.step_id}_attempt_{attempt_number:03d}"
+) -> BatchRequest:
+    """Build one deterministic, independent public proposer-reviewer batch."""
+
+    attempt_id = _attempt_id(step.step_id, attempt_number)
     selectable_proposer_ids = list(
         dict.fromkeys([*active_proposer_ids, *[proposer_id for proposer_id in locked_outputs]])
     )
@@ -451,66 +444,35 @@ def _attempt_batch_config(
         retry_feedback=retry_feedback,
         accepted_step_outputs=accepted_step_outputs,
     )
-    return {
-        "schema_version": "arc.llm.proposers_reviewer_batch.config.v1",
-        "run_id": attempt_id,
-        "run_dir": str(run_root / "attempt_batches"),
-        "max_concurrent_loops": 1,
-        "session": {
-            "policy": "stateful",
-            "history_mode": "delta",
-            "scope_id": f"calculate/{config.run_id}/{step.step_id}",
-            "reuse_across_batch_calls": True,
-            "max_concurrent_same_prefix": 4,
-            "root": str(run_root / "llm_sessions"),
-        },
-        "artifact_options": {"save_prompts": config.artifact_options.get("save_prompts", True)},
-        "output_recovery": _relaxed_output_recovery_config(),
-        "defaults": copy.deepcopy(config.defaults),
-        "loops": [
-            {
-                "loop_id": attempt_id,
-                "max_rounds": 1,
-                "early_stop": {"enabled": False},
-                "caller_context": caller_context,
-                "cache_context": {
-                    "static_caller_context_keys": [
-                        "step_id",
-                        "step_kind",
-                        "step_prompt",
-                        "allowed_context",
-                        "accepted_prior_step_outputs",
-                        "max_recalculations",
-                        "integrity_reference",
-                        "consensus_instruction",
-                    ],
-                    "volatile_caller_context_keys": [
-                        "attempt_number",
-                        "active_proposer_ids",
-                        "locked_outputs",
-                        "retry_feedback",
-                    ],
-                },
-                "proposers": [
-                    _proposer_config(
+    return BatchRequest(
+        schema_version="arc.proposer_reviewer.batch.v1",
+        batch_id=_batch_run_id(config.run_id, attempt_id),
+        loops=(
+            LoopSpec(
+                loop_id=attempt_id,
+                context=caller_context,
+                proposers=tuple(
+                    _proposer_worker(
                         config,
                         proposer_id,
                         runtime=_proposer_runtime(config, step),
                     )
                     for proposer_id in active_proposer_ids
-                ],
-                "reviewers": [
-                    _reviewer_config(
-                        config,
-                        active_proposer_ids,
-                        selectable_proposer_ids,
-                        reviewer_reference_claim=step.reviewer_reference_claim,
-                        human_gate=config.human_gate,
-                    )
-                ],
-            }
-        ],
-    }
+                ),
+                reviewer=_reviewer_worker(
+                    config,
+                    active_proposer_ids,
+                    selectable_proposer_ids,
+                    reviewer_reference_claim=step.reviewer_reference_claim,
+                    human_gate=config.human_gate,
+                ),
+                max_rounds=1,
+                allow_early_stop=False,
+                on_proposer_failure=ProposerFailurePolicy.FAIL_LOOP,
+            ),
+        ),
+        failure_policy=BatchFailurePolicy.COLLECT,
+    )
 
 
 def _caller_context(
@@ -539,24 +501,31 @@ def _caller_context(
     }
 
 
-def _proposer_config(config: CalculateConfig, proposer_id: str, *, runtime: Mapping[str, Any]) -> dict[str, Any]:
+def _proposer_worker(
+    config: CalculateConfig, proposer_id: str, *, runtime: Mapping[str, Any]
+) -> WorkerSpec:
     payload = _read_template(config.workflow_json_dir / "calculate-proposer.template.json")
-    payload["id"] = proposer_id
     prompt = _dict(payload.get("prompt"), "calculate-proposer.template.prompt")
-    prompt["template"] = str(prompt.get("template", "")).replace("{source_policy}", _proposer_source_policy(runtime))
-    payload["prompt"] = prompt
-    payload["runtime"] = dict(runtime)
-    return payload
+    template = str(prompt.get("template", "")).replace(
+        "{source_policy}", _proposer_source_policy(runtime)
+    )
+    return WorkerSpec(
+        worker_id=proposer_id,
+        instructions=_worker_instructions(prompt, template),
+        output_schema=_dict(payload.get("output_schema"), "calculate-proposer.template.output_schema"),
+        model=_worker_model(config.defaults),
+        capabilities=_worker_capabilities(runtime),
+    )
 
 
-def _reviewer_config(
+def _reviewer_worker(
     config: CalculateConfig,
     active_proposer_ids: list[str],
     selectable_proposer_ids: list[str],
     *,
     reviewer_reference_claim: Mapping[str, Any] | None = None,
     human_gate: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> WorkerSpec:
     payload = _read_template(config.workflow_json_dir / "calculate-reviewer.template.json")
     prompt = _dict(payload.get("prompt"), "calculate-reviewer.template.prompt")
     replacements = {
@@ -573,22 +542,25 @@ def _reviewer_config(
     template = str(prompt.get("template", ""))
     for placeholder, value in replacements.items():
         template = template.replace(placeholder, value)
-    prompt["template"] = template
-    payload["prompt"] = prompt
-    payload["output_schema"] = _reviewer_output_schema(
-        config,
-        active_proposer_ids,
-        selectable_proposer_ids,
-        allow_reference_disagrees=bool(reviewer_reference_claim),
+    runtime = {
+        "allow_internet": False if reviewer_reference_claim else _bool_default(
+            config.defaults.get("reviewer_allow_internet", False), False
+        ),
+        "inherit_host_tools": False,
+        "evidence_access": "none" if reviewer_reference_claim else "context_only",
+    }
+    return WorkerSpec(
+        worker_id="reviewer_001",
+        instructions=_worker_instructions(prompt, template),
+        output_schema=_reviewer_output_schema(
+            config,
+            active_proposer_ids,
+            selectable_proposer_ids,
+            allow_reference_disagrees=bool(reviewer_reference_claim),
+        ),
+        model=_worker_model(config.defaults),
+        capabilities=_worker_capabilities(runtime),
     )
-    runtime = _canonical_paper_access_runtime(
-        _dict(payload.get("runtime", {}), "calculate-reviewer.template.runtime"),
-        "calculate-reviewer.template.runtime",
-    )
-    runtime["arc_paper_access"] = "none" if reviewer_reference_claim else "full"
-    runtime["inherit_host_tools"] = False
-    payload["runtime"] = runtime
-    return payload
 
 
 def _proposer_runtime(config: CalculateConfig, step: CalculateStep) -> dict[str, Any]:
@@ -596,41 +568,40 @@ def _proposer_runtime(config: CalculateConfig, step: CalculateStep) -> dict[str,
         runtime = {
             "allow_internet": False,
             "codex_sandbox": "read-only",
-            "arc_paper_access": "none",
+            "evidence_access": "none",
             "inherit_host_tools": False,
         }
     elif step.kind == "new_calculation":
         runtime = {
             "allow_internet": True,
             "codex_sandbox": "read-only",
-            "arc_paper_access": "full",
+            "evidence_access": "context_only",
             "inherit_host_tools": False,
         }
     else:
         runtime = {
             "allow_internet": False,
             "codex_sandbox": "read-only",
-            "arc_paper_access": "full",
+            "evidence_access": "context_only",
             "inherit_host_tools": False,
         }
     runtime.update(_dict(config.defaults.get("proposer_runtime", {}), "defaults.proposer_runtime"))
     runtime.update(step.proposer_runtime)
-    for retired_key in ("allow_mcp", "mcp_mode", "arc_mcp_command"):
-        runtime.pop(retired_key, None)
-    runtime = _canonical_paper_access_runtime(runtime, f"{step.step_id}.proposer_runtime")
+    runtime["evidence_access"] = str(runtime.get("evidence_access", "context_only"))
+    runtime["inherit_host_tools"] = False
     if step.reviewer_reference_claim:
         # Blind validation is a hard isolation boundary; ordinary runtime
         # overrides cannot expose paper or inherited host tools here.
-        runtime["arc_paper_access"] = "none"
+        runtime["evidence_access"] = "none"
         runtime["inherit_host_tools"] = False
+        runtime["allow_internet"] = False
     return runtime
 
 
 def _proposer_source_policy(runtime: Mapping[str, Any]) -> str:
-    runtime = _canonical_paper_access_runtime(dict(runtime), "proposer_runtime")
     allow_internet = _bool_default(runtime.get("allow_internet", False), False)
-    paper_access = str(runtime.get("arc_paper_access", "full"))
-    if paper_access == "none" and not allow_internet:
+    evidence_access = str(runtime.get("evidence_access", "context_only"))
+    if evidence_access == "none" and not allow_internet:
         return (
             "Do not use internet search. Do not invoke ARC CLIs, shell commands, or MCP tools. "
             "Do not read paper source sections, arXiv pages, INSPIRE pages, "
@@ -639,20 +610,15 @@ def _proposer_source_policy(runtime: Mapping[str, Any]) -> str:
             "Do not use validation-only final formulas as derivation inputs."
         )
     parts = []
-    if paper_access == "full":
-        parts.append(
-            "Use structured Controller requests for deterministic cached or missing-paper evidence; "
-            "do not invoke ARC CLIs, shell commands, MCP tools, or nested LLM commands."
-        )
-    else:
-        parts.append(
-            "Do not invoke ARC CLIs, shell commands, or MCP tools, and do not use cached paper text."
-        )
+    parts.append(
+        "Use only evidence present in caller_context and any explicitly supplied public operation result; "
+        "do not invoke ARC CLIs, shell commands, MCP tools, or nested LLM commands."
+    )
     if allow_internet:
         parts.append("Internet search is allowed only for source discovery or uncached paper access.")
     else:
         parts.append("Do not use internet search.")
-    parts.append("Cite any controller-provided paper evidence or internet source you use.")
+    parts.append("Cite any supplied public paper-operation result or internet source you use.")
     parts.append("Do not use validation-only final formulas as derivation inputs.")
     return " ".join(parts)
 
@@ -669,7 +635,7 @@ def _reviewer_reference_instruction(
     second = active_proposer_ids[1] if len(active_proposer_ids) >= 2 else "proposer_002"
     return (
         "Reviewer-only blind reference check is active. Do not reveal the reference claim "
-        "to proposers through proposer_messages. Compare the final result from "
+        "to proposers through the public feedback channel. Compare the final result from "
         f"{first}, the final result from {second}, and reviewer_reference_claim. "
         "When blind proposers and the reference agree, set status=all_agree. When blind "
         "proposers agree with each other but disagree with the reference claim, "
@@ -723,18 +689,7 @@ def _reviewer_output_schema(
     status_values = ["all_agree", "two_agree", "all_disagree", "unresolved"]
     if allow_reference_disagrees:
         status_values.append("reference_disagrees")
-    proposer_message_properties = {
-        proposer_id: {
-            "type": "object",
-            "required": ["message"],
-            "properties": {"message": {"type": "string"}},
-            "additionalProperties": False,
-        }
-        for proposer_id in active_proposer_ids
-    }
-    schema["properties"]["proposer_messages"]["required"] = active_proposer_ids
-    schema["properties"]["proposer_messages"]["properties"] = proposer_message_properties
-    consensus_properties = schema["properties"]["review_payload"]["properties"]["consensus"]["properties"]
+    consensus_properties = schema["properties"]["consensus"]["properties"]
     consensus_properties["status"]["enum"] = status_values
     for field in ["agreed_proposer_ids", "likely_wrong_proposer_ids", "recalculate_proposer_ids"]:
         consensus_properties[field]["items"]["type"] = "string"
@@ -826,56 +781,6 @@ def _human_gate_blocked_step_result(
     }
 
 
-def _structured_recovery_blocked_step_result(
-    step: CalculateStep,
-    *,
-    attempts: list[dict[str, Any]],
-    consensus: Mapping[str, Any],
-) -> dict[str, Any]:
-    workflow_action = _normalized_workflow_action(
-        {
-            "action": "pause_for_human",
-            "requires_human": True,
-            "issue_type": "worker_failure",
-            "proposed_revision": None,
-            "reason": "Reviewer output required major structured-output recovery; automatic retry is disabled.",
-            "expert_question": (
-                "The reviewer returned malformed or unstructured output. "
-                "Inspect the reviewer raw text and decide whether to accept, revise, or rerun."
-            ),
-        },
-        "unresolved",
-    )
-    return {
-        "step_id": step.step_id,
-        "kind": step.kind,
-        "status": "blocked_for_user",
-        "attempts": attempts,
-        "accepted_output": None,
-        "blocked_output": {
-            "reason": "reviewer_structured_output_recovery",
-            "trigger_status": "unresolved",
-            "requires_human": True,
-            "workflow_action": workflow_action,
-            "expert_question": workflow_action["expert_question"],
-            "analysis": str(consensus.get("analysis", "")),
-            "last_consensus": copy.deepcopy(dict(consensus)),
-        },
-        "reviewer_consensus": dict(consensus),
-    }
-
-
-def _attempt_paths(batch_config: Mapping[str, Any]) -> dict[str, Path]:
-    run_root = Path(str(batch_config["run_dir"])) / str(batch_config["run_id"])
-    loop_id = str(batch_config["loops"][0]["loop_id"])
-    round_root = run_root / "loops" / loop_id / "rounds" / "round_001"
-    return {
-        "run_root": run_root,
-        "round_root": round_root,
-        "review_path": round_root / "reviews" / "reviewer_001.json",
-    }
-
-
 def _review_consensus(
     review: Mapping[str, Any],
     *,
@@ -885,14 +790,14 @@ def _review_consensus(
 ) -> dict[str, Any]:
     if selectable_proposer_ids is None:
         selectable_proposer_ids = active_proposer_ids
-    if review.get("schema_version") != REVIEW_ENVELOPE_SCHEMA:
-        raise ValueError(f"review schema_version must be {REVIEW_ENVELOPE_SCHEMA}")
-    payload = review.get("review_payload")
+    if review.get("schema_version") != "arc.proposer_reviewer.review.v1":
+        raise ValueError("review must use the public proposer-reviewer review envelope")
+    payload = review.get("payload")
     if not isinstance(payload, dict):
-        raise ValueError("review.review_payload must be an object")
+        raise ValueError("review.payload must be an object")
     consensus = payload.get("consensus")
     if not isinstance(consensus, dict):
-        raise ValueError("review.review_payload.consensus must be an object")
+        raise ValueError("review.payload.consensus must be an object")
     status = consensus.get("status")
     allowed_statuses = {"all_agree", "two_agree", "all_disagree", "unresolved"}
     if reviewer_reference_claim:
@@ -905,9 +810,6 @@ def _review_consensus(
     consensus = dict(consensus)
     _validate_source_discrepancies(consensus)
     consensus["workflow_action"] = _normalized_workflow_action(consensus.get("workflow_action"), str(status))
-    if _structured_recovery_severity(review) in {"major", "fatal"}:
-        consensus = _force_unresolved_after_recovered_review(consensus, active_proposer_ids=active_proposer_ids)
-        status = "unresolved"
     if status == "all_agree":
         _validate_best_written_selection(
             consensus,
@@ -926,57 +828,6 @@ def _review_consensus(
             active_proposer_ids=active_proposer_ids,
         )
     return consensus
-
-
-def _structured_recovery_severity(payload: Mapping[str, Any]) -> str:
-    record = payload.get("arc_llm_call_record")
-    if not isinstance(record, Mapping):
-        return "none"
-    structured = record.get("structured_output")
-    if not isinstance(structured, Mapping):
-        return "none"
-    return str(structured.get("severity") or "none")
-
-
-def _reviewer_output_requires_manual_block(review: Mapping[str, Any]) -> bool:
-    return _structured_recovery_severity(review) in {"major", "fatal"}
-
-
-def _force_unresolved_after_recovered_review(
-    consensus: Mapping[str, Any],
-    *,
-    active_proposer_ids: list[str],
-) -> dict[str, Any]:
-    result = dict(consensus)
-    analysis = str(result.get("analysis", "")).strip()
-    warning = (
-        "ARC warning: reviewer output required major structured-output recovery; "
-        "forcing unresolved/manual inspection instead of accepting."
-    )
-    result.update(
-        {
-            "status": "unresolved",
-            "accepted_result": None,
-            "agreed_proposer_ids": [],
-            "likely_wrong_proposer_ids": list(active_proposer_ids),
-            "recalculate_proposer_ids": list(active_proposer_ids),
-            "analysis": f"{analysis}\n\n{warning}".strip(),
-            "best_written_proposer_id": None,
-            "best_written_selection_reason": "",
-            "workflow_action": _normalized_workflow_action(
-                {
-                    "action": "pause_for_human",
-                    "requires_human": True,
-                    "issue_type": "worker_failure",
-                    "proposed_revision": None,
-                    "reason": "Reviewer output required major structured-output recovery; automatic retry is disabled.",
-                    "expert_question": "Inspect the reviewer raw text and decide whether to accept, revise, or rerun.",
-                },
-                "unresolved",
-            ),
-        }
-    )
-    return result
 
 
 def _validate_best_written_selection(
@@ -1037,7 +888,7 @@ def _agreement_assessment(
 ) -> Mapping[str, Any]:
     assessment = consensus.get("agreement_assessment")
     if not isinstance(assessment, dict):
-        raise ValueError(f"{status} requires review_payload.consensus.agreement_assessment")
+        raise ValueError(f"{status} requires payload.consensus.agreement_assessment")
     summary = assessment.get("comparison_summary")
     if not isinstance(summary, str) or not summary.strip():
         raise ValueError(f"{status} requires agreement_assessment.comparison_summary")
@@ -1131,7 +982,7 @@ def _integrity_reference(path_value: Any = None) -> dict[str, str]:
     path = _resolve_integrity_path(path_value)
     if path is None:
         raise FileNotFoundError("integrity.md was not found")
-    return {"path": str(path), "content": path.read_text(encoding="utf-8")}
+    return {"content": path.read_text(encoding="utf-8")}
 
 
 def _resolve_integrity_path(path_value: Any = None) -> Path | None:
@@ -1144,17 +995,8 @@ def _resolve_integrity_path(path_value: Any = None) -> Path | None:
             if candidate.exists():
                 return candidate.resolve()
         return None
-    path = Path(__file__).resolve().parents[2] / "rules/integrity.md"
+    path = Path(__file__).resolve().parents[1] / "rules/integrity.md"
     return path if path.exists() else None
-
-
-def _read_proposer_outputs(round_root: Path, proposer_ids: list[str]) -> dict[str, Any]:
-    outputs: dict[str, Any] = {}
-    for proposer_id in proposer_ids:
-        path = round_root / "proposer_outputs" / f"{proposer_id}.json"
-        if path.exists():
-            outputs[proposer_id] = _read_json(path)
-    return outputs
 
 
 def _retry_feedback_record(
@@ -1162,17 +1004,33 @@ def _retry_feedback_record(
     consensus: Mapping[str, Any],
     *,
     attempt_number: int,
+    blind_reference: bool = False,
 ) -> dict[str, Any]:
-    proposer_messages = review.get("proposer_messages", {})
-    if not isinstance(proposer_messages, dict):
-        proposer_messages = {}
+    if blind_reference:
+        return {
+            "attempt_number": attempt_number,
+            "status": "retry_required",
+            "analysis": (
+                "Recompute the supplied calculation independently. Do not use "
+                "validation-only material as a derivation input."
+            ),
+            "likely_wrong_proposer_ids": [],
+            "recalculate_proposer_ids": [],
+            "proposer_feedback": {},
+        }
+    feedback = review.get("feedback", {})
+    proposer_feedback = (
+        {str(worker_id): {"message": str(message)} for worker_id, message in feedback.items()}
+        if isinstance(feedback, Mapping)
+        else {}
+    )
     return {
         "attempt_number": attempt_number,
         "status": str(consensus.get("status", "")),
         "analysis": str(consensus.get("analysis", "")),
         "likely_wrong_proposer_ids": copy.deepcopy(list(consensus.get("likely_wrong_proposer_ids", []))),
         "recalculate_proposer_ids": copy.deepcopy(list(consensus.get("recalculate_proposer_ids", []))),
-        "proposer_messages": copy.deepcopy(proposer_messages),
+        "proposer_feedback": copy.deepcopy(proposer_feedback),
     }
 
 
@@ -1410,12 +1268,77 @@ def _proposer_ids(count: int) -> list[str]:
     return [f"proposer_{index:03d}" for index in range(1, count + 1)]
 
 
-def _dry_run_result(config: CalculateConfig, paths: RunPaths) -> dict[str, Any]:
+def _attempt_id(step_id: str, attempt_number: int) -> str:
+    return _bounded_id(f"{step_id}_attempt_{attempt_number:03d}")
+
+
+def _batch_run_id(config_run_id: str, attempt_id: str) -> str:
+    return _bounded_id(f"calculate_{config_run_id}_{attempt_id}")
+
+
+def _bounded_id(candidate: str) -> str:
+    if len(candidate) <= 128:
+        return candidate
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
+    return f"{candidate[:115]}-{digest}"
+
+
+def _execute_public_batch(
+    request: BatchRequest, run_root: Path, run_id: str
+) -> CommittedRound:
+    """Execute one independent batch and expand only its committed first round."""
+
+    repository = RunRepository(run_root)
+    handler = ProposerReviewerHandler(ProposerReviewerService(LLMTaskService()))
+    snapshot = RunEngine(repository).execute(
+        RunSpec(run_id, handler.name, encode_batch_request(request)), handler
+    )
+    if snapshot.status is not RunStatus.SUCCEEDED:
+        detail = ""
+        if snapshot.error is not None:
+            detail = f": {snapshot.error.message}"
+        raise RuntimeError(f"calculation batch ended as {snapshot.status.value}{detail}")
+    return read_batch_round(repository, run_id, request.loops[0].loop_id, 1)
+
+
+def _review_from_committed_round(committed_round: CommittedRound) -> Mapping[str, Any]:
+    if committed_round.round_number != 1:
+        raise ValueError("calculation attempts may consume only their committed first round")
+    if not isinstance(committed_round.review, Mapping):
+        raise ValueError("committed reviewer output must be an object")
+    return committed_round.review
+
+
+def _worker_instructions(prompt: Mapping[str, Any], template: str) -> str:
+    system = str(prompt.get("system", "")).strip()
+    return f"{system}\n\n{template}".strip()
+
+
+def _worker_model(defaults: Mapping[str, Any]) -> ModelSelection:
+    provider = str(defaults.get("provider", "auto") or "auto")
+    model_value = defaults.get("model")
+    model = None if model_value is None else str(model_value)
+    tier = str(defaults.get("model_tier", defaults.get("tier", "high")) or "high")
+    try:
+        return ModelSelection(provider=provider, model=model, tier=tier)  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise ConfigError(f"defaults model selection: {exc}") from exc
+
+
+def _worker_capabilities(runtime: Mapping[str, Any]) -> CapabilityPolicy:
+    return CapabilityPolicy(
+        internet=_bool_default(runtime.get("allow_internet", False), False),
+        inherit_host_config=_bool_default(runtime.get("inherit_host_tools", False), False),
+        allowed_tools=(),
+    )
+
+
+def _dry_run_result(config: CalculateConfig, run_root: Path) -> dict[str, Any]:
     return {
         "schema_version": CALCULATE_RESULT_SCHEMA,
         "status": "dry_run",
         "run_id": config.run_id,
-        "run_root": str(paths.run_root),
+        "run_root": str(run_root),
         "proposer_count": config.proposer_count,
         "max_recalculations": config.max_recalculations,
         "human_gate": copy.deepcopy(config.human_gate),
@@ -1435,8 +1358,28 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _write_json(path: Path, payload: Any) -> None:
+    """Atomically replace a calculation-owned JSON record."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def _default_workflow_json_dir() -> Path:
-    return Path(__file__).resolve().parents[1] / "json"
+    return Path(__file__).resolve().parents[1] / "workflows" / "json"
 
 
 def _required_text(data: Mapping[str, Any], key: str) -> str:
@@ -1481,18 +1424,6 @@ def _dict(value: Any, field_name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ConfigError(f"{field_name} must be an object")
     return copy.deepcopy(value)
-
-
-def _canonical_paper_access_runtime(
-    runtime: dict[str, Any], field_name: str,
-) -> dict[str, Any]:
-    try:
-        access = resolve_arc_paper_access(runtime).access
-    except ValueError as exc:
-        raise ConfigError(f"{field_name}: {exc}") from exc
-    runtime["arc_paper_access"] = access
-    runtime.pop("arc_paper_cli_access", None)
-    return runtime
 
 
 def _bool(value: Any, field_name: str) -> bool:

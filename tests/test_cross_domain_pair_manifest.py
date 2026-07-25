@@ -9,7 +9,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "plugins/arc/skills/arc/workflows/scripts/write-cross-domain-pair-manifest.py"
+SCRIPT = ROOT / "plugins/arc/skills/arc/scripts/write-cross-domain-pair-manifest.py"
 
 
 def _load_module():

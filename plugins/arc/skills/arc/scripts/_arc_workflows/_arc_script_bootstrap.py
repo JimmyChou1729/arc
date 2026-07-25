@@ -17,6 +17,7 @@ sys.dont_write_bytecode = True
 ARC_PACKAGE_MODULES = (
     ("arc-jobs", "arc_jobs"),
     ("arc-llm", "arc_llm"),
+    ("arc-proposer-reviewer", "arc_proposer_reviewer"),
     ("arc-paper", "arc_paper"),
     ("arc-domain", "arc_domain"),
     ("arc-companion", "arc_companion"),
@@ -244,8 +245,8 @@ def _bootstrap_required_repo_root(root: Path) -> None:
         / "arc"
         / "skills"
         / "arc"
-        / "workflows"
         / "scripts"
+        / "_arc_workflows"
         / "_arc_script_bootstrap.py"
     )
     try:
@@ -362,7 +363,7 @@ def _candidate_roots() -> list[Path]:
 def _checkout_containing_bootstrap() -> Path | None:
     here = Path(__file__).resolve()
     relative_bootstrap = Path(
-        "plugins/arc/skills/arc/workflows/scripts/_arc_script_bootstrap.py"
+        "plugins/arc/skills/arc/scripts/_arc_workflows/_arc_script_bootstrap.py"
     )
     for candidate in here.parents:
         expected = candidate / relative_bootstrap

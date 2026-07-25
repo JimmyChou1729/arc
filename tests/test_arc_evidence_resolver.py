@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import importlib
+import sys
+from pathlib import Path
+from arc_llm import InteractionRequest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "plugins/arc/skills/arc/scripts"
+
+
+def _module():
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        return importlib.import_module("_arc_workflows.evidence")
+    finally:
+        sys.path.remove(str(SCRIPTS))
+
+
+def test_evidence_contracts_are_exactly_the_bounded_paper_allowlist() -> None:
+    module = _module()
+
+    contracts = module.evidence_operation_contracts()
+
+    assert tuple(contracts) == module.EVIDENCE_OPERATION_NAMES
+    assert len(contracts) == 8
+    assert all("cache_root" not in contract.arguments_schema["properties"] for name, contract in contracts.items() if "arxiv" in name)
+    assert {
+        "get-arxiv-table-of-contents",
+        "get-arxiv-section",
+        "search-arxiv-full-text",
+        "search-arxiv-equations",
+    } <= set(contracts)
+
+
+def test_evidence_resolver_reuses_one_service_document_memo_and_records_provenance() -> None:
+    module = _module()
+
+    class MemoizedService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, bool]] = []
+            self.parsed_documents: set[str] = set()
+            self.parse_count = 0
+
+        def get_arxiv_section(
+            self,
+            arxiv_id: str,
+            selector: str,
+            *,
+            refresh: bool = False,
+        ) -> dict[str, object]:
+            self.calls.append((arxiv_id, selector, refresh))
+            if arxiv_id not in self.parsed_documents:
+                self.parsed_documents.add(arxiv_id)
+                self.parse_count += 1
+            return {
+                "provenance": {
+                    "canonical_arxiv_id": "arXiv:0911.3380",
+                    "provider": "ar5iv",
+                    "source_format": "html",
+                    "source_digest": "a" * 64,
+                    "document_digest": "b" * 64,
+                },
+                "section_id": "intro",
+                "title": "Introduction",
+                "text": "Body",
+                "level": 1,
+                "ordinal": 0,
+                "page_start": None,
+                "page_end": None,
+                "warnings": [],
+            }
+
+    service = MemoizedService()
+    resolver = module.ArcPaperEvidenceResolver(service=service)  # type: ignore[arg-type]
+    responses = tuple(
+        resolver.resolve(
+            InteractionRequest(
+                f"request-{number}",
+                "get-arxiv-section",
+                {
+                    "arxiv_id": "https://arxiv.org/abs/0911.3380v3",
+                    "selector": "Introduction",
+                },
+            )
+        )
+        for number in (1, 2)
+    )
+
+    assert all(response.error is None for response in responses)
+    assert resolver.service is service
+    assert service.calls == [
+        ("arXiv:0911.3380", "Introduction", False),
+        ("arXiv:0911.3380", "Introduction", False),
+    ]
+    assert service.parse_count == 1
+    response = responses[0]
+    assert response.result["operation_id"] == "arc-paper.get-arxiv-section.v1"
+    provenance = response.result["provenance"]
+    assert provenance["canonical_arxiv_id"] == "arXiv:0911.3380"
+    assert provenance["source_digest"] == "a" * 64
+    assert provenance["document_digest"] == "b" * 64
+    assert resolver.records[0]["parameters"]["selector"] == "Introduction"
+
+
+def test_evidence_resolver_enforces_batch_budget_and_allowlist() -> None:
+    module = _module()
+
+    class SearchService:
+        def search_metadata(self, query: str, *, limit: int = 20) -> list[object]:
+            return []
+
+    resolver = module.ArcPaperEvidenceResolver(  # type: ignore[arg-type]
+        request_limit=2,
+        service=SearchService(),
+    )
+
+    for number in (1, 2):
+        response = resolver.resolve(
+            InteractionRequest(
+                f"request-{number}",
+                "search-metadata",
+                {"query": "bounded query", "limit": 1},
+            )
+        )
+        assert response.error is None
+    exhausted = resolver.resolve(
+        InteractionRequest(
+            "request-3",
+            "search-metadata",
+            {"query": "one too many", "limit": 1},
+        )
+    )
+    forbidden = resolver.resolve(
+        InteractionRequest("request-4", "import-source", {"path": "/tmp/paper"})
+    )
+
+    assert exhausted.error["code"] == "evidence_budget_exhausted"
+    assert forbidden.error["code"] == "evidence_operation_not_allowed"
+    assert resolver.request_count == 4
+    assert [record["request_number"] for record in resolver.records] == [1, 2, 3, 4]
