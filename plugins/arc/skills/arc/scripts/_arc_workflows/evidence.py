@@ -1,4 +1,4 @@
-"""Bounded controller-side paper evidence for ARC Skill worker interactions."""
+"""Controller-side paper evidence for ARC Skill worker interactions."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from arc_paper import (
 )
 
 
-EVIDENCE_REQUEST_LIMIT = 24
 EVIDENCE_OPERATION_NAMES = (
     "get-metadata",
     "get-references",
@@ -56,18 +55,12 @@ class ArcPaperEvidenceResolver:
     def __init__(
         self,
         *,
-        request_limit: int = EVIDENCE_REQUEST_LIMIT,
         service: ArcPaperService | None = None,
     ) -> None:
         self._resolver = PaperOperationResolver(
             allowed_operations=EVIDENCE_OPERATION_NAMES,
-            request_limit=request_limit,
             service=service,
         )
-
-    @property
-    def request_limit(self) -> int:
-        return self._resolver.request_limit
 
     @property
     def service(self) -> ArcPaperService:
@@ -83,10 +76,7 @@ class ArcPaperEvidenceResolver:
         for record in self._resolver.records:
             document = record.to_document()
             if record.result.error is not None:
-                code, message = _ideas_error(
-                    record.result,
-                    request_limit=self.request_limit,
-                )
+                code, message = _ideas_error(record.result)
                 document["error"] = {"code": code, "message": message}
             records.append(document)
         return records
@@ -103,10 +93,7 @@ class ArcPaperEvidenceResolver:
                 result=result.to_document(),
             )
 
-        code, message = _ideas_error(
-            result,
-            request_limit=self.request_limit,
-        )
+        code, message = _ideas_error(result)
         return InteractionResponse(
             request_id=request.request_id,
             error={
@@ -120,15 +107,11 @@ class ArcPaperEvidenceResolver:
 
 
 class IdeasEvidenceLedger:
-    """Observe per-loop use while preserving one shared global resolver cap."""
+    """Observe current-process evidence activity globally and per loop."""
 
     def __init__(self, resolver: Any, loop_ids: list[str]) -> None:
         self.resolver = resolver
         self._ledger = ScopedInteractionLedger(resolver, loop_ids)
-
-    @property
-    def request_limit(self) -> int:
-        return int(self.resolver.request_limit)
 
     @property
     def request_count(self) -> int:
@@ -136,40 +119,60 @@ class IdeasEvidenceLedger:
 
     @property
     def records(self) -> list[dict[str, Any]]:
-        return [dict(item) for item in self.resolver.records]
+        records = [dict(item) for item in self.resolver.records]
+        return sorted(records, key=lambda item: int(item["request_number"]))
 
     def scoped(self, loop_id: str) -> InteractionResolver:
         return self._ledger.scoped(loop_id)
 
-    def per_loop(self) -> dict[str, dict[str, int]]:
-        result: dict[str, dict[str, int]] = {}
+    def per_loop(self) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
         for loop_id, counts in self._ledger.snapshot().items():
             attempted = counts["request_count"]
-            exhausted = counts["error_counts"].get(
-                "evidence_budget_exhausted",
-                0,
-            )
+            errors_by_code = dict(sorted(counts["error_counts"].items()))
+            failed = sum(errors_by_code.values())
             result[loop_id] = {
                 "attempted": attempted,
-                "consumed": attempted - exhausted,
-                "exhausted": exhausted,
-                "repeated_request": counts["repeated_request_count"],
+                "succeeded": attempted - failed,
+                "failed": failed,
+                "errors_by_code": errors_by_code,
+                "repeated_raw_signature": counts[
+                    "repeated_request_count"
+                ],
             }
         return result
 
     def to_document(self) -> dict[str, Any]:
+        records = self.records
+        errors_by_code: dict[str, int] = {}
+        succeeded = 0
+        for record in records:
+            if record["ok"]:
+                succeeded += 1
+                continue
+            error = record.get("error")
+            if isinstance(error, Mapping):
+                code = error.get("code")
+                if isinstance(code, str) and code:
+                    errors_by_code[code] = errors_by_code.get(code, 0) + 1
+        failed = len(records) - succeeded
+        per_loop = self.per_loop()
         return {
-            "request_limit": self.request_limit,
-            "request_count": self.request_count,
-            "records": self.records,
-            "per_loop": self.per_loop(),
+            "observation_scope": "current_process",
+            "attempted": self.request_count,
+            "succeeded": succeeded,
+            "failed": failed,
+            "errors_by_code": dict(sorted(errors_by_code.items())),
+            "repeated_raw_signature": sum(
+                counts["repeated_raw_signature"]
+                for counts in per_loop.values()
+            ),
+            "records": records,
+            "per_loop": per_loop,
         }
 
-def _ideas_error(
-    result: PaperOperationResult,
-    *,
-    request_limit: int,
-) -> tuple[str, str]:
+
+def _ideas_error(result: PaperOperationResult) -> tuple[str, str]:
     failure = result.error
     if failure is None:
         raise ValueError("successful paper operation has no ideas error")
@@ -180,14 +183,6 @@ def _ideas_error(
         return (
             "evidence_operation_not_allowed",
             f"operation is not in the ARC evidence allowlist: {operation}",
-        )
-    if failure.code == "request_limit_exceeded":
-        return (
-            "evidence_budget_exhausted",
-            (
-                f"ideas evidence budget is limited to "
-                f"{request_limit} arc-paper requests"
-            ),
         )
     if failure.code == "operation_failed":
         return "evidence_operation_failed", failure.message
@@ -243,7 +238,6 @@ def _response_schema(
 __all__ = [
     "ArcPaperEvidenceResolver",
     "EVIDENCE_OPERATION_NAMES",
-    "EVIDENCE_REQUEST_LIMIT",
     "IdeasEvidenceLedger",
     "evidence_operation_contracts",
 ]

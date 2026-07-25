@@ -18,7 +18,7 @@ def _module():
         sys.path.remove(str(SCRIPTS))
 
 
-def test_evidence_contracts_are_exactly_the_bounded_paper_allowlist() -> None:
+def test_evidence_contracts_are_exactly_the_paper_allowlist() -> None:
     module = _module()
 
     contracts = module.evidence_operation_contracts()
@@ -193,7 +193,7 @@ def test_evidence_resolver_reuses_one_service_document_memo_and_records_provenan
     assert resolver.records[0]["parameters"]["selector"] == "Introduction"
 
 
-def test_evidence_resolver_enforces_batch_budget_and_allowlist() -> None:
+def test_evidence_resolver_has_no_batch_cap_and_enforces_allowlist() -> None:
     module = _module()
 
     class SearchService:
@@ -201,41 +201,29 @@ def test_evidence_resolver_enforces_batch_budget_and_allowlist() -> None:
             return []
 
     resolver = module.ArcPaperEvidenceResolver(  # type: ignore[arg-type]
-        request_limit=2,
         service=SearchService(),
     )
 
-    for number in (1, 2):
+    for number in range(50):
         response = resolver.resolve(
             InteractionRequest(
                 f"request-{number}",
                 "search-metadata",
-                {"query": "bounded query", "limit": 1},
+                {"query": f"research query {number}", "limit": 1},
             )
         )
         assert response.error is None
-    exhausted = resolver.resolve(
-        InteractionRequest(
-            "request-3",
-            "search-metadata",
-            {"query": "one too many", "limit": 1},
-        )
-    )
     forbidden = resolver.resolve(
-        InteractionRequest("request-4", "import-source", {"path": "/tmp/paper"})
+        InteractionRequest("request-50", "import-source", {"path": "/tmp/paper"})
     )
     aliased = resolver.resolve(
         InteractionRequest(
-            "request-5",
+            "request-51",
             "arc-paper.search-metadata.v1",
             {"query": "alias must be explicit", "limit": 1},
         )
     )
 
-    assert exhausted.error["code"] == "evidence_budget_exhausted"
-    assert exhausted.error["message"] == (
-        "ideas evidence budget is limited to 2 arc-paper requests"
-    )
     assert forbidden.error["code"] == "evidence_operation_not_allowed"
     assert forbidden.error["message"] == (
         "operation is not in the ARC evidence allowlist: import-source"
@@ -245,14 +233,100 @@ def test_evidence_resolver_enforces_batch_budget_and_allowlist() -> None:
         "operation is not in the ARC evidence allowlist: "
         "arc-paper.search-metadata.v1"
     )
-    assert resolver.request_count == 5
+    assert resolver.request_count == 52
     assert [record["request_number"] for record in resolver.records] == [
+        *range(1, 53),
+    ]
+
+
+def test_evidence_ledger_reports_current_process_outcomes_by_loop() -> None:
+    module = _module()
+
+    class SearchService:
+        def search_metadata(
+            self,
+            query: str,
+            *,
+            limit: int = 20,
+        ) -> list[object]:
+            if query == "provider failure":
+                raise RuntimeError("provider unavailable")
+            return []
+
+    ledger = module.IdeasEvidenceLedger(
+        module.ArcPaperEvidenceResolver(  # type: ignore[arg-type]
+            service=SearchService(),
+        ),
+        ["loop-a", "loop-b"],
+    )
+    loop_a = ledger.scoped("loop-a")
+    loop_b = ledger.scoped("loop-b")
+
+    successful = InteractionRequest(
+        "success-a",
+        "search-metadata",
+        {"query": "same raw request", "limit": 1},
+    )
+    repeated = InteractionRequest(
+        "success-b",
+        "search-metadata",
+        {"query": "same raw request", "limit": 1},
+    )
+    failed = InteractionRequest(
+        "failed",
+        "search-metadata",
+        {"query": "provider failure", "limit": 1},
+    )
+    forbidden = InteractionRequest(
+        "forbidden",
+        "import-source",
+        {"path": "/tmp/paper"},
+    )
+
+    assert loop_a.resolve(successful).error is None
+    assert loop_b.resolve(repeated).error is None
+    assert loop_b.resolve(failed).error["code"] == "evidence_operation_failed"
+    assert loop_a.resolve(forbidden).error["code"] == (
+        "evidence_operation_not_allowed"
+    )
+
+    document = ledger.to_document()
+
+    assert document["observation_scope"] == "current_process"
+    assert document["attempted"] == 4
+    assert document["succeeded"] == 2
+    assert document["failed"] == 2
+    assert document["errors_by_code"] == {
+        "evidence_operation_failed": 1,
+        "evidence_operation_not_allowed": 1,
+    }
+    assert document["repeated_raw_signature"] == 1
+    assert [record["request_number"] for record in document["records"]] == [
         1,
         2,
         3,
         4,
-        5,
     ]
+    assert document["per_loop"] == {
+        "loop-a": {
+            "attempted": 2,
+            "succeeded": 1,
+            "failed": 1,
+            "errors_by_code": {
+                "evidence_operation_not_allowed": 1,
+            },
+            "repeated_raw_signature": 0,
+        },
+        "loop-b": {
+            "attempted": 2,
+            "succeeded": 1,
+            "failed": 1,
+            "errors_by_code": {
+                "evidence_operation_failed": 1,
+            },
+            "repeated_raw_signature": 1,
+        },
+    }
 
 
 def test_evidence_adapter_delegates_package_mechanics() -> None:

@@ -52,7 +52,6 @@ def test_resolver_reuses_service_normalizes_ids_and_uses_registry_codecs() -> No
     service = SectionService()
     resolver = PaperOperationResolver(
         allowed_operations=("get-arxiv-section",),
-        request_limit=2,
         service=service,  # type: ignore[arg-type]
     )
 
@@ -113,26 +112,19 @@ def test_resolver_reuses_service_normalizes_ids_and_uses_registry_codecs() -> No
 
 
 def test_resolver_validates_configuration_without_workflow_policy() -> None:
-    with pytest.raises(ValueError, match="positive integer"):
-        PaperOperationResolver(
-            allowed_operations=("search-metadata",),
-            request_limit=True,
-        )
     with pytest.raises(ValueError, match="must not be empty"):
-        PaperOperationResolver(allowed_operations=(), request_limit=1)
+        PaperOperationResolver(allowed_operations=())
     with pytest.raises(ValueError, match="unknown arc-paper operation"):
         PaperOperationResolver(
             allowed_operations=("missing-operation",),
-            request_limit=1,
         )
     with pytest.raises(ValueError, match="not supported"):
         PaperOperationResolver(
             allowed_operations=("import-source",),
-            request_limit=1,
         )
 
 
-def test_resolver_enforces_allowlist_and_limit_and_records_codec_failures() -> None:
+def test_resolver_enforces_allowlist_and_records_codec_failures_without_cap() -> None:
     class SearchService:
         def search_metadata(
             self, query: str, *, limit: int = 20
@@ -141,7 +133,6 @@ def test_resolver_enforces_allowlist_and_limit_and_records_codec_failures() -> N
 
     resolver = PaperOperationResolver(
         allowed_operations=("search-metadata",),
-        request_limit=2,
         service=SearchService(),  # type: ignore[arg-type]
     )
 
@@ -150,15 +141,13 @@ def test_resolver_enforces_allowlist_and_limit_and_records_codec_failures() -> N
         {"query": "", "limit": 1},
         request_id="invalid",
     )
-    success = resolver.resolve(
-        "search-metadata",
-        {"query": "bounded query", "limit": 1},
-        request_id="success",
-    )
-    exhausted = resolver.resolve(
-        "search-metadata",
-        {"query": "one too many", "limit": 1},
-        request_id="exhausted",
+    successes = tuple(
+        resolver.resolve(
+            "search-metadata",
+            {"query": f"research query {number}", "limit": 1},
+            request_id=f"success-{number}",
+        )
+        for number in range(50)
     )
     forbidden = resolver.resolve(
         "import-source",
@@ -168,15 +157,13 @@ def test_resolver_enforces_allowlist_and_limit_and_records_codec_failures() -> N
 
     assert invalid.error is not None
     assert invalid.error.code == "invalid_parameters"
-    assert success.ok
-    assert exhausted.error is not None
-    assert exhausted.error.code == "request_limit_exceeded"
+    assert all(result.ok for result in successes)
     assert forbidden.error is not None
     assert forbidden.error.code == "operation_not_allowed"
-    assert resolver.request_count == 4
+    assert resolver.request_count == 52
     assert [
         record.result.provenance.request_number for record in resolver.records
-    ] == [1, 2, 3, 4]
+    ] == list(range(1, 53))
     assert resolver.records[0].to_document()["error"]["code"] == (
         "invalid_parameters"
     )
@@ -193,12 +180,10 @@ def test_resolver_allowlist_matches_only_explicitly_configured_tokens() -> None:
 
     short_name_resolver = PaperOperationResolver(
         allowed_operations=("search-metadata",),
-        request_limit=2,
         service=SearchService(),  # type: ignore[arg-type]
     )
     operation_id_resolver = PaperOperationResolver(
         allowed_operations=("arc-paper.search-metadata.v1",),
-        request_limit=2,
         service=SearchService(),  # type: ignore[arg-type]
     )
 
@@ -248,7 +233,6 @@ def test_resolver_serializes_one_service_and_keeps_concurrent_records_safe() -> 
     service = ConcurrentService()
     resolver = PaperOperationResolver(
         allowed_operations=("search-metadata",),
-        request_limit=12,
         service=service,  # type: ignore[arg-type]
     )
 

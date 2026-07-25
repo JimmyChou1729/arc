@@ -1,9 +1,8 @@
-"""Bounded, reusable resolution of registry-backed paper operations.
+"""Reusable resolution of registry-backed paper operations.
 
 The resolver owns package mechanics only: registry codecs, service reuse,
-admission accounting, and path-free provenance.  Callers remain responsible
-for choosing an operation allowlist and a request budget appropriate to their
-workflow.
+request accounting, and path-free provenance. Callers remain responsible for
+choosing an operation allowlist appropriate to their workflow.
 """
 
 from __future__ import annotations
@@ -136,15 +135,8 @@ class PaperOperationResolver:
         self,
         *,
         allowed_operations: Iterable[str],
-        request_limit: int,
         service: ArcPaperService | None = None,
     ) -> None:
-        if (
-            isinstance(request_limit, bool)
-            or not isinstance(request_limit, int)
-            or request_limit < 1
-        ):
-            raise ValueError("request_limit must be a positive integer")
         if isinstance(allowed_operations, (str, bytes)):
             raise ValueError("allowed_operations must be an iterable of operation names")
 
@@ -166,7 +158,6 @@ class PaperOperationResolver:
         if not specs:
             raise ValueError("allowed_operations must not be empty")
 
-        self.request_limit = request_limit
         self.service = service or ArcPaperService()
         self._specs = specs
         self._allowed_tokens = allowed_tokens
@@ -213,19 +204,6 @@ class PaperOperationResolver:
                 code="operation_not_allowed",
                 message=f"operation is not allowed by this resolver: {operation}",
             )
-        if request_number > self.request_limit:
-            return self._record_failure(
-                request_id=request_id,
-                operation_id=allowed_spec.operation_id,
-                parameters=normalized,
-                request_number=request_number,
-                code="request_limit_exceeded",
-                message=(
-                    "paper operation request limit exceeded: "
-                    f"{self.request_limit}"
-                ),
-            )
-
         try:
             decoded = allowed_spec.input_codec.decode(normalized)
             method = getattr(self.service, _SERVICE_METHODS[allowed_spec.name])
