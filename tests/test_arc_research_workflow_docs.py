@@ -1037,11 +1037,9 @@ def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
     sys.path.insert(0, str(SCRIPTS))
     try:
         config_module = importlib.import_module("_arc_workflows.ideas_config")
-        spec = importlib.util.spec_from_file_location("run_ideas", SCRIPTS / "run-ideas.py")
-        assert spec is not None and spec.loader is not None
-        runner_module = importlib.util.module_from_spec(spec)
-        sys.modules["run_ideas"] = runner_module
-        spec.loader.exec_module(runner_module)
+        templates_module = importlib.import_module(
+            "_arc_workflows.ideas_templates"
+        )
     finally:
         sys.dont_write_bytecode = old_dont_write_bytecode
         sys.path.remove(str(SCRIPTS))
@@ -1056,7 +1054,9 @@ def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
             "variant_config_dir": str(WJ),
         }
     )
-    reviewer_payload = runner_module._reviewer_worker_payload(config.variants[0])
+    reviewer_payload = templates_module.reviewer_worker_payload(
+        config.variants[0]
+    )
     marks = reviewer_payload["output_schema"]["properties"]["marks"]
     mark_properties = marks["properties"]
     reviewer = json.loads((WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8"))

@@ -65,6 +65,37 @@ def _single_scheme() -> dict[str, Any]:
     }
 
 
+def test_formal_normalization_fills_missing_or_non_object_marks_with_zero() -> None:
+    old_path = list(sys.path)
+    sys.path.insert(0, str(SCRIPT.parent))
+    try:
+        from _arc_workflows.ideas_ranking import normalized_review_marks
+    finally:
+        sys.path[:] = old_path
+
+    scheme = _single_scheme()
+    expected = {
+        "user_intent_relevance": 0,
+        "novelty": 0,
+        "confidence_of_novelty": 0,
+        "scientific_value": 0,
+        "planning": 0,
+        "problem_well_definedness": 0,
+        "total_score": 0,
+    }
+
+    assert normalized_review_marks(
+        {"payload": {}},
+        scheme,
+        fill_missing_total=True,
+    ) == expected
+    assert normalized_review_marks(
+        {"payload": {"marks": []}},
+        scheme,
+        fill_missing_total=True,
+    ) == expected
+
+
 def _cross_scheme() -> dict[str, Any]:
     marks = [
         ("user_intent_relevance", "Intent Relevance"),

@@ -18,6 +18,14 @@ WORKFLOW_JSON = ROOT / "plugins/arc/skills/arc/workflows/json"
 SCRIPTS = ROOT / "plugins/arc/skills/arc/scripts"
 RUNNER = SCRIPTS / "run-ideas.py"
 
+sys.path.insert(0, str(SCRIPTS))
+try:
+    from _arc_workflows.evidence import EVIDENCE_OPERATION_NAMES
+    from _arc_workflows.ideas_config import ConfigError as IdeasConfigError
+    from _arc_workflows.ideas_templates import read_json as read_ideas_json
+finally:
+    sys.path.remove(str(SCRIPTS))
+
 
 def _load_runner_module():
     old_dont_write_bytecode = sys.dont_write_bytecode
@@ -162,7 +170,7 @@ def test_dry_run_materializes_public_typed_request_with_three_rounds(tmp_path: P
     reviewer = request["loops"][0]["reviewer"]
     assert proposer["max_interaction_turns"] == 2
     assert reviewer["max_interaction_turns"] == 2
-    assert set(proposer["interaction_operations"]) == set(runner.EVIDENCE_OPERATION_NAMES)
+    assert set(proposer["interaction_operations"]) == set(EVIDENCE_OPERATION_NAMES)
     assert proposer["capabilities"] == {
         "internet": True,
         "inherit_host_config": False,
@@ -383,7 +391,9 @@ def test_no_info_disables_evidence_and_cross_domain_keeps_structured_context(tmp
     assert cross_loop["context"]["generation_mode"] == "cross_domain"
     assert [card["field_id"] for card in cross_loop["context"]["domain_cards"]] == ["field-a", "field-b"]
     assert cross_loop["context"]["exploration_profile"]["profile_id"] == "forward"
-    assert set(cross_loop["proposers"][0]["interaction_operations"]) == set(runner.EVIDENCE_OPERATION_NAMES)
+    assert set(cross_loop["proposers"][0]["interaction_operations"]) == set(
+        EVIDENCE_OPERATION_NAMES
+    )
     assert "review_payload" not in cross_loop["reviewer"]["output_schema"]["properties"]
 
 
@@ -450,7 +460,7 @@ def test_cross_domain_cards_reject_domain_id_in_closed_v5_summary(
     )
 
     with pytest.raises(
-        runner.ConfigError,
+        IdeasConfigError,
         match="arc.domain_summary.v5 must not contain domain_id",
     ):
         runner.run_ideas(
@@ -505,10 +515,10 @@ def test_json_reader_preserves_ideas_error_contract(tmp_path: Path) -> None:
     path.write_text("[]", encoding="utf-8")
 
     with pytest.raises(
-        runner.ConfigError,
+        IdeasConfigError,
         match=f"JSON file must contain an object: {path}",
     ):
-        runner._read_json(path)
+        read_ideas_json(path)
 
 
 def _write_cross_domain_manifest(project: Path) -> None:
