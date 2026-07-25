@@ -1,8 +1,8 @@
 # ARC v1 Core Refactor Migration Report
 
 This is the final migration report for the ARC v1 core refactor. It records
-the completed package and Skill boundaries, the frozen pre-v1 test-ledger
-closure, and the verification completed before final closure-fixture removal.
+the completed package and Skill boundaries, the historical pre-v1 test-ledger
+closure, and verification completed before and after closure-fixture removal.
 It is not a compatibility backlog: retired APIs and durable layouts must not
 be restored as shims.
 
@@ -96,11 +96,10 @@ controller API nor moves Skill-specific grouping policy into `arc-domain`.
   Public projections and their verified logical references are the supported
   observation boundary.
 
-## Frozen Pre-v1 Test-Ledger Closure
+## Historical Pre-v1 Test-Ledger Closure
 
-The retained fixtures under `tests/architecture/fixtures/` are the auditable
-closure record for the frozen baseline. Every group is closed. Counts below are
-exact fixture counts, grouped by disposition.
+Every frozen-baseline group was closed. The counts below are the exact
+pre-retirement fixture counts, grouped by disposition.
 
 | Ledger | Closed groups | Retain | Rewrite | Move | Delete |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -110,10 +109,11 @@ exact fixture counts, grouped by disposition.
 | `arc-paper` | 409 | 11 | 96 | 38 | 264 |
 | **Total** | **1,178** | **32** | **214** | **62** | **870** |
 
-The fixtures and `tests/architecture/test_legacy_test_audit.py` remain until
-the final migration report is complete and the full-ledger commit SHA is
-recorded below. Their removal is a separately committed retirement step; they
-are not package runtime state and do not provide a compatibility layer.
+The eight closure fixtures and
+`tests/architecture/test_legacy_test_audit.py` were archival migration records,
+not package runtime state or a compatibility layer. They were retired after the
+full-ledger report commit was recorded below; the counts remain here as the
+permanent human-readable closure record.
 
 ## Implemented Commit Sequence
 
@@ -149,19 +149,17 @@ the final combined verification pass:
 - `arc-proposer-reviewer --help` completed successfully.
 - Focused diff checks and Skill-tree bytecode checks completed without errors.
 
-The retained archival audit is not a final runtime acceptance suite. At this
-report's preparation, `tests/architecture/test_legacy_test_audit.py` passed all
-8 cases against the frozen inventories. It remains an archival completeness
-guard until the planned final ledger-retirement commit removes the closure
-fixtures and its dedicated audit test.
+The archival audit was not a final runtime acceptance suite. Before retirement,
+`tests/architecture/test_legacy_test_audit.py` passed all 8 cases against the
+frozen inventories. That dedicated audit and its fixture inputs are now removed.
 
 ## Final Verification
 
 - Six-package suite: **789 passed, 1 skipped**.
 - Repository `tests` suite: **215 passed, 3 skipped**.
 - Architecture, identity, and protocol command: **85 passed**.
-- Restored legacy audit: `tests/architecture/test_legacy_test_audit.py`:
-  **8 passed**.
+- Archival legacy audit before retirement:
+  `tests/architecture/test_legacy_test_audit.py`: **8 passed**.
 - `scripts/check-packages.sh` built both wheel and sdist successfully for all
   six `1.0.1` packages.
 - Isolated wheel-target imports of all six packages passed.
@@ -180,9 +178,20 @@ This is a bounded safe-pause outcome, not a green completion.
 ### Remaining Finalization Records
 
 - **Last commit containing the complete four-ledger closure:**
-  `PENDING — replace with the exact report-commit SHA after this report is committed.`
-- **Final clean-worktree and retired-import scan:**
-  `PENDING — exact command and result after fixture retirement and install-ref pin.`
+  `44c25c5f6e4c6de6df523008aa02cb852dbd2fa5`.
+- **Post-retirement architecture suite:**
+  `PYTHONDONTWRITEBYTECODE=1 packages/arc-paper/.venv/bin/python -m pytest tests/architecture`
+  completed with **23 passed**.
+- **Post-retirement active-import/path scan:**
+  `rg -n -i 'test_legacy_test_audit|arc_(jobs|llm|proposer_reviewer|paper)_(pre_v1_tests|legacy_closure)\.json|arc\.legacy_test_(manifest|closure)\.v1' packages plugins scripts tests`
+  returned no matches.
+- **Post-retirement Skill bytecode scan:**
+  `find plugins/arc/skills/arc -type f \( -name '*.pyc' -o -name '*.pyo' \) -print`
+  and `find plugins/arc/skills/arc -type d -name '__pycache__' -print` both
+  returned no entries.
+- **Final clean worktree:** this will be verified in the final handoff after
+  the source pin is applied. This report does not claim a clean worktree before
+  that finalization step.
 
 ## Release and Publication Boundary
 
