@@ -202,7 +202,7 @@ Step 2: Build final content before writing files and note planned PDF export in 
 Step 3: Write the next immutable version, starting with `work-note-v001.md`;
 never overwrite an old version.
 Step 4: Mirror it to `<project-dir>/work-note.md`.
-Step 5: Follow `manuals/arc-jobs.md` Markdown Report Export for `<project-dir>/work-note.md`. This report-export gate is not satisfied until `md2pdf` has been started or a `WARNING:` with the exact blocker is recorded. Do not wait for PDF completion. Record any job id in host logs or the next work-note version, not by editing an old immutable version. If PDF generation appears bugged, report it and continue this workflow; do not debug or fix PDF generation unless the user explicitly asks.
+Step 5: Follow `manuals/arc-jobs.md` Markdown Report Export for `<project-dir>/work-note.md`: run the canonical Pandoc/XeLaTeX command from `rules/math_typeset.md` as an ordinary blocking command. If it fails, record a `WARNING:` with the exact blocker and continue this workflow. If PDF generation appears bugged, report it and continue this workflow; do not debug or fix PDF generation unless the user explicitly asks.
 
 ## Phase 5: Review
 Step 1: Review the plan before execution. If the host and workflow permissions
@@ -210,11 +210,11 @@ allow delegation, use an independent reviewer. Otherwise the main agent must
 perform the same review.
 
 Step 2: Check that foundations are separated from derived results, accepted derived results were actually accepted, agent-added foundations have proposer/reviewer/main-agent agreement plus validity scope and the `[foundation added by agent]` marker, validation-only references are not premises, ready steps have complete contracts including physical endpoint fields, new derivations have no implicit terminal variables, formal setup steps have a downstream reduction task or explicit stop condition, rough steps are not executable, target secrecy is preserved, no `status: accepted` entry remains in `## Detailed Steps Ready To Calculate`, no accepted/ready/blocked step is duplicated in `## Rough Steps For Later Planning`, all rough-step triggers are adjudicated, every parsed equation id is represented in the Equation Coverage Ledger, ready steps with disabled source tools have enough proposer-visible source excerpt or exact formula context, special PDF color markers are not inside code spans, math and TeX snippets follow `rules/math_typeset.md`, and source coverage is enough for the task.
-
-Step 3: If review finds gaps, build final content with the planned PDF export
-noted in the Journal, write a new immutable work-note version, mirror it to root,
-and follow `manuals/arc-jobs.md` Markdown Report Export. Record any returned job
-id in host/run logs or the next work-note version, not by editing the immutable
-version just written. If PDF generation appears bugged, report it and continue
-this workflow; do not debug or fix PDF generation unless the user explicitly asks.
+Step 3: If review finds gaps, build final content with the planned PDF export noted in
+the Journal, write a new immutable work-note version, mirror it to root, and follow
+`manuals/arc-jobs.md` Markdown Report Export: run the canonical Pandoc/XeLaTeX
+command from `rules/math_typeset.md` as an ordinary blocking command. If it fails,
+record a `WARNING:` with the exact blocker and continue this workflow. If PDF
+generation appears bugged, report it and continue this workflow; do not debug or fix
+PDF generation unless the user explicitly asks.
 After the work note passes review, enter calculation only when it is in the caller's requested scope: pause first in `interactive` mode, or hand off ready steps directly in `auto` mode.

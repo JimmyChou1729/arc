@@ -22,7 +22,7 @@ checkout merely because it is already available.
 ```bash
 <skill-dir>/scripts/arc-runtime setup --profile core
 export ARC_REQUIRE_REPO_ROOT=<checkout-root>
-python3 <skill-dir>/workflows/scripts/verify-source-runtime.py \
+python3 <skill-dir>/scripts/verify-source-runtime.py \
   --repo-root <checkout-root> \
   --require-clean \
   --require-ancestor <required-refactor-commitish> \
@@ -157,5 +157,54 @@ access, inherited host configuration, and host tools disabled unless the owning
 workflow has a documented need. Provider diagnostics and durable artifacts are
 audit information, never a credential store.
 
-The proposer-reviewer orchestration belongs to `arc-proposer-reviewer`, and
-generic job controls belong to `arc-jobs`; neither is an `arc-llm` CLI alias.
+## Core Proposer-Reviewer Batches
+
+`arc-proposer-reviewer` is the core package and CLI for typed proposer-worker
+and reviewer batches. It owns the batch protocol and committed dialogue
+frontier; `arc-llm` supplies individual model calls and `arc-jobs` supplies
+durable execution. It is not an `arc-llm` CLI alias.
+
+For a plugin or standalone Skill, invoke the core-only tool through the
+runtime launcher:
+
+```bash
+<skill-dir>/scripts/arc-runtime arc-proposer-reviewer inspect \
+  --run-root <run-root> --run-id <run-id>
+<skill-dir>/scripts/arc-runtime arc-proposer-reviewer trace \
+  --run-root <run-root> --run-id <run-id>
+<skill-dir>/scripts/arc-runtime arc-proposer-reviewer show-round \
+  --run-root <run-root> --run-id <run-id> --loop-id <loop-id> --round <number>
+```
+
+These commands are read-only and make no model call. `inspect` is available
+for pending, running, paused, and terminal batches. It reports run and loop
+lifecycle, phase, current round, a safe pause summary, and activity counts.
+Activity is explicitly best effort: never use it for ranking, recovery,
+retry, or resume decisions.
+
+`trace` returns only complete rounds atomically committed by each loop, with
+verified logical artifact IDs and content digests. A published-but-uncommitted
+partial round is never visible. The returned run revision and per-loop revision
+vector identify this observation without claiming a globally linearized
+snapshot. `show-round` is the only public query that expands a committed
+round's proposal and review JSON.
+
+The projection never exposes sessions, task IDs, private group IDs, full pause
+records, or physical paths. A corrupt committed frontier fails closed for
+`trace` and `show-round`; `inspect --include-trace` keeps the basic inspection
+and reports a trace-integrity warning instead. Do not infer results by reading
+the durable directory layout.
+
+## Workflow Interaction Contracts
+
+The ideas workflow does not call `arc-llm` recursively or expose its workers to
+shell, ARC CLI, MCP, cache-administration, or arbitrary-path tools. It gives
+each configured proposer and reviewer one typed interactive JSON contract owned
+by `arc-proposer-reviewer`. The contract permits at most two automatic evidence
+interaction rounds; a third request pauses durably for explicit resume handling.
+
+The ideas batch shares one 24-request ARC-paper resolver across every worker
+and round. See `workflows/ideas.md` for its exact operation allowlist and for
+the public `BatchRequest` and committed-round observation contract. The
+resolver is the workflow's only evidence surface; it does not enable nested
+model calls or an `arc-llm` CLI callback.

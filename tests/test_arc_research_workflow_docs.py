@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import importlib
+import importlib.util
 import os
 import re
 import subprocess
@@ -17,7 +18,7 @@ SKILL = PLUGIN / "skills/arc"
 RULES = SKILL / "rules"
 WF = SKILL / "workflows"
 WJ = WF / "json"
-WS = WF / "scripts"
+SCRIPTS = SKILL / "scripts"
 
 
 def test_calculation_workflow_files_exist() -> None:
@@ -26,7 +27,8 @@ def test_calculation_workflow_files_exist() -> None:
     assert not (WF / "foundation.md").exists()
     for name in ["plan.schema.json", "foundation.schema.json", "calculate.schema.json"]:
         assert not (WJ / name).exists()
-    assert not (WS / "filter-foundation-context.py").exists()
+    assert not (WF / "scripts").exists()
+    assert not (SCRIPTS / "_arc_workflows/filter-foundation-context.py").exists()
 
 
 def test_arc_skill_routes_check_and_calculation_workflows() -> None:
@@ -114,14 +116,36 @@ def test_arc_skill_references_pdf_export_manuals() -> None:
     assert "markdown report export" in text
     assert "`rules/math_typeset.md`" in text
     assert "`manuals/arc-jobs.md`" in text
-    assert "md2pdf" in manual
-    assert "background cli job" in manual
-    assert "do not wait" in manual
+    assert "canonical pandoc/xelatex command" in manual
+    assert "ordinary blocking command" in manual_flat
+    assert "rather than an `arc-jobs submit` job" in manual_flat
+    assert "md2pdf" not in manual
     assert "markdown report" in manual
-    assert "report-export gate is satisfied after the job is accepted" in manual_flat
-    assert "arc-jobs submit --job-type md2pdf" in manual
     assert "print `warning:`" in manual_flat
-    assert "do not debug pandoc or tex" in manual
+    assert "do not debug pandoc or tex" in manual_flat
+
+
+def test_shared_docs_describe_public_proposer_reviewer_projection() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    manual = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    for text in (skill, manual, readme):
+        assert "arc-proposer-reviewer" in text
+        assert "inspect" in text
+        assert "trace" in text
+        assert "show-round" in text
+    assert "core-only" in skill
+    assert "best effort" in skill
+    assert "ranking, recovery, retries, or resume" in skill
+    assert "pending, running, paused, and terminal" in manual
+    assert "published-but-uncommitted" in manual
+    assert "per-loop revision\nvector" in manual
+    assert "only public query that expands" in manual
+    assert "sessions, task IDs, private group IDs, full pause\nrecords, or physical paths" in manual
+    assert "trace-integrity warning" in manual
+    assert "arc-llm run-text" not in readme
+    assert "arc-llm run-json" not in readme
 
 
 def test_math_typeset_rules_define_markdown_math_hygiene() -> None:
@@ -163,11 +187,11 @@ def test_workflows_start_pdf_export_for_user_facing_markdown() -> None:
         text = (WF / name).read_text(encoding="utf-8").lower()
         text_flat = " ".join(text.split())
         assert "`manuals/arc-jobs.md` markdown report export" in text
-        assert "md2pdf" in text
-        assert "report-export gate" in text
         assert "warning:" in text
-        assert "do not wait" in text
-        assert "arc-mcp md2pdf" not in text
+        assert "canonical pandoc/xelatex command" in text_flat
+        assert "ordinary blocking command" in text_flat
+        assert "md2pdf" not in text
+        assert "report-export gate" not in text
         assert text_flat.count("do not debug or fix pdf generation") == guard_count
 
 
@@ -235,11 +259,11 @@ def test_workflow_script_commands_use_skill_dir_placeholder() -> None:
     skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-    assert "python3 <skill-dir>/workflows/scripts/ideas_runner.py" in ideas
-    assert "python3 <skill-dir>/workflows/scripts/rank-ideas.py" in ideas
-    assert "python3 <skill-dir>/workflows/scripts/calculate_runner.py" in calculate
-    assert "python3 workflows/scripts/" not in ideas
-    assert "python3 workflows/scripts/" not in calculate
+    assert "python3 <skill-dir>/scripts/run-ideas.py" in ideas
+    assert "python3 <skill-dir>/scripts/rank-ideas.py" in ideas
+    assert "python3 <skill-dir>/scripts/run-calculate.py" in calculate
+    assert "python3 <skill-dir>/workflows/scripts/" not in ideas
+    assert "python3 <skill-dir>/workflows/scripts/" not in calculate
     assert "Do not diagnose `arc-llm` by running `pip show arc-llm`" in manual
     assert "wrong Python path/runtime" in manual
     for text in (ideas, calculate, skill, readme):
@@ -260,8 +284,29 @@ def test_manuals_do_not_hardcode_checkout_cache_paths() -> None:
     for manual in ["arc-paper.md", "arc-domain.md"]:
         text = (SKILL / "manuals" / manual).read_text(encoding="utf-8")
         assert "/arc-dev/cache/" not in text
-    assert "doctor-cache" in (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    paper = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    assert "doctor-cache" not in paper
+    assert "There is no cache list, delete, scan, or other administration command." in paper
     assert "ARC_JOBS_CACHE" in (SKILL / "manuals/arc-jobs.md").read_text(encoding="utf-8")
+
+
+def test_arc_paper_manual_documents_cache_first_arxiv_queries() -> None:
+    text = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+
+    for command in (
+        "get-arxiv-table-of-contents",
+        "get-arxiv-section",
+        "search-arxiv-full-text",
+        "search-arxiv-equations",
+    ):
+        assert f"arc-paper {command}" in text
+        assert f"arc-paper.{command}.v1" in text
+    assert "bare ID" in text
+    assert "`arXiv:` ID" in text
+    assert "versioned ID" in text
+    assert "never fall back to PDF" in text
+    assert "content-identity and parser-contract key" in text
+    assert "`SourceRepository`" in text
 
 
 def test_self_reflection_allows_missing_git_metadata() -> None:
@@ -388,7 +433,7 @@ def test_workflow_docs_stay_human_readable() -> None:
         if name != "calculate.md":
             assert "/scripts/" not in text
         else:
-            assert "workflows/scripts/calculate_runner.py" in text
+            assert "scripts/run-calculate.py" in text
 
 
 def test_check_workflow_keeps_notes_out_of_proposer_context() -> None:
@@ -475,7 +520,7 @@ def test_calculate_workflow_uses_work_note_runtime_artifacts() -> None:
 
     assert "<project-dir>/work-note.md" in calculate
     assert "<project-dir>/calculate/<run-id>/execute/calculate.config.json" in calculate
-    assert "<project-dir>/calculate/<run-id>/execute/<calculate-run-id>/" in calculate
+    assert "<project-dir>/calculate/<run-id>/execute/<calculate-run-id>/state.json" in calculate
     assert "calculate.config.template.json" in calculate
     assert "calculation-report.md" not in calculate
     assert "foundation/latest.json" not in calculate
@@ -604,7 +649,8 @@ def test_accepted_steps_keep_trace_outside_ready_section() -> None:
     assert "step id" in calculate
     assert "reviewer status" in calculate
     assert "source discrepancy status" in calculate
-    assert "artifact paths" in calculate
+    assert "batch run id" in calculate
+    assert "verified public ref digests" in calculate
 
 
 def test_calculate_workflow_owns_consensus_results_only() -> None:
@@ -632,17 +678,18 @@ def test_check_workflow_owns_note_parsing_only() -> None:
     assert "refer to the owning workflow" in check
 
 
-def test_calculate_uses_phase_specific_source_defaults() -> None:
+def test_calculate_documents_public_batch_and_blind_reference_contract() -> None:
     text = (WF / "calculate.md").read_text(encoding="utf-8").lower()
 
     assert "blind reference check" in text
     assert "reviewer_reference_claim" in text
-    assert "proposer_runtime" in text
-    assert '"allow_internet": false' in text
-    assert '"allow_internet": true' in text
-    assert "controller arc-paper access" in text
-    assert '"arc_paper_access": "none"' in text
-    assert '"arc_paper_access": "full"' in text
+    assert "deterministic, independent public" in text
+    assert "batchrequest" in text
+    assert "committed round" in text
+    assert "public `arc-paper` operations" in text
+    assert "redacts reviewer feedback" in text
+    assert "arc_paper_access" not in text
+    assert "controller arc-paper access" not in text
     assert "reference_disagrees" in text
     assert "post-check new calculation" in text
 
@@ -750,70 +797,17 @@ def test_calculate_workflow_uses_pdf_marker_colorbox_templates() -> None:
     assert "Do not use custom no-argument marker macros" in text
 
 
-def test_ideas_ranking_script_selects_best_round_per_loop(tmp_path) -> None:
-    run_root = tmp_path / "ideas" / "run_001"
-    _write_idea_round(run_root, "idea_001", 1, "first", total=10, novelty=4)
-    _write_idea_round(run_root, "idea_001", 2, "better", total=15, novelty=3)
-    _write_idea_round(run_root, "idea_002", 1, "high novelty", total=15, novelty=8)
-    _write_idea_round(run_root, "idea_002", 2, "lower", total=12, novelty=9)
-
+def test_ideas_ranking_script_uses_durable_run_identifiers() -> None:
     result = subprocess.run(
-        [
-            sys.executable,
-            str(WS / "rank-ideas.py"),
-            str(run_root),
-            "--format",
-            "json",
-        ],
+        [sys.executable, str(SCRIPTS / "rank-ideas.py"), "--help"],
         check=True,
         capture_output=True,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         text=True,
     )
 
-    ranking = json.loads(result.stdout)["ranking"]
-    assert [(item["loop_id"], item["round"], item["title"]) for item in ranking] == [
-        ("idea_002", 1, "high novelty"),
-        ("idea_001", 2, "better"),
-    ]
-    assert ranking[0]["marks"]["user_intent_relevance"] == 6
-    assert ranking[0]["marks"]["confidence_of_novelty"] == 7
-    assert "user_intent_fit" not in ranking[0]["marks"]
-
-    markdown = subprocess.run(
-        [
-            sys.executable,
-            str(WS / "rank-ideas.py"),
-            str(run_root),
-            "--format",
-            "markdown",
-        ],
-        check=True,
-        capture_output=True,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        text=True,
-    ).stdout
-    assert "# Ideas\n\n" in markdown
-    assert "Abbreviations:\n\nIR=intent relevance" in markdown
-    summary = markdown.split("# Appendix: Idea Details", 1)[0]
-    details = markdown.split("# Appendix: Idea Details", 1)[1]
-    assert summary.index("## `idea_001`\n\nbetter") < summary.index("## `idea_002`\n\nhigh novelty")
-    assert "| Round | IR | N | CN | SV | PL | WD | T |" in markdown
-    assert "| Title | Total Mark | Rank |" not in markdown
-    assert "| Loop | Round | Total | Intent Relevance | Novelty | Confidence | Value | Planning | Well-definedness |" in markdown
-    assert "# Ranked Ideas and Details" not in markdown
-    assert "# Appendix: Idea Details" in markdown
-    assert details.index("### 1. high novelty") < details.index("### 2. better")
-    assert "#### Referee Marks by Round" in markdown
-    assert "#### Full Idea Verbatim" in markdown
-    assert "```text" not in markdown
-    assert "Title: high novelty" in markdown
-    assert "Idea Summary:" in markdown
-    assert "Calculation Plan:" in markdown
-    assert "novelty_checks:" not in markdown
-    assert "motivation:" not in markdown
-    assert "```json" not in markdown
-    assert "user_intent_fit" not in markdown
+    assert "--run-root RUN_ROOT" in result.stdout
+    assert "--run-id RUN_ID" in result.stdout
 
 
 def test_ideas_marking_scheme_is_centralized() -> None:
@@ -877,14 +871,44 @@ def test_ideas_reviewer_comments_turn_marks_into_scientific_guidance() -> None:
 def test_ideas_workflow_points_to_active_runner_without_global_review() -> None:
     text = (WF / "ideas.md").read_text(encoding="utf-8")
 
-    assert "ideas_runner.py" in text
+    assert "run-ideas.py" in text
     assert "global reviewer" not in text
     assert "global_review" not in text
-    assert "three reviewer reports per loop" in text
-    assert "<project-dir>/ideas/<run-id>/idea_loops/loops/" in text
+    assert "template's three rounds by default" in text
+    assert "RunRepository" in text
+    assert "proposer-reviewer/request" in text
+    assert "idea_loops" not in text
+    assert "ideas_batch_config" not in text
     assert "scripts/rank-ideas.py" in text
     assert "<project-dir>/ideas/<run-id>/ideas.md" not in text
     assert "<project-dir>/ideas.md" not in text
+
+
+def test_ideas_workflow_documents_public_batch_evidence_contract() -> None:
+    text = (WF / "ideas.md").read_text(encoding="utf-8")
+
+    for operation in (
+        "get-metadata",
+        "get-references",
+        "get-citers",
+        "search-metadata",
+        "get-arxiv-table-of-contents",
+        "get-arxiv-section",
+        "search-arxiv-full-text",
+        "search-arxiv-equations",
+    ):
+        assert f"`{operation}`" in text
+    assert "one budget of 24 ARC-paper requests" in text
+    assert "at most two interaction rounds; a third interaction request pauses" in " ".join(text.split())
+    assert "`inspect_batch`" in text
+    assert "`read_batch_trace`" in text
+    assert "`read_batch_round`" in text
+    assert "--run-root <project-dir>/ideas" in text
+    assert "--run-id <run-id>" in text
+    assert "shell commands, ARC CLIs, arbitrary paths, cache" in text
+    assert "recursive LLM calls, or MCP tools" in text
+    assert "status is `completed` or `degraded`" in text
+    assert "lifecycle is `succeeded`" in text
 
 
 def test_ideas_workflow_requires_context_and_runner_artifacts() -> None:
@@ -896,7 +920,7 @@ def test_ideas_workflow_requires_context_and_runner_artifacts() -> None:
     assert "initialize that field to `auto` in place" in text_flat
     assert "without asking an execution-mode question" in text_flat
     assert "Do not synthesize ideas manually" in text
-    assert "Final ranked ideas must come from `ideas_runner.py` artifacts" in text
+    assert "Final ranked ideas must come from `run-ideas.py`'s public committed batch data" in text
 
 
 def test_ideas_workflow_has_deterministic_ranked_report_deliverable() -> None:
@@ -910,23 +934,29 @@ def test_ideas_workflow_has_deterministic_ranked_report_deliverable() -> None:
     assert "<project-dir>/suggested-ideas.md" not in text
 
 
-def test_ideas_loop_reviewer_template_uses_controller_evidence() -> None:
+def test_ideas_loop_reviewer_template_uses_resolver_evidence() -> None:
     reviewer = json.loads((WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8"))
+    template = reviewer["prompt"]["template"]
 
     assert reviewer["id"] == "reviewer_001"
-    assert "controller-supplied" in reviewer["prompt"]["template"]
+    assert "resolver" in template
+    assert "controller" not in template.lower()
 
 
 def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
     old_dont_write_bytecode = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
-    sys.path.insert(0, str(WS))
+    sys.path.insert(0, str(SCRIPTS))
     try:
-        config_module = importlib.import_module("ideas_config")
-        runner_module = importlib.import_module("ideas_runner")
+        config_module = importlib.import_module("_arc_workflows.ideas_config")
+        spec = importlib.util.spec_from_file_location("run_ideas", SCRIPTS / "run-ideas.py")
+        assert spec is not None and spec.loader is not None
+        runner_module = importlib.util.module_from_spec(spec)
+        sys.modules["run_ideas"] = runner_module
+        spec.loader.exec_module(runner_module)
     finally:
         sys.dont_write_bytecode = old_dont_write_bytecode
-        sys.path.remove(str(WS))
+        sys.path.remove(str(SCRIPTS))
 
     config = config_module.load_ideas_config(
         {
@@ -938,8 +968,8 @@ def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
             "variant_config_dir": str(WJ),
         }
     )
-    reviewer_payload = runner_module._loop_reviewer_payload(config.variants[0])
-    marks = reviewer_payload["output_schema"]["properties"]["review_payload"]["properties"]["marks"]
+    reviewer_payload = runner_module._reviewer_worker_payload(config.variants[0])
+    marks = reviewer_payload["output_schema"]["properties"]["marks"]
     mark_properties = marks["properties"]
     reviewer = json.loads((WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8"))
 
@@ -981,11 +1011,19 @@ def test_ideas_config_template_has_no_global_reviewer() -> None:
 def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     domain = (WF / "domain.md").read_text(encoding="utf-8")
     ideas = (WF / "ideas.md").read_text(encoding="utf-8")
+    manual = (SKILL / "manuals/arc-domain.md").read_text(encoding="utf-8")
 
     assert "write-domain-manifest.py" in domain
     assert "arc.workflow.domain_manifest.v2" in domain
     assert "field_count" in domain
     assert "field_id" in domain
+    assert "LLMClient.generate" in domain
+    assert "field-grouping-llm" in domain
+    assert "typed LLM pause, failure,\nor cancellation" in domain
+    assert "run_json" not in domain
+    assert "LLMAbortScope" not in domain
+    assert "LLMClient.generate" in manual
+    assert "private-artifact" in manual
     assert "domain_manifest_path" in ideas
     assert "two or more fields use cross-domain prompts" in ideas
     assert "source domain may contribute a mature method" in ideas
@@ -1034,6 +1072,14 @@ def test_readme_and_llm_manual_document_experimental_kimi_provider() -> None:
 
     assert "usage fields remain null" in readme
     assert "does not copy, migrate, or delete Kimi sessions" in readme
+    assert "arc-llm doctor --provider auto" in readme
+    assert "arc-llm doctor --provider kimi" in readme
+    for obsolete in (
+        "arc-llm doctor host",
+        "arc-llm doctor provider",
+        "arc-llm doctor config",
+    ):
+        assert obsolete not in readme
     assert "`kimi` provider uses an ACP adapter" in manual
     assert "provider configuration is\ninherited" in manual
     assert "native session resume" in manual
@@ -1053,7 +1099,7 @@ def test_readme_and_llm_manual_document_experimental_kimi_provider() -> None:
         assert retired not in manual
 
 
-def test_ideas_full_info_template_includes_domain_and_controller_context() -> None:
+def test_ideas_full_info_template_includes_domain_and_resolver_context() -> None:
     batch = json.loads((WJ / "ideas-batch.template.json").read_text(encoding="utf-8"))
     variant = json.loads((WJ / "ideas-domain.variant.json").read_text(encoding="utf-8"))
     loop = json.loads((WJ / "ideas-loop.template.json").read_text(encoding="utf-8"))
@@ -1066,7 +1112,20 @@ def test_ideas_full_info_template_includes_domain_and_controller_context() -> No
     assert "domain_markdown_files" in loop["caller_context"]
     assert "arc_paper_tool_notes" in loop["caller_context"]
     assert proposer["runtime"]["allow_internet"] is True
-    assert "controller-supplied" in proposer["prompt"]["template"]
+    notes = loop["caller_context"]["arc_paper_tool_notes"]
+    prompt = proposer["prompt"]["template"]
+    assert "resolver-supplied" in notes
+    assert "typed operation requests and responses" in notes
+    assert "resolver-supplied" in prompt
+    assert "typed operations" in prompt
+    for retired in (
+        "controller-supplied",
+        "controller resolution",
+        "controller-mediated",
+        "arc-paper CLI/service",
+    ):
+        assert retired not in notes
+        assert retired not in prompt
 
 
 def test_ideas_no_info_description_mentions_shared_marking_scheme() -> None:
@@ -1241,19 +1300,21 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
     assert "field_count" in ideas
     assert "multiple seed-specific packages" in ideas
     assert "field_id" in ideas
-    assert "status is `completed` or `degraded`" in ideas
-    assert "rank only usable loops" in ideas
-    for text in (skill, domain, ideas):
+    assert "lifecycle is `succeeded`" in ideas
+    assert "failed, cancelled, pending, running, paused" in ideas
+    for text in (skill,):
         assert "no absolute runtime limit" in text
         assert "--idle-timeout-seconds" in text
         assert "ARC_*_IDLE_TIMEOUT_SECONDS" in text
         assert "30-minute" in text or "30 minutes" in text
-    for text in (skill, domain):
+    assert "no absolute runtime limit" in ideas
+    assert "30 minutes" in ideas
+    for text in (skill,):
         assert "--until-review --after-review-sequence 0 --json" in text
-    assert "streams progress JSONL to" in ideas
+    assert "streams start/finish progress\nJSON to" in ideas
     assert "stderr" in ideas
     assert "SIGINT" in ideas and "SIGTERM" in ideas
-    for text in (skill, domain, ideas):
+    for text in (skill,):
         assert "review_sequence" in text
         assert "terminal result" in text
     assert "cancellation" in skill
@@ -1404,37 +1465,3 @@ def test_interaction_reference_allows_portable_typed_fallback() -> None:
     assert "when no selection/menu tool" in text or "if no selection/menu tool" in text
     assert "enter the exact option label" in text
     assert "cannot present the required selection ui" not in text
-
-
-def _write_idea_round(
-    run_root: Path,
-    loop_id: str,
-    round_number: int,
-    title: str,
-    *,
-    total: float,
-    novelty: float,
-) -> None:
-    round_root = run_root / "loops" / loop_id / "rounds" / f"round_{round_number:03d}"
-    proposer_dir = round_root / "proposer_outputs"
-    review_dir = round_root / "reviews"
-    proposer_dir.mkdir(parents=True)
-    review_dir.mkdir(parents=True)
-    (run_root / "loops" / loop_id / "state.json").write_text(
-        json.dumps({"status": "completed", "loop_id": loop_id, "rounds_completed": round_number}),
-        encoding="utf-8",
-    )
-    (proposer_dir / "proposer_001.json").write_text(json.dumps({"title": title}), encoding="utf-8")
-    marks = {
-        "novelty": novelty,
-        "confidence_of_novelty": 7,
-        "planning": 3,
-        "scientific_value": 3,
-        "user_intent_relevance": 6,
-        "problem_well_definedness": 3,
-        "total_score": total,
-    }
-    (review_dir / "reviewer_001.json").write_text(
-        json.dumps({"review_payload": {"marks": marks}}),
-        encoding="utf-8",
-    )

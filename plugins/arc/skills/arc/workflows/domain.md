@@ -30,7 +30,7 @@ requirement to a commit in the intended checkout and use the source verifier:
 
 ```bash
 export ARC_REQUIRE_REPO_ROOT=<checkout-root>
-python3 <skill-dir>/workflows/scripts/verify-source-runtime.py \
+python3 <skill-dir>/scripts/verify-source-runtime.py \
   --repo-root <checkout-root> \
   --require-clean \
   --require-ancestor <required-refactor-commitish> \
@@ -277,9 +277,10 @@ TeX snippets.
 
 After writing each domain summary Markdown report to `<project-dir>/`, follow
 `manuals/arc-jobs.md` Markdown Report Export for
-`<project-dir>/<seed-safe>_domain_summary.md`. This
-report-export gate is not satisfied until `md2pdf` has been started or a
-`WARNING:` with the exact blocker is recorded. Do not wait for PDF completion.
+`<project-dir>/<seed-safe>_domain_summary.md`: run the canonical
+Pandoc/XeLaTeX command from `rules/math_typeset.md` as an ordinary blocking
+command. If it fails, record a `WARNING:` with the exact blocker and continue
+this workflow.
 If PDF generation appears bugged, report it and continue this workflow; do not
 debug or fix PDF generation unless the user explicitly asks.
 
@@ -299,7 +300,7 @@ candidate. A v1 build may still distinguish its requested seed from the
 builder-selected foundation.
 
 ```bash
-python3 <skill-dir>/workflows/scripts/write-domain-manifest.py \
+python3 <skill-dir>/scripts/write-domain-manifest.py \
   --project-dir <project-dir> \
   --json
 ```
@@ -312,6 +313,19 @@ separation; uncertain, low-confidence, or failed grouping conservatively
 merges packages with a warning. Ideas routing uses `field_count` and `field_id`,
 never package count. Print a `WARNING:` and stop before ideas if the manifest
 cannot be written or any referenced artifact is missing.
+
+For one domain package, the helper writes the single field without an LLM call.
+For two or more packages, it makes one typed `LLMClient.generate` request with
+a deterministic field-grouping task ID, the complete pair-classification schema,
+and an isolated `<project-dir>/domain/field-grouping-llm` run root. It does not
+accept an agent-provided runner, cache root, or artifact path. The generated
+manifest records `domain/field-grouping.json` as its grouping artifact.
+
+An invalid grouping payload or inconsistent pair classification is a
+conservative single-field fallback with a warning. A typed LLM pause, failure,
+or cancellation is not a fallback: print `WARNING:` and stop before ideas so
+the caller can resolve the provider state or rerun the manifest helper. Do not
+invent a grouping result or inspect private LLM artifacts.
 
 ### Phase 4: Scope Boundary and Interactive Review
 

@@ -187,6 +187,32 @@ def test_reviewer_schema_templates_describe_direct_worker_payloads() -> None:
         assert "arc.llm.review_envelope.v1" not in json.dumps(schema)
 
 
+def test_evidence_enabled_idea_prompts_describe_typed_resolver_boundary() -> None:
+    names = (
+        "ideas-loop.template.json",
+        "ideas-cross-domain-loop.template.json",
+        "ideas-proposer.template.json",
+        "ideas-cross-domain-proposer.template.json",
+        "ideas-reviewer.template.json",
+        "ideas-domain-reviewer.template.json",
+        "ideas-cross-domain-reviewer.template.json",
+        "ideas-domain.variant.json",
+    )
+    text = "\n".join(
+        (WORKFLOW_JSON / name).read_text(encoding="utf-8")
+        for name in names
+    ).lower()
+
+    assert "resolver-supplied" in text
+    assert "typed operation" in text
+    assert "typed resolver operations" in text
+    assert "do not invoke arc clis, shell commands, or mcp tools" in text
+    assert "controller-supplied" not in text
+    assert "controller resolution" not in text
+    assert "controller-mediated" not in text
+    assert "arc-paper cli/service" not in text
+
+
 def test_execution_uses_public_projection_for_three_committed_rounds_and_scores(tmp_path: Path) -> None:
     runner = _load_runner_module()
     ranker = _load_ranker_module()

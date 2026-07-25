@@ -91,21 +91,39 @@ not optional.
   report export: read `manuals/arc-jobs.md`.
 - Host LLM/provider detection, model choice, direct prompt tests, or provider
   troubleshooting: read `manuals/arc-llm.md`.
+- Typed proposer-reviewer batch construction, resume, or safe observation of
+  committed rounds: read `manuals/arc-llm.md`.
 - Companion-reading PDF generation: read `workflows/companion.md` and
   `manuals/arc-companion.md` before fetching a paper or starting LLM work.
-- User-facing Markdown report export: see `rules/math_typeset.md` and
-  `manuals/arc-jobs.md`.
+- User-facing Markdown report export: use the ordinary blocking
+  Pandoc/XeLaTeX command in `rules/math_typeset.md`; see
+  `manuals/arc-jobs.md` for the workflow failure boundary.
 
 ## CLI Resolution
 
-Use `arc-paper`, `arc-domain`, `arc-llm`, `arc-companion`, and
-`arc-jobs` directly when the host plugin exposes them on `PATH`. For a
-standalone Skill install, or when a bare command is unavailable, invoke the
-same command through:
+Use `arc-paper`, `arc-domain`, `arc-llm`, `arc-companion`, and `arc-jobs`
+directly when the host plugin exposes them on `PATH`. The core-only
+`arc-proposer-reviewer` tool deliberately has no plugin-bin wrapper; invoke it
+through the runtime launcher. For a standalone Skill install, or when a bare
+command is unavailable, invoke the same command through:
 
 ```bash
 <skill-dir>/scripts/arc-runtime <arc-command> [args...]
 ```
+
+For example:
+
+```bash
+<skill-dir>/scripts/arc-runtime arc-proposer-reviewer trace \
+  --run-root <run-root> --run-id <run-id>
+```
+
+`inspect`, `trace`, and `show-round` are the only public observation surface
+for a proposer-reviewer batch. `inspect` activity is best effort and cannot
+drive ranking, recovery, retries, or resume. `trace` exposes only verified
+committed-round refs and revision vectors; `show-round` alone expands a
+committed proposal/review JSON payload. Never read durable loop or artifact
+layout to substitute for these queries.
 
 The first real CLI call lazily installs the immutable core runtime. Managed,
 CI, or offline-preparation environments may prewarm it with
@@ -179,7 +197,7 @@ Use a user-specified project directory when present. Otherwise derive
 paper tools, then resolve `<project-dir>` with:
 
 ```bash
-python3 <skill-dir>/workflows/scripts/resolve-project-dir.py \
+python3 <skill-dir>/scripts/resolve-project-dir.py \
   --name <project_dir_name> \
   --run-root <arc-run-root> \
   --json
@@ -233,7 +251,10 @@ Read and execute `workflows/domain.md`.
 
 Case 2: Suggest ideas from a not-yet-explicit request.
 First complete Case 1. Then read and execute
-`workflows/ideas.md`.
+`workflows/ideas.md`. The workflow owns one public `BatchRequest` in its
+project-local `RunRepository`; inspect and rank only its verified committed
+rounds. Do not substitute private loop files, worker sessions, retired
+intermediary artifacts, nested ARC CLIs, or MCP calls for that contract.
 
 Case 3: Check note files or collaborator notes.
 Use when the request asks to check, verify, audit, or mark work-note premises

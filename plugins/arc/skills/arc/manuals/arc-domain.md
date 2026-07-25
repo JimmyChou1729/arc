@@ -184,6 +184,12 @@ The owning domain workflow prints and records summary warnings to project `self-
 
 That workflow writes `arc.workflow.domain_manifest.v2` only after a completed
 domain export and validates its referenced artifacts before any ideas workflow.
+For multiple exported packages, its `write-domain-manifest.py` helper uses one
+typed `LLMClient.generate` pair-classification request with a deterministic task
+ID and a project-local `domain/field-grouping-llm` run root. Invalid grouping
+content degrades conservatively to one field with a warning; a typed pause,
+failure, or cancellation stops the handoff instead. The helper has no legacy
+runner, controller, or private-artifact reading surface.
 
 ## MCP Status
 

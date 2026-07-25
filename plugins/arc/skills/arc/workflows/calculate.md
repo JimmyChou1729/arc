@@ -21,9 +21,11 @@ Runtime artifacts:
 
 ```text
 <project-dir>/calculate/<run-id>/execute/calculate.config.json
-<project-dir>/calculate/<run-id>/execute/<calculate-run-id>/
-<project-dir>/calculate/<run-id>/execute/<calculate-run-id>/attempt_batches/
+<project-dir>/calculate/<run-id>/execute/<calculate-run-id>/config.json
+<project-dir>/calculate/<run-id>/execute/<calculate-run-id>/state.json
 ```
+
+The first file is the workflow input. The runner copies the normalized input and result state to the calculation-owned run directory. Do not discover proposal, review, transcript, session, task, or group files by walking that directory.
 
 Copy `workflows/json/calculate.config.template.json` to:
 
@@ -39,7 +41,10 @@ The runner reads worker prompt/schema templates from `workflows/json/calculate-p
 
 `"max_recalculations": 1` means 2 total attempts: 1 initial attempt + 1 recalculation.
 Do not increase attempts unless the user asks.
-For retryable proposer disagreement statuses, use the recalculation budget before pausing for human input. Also retry `reference_disagrees` while budget remains when reviewer feedback can tell proposers what to recheck without revealing reviewer-only target formulas.
+
+Each ready step and attempt creates one deterministic, independent public `arc_proposer_reviewer.BatchRequest`: one loop, one committed round, the active proposers, and one reviewer. Attempts do not reuse a private workflow session or artifact layout. The runner executes that request through `arc-jobs` and `arc-proposer-reviewer`, then reads proposal and review JSON only from the public committed round. A returned attempt records its public batch run ID and loop ID; use those identities rather than constructing artifact paths.
+
+For retryable proposer disagreement statuses, use the recalculation budget before pausing for human input. A `two_agree` decision locks the two accepted proposer outputs and runs only the one selected proposer again. Other retryable outcomes restart the active proposer set within the remaining budget.
 
 Remove foundation_check mechanics. Starting points are checked by ordinary ready
 steps when they are marked not accepted in the work note.
@@ -52,36 +57,49 @@ ready step, and clean proposer-facing source context in `allowed_context`.
 Do not expose reviewer-only targets, target equations, or later note text to proposers.
 
 For a blind reference check, include `reviewer_reference_claim` only in the
-step object and disable source tools:
+step object:
 
 ```json
-"proposer_runtime": {"allow_internet": false, "arc_paper_access": "none"}
+"reviewer_reference_claim": {"claim_id": "...", "statement": "..."}
 ```
 
-If blind proposers agree with each other but not with the reviewer reference,
-record `reference_disagrees`; use remaining recalculation budget with
-non-revealing reviewer feedback before pausing for a human decision.
+The runner places this claim in reviewer instructions only. It forces blind proposers to have no internet or inherited host configuration, never puts the claim in proposer context, and redacts reviewer feedback before a blind retry. If blind proposers agree with each other but not with the reviewer reference, record `reference_disagrees`; use remaining recalculation budget with a generic independent-recomputation instruction before pausing for a human decision.
 
-For a post-check new calculation, enable internet discovery and deterministic
-Controller ARC-paper access:
+For a post-check new calculation, place the permitted source evidence and its
+provenance in `allowed_context` before starting the batch:
 
 ```json
-"proposer_runtime": {"allow_internet": true, "arc_paper_access": "full"}
+"allowed_context": {
+  "accepted_sources": [{"canonical_id": "...", "excerpt": "...", "provenance": "..."}]
+}
 ```
 
-External sources may guide methods, but any used identity or intermediate result must be derived or already accepted in the work note. Map all notation back to work-note conventions.
+Use the public `arc-paper` operations before this step when more document evidence is needed. Do not give workers shell commands, CLI invocations, cache roots, source paths, MCP instructions, or unrestricted tool access. External sources may guide methods, but any used identity or intermediate result must be derived or already accepted in the work note. Map all notation back to work-note conventions.
 
 ## Phase 3: Run Consensus
 
 Run:
 
 ```bash
-python3 <skill-dir>/workflows/scripts/calculate_runner.py \
+python3 <skill-dir>/scripts/run-calculate.py \
   --config <project-dir>/calculate/<run-id>/execute/calculate.config.json \
   --json
 ```
 
-Inspect the returned JSON and saved artifacts. Large or slow runs are runtime facts, not workflow blocks. Use package status or watcher commands instead of manual polling when available.
+Inspect the returned JSON and saved calculation state. Large or slow runs are
+runtime facts, not workflow blocks. Use package status or watcher commands
+instead of manual polling when available.
+
+When a completed attempt needs durable inspection, use only the public proposer-reviewer inspection surface with the returned batch run ID:
+
+```bash
+arc-proposer-reviewer inspect --run-root <attempt-batch-run-root> --run-id <batch-run-id>
+arc-proposer-reviewer trace --run-root <attempt-batch-run-root> --run-id <batch-run-id>
+arc-proposer-reviewer show-round --run-root <attempt-batch-run-root> \
+  --run-id <batch-run-id> --loop-id <loop-id> --round 1
+```
+
+`trace` exposes only verified committed refs and summaries. `show-round` is the only public operation here that expands proposal and review bodies. Never infer state from unpublished half-round artifacts; they are intentionally invisible.
 
 ## Phase 4: Review Acceptance
 
@@ -91,7 +109,7 @@ The reviewer must explain the comparison, conventions, rewrites, and identities 
 
 The main agent audits the reviewer report before updating the work note. Reject weak evidence such as formatting agreement, visual similarity, or agreement in an undeclared special limit. Depending on the failure, retry, split, pause for the expert question, or write a planning request.
 
-If proposers, reviewer, and the main agent all agree that a specific equation or rule should be added to `## Axioms And Starting Points`, do not pause for a human expert solely for that promotion. Treat it as a nonhuman planning revision: record the exact equation or rule, scope, consensus artifact paths, and reason in a planning request, then return to `plan.md`. When `plan.md` adds it, mark it with the red `[foundation added by agent]` marker described below. Source target formulas, unresolved conventions, and broad unsupported rules still require the ordinary validation-only, accepted-derived, blocked, or human-question path.
+If proposers, reviewer, and the main agent all agree that a specific equation or rule should be added to `## Axioms And Starting Points`, do not pause for a human expert solely for that promotion. Treat it as a nonhuman planning revision: record the exact equation or rule, scope, batch run ID, loop ID, committed round, verified public refs, and reason in a planning request, then return to `plan.md`. When `plan.md` adds it, mark it with the red `[foundation added by agent]` marker described below. Source target formulas, unresolved conventions, and broad unsupported rules still require the ordinary validation-only, accepted-derived, blocked, or human-question path.
 
 If an accepted derivation contradicts a source or reviewer-only reference claim, classify each independent discrepancy before updating the work note. A step may have zero or more `source_discrepancies`; do not merge unrelated equations or claims into one aggregate status:
 
@@ -129,7 +147,7 @@ For an accepted step, update the work note and remove it from the executable bac
 - accepted step result goes to `## Accepted Derived Results`
 - remove the accepted step block from `## Detailed Steps Ready To Calculate`
 - use main prose for the physics argument
-- keep compact trace in `## Calculation Status`, `## Revision History`, and `## Journal`: step id, accepted status, attempt, reviewer status, source discrepancy status, and artifact paths
+- keep compact trace in `## Calculation Status`, `## Revision History`, and `## Journal`: step ID, accepted status, attempt, reviewer status, source discrepancy status, batch run ID, loop ID, committed round, and verified public ref digests
 - no `status: accepted` step block may remain under `## Detailed Steps Ready To Calculate`
 - follow `rules/math_typeset.md` math/TeX hygiene
 
@@ -172,11 +190,11 @@ Write an immutable next work-note version at
 `<project-dir>/calculate/<run-id>/work-notes/work-note-vNNN.md`, then mirror it
 to `<project-dir>/work-note.md`. After writing the root work note, follow
 `manuals/arc-jobs.md` Markdown Report Export for
-`<project-dir>/work-note.md`. This report-export gate is not
-satisfied until `md2pdf` has been started or a `WARNING:` with the exact blocker
-is recorded. Do not wait for PDF completion, and do not require any separate
-report. If PDF generation appears bugged, report it and continue this workflow;
-do not debug or fix PDF generation unless the user explicitly asks.
+`<project-dir>/work-note.md`: run the canonical Pandoc/XeLaTeX command from
+`rules/math_typeset.md` as an ordinary blocking command. If it fails, record a
+`WARNING:` with the exact blocker and continue this workflow; do not require a
+separate report. If PDF generation appears bugged, report it and continue this
+workflow; do not debug or fix PDF generation unless the user explicitly asks.
 
 ## Phase 6: Planning Handoff
 
@@ -184,7 +202,7 @@ If proposers, reviewer, or the main agent agree that plan content should change,
 
 Write `<project-dir>/calculate/<run-id>/planning-request.md` with:
 
-- current step id/status, consensus artifact paths, evidence, proposer positions, reviewer judgment, and requested `plan.md` action
+- current step ID/status, batch run ID, loop ID, committed round, verified public refs, evidence, proposer positions, reviewer judgment, and requested `plan.md` action
 - for agent-added foundation requests: exact equation or rule, validity scope, why it should live in `## Axioms And Starting Points`, and confirmation that proposers, reviewer, and main agent agree
 
 Then return to `plan.md`. Use the same handoff when blocked refinement needs splitting, limits, projections, different source context, or changed future premises. When the issue came from note parsing or claim extraction, refer to the owning workflow instead of changing it here.

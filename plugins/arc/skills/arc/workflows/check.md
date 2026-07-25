@@ -108,15 +108,13 @@ perform the check without reading the original source.
 
 After writing `<project-dir>/initial-note-check.md`, follow
 `manuals/arc-jobs.md` Markdown Report Export for
-`<project-dir>/initial-note-check.md`. This report-export gate
-is not satisfied until `md2pdf` has been started or a `WARNING:` with the exact
-blocker is recorded. Do not wait for PDF completion.
+`<project-dir>/initial-note-check.md`: run the canonical Pandoc/XeLaTeX
+command from `rules/math_typeset.md` as an ordinary blocking command. If it
+fails, record a `WARNING:` with the exact blocker and continue this workflow.
 If PDF generation appears bugged, report it and continue this workflow; do not
 debug or fix PDF generation unless the user explicitly asks.
-This `md2pdf` call applies only to ARC-generated Markdown reports, not to the
+This PDF export applies only to ARC-generated Markdown reports, not to the
 original TeX/PDF note being checked.
-Record any returned job id in host/run logs or later
-work-note journal entries.
 
 ## Phase 4: Execute Owning Workflows
 

@@ -97,6 +97,6 @@ terminal failure instead of risking duplicate work.
 
 Convert a report to PDF with the canonical Pandoc/XeLaTeX command in
 `rules/math_typeset.md` (PDF Export section), run as an ordinary blocking
-command. On failure, print `WARNING:` with the exact error and continue
-according to the owning workflow; do not debug Pandoc or TeX unless the user
-requested that work.
+command rather than an `arc-jobs submit` job. On failure, print `WARNING:`
+with the exact error and continue according to the owning workflow; do not
+debug Pandoc or TeX unless the user requested that work.

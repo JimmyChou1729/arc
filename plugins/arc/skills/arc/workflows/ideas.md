@@ -3,7 +3,8 @@
 Use this workflow for Case 2 idea generation. It selects the single-domain or
 cross-domain variant from the project domain manifest, then runs concurrent
 proposer-reviewer loops. Each loop has exactly one proposer and exactly one
-reviewer; the reviewer serves only that proposer and sends three reviewer reports per loop by default.
+reviewer; the reviewer serves only that proposer and may commit up to the
+template's three rounds by default.
 
 ## Inputs
 
@@ -36,6 +37,10 @@ transfer profiles, reviewer assessment, and qualification gates. Cross-domain
 cards and source/target roles use `field_id`. A v1, missing, or invalid
 manifest must be regenerated before cross-domain work.
 
+Proceed only when the domain-build handoff status is `completed` or `degraded`.
+For a degraded handoff, print its warnings and use only the verified domain
+material; a failed or cancelled handoff must be resolved before idea generation.
+
 Step 4: Keep `variant_glob` as `ideas-*.variant.json`. The release package
 runs only enabled variants, then selects only the enabled variant applicable
 to the manifest; it must not run both the single-domain and cross-domain
@@ -55,52 +60,67 @@ the runner never creates duplicate loops that differ only by ID.
 Step 1: Run:
 
 ```bash
-python3 <skill-dir>/workflows/scripts/ideas_runner.py \
+python3 <skill-dir>/scripts/run-ideas.py \
   --config <project-dir>/ideas/<run-id>.config.json \
   --json
 ```
 
 LLM calls have no absolute runtime limit and stop after 30 minutes with no
-substantive provider output. The foreground runner streams progress JSONL to
-stderr. Keep its terminal session active and inspect the latest excerpt and
-artifacts at each 30-minute `review_due`. Concrete results, new evidence,
-reusable artifacts, or meaningful narrowing mean continue waiting in the same
-session. Repetitive, erroneous, or off-task output means send `SIGINT` or
-`SIGTERM`; never interrupt merely because a run is long. A terminal result
-ends the foreground review loop normally. When an external
-controller launches the runner with an ARC job side channel, use the job-level
-`review_sequence` cursor loop documented in `manuals/arc-jobs.md` instead.
-Override the idle bound through `worker_idle_timeout_seconds`,
-`--idle-timeout-seconds`, or an applicable `ARC_*_IDLE_TIMEOUT_SECONDS`
-variable. `SIGINT`, `SIGTERM`, and background cancellation remain available.
+substantive provider output. The foreground runner streams start/finish progress
+JSON to stderr. Keep its terminal session active; do not interrupt merely
+because the run is long. `SIGINT`, `SIGTERM`, and ordinary durable cancellation
+remain available.
 
-Step 2: Print any returned `WARNING:` messages. For loop concurrency, see
+Step 2: Treat the runner result as the public batch handoff. It materializes
+one `BatchRequest` and executes it through `ProposerReviewerHandler` in the
+`RunRepository` rooted at `<project-dir>/ideas`, with the stable run ID
+`<run-id>`. The request is published under the logical artifact ID
+`proposer-reviewer/request`. Do not inspect or derive behavior from a run's
+private directories, loop state, transcripts, sessions, task IDs, group IDs,
+or physical artifact paths.
+
+The result's `batch` object reports the run revision, loop revision vector, and
+whether the committed trace verified. `inspect_batch` supplies lifecycle and
+best-effort activity; `read_batch_trace` supplies only atomically committed
+round references; `read_batch_round` is the only public expansion of a
+proposal and its review envelope. The scientific review is the envelope's
+`payload`, not a separate intermediary artifact. If committed-trace verification
+fails, print its `WARNING:` and do not rank or reconstruct output from files.
+
+Step 3: Print any returned `WARNING:` messages. Rank only loops whose public
+lifecycle is `succeeded`; failed, cancelled, pending, running, paused, and
+integrity-error loops remain visible in inspection but are excluded from the
+formal ranking. For loop concurrency and durable pause/resume behavior, see
 `manuals/arc-llm.md`.
 
-Proposers and reviewers use structured Controller evidence requests by default.
-An explicit direct-shell request may expose the cache-only `network=none`
-ARC-paper subset only after trusted nested-shell preflight; otherwise no direct
-command is present. The Controller resolves deterministic ARC-paper operations
-between rounds and returns provenance in the next worker context. Other ARC
-CLIs, nested LLM entry points, and MCP tools remain unavailable. See
-`manuals/arc-llm.md`.
+### Evidence Boundary
 
-Step 3: Continue when status is `completed` or `degraded`. For `degraded`,
-print a prominent `WARNING:` with failed/degraded loop counts and the artifact
-root, then rank only usable loops with valid proposer and reviewer results. If
-status is `failed` or `cancelled`, print `WARNING:` and stop before ranking.
+When the selected variant attaches ARC-paper evidence, every proposer and
+reviewer receives the same bounded interaction resolver. Its complete allowlist
+is exactly:
 
-The workflow runner writes this generated batch config before launch:
+- `get-metadata`
+- `get-references`
+- `get-citers`
+- `search-metadata`
+- `get-arxiv-table-of-contents`
+- `get-arxiv-section`
+- `search-arxiv-full-text`
+- `search-arxiv-equations`
 
-```text
-<project-dir>/ideas/<run-id>/ideas_batch_config.json
-```
+The entire ideas batch shares one budget of 24 ARC-paper requests, rather than
+24 requests per worker or per round. Each worker may automatically complete at
+most two interaction rounds; a third interaction request pauses the durable
+batch for explicit resume handling. Resolver responses record the versioned
+operation ID, normalized parameters, canonical arXiv ID when available, source
+and document digests, and typed error provenance.
 
-For proposer-reviewer artifact ownership and runner result shape, see
-`manuals/arc-llm.md`.
-Final ranked ideas must come from `ideas_runner.py` artifacts and the read-only
-ranking helper, not ad-hoc agent judgment. This includes usable loops from a
-degraded batch. In cross-domain mode,
+Workers cannot invoke shell commands, ARC CLIs, arbitrary paths, cache
+administration, recursive LLM calls, or MCP tools. Do not add a fallback for
+those capabilities. The resolver is the only dynamic evidence surface.
+
+Final ranked ideas must come from `run-ideas.py`'s public committed batch data
+and the read-only ranking helper, not ad-hoc agent judgment. In cross-domain mode,
 only candidates marked as genuine transfers with a substantial target-domain
 contribution and a feasible first calculation are eligible for the formal
 ranking. The source domain may contribute a mature method or mechanism without
@@ -117,26 +137,33 @@ or an important problem without ready inputs and a bounded first calculation.
 
 ### Phase 3: Inspect Artifacts
 
-Report these paths:
+Report the durable repository root and run ID, not internal run-layout paths:
 
 ```text
-<project-dir>/ideas/<run-id>/
-<project-dir>/ideas/<run-id>/ideas_batch_config.json
-<project-dir>/ideas/<run-id>/idea_loops/
-<project-dir>/ideas/<run-id>/idea_loops/loops/
+run root: <project-dir>/ideas
+run ID: <run-id>
+request artifact: proposer-reviewer/request
 ```
 
-Step 1: After the run completes, use the read-only ranking helper to write the
-deterministic ranked ideas report directly to both readable destinations:
+Step 1: Use the public observation APIs after the run completes. `inspect_batch`
+may show a lifecycle for any batch state; the strict trace exposes only complete
+committed rounds. The ranking helper selects the best qualified committed round
+for each succeeded loop, rather than assuming the final round is best. It emits
+logical artifact IDs and content digests, never physical proposal or review
+paths.
+
+Write the deterministic ranked report directly to both readable destinations:
 
 ```bash
-python3 <skill-dir>/workflows/scripts/rank-ideas.py \
-  <project-dir>/ideas/<run-id>/idea_loops \
+python3 <skill-dir>/scripts/rank-ideas.py \
+  --run-root <project-dir>/ideas \
+  --run-id <run-id> \
   --format markdown \
   > <project-dir>/ideas/<run-id>/ranked-ideas.md
 
-python3 <skill-dir>/workflows/scripts/rank-ideas.py \
-  <project-dir>/ideas/<run-id>/idea_loops \
+python3 <skill-dir>/scripts/rank-ideas.py \
+  --run-root <project-dir>/ideas \
+  --run-id <run-id> \
   --format markdown \
   > <project-dir>/ranked-ideas.md
 ```
@@ -158,28 +185,26 @@ proposer text; avoid wide tables with long prose.
 For cross-domain runs, use the abbreviations and score columns declared by the
 selected cross-domain marking scheme. List qualified candidates first in
 formal ranking order, never fill the top three with an unqualified candidate,
-and add an unqualified appendix with explicit reasons. The helper also writes
-`<project-dir>/ideas/<run-id>/cross-domain-diagnostics.json`; report that path
-and print any insufficient-qualified-candidate `WARNING:` messages.
+and add an unqualified appendix with explicit reasons. Print any
+insufficient-qualified-candidate `WARNING:` messages.
 
 For new single-domain runs, formal ranking likewise contains only candidates
 that pass the mathematical-definition and feasibility gate. Do not pad the top
 three with infeasible candidates. Add explicit failures to the unqualified
-appendix, write `<project-dir>/ideas/<run-id>/single-domain-diagnostics.json`,
-and print any insufficient-qualified-candidate `WARNING:` messages. Historical
-artifacts without `idea_assessment` remain readable under the visibly reported
-`legacy_no_feasibility_gate` policy.
+appendix and print any insufficient-qualified-candidate `WARNING:` messages.
+No-assessment single-domain variants remain visibly marked as using the
+`no_assessment` policy; do not infer a legacy artifact layout.
 
 Step 2: After writing the project-level Markdown report, follow
 `manuals/arc-jobs.md` Markdown Report Export for
-`<project-dir>/ranked-ideas.md`. This report-export gate is not
-satisfied until `md2pdf` has been started or a `WARNING:` with the exact blocker
-is recorded. Do not wait for PDF completion.
-If PDF generation appears bugged, report it and continue this workflow; do not
-debug or fix PDF generation unless the user explicitly asks.
+`<project-dir>/ranked-ideas.md`: run the canonical Pandoc/XeLaTeX command as
+an ordinary blocking command. On failure, print `WARNING:` with the exact error
+and continue this workflow; do not debug or fix PDF generation unless the user
+explicitly asks. Do not turn this into a background job.
 
-Do not invent rankings or novelty claims. Use the recorded proposer outputs and
-per-round reviewer reports from the `arc-llm` loop artifacts.
+Do not invent rankings or novelty claims. Use only public committed proposals,
+review envelopes, and reviewer `payload` values returned through the
+proposer-reviewer projection.
 
 ### Phase 4: Select Next Action
 
