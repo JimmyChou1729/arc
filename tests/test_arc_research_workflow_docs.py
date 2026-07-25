@@ -286,7 +286,8 @@ def test_manuals_do_not_hardcode_checkout_cache_paths() -> None:
         assert "/arc-dev/cache/" not in text
     paper = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
     assert "doctor-cache" not in paper
-    assert "There is no cache list, delete, scan, or other administration command." in paper
+    assert "There is no cache list, delete, or administration command." in paper
+    assert "Controlled read-only" in paper
     assert "ARC_JOBS_CACHE" in (SKILL / "manuals/arc-jobs.md").read_text(encoding="utf-8")
 
 
@@ -307,6 +308,45 @@ def test_arc_paper_manual_documents_cache_first_arxiv_queries() -> None:
     assert "never fall back to PDF" in text
     assert "content-identity and parser-contract key" in text
     assert "`SourceRepository`" in text
+
+
+def test_arc_paper_docs_define_bounded_cached_full_text_search() -> None:
+    manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    readme = (ROOT / "packages/arc-paper/README.md").read_text(encoding="utf-8")
+
+    for text in (manual, readme):
+        compact = " ".join(text.split())
+        assert "search-cached-full-text" in compact
+        assert '--term "heavy field"' in compact
+        assert '--term "massive exchange"' in compact
+        assert "literal OR alternatives" in compact
+        assert "top 50 matching paper titles" in compact
+        assert "top_paper_titles" in compact
+        assert "never returns abstracts or summaries" in compact
+        assert "without network" in compact
+        assert "rg_unavailable" in compact
+
+    assert "arc-paper.search-cached-full-text.v1" in manual
+    assert "mode=refinement_required" in manual
+    assert "search_cached_full_text(" in manual
+    assert "case_sensitive=False" in manual
+    assert "--case-sensitive" in manual
+    assert "1–500" in manual
+    assert "at most 20 occurrences" in manual
+    assert "at most 400 characters" in manual
+
+
+def test_ideas_workflow_guides_one_multi_term_cached_search_request() -> None:
+    ideas = (WF / "ideas.md").read_text(encoding="utf-8")
+    compact = " ".join(ideas.split())
+
+    assert "- `search-cached-full-text`" in ideas
+    assert "one `search-cached-full-text` request" in compact
+    assert '--term "heavy field" --term "massive exchange"' in compact
+    assert "`terms` array" in compact
+    assert "literal alternatives combined with OR" in compact
+    assert "top 50 matching paper titles" in compact
+    assert "never abstracts or summaries" in compact
 
 
 def test_self_reflection_allows_missing_git_metadata() -> None:

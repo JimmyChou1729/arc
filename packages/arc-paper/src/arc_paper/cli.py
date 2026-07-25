@@ -64,6 +64,14 @@ def _parser() -> _Parser:
     search.add_argument("query", nargs="+")
     search.add_argument("--limit", type=int, default=20)
 
+    cached_full_text = commands.add_parser(
+        "search-cached-full-text", add_help=False
+    )
+    cached_full_text.add_argument("--term", action="append", required=True)
+    cached_full_text.add_argument("--limit", type=int, default=100)
+    cached_full_text.add_argument("--context-lines", type=int, default=0)
+    cached_full_text.add_argument("--case-sensitive", action="store_true")
+
     toc = commands.add_parser("get-arxiv-table-of-contents", add_help=False)
     _arxiv_arguments(toc)
 
@@ -161,6 +169,13 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
         }
     if command == "search-metadata":
         return {"query": " ".join(args.query), "limit": args.limit}
+    if command == "search-cached-full-text":
+        return {
+            "terms": args.term,
+            "limit": args.limit,
+            "context_lines": args.context_lines,
+            "case_sensitive": args.case_sensitive,
+        }
     if command == "get-arxiv-table-of-contents":
         return {"arxiv_id": args.arxiv_id, "refresh": args.refresh}
     if command == "get-arxiv-section":
@@ -224,6 +239,7 @@ def _help_data() -> dict[str, Any]:
             "get-citers",
             "get-citer-count",
             "search-metadata",
+            "search-cached-full-text",
             "get-arxiv-table-of-contents",
             "get-arxiv-section",
             "search-arxiv-full-text",
@@ -237,6 +253,13 @@ def _help_data() -> dict[str, Any]:
             "stop (arc-jobs)",
             "validate (arc-jobs)",
         ],
+        "guidance": {
+            "search-cached-full-text": (
+                "Prefer several specific multi-word --term values in one call "
+                "to cover synonyms, abbreviations, and alternate spellings; "
+                "broad single words may require refinement."
+            )
+        },
     }
 
 

@@ -14,14 +14,16 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 from ._cache_root import resolve_cache_root
 from ._durable_io import atomic_write_bytes
 from ._file_lock import exclusive_file_lock
 from .ids import arxiv_path_id
-from .parse.models import ParsedDocument
 from .sources import SourceArtifact
+
+if TYPE_CHECKING:
+    from .parse.models import ParsedDocument
 
 
 FULL_TEXT_CATALOG_SCHEMA = "arc.paper.full_text_catalog.v1"

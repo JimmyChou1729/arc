@@ -47,6 +47,7 @@ def test_registry_has_one_typed_spec_per_operation_and_safe_default_projection()
         "arc-paper.get-arxiv-section.v1",
         "arc-paper.search-arxiv-full-text.v1",
         "arc-paper.search-arxiv-equations.v1",
+        "arc-paper.search-cached-full-text.v1",
     } <= set(OPERATION_REGISTRY)
     assert all(
         "cache_root"
@@ -56,6 +57,7 @@ def test_registry_has_one_typed_spec_per_operation_and_safe_default_projection()
             "get-arxiv-section",
             "search-arxiv-full-text",
             "search-arxiv-equations",
+            "search-cached-full-text",
         )
     )
     assert registry_document()["schema_version"] == "arc.paper.operation_registry.v1"
@@ -147,6 +149,27 @@ def test_cli_stdout_is_exactly_one_command_result(
             ["search-metadata", "specific", "mechanism", "--limit", "7"],
             "search-metadata",
             {"query": "specific mechanism", "limit": 7},
+        ),
+        (
+            [
+                "search-cached-full-text",
+                "--term",
+                "heavy field",
+                "--term",
+                "massive exchange",
+                "--limit",
+                "100",
+                "--context-lines",
+                "2",
+                "--case-sensitive",
+            ],
+            "search-cached-full-text",
+            {
+                "terms": ["heavy field", "massive exchange"],
+                "limit": 100,
+                "context_lines": 2,
+                "case_sensitive": True,
+            },
         ),
         (
             ["get-arxiv-table-of-contents", "0911.3380", "--refresh"],
@@ -309,6 +332,18 @@ def test_cli_preserves_nonfatal_domain_warnings_in_shared_envelope(
     ]
 
 
+def test_cli_help_guides_specific_multi_term_cached_search(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["--help"]) == 0
+    value = json.loads(capsys.readouterr().out)
+
+    guidance = value["data"]["guidance"]["search-cached-full-text"]
+    assert "specific multi-word --term values" in guidance
+    assert "synonyms" in guidance
+    assert "refinement" in guidance
+
+
 def test_cli_import_and_parse_local_use_content_addressed_repository(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -382,6 +417,7 @@ def test_source_has_no_private_queue_thread_pool_or_detached_process_owner() -> 
         "arc_paper.runtime_context",
     }
     subprocess_adapters = {
+        SOURCE_ROOT / "_ripgrep.py",
         SOURCE_ROOT / "parse" / "parser.py",
         SOURCE_ROOT / "parse" / "visual.py",
     }

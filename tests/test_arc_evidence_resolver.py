@@ -24,14 +24,105 @@ def test_evidence_contracts_are_exactly_the_bounded_paper_allowlist() -> None:
     contracts = module.evidence_operation_contracts()
 
     assert tuple(contracts) == module.EVIDENCE_OPERATION_NAMES
-    assert len(contracts) == 8
+    assert len(contracts) == 9
     assert all("cache_root" not in contract.arguments_schema["properties"] for name, contract in contracts.items() if "arxiv" in name)
     assert {
         "get-arxiv-table-of-contents",
         "get-arxiv-section",
         "search-arxiv-full-text",
         "search-arxiv-equations",
+        "search-cached-full-text",
     } <= set(contracts)
+    cached_properties = contracts[
+        "search-cached-full-text"
+    ].arguments_schema["properties"]
+    assert set(cached_properties) == {
+        "terms",
+        "limit",
+        "context_lines",
+        "case_sensitive",
+    }
+    assert "cache_root" not in cached_properties
+    assert "path" not in cached_properties
+    cached_output = contracts[
+        "search-cached-full-text"
+    ].response_schema["properties"]["data"]
+    title_items = cached_output["properties"]["top_paper_titles"]["items"]
+    assert title_items["type"] == "string"
+    assert title_items["minLength"] == 1
+    assert "abstracts" not in cached_output["properties"]
+    assert "summaries" not in cached_output["properties"]
+    assert module._SERVICE_METHODS["search-cached-full-text"] == (
+        "search_cached_full_text"
+    )
+
+
+def test_evidence_resolver_routes_multi_term_cached_search() -> None:
+    module = _module()
+
+    class CachedSearchService:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def search_cached_full_text(
+            self,
+            terms: list[str],
+            *,
+            limit: int = 100,
+            context_lines: int = 0,
+            case_sensitive: bool = False,
+        ) -> dict[str, object]:
+            self.calls.append(
+                {
+                    "terms": terms,
+                    "limit": limit,
+                    "context_lines": context_lines,
+                    "case_sensitive": case_sensitive,
+                }
+            )
+            return {
+                "mode": "occurrences",
+                "terms": terms,
+                "limit": limit,
+                "context_lines": context_lines,
+                "case_sensitive": case_sensitive,
+                "total_occurrences": 0,
+                "matched_document_count": 0,
+                "occurrences": [],
+                "top_paper_titles": [],
+                "context_status": "not_requested",
+                "message": "Add synonymous multiword terms.",
+                "warnings": [],
+            }
+
+    service = CachedSearchService()
+    resolver = module.ArcPaperEvidenceResolver(service=service)  # type: ignore[arg-type]
+    response = resolver.resolve(
+        InteractionRequest(
+            "cached-search",
+            "search-cached-full-text",
+            {
+                "terms": ["heavy field", "massive exchange"],
+                "limit": 50,
+                "context_lines": 0,
+                "case_sensitive": True,
+            },
+        )
+    )
+
+    assert response.error is None
+    assert service.calls == [
+        {
+            "terms": ["heavy field", "massive exchange"],
+            "limit": 50,
+            "context_lines": 0,
+            "case_sensitive": True,
+        }
+    ]
+    assert response.result["operation_id"] == (
+        "arc-paper.search-cached-full-text.v1"
+    )
+    assert response.result["data"]["top_paper_titles"] == []
 
 
 def test_evidence_resolver_reuses_one_service_document_memo_and_records_provenance() -> None:

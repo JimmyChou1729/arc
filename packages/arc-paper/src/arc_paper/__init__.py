@@ -28,6 +28,15 @@ from .document_search import (  # noqa: E402
     search_full_text,
     table_of_contents,
 )
+from .cached_full_text_search import (  # noqa: E402
+    CachedFullTextContextStatus,
+    CachedFullTextLocation,
+    CachedFullTextOccurrence,
+    CachedFullTextSearchError,
+    CachedFullTextSearchMode,
+    CachedFullTextSearchResult,
+    CachedFullTextSearcher,
+)
 from .arxiv_document import (  # noqa: E402
     ArxivDocumentProvenance,
     ArxivEquationSearch,
@@ -91,6 +100,7 @@ from .service import (  # noqa: E402
     get_arxiv_table_of_contents,
     search_arxiv_equations,
     search_arxiv_full_text,
+    search_cached_full_text,
 )
 from .rich_document import (  # noqa: E402
     AssetImporter,
@@ -148,6 +158,13 @@ __all__ = [
     "ArxivFullTextSearch",
     "ArxivSection",
     "ArxivTableOfContents",
+    "CachedFullTextContextStatus",
+    "CachedFullTextLocation",
+    "CachedFullTextOccurrence",
+    "CachedFullTextSearchError",
+    "CachedFullTextSearchMode",
+    "CachedFullTextSearchResult",
+    "CachedFullTextSearcher",
     "arxiv_path_id",
     "DEFAULT_EXCLUDED_EFFECTS",
     "DocumentSearchError",
@@ -239,6 +256,7 @@ __all__ = [
     "search_equations",
     "search_arxiv_equations",
     "search_arxiv_full_text",
+    "search_cached_full_text",
     "search_full_text",
     "table_of_contents",
     "parse_outcome_to_document",

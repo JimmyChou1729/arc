@@ -12,7 +12,7 @@
         "content": "<full markdown text>"
       }
     ],
-    "arc_paper_tool_notes": "Bounded ARC paper evidence is available only through resolver-supplied typed operation requests and responses. Treat returned evidence as read-only. Do not invoke ARC CLIs, shell commands, or MCP tools from the worker. Use typed resolver operations for cached/local paper checks and internet search only for uncached, very recent, or non-arXiv public evidence. Record each check with its operation or query and short result."
+    "arc_paper_tool_notes": "Bounded ARC paper evidence is available only through resolver-supplied typed operation requests and responses. Treat returned evidence as read-only. Do not invoke ARC CLIs, shell commands, or MCP tools from the worker. Use typed resolver operations for cached/local paper checks and internet search only for uncached, very recent, or non-arXiv public evidence. For cache-wide full-text checks, send one search-cached-full-text request whose terms array contains several concrete multiword synonyms; the CLI equivalent is repeated --term values in one call. Avoid broad single words. Terms are literal OR alternatives. A refinement response contains at most 50 paper titles, never summaries or abstracts. Record each check with its operation or query and short result."
   },
   "proposers": [],
   "reviewers": []

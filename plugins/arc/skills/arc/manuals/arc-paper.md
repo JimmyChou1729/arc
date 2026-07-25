@@ -95,7 +95,64 @@ Use `fetch-arxiv-pdf`, `import-source`, `parse-local`, and `SourceRepository`
 only for explicit local imports, HTML/PDF comparison, validation, visual review,
 or other advanced source handling.
 
-### Step 3: Parse and reconcile local or explicitly selected sources
+### Step 3: Search all cached full text
+
+Search only the current, verified full-text documents already materialized in
+the ARC paper cache:
+
+```bash
+arc-paper search-cached-full-text \
+  --term "heavy field" \
+  --term "massive exchange" \
+  --limit 100 \
+  --context-lines 0
+```
+
+The corresponding registry operation ID is:
+
+```text
+arc-paper.search-cached-full-text.v1
+```
+
+The Python facade is:
+
+```python
+search_cached_full_text(
+    terms,
+    limit=100,
+    context_lines=0,
+    case_sensitive=False,
+)
+```
+
+Repeat `--term` with several concrete multiword synonyms, abbreviations, or
+spellings in one call. Terms are literal OR alternatives, and
+whitespace inside a term may match equivalent whitespace. Avoid broad
+single-word terms, which are likely to require refinement. The typed Python and
+resolver API passes the same values as a `terms` array. Matching is
+case-insensitive unless `--case-sensitive` or `case_sensitive=True` is set.
+
+The command requires `rg` (ripgrep) and fails with `rg_unavailable` when it is
+not installed; it has no Python search fallback. It searches only
+catalog-selected, verified `document.json` payloads, not source PDFs, manifests,
+checkpoints, sessions, or arbitrary paths. For one arXiv ID, current HTML is
+preferred over PDF; aliases of the same parsed document are combined.
+
+`limit` defaults to 100 and accepts 1–500 occurrences. `context_lines` defaults
+to 0 and accepts 0–2. Requested context is included only when the complete
+result has at most 20 occurrences, with at most 400 characters per occurrence.
+When the exact occurrence count exceeds `limit`, the response uses
+`mode=refinement_required`, omits all occurrences and context, and returns the
+exact occurrence and document counts plus at most the top 50 matching paper
+titles in `top_paper_titles`. It never returns abstracts or summaries. Display
+titles come only from the verified cached projection and use deterministic
+fallbacks when needed: the first meaningful section title, then the first
+meaningful page line, then sorted canonical arXiv IDs, then a local
+format-and-digest label. They are resolved without network access. Narrow the
+multiword phrases while keeping synonyms together in one request. A zero-match
+response suggests adding synonym terms.
+
+### Step 4: Parse and reconcile local or explicitly selected sources
 
 ```bash
 arc-paper parse-local note.md
@@ -137,7 +194,7 @@ another provider call. Use
 `--policy deterministic_only` or `--policy none` when that is intentional.
 TeX+PDF and ar5iv default to deterministic reconciliation.
 
-### Step 4: Search an already parsed document in Python
+### Step 5: Search an already parsed document in Python
 
 Full-text and equation search are pure typed Python operations over one or more
 `ParsedDocument` values:
@@ -188,14 +245,22 @@ to `arc-jobs`; `arc-paper` does not implement another status database.
 
 `arc_paper.registry_document()` exposes the default registry projection.
 It excludes cache administration, destructive operations, arbitrary local-path
-operations, and recursive LLM operations. Trusted local CLI commands may still
-import and parse explicit local paths.
+operations, and recursive LLM operations. It includes the controlled read-only
+`search-cached-full-text` operation, which can inspect only catalog-selected
+verified parsed documents and cannot accept paths. Trusted local CLI commands
+may still import and parse explicit local paths.
 
 ## Cache
 
 Set `ARC_PAPER_CACHE` to override the paper cache root. Source objects and
 remote request entries are integrity checked and published atomically. The
-cache-first arXiv document commands also persist a separately verified parsed
-document projection keyed by source content identity and
-`arc.paper.parser.v1`; a parser-contract change naturally uses a new entry.
-There is no cache list, delete, scan, or other administration command.
+public paper service, repository-backed parser, and package workflows persist a
+separately verified parsed-document projection for every successfully processed
+HTML, Markdown, flattened single-file TeX, or PDF source. The projection is
+keyed by source content identity and its format-specific parser contract; PDF
+keys also include the stable extractor contract. A parser-contract change
+naturally uses a new entry.
+
+There is no cache list, delete, or administration command. Controlled read-only
+full-text search is allowed only through `search-cached-full-text`; it follows
+the current catalog locators and does not enumerate unrelated cache data.

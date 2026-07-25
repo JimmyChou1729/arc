@@ -107,6 +107,16 @@ is exactly:
 - `get-arxiv-section`
 - `search-arxiv-full-text`
 - `search-arxiv-equations`
+- `search-cached-full-text`
+
+For a cache-wide novelty check, prefer one `search-cached-full-text` request
+with several concrete multiword synonym terms instead of separate broad
+single-word requests. The CLI equivalent repeats `--term` in one call, for
+example `--term "heavy field" --term "massive exchange"`; the typed resolver
+passes the same values in its `terms` array. Terms are literal alternatives
+combined with OR. If the result requires refinement, narrow the phrases rather
+than requesting summaries: the response contains at most the top 50 matching
+paper titles and never abstracts or summaries.
 
 The entire ideas batch shares one budget of 24 ARC-paper requests, rather than
 24 requests per worker or per round. Each worker may automatically complete at

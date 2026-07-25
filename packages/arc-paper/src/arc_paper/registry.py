@@ -476,6 +476,45 @@ _FULL_TEXT_MATCH_SCHEMA = _object(
         "snippet",
     ),
 )
+_CACHED_FULL_TEXT_OCCURRENCE_SCHEMA = _object(
+    {
+        "source_kind": {"enum": ["arxiv", "local"]},
+        "arxiv_ids": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^arXiv:"},
+        },
+        "source_format": {"enum": ["html", "markdown", "tex", "pdf"]},
+        "source_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "document_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "location": {"enum": ["section", "page"]},
+        "location_id": _NONEMPTY_STRING,
+        "title": _STRING,
+        "page_number": _NULLABLE_INTEGER,
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1},
+        "matched_terms": {
+            "type": "array",
+            "items": _NONEMPTY_STRING,
+            "minItems": 1,
+        },
+        "context": {"type": "string", "maxLength": 400},
+    },
+    required=(
+        "source_kind",
+        "arxiv_ids",
+        "source_format",
+        "source_digest",
+        "document_digest",
+        "location",
+        "location_id",
+        "title",
+        "page_number",
+        "line",
+        "column",
+        "matched_terms",
+        "context",
+    ),
+)
 _EQUATION_MATCH_SCHEMA = _object(
     {
         "document_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -607,6 +646,88 @@ _OPERATIONS = (
         service.search_metadata,
         output_schema={"type": "array", "items": _METADATA_SCHEMA},
         effects=_NETWORK_CACHE,
+    ),
+    _spec(
+        "search-cached-full-text",
+        _object(
+            {
+                "terms": {
+                    "type": "array",
+                    "items": _NONEMPTY_STRING,
+                    "minItems": 1,
+                    "description": (
+                        "Literal OR terms. Prefer several specific multi-word "
+                        "synonyms, abbreviations, and alternate spellings in one request; "
+                        "broad single words may require refinement."
+                    ),
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                "context_lines": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2,
+                },
+                "case_sensitive": {"type": "boolean", "default": False},
+            },
+            required=("terms",),
+        ),
+        service.search_cached_full_text,
+        output_schema=_object(
+            {
+                "mode": {"enum": ["occurrences", "refinement_required"]},
+                "terms": {
+                    "type": "array",
+                    "items": _NONEMPTY_STRING,
+                    "minItems": 1,
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                "context_lines": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2,
+                },
+                "case_sensitive": {"type": "boolean"},
+                "total_occurrences": {"type": "integer", "minimum": 0},
+                "matched_document_count": {"type": "integer", "minimum": 0},
+                "occurrences": {
+                    "type": "array",
+                    "items": _CACHED_FULL_TEXT_OCCURRENCE_SCHEMA,
+                },
+                "top_paper_titles": {
+                    "type": "array",
+                    "items": _NONEMPTY_STRING,
+                    "maxItems": 50,
+                    "description": (
+                        "At most 50 cached display titles in refinement mode; "
+                        "no abstracts or summaries are returned."
+                    ),
+                },
+                "context_status": {
+                    "enum": [
+                        "not_requested",
+                        "included",
+                        "omitted_too_broad",
+                        "omitted_refinement_required",
+                    ]
+                },
+                "message": _NONEMPTY_STRING,
+                "warnings": _STRING_ARRAY,
+            },
+            required=(
+                "mode",
+                "terms",
+                "limit",
+                "context_lines",
+                "case_sensitive",
+                "total_occurrences",
+                "matched_document_count",
+                "occurrences",
+                "top_paper_titles",
+                "context_status",
+                "message",
+                "warnings",
+            ),
+        ),
     ),
     _spec(
         "get-arxiv-table-of-contents",

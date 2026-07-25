@@ -211,6 +211,21 @@ def test_evidence_enabled_idea_prompts_describe_typed_resolver_boundary() -> Non
     assert "controller resolution" not in text
     assert "controller-mediated" not in text
     assert "arc-paper cli/service" not in text
+    assert "search-cached-full-text" in text
+    assert "several concrete multiword synonyms" in text
+    assert "repeated --term values in one call" in text
+    assert "at most 50 paper titles, never summaries or abstracts" in text
+    for name in (
+        "ideas-loop.template.json",
+        "ideas-cross-domain-loop.template.json",
+    ):
+        notes = json.loads(
+            (WORKFLOW_JSON / name).read_text(encoding="utf-8")
+        )["caller_context"]["arc_paper_tool_notes"].lower()
+        assert "search-cached-full-text" in notes
+        assert "several concrete multiword synonyms" in notes
+        assert "repeated --term values in one call" in notes
+        assert "at most 50 paper titles, never summaries or abstracts" in notes
 
 
 def test_execution_uses_public_projection_for_three_committed_rounds_and_scores(tmp_path: Path) -> None:

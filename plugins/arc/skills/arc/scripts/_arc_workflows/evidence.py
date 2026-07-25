@@ -28,6 +28,7 @@ EVIDENCE_OPERATION_NAMES = (
     "get-arxiv-section",
     "search-arxiv-full-text",
     "search-arxiv-equations",
+    "search-cached-full-text",
 )
 
 _SERVICE_METHODS = {
@@ -39,6 +40,7 @@ _SERVICE_METHODS = {
     "get-arxiv-section": "get_arxiv_section",
     "search-arxiv-full-text": "search_arxiv_full_text",
     "search-arxiv-equations": "search_arxiv_equations",
+    "search-cached-full-text": "search_cached_full_text",
 }
 
 

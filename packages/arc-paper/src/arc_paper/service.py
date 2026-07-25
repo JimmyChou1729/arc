@@ -18,6 +18,10 @@ from .arxiv_document import (
     ArxivSection,
     ArxivTableOfContents,
 )
+from .cached_full_text_search import (
+    CachedFullTextSearchResult,
+    CachedFullTextSearcher,
+)
 from .document_search import (
     EquationSearchResult,
     FullTextSearchResult,
@@ -93,6 +97,7 @@ class ArcPaperService:
             self.repository,
             pdf_text_extractor=pdf_text_extractor,
         )
+        self._cached_full_text_searcher = CachedFullTextSearcher(root)
 
     def import_source(
         self,
@@ -224,6 +229,21 @@ class ArcPaperService:
 
     def search_metadata(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
         return self.inspire.search_metadata(query, limit=limit)
+
+    def search_cached_full_text(
+        self,
+        terms: Sequence[str],
+        *,
+        limit: int = 100,
+        context_lines: int = 0,
+        case_sensitive: bool = False,
+    ) -> CachedFullTextSearchResult:
+        return self._cached_full_text_searcher.search(
+            terms,
+            limit=limit,
+            context_lines=context_lines,
+            case_sensitive=case_sensitive,
+        )
 
     def search_full_text(
         self,
@@ -468,6 +488,21 @@ def search_metadata(query: str, *, limit: int = 20) -> list[dict[str, Any]]:
     return ArcPaperService().search_metadata(query, limit=limit)
 
 
+def search_cached_full_text(
+    terms: Sequence[str],
+    *,
+    limit: int = 100,
+    context_lines: int = 0,
+    case_sensitive: bool = False,
+) -> CachedFullTextSearchResult:
+    return ArcPaperService().search_cached_full_text(
+        terms,
+        limit=limit,
+        context_lines=context_lines,
+        case_sensitive=case_sensitive,
+    )
+
+
 def search_full_text(
     documents: ParsedDocument | Iterable[ParsedDocument],
     query: str,
@@ -643,6 +678,7 @@ __all__ = [
     "search_equations",
     "search_arxiv_equations",
     "search_arxiv_full_text",
+    "search_cached_full_text",
     "search_full_text",
     "search_metadata",
     "table_of_contents",
