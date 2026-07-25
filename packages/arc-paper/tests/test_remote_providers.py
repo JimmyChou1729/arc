@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import urllib.parse
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -19,7 +20,7 @@ from arc_paper.providers import (
 from arc_paper.providers.ar5iv import MAX_HTML_BYTES
 from arc_paper.providers.arxiv_pdf import arxiv_pdf_url
 from arc_paper.source_repository import SourceRepository
-from arc_paper.sources import SourceFormat
+from arc_paper.sources import SourceFormat, SourceOrigin, SourceOriginKind
 
 
 def _response(
@@ -124,6 +125,124 @@ def test_ar5iv_concurrent_cache_fill_fetches_once(tmp_path):
 
     assert call_count == 1
     assert len({artifact.content_identity for artifact in artifacts}) == 1
+
+
+def test_fetch_source_checks_reads_and_fetches_under_request_lock(
+    tmp_path, monkeypatch
+):
+    cache = RemoteRequestCache(tmp_path)
+    original_lock = cache._request_lock
+    original_get = cache.get_source
+    lock_depth = 0
+    get_calls = 0
+    fetch_calls = 0
+
+    @contextmanager
+    def tracked_lock(kind, namespace, digest):
+        nonlocal lock_depth
+        with original_lock(kind, namespace, digest):
+            lock_depth += 1
+            try:
+                yield
+            finally:
+                lock_depth -= 1
+
+    def checked_get(*args, **kwargs):
+        nonlocal get_calls
+        assert lock_depth == 1
+        get_calls += 1
+        return original_get(*args, **kwargs)
+
+    def fetch():
+        nonlocal fetch_calls
+        assert lock_depth == 1
+        fetch_calls += 1
+        return f"source-{fetch_calls}".encode()
+
+    monkeypatch.setattr(cache, "_request_lock", tracked_lock)
+    monkeypatch.setattr(cache, "get_source", checked_get)
+    origin = SourceOrigin(
+        SourceOriginKind.REMOTE_PROVIDER,
+        provider="fixture",
+    )
+    first = cache.fetch_source(
+        "source",
+        "request",
+        source_format=SourceFormat.HTML,
+        media_type="text/html",
+        origin=origin,
+        fetch=fetch,
+    )
+    replayed = cache.fetch_source(
+        "source",
+        "request",
+        source_format=SourceFormat.HTML,
+        media_type="text/html",
+        origin=origin,
+        fetch=fetch,
+    )
+    refreshed = cache.fetch_source(
+        "source",
+        "request",
+        source_format=SourceFormat.HTML,
+        media_type="text/html",
+        origin=origin,
+        fetch=fetch,
+        refresh=True,
+    )
+
+    assert replayed.content_identity == first.content_identity
+    assert refreshed.content_identity != first.content_identity
+    assert get_calls == 2
+    assert fetch_calls == 2
+    assert lock_depth == 0
+
+
+def test_fetch_json_checks_reads_and_fetches_under_request_lock(
+    tmp_path, monkeypatch
+):
+    cache = RemoteRequestCache(tmp_path)
+    original_lock = cache._request_lock
+    original_get = cache.get_json
+    lock_depth = 0
+    get_calls = 0
+    fetch_calls = 0
+
+    @contextmanager
+    def tracked_lock(kind, namespace, digest):
+        nonlocal lock_depth
+        with original_lock(kind, namespace, digest):
+            lock_depth += 1
+            try:
+                yield
+            finally:
+                lock_depth -= 1
+
+    def checked_get(*args, **kwargs):
+        nonlocal get_calls
+        assert lock_depth == 1
+        get_calls += 1
+        return original_get(*args, **kwargs)
+
+    def fetch():
+        nonlocal fetch_calls
+        assert lock_depth == 1
+        fetch_calls += 1
+        return {"generation": fetch_calls}
+
+    monkeypatch.setattr(cache, "_request_lock", tracked_lock)
+    monkeypatch.setattr(cache, "get_json", checked_get)
+    first = cache.fetch_json("json", "request", fetch=fetch)
+    replayed = cache.fetch_json("json", "request", fetch=fetch)
+    refreshed = cache.fetch_json(
+        "json", "request", fetch=fetch, refresh=True
+    )
+
+    assert first == replayed == {"generation": 1}
+    assert refreshed == {"generation": 2}
+    assert get_calls == 2
+    assert fetch_calls == 2
+    assert lock_depth == 0
 
 
 def test_ar5iv_rejects_wrong_media_and_oversized_header(tmp_path):

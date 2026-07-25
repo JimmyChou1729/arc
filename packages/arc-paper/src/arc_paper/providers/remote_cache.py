@@ -168,21 +168,6 @@ class RemoteRequestCache:
         fetch: Callable[[], bytes],
         refresh: bool = False,
     ) -> SourceArtifact:
-        if not refresh:
-            try:
-                cached = self.get_source(
-                    namespace,
-                    request_key,
-                    source_format=source_format,
-                    media_type=media_type,
-                    origin=origin,
-                )
-            except RemoteCacheError as exc:
-                if exc.code != "remote_cache_source_corrupt":
-                    raise
-                cached = None
-            if cached is not None:
-                return cached
         digest = _request_digest(namespace, request_key)
         with self._request_lock("source", namespace, digest):
             if not refresh:
@@ -296,15 +281,6 @@ class RemoteRequestCache:
         fetch: Callable[[], Any],
         refresh: bool = False,
     ) -> Any:
-        if not refresh:
-            try:
-                cached = self.get_json(namespace, request_key)
-            except RemoteCacheError as exc:
-                if exc.code != "remote_cache_json_corrupt":
-                    raise
-                cached = None
-            if cached is not None:
-                return cached
         digest = _request_digest(namespace, request_key)
         with self._request_lock("json", namespace, digest):
             if not refresh:
