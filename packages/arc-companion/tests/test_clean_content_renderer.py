@@ -566,6 +566,17 @@ def test_business_validation_enforces_coverage_translation_and_evidence(
     assert {"unknown_learning_anchor", "missing_evidence_citation"} <= codes
 
 
+def test_accepted_content_rejects_empty_guide_and_translation(
+    accepted_book: AcceptedBook,
+) -> None:
+    chapter = accepted_book.chapters[0]
+
+    with pytest.raises(ValueError, match="accepted chapter"):
+        replace(chapter, guide=" \n ")
+    with pytest.raises(ValueError, match="non-empty string"):
+        replace(chapter.translations[0], text="\t")
+
+
 def test_web_is_responsive_anchor_interleaved_and_deterministic(
     accepted_book: AcceptedBook, tmp_path: Path
 ) -> None:

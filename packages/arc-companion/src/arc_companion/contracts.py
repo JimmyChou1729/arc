@@ -184,8 +184,8 @@ class TranslatedBlock:
     def __post_init__(self) -> None:
         if not self.block_id:
             raise ValueError("translated block ID is required")
-        if not isinstance(self.text, str):
-            raise ValueError("translated block text must be a string")
+        if not isinstance(self.text, str) or not self.text.strip():
+            raise ValueError("translated block text must be a non-empty string")
 
 
 @dataclass(frozen=True)
@@ -218,7 +218,13 @@ class AcceptedChapter:
     learning_units: tuple[LearningUnit, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.chapter_id or not self.title or not self.source_anchors:
+        if (
+            not self.chapter_id
+            or not self.title
+            or not isinstance(self.guide, str)
+            or not self.guide.strip()
+            or not self.source_anchors
+        ):
             raise ValueError("accepted chapter identity and source are required")
         object.__setattr__(self, "source_anchors", tuple(self.source_anchors))
         object.__setattr__(self, "translations", tuple(self.translations))
