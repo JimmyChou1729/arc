@@ -339,27 +339,40 @@ def _pages_for_exact_section_title(pages: list[str], title: str) -> list[int]:
     PDF tables of contents normally retain a page number or leader after a
     section title.  Treating the whole extracted line as evidence therefore
     prefers a rendered heading over a TOC mention without requiring layout
-    metadata from the PDF extractor.
+    metadata from the PDF extractor.  A source title is authoritative: only
+    after an exact source-title match fails may a PDF-only section number be
+    ignored.
     """
 
-    needle = _section_heading_fingerprint(title)
+    needle = _fingerprint(title)
     if not needle:
         return []
+    exact_matching_pages = [
+        page_number
+        for page_number, page in enumerate(pages, 1)
+        if any(_fingerprint(line) == needle for line in page.splitlines())
+    ]
+    if exact_matching_pages:
+        return exact_matching_pages
     return [
         page_number
         for page_number, page in enumerate(pages, 1)
         if any(
-            _section_heading_fingerprint(line) == needle
+            _fingerprint(_without_pdf_section_prefix(line)) == needle
             for line in page.splitlines()
         )
     ]
 
 
-def _section_heading_fingerprint(value: str) -> str:
-    """Normalize a heading line while ignoring an optional numeric section label."""
+_PDF_SECTION_PREFIX = re.compile(
+    r"^\s*(?:\d+(?:\s*\.\s*\d+)*|[IVXLCDM]+)\s*[.)]?\s+(?=\S)"
+)
 
-    normalized = _fingerprint(value)
-    return re.sub(r"^\d+(?: \d+)* (?=\S)", "", normalized)
+
+def _without_pdf_section_prefix(value: str) -> str:
+    """Remove one conventional decimal or uppercase-Roman PDF section label."""
+
+    return _PDF_SECTION_PREFIX.sub("", value, count=1)
 
 
 def _pages_for_printed_label(pages: list[str], label: str) -> list[int]:

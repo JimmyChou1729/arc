@@ -899,6 +899,67 @@ def test_pdf_section_title_exact_duplicate_remains_ambiguous(tmp_path):
     assert entry.provenance["matching_method"] == "normalized_exact_line"
 
 
+@pytest.mark.parametrize("pdf_heading", ("1.2 Model", "II. Model"))
+def test_pdf_section_title_accepts_conventional_pdf_only_section_prefix(
+    tmp_path, pdf_heading
+):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# Model\nText.\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf = _store(repository, b"%PDF numbered heading", SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {b"%PDF numbered heading": PDFTextLayer((f"{pdf_heading}\nText.",))}
+    )
+
+    outcome = PaperParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+    section_id = outcome.document.sections[0].section_id
+    entry = next(
+        item
+        for item in outcome.report.entries
+        if item.subject_id == f"section:{section_id}"
+    )
+
+    assert entry.status is ReconciliationStatus.VERIFIED
+    assert entry.provenance["page_candidates"] == [1]
+    assert entry.provenance["matching_method"] == "normalized_exact_line"
+
+
+def test_pdf_section_title_preserves_genuine_numeric_source_title(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"# 2024 Results\nText.\n",
+        SourceFormat.MARKDOWN,
+    )
+    pdf = _store(repository, b"%PDF numeric title", SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {
+            b"%PDF numeric title": PDFTextLayer(
+                ("2024 Results\nText.", "Results\nDifferent text.")
+            )
+        }
+    )
+
+    outcome = PaperParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+    section_id = outcome.document.sections[0].section_id
+    entry = next(
+        item
+        for item in outcome.report.entries
+        if item.subject_id == f"section:{section_id}"
+    )
+
+    assert entry.status is ReconciliationStatus.VERIFIED
+    assert entry.provenance["page_candidates"] == [1]
+    assert entry.provenance["matching_method"] == "normalized_exact_line"
+
+
 def test_pdf_section_title_falls_back_to_page_substring_or_reports_missing(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     primary = _store(
