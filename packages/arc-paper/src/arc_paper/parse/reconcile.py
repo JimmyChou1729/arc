@@ -651,6 +651,7 @@ class _PDFLayoutLabelCandidate:
     label: int
     page_number: int
     line_index: int
+    label_column: int
     score: int
 
 
@@ -685,13 +686,9 @@ def _pdf_layout_equation_units(
                 "PDF equation labels were not canonically mapped: layout evidence is ambiguous",
             )
         selected.append(best[0])
-    if [candidate.page_number for candidate in selected] != sorted(
-        candidate.page_number for candidate in selected
-    ):
-        return (
-            None,
-            "PDF equation labels were not canonically mapped: printed labels are out of document order",
-        )
+    order_warning = _pdf_layout_order_warning(selected)
+    if order_warning:
+        return None, order_warning
     if _has_independent_compact_unlabelled_formula(raw_pages, selected):
         return (
             None,
@@ -737,6 +734,7 @@ def _pdf_layout_label_candidates(
                             label=label,
                             page_number=page_number,
                             line_index=line_index,
+                            label_column=match.start(),
                             score=score,
                         )
                     )
@@ -791,10 +789,68 @@ def _pdf_layout_neighbor_region(
     return line[max(0, label_column - 72) : label_column]
 
 
+def _pdf_layout_order_warning(selected: list[_PDFLayoutLabelCandidate]) -> str:
+    """Require visual label order while permitting established text columns."""
+
+    if [candidate.page_number for candidate in selected] != sorted(
+        candidate.page_number for candidate in selected
+    ):
+        return (
+            "PDF equation labels were not canonically mapped: printed labels are out of document order"
+        )
+    by_page: dict[int, list[_PDFLayoutLabelCandidate]] = {}
+    for candidate in selected:
+        by_page.setdefault(candidate.page_number, []).append(candidate)
+    for page_number in sorted(by_page):
+        columns = _pdf_layout_columns(by_page[page_number])
+        if len(columns) > 1 and all(len(column) == 1 for column in columns):
+            return (
+                "PDF equation labels were not canonically mapped: layout columns are insufficiently established"
+            )
+        previous_label: int | None = None
+        for column in columns:
+            labels = [
+                candidate.label
+                for candidate in sorted(column, key=lambda item: item.label)
+            ]
+            if labels != list(range(labels[0], labels[-1] + 1)) or (
+                previous_label is not None and labels[0] != previous_label + 1
+            ):
+                return (
+                    "PDF equation labels were not canonically mapped: labels do not form visual layout intervals"
+                )
+            ordered = sorted(column, key=lambda item: item.line_index)
+            if [candidate.label for candidate in ordered] != labels or any(
+                left.line_index >= right.line_index
+                for left, right in zip(ordered, ordered[1:], strict=False)
+            ):
+                return (
+                    "PDF equation labels were not canonically mapped: printed labels are not in visual layout order"
+                )
+            previous_label = labels[-1]
+    return ""
+
+
+def _pdf_layout_columns(
+    candidates: list[_PDFLayoutLabelCandidate],
+) -> tuple[tuple[_PDFLayoutLabelCandidate, ...], ...]:
+    """Group label positions only when layout text shows a wide column gap."""
+
+    ordered = sorted(candidates, key=lambda item: item.label_column)
+    if not ordered:
+        return ()
+    columns: list[list[_PDFLayoutLabelCandidate]] = [[ordered[0]]]
+    for candidate in ordered[1:]:
+        if candidate.label_column - columns[-1][-1].label_column > 24:
+            columns.append([])
+        columns[-1].append(candidate)
+    return tuple(tuple(column) for column in columns)
+
+
 def _pdf_formula_shape_score(value: str) -> int:
     """Identify compact symbolic text without promoting ordinary prose."""
 
-    stripped = value.strip()
+    stripped = _pdf_formula_fragment(value)
     if not stripped:
         return 0
     strong_symbols = re.findall(r"[=≡≈≃≤≥<>∑∫√∂±]", stripped)
@@ -803,11 +859,21 @@ def _pdf_formula_shape_score(value: str) -> int:
         r"[^\sA-Za-z0-9.,;:()\[\]{}]", stripped
     )
     digits = re.findall(r"\d", stripped)
-    if strong_symbols:
+    if strong_symbols and len(short_words) <= 4:
         return 3
     if len(short_words) <= 3 and (non_prose_symbols or len(digits) >= 2):
         return 1
     return 0
+
+
+def _pdf_formula_fragment(value: str) -> str:
+    """Use a compact right-column expression instead of adjacent prose."""
+
+    stripped = value.rstrip()
+    if not stripped:
+        return ""
+    parts = re.split(r"\s{3,}", stripped)
+    return parts[-1].strip()
 
 
 def _has_independent_compact_unlabelled_formula(
@@ -816,27 +882,51 @@ def _has_independent_compact_unlabelled_formula(
     """Reject only unmistakable standalone formula lines without a label.
 
     Layout text cannot always distinguish a multiline numbered expression from
-    an adjacent unnumbered expression.  This deliberately narrow check catches
-    a compact, left-aligned independent formula (the safe synthetic failure
-    mode) without treating indented continuation fragments as separate units.
+    an adjacent unnumbered expression. This deliberately narrow check catches
+    a compact assignment aligned between two numbered displays, without
+    treating ordinary indented continuation fragments as separate units.
     """
 
-    labelled_lines = {
-        (candidate.page_number, candidate.line_index) for candidate in selected
-    }
+    selected_by_page: dict[int, list[_PDFLayoutLabelCandidate]] = {}
+    for candidate in selected:
+        selected_by_page.setdefault(candidate.page_number, []).append(candidate)
     for page_number, page in enumerate(raw_pages, 1):
-        for line_index, line in enumerate(page.splitlines()):
-            if (page_number, line_index) in labelled_lines:
-                continue
-            if len(line) - len(line.lstrip()) > 2 or re.search(r"\s{3,}", line):
-                continue
-            if len(re.findall(r"[A-Za-z]{3,}", line)) > 2:
-                continue
-            if _pdf_formula_shape_score(line) < 3:
-                continue
-            if re.search(r"[=≡≈≃≤≥<>]", line):
-                return True
+        lines = page.splitlines()
+        for column in _pdf_layout_columns(selected_by_page.get(page_number, [])):
+            ordered = sorted(column, key=lambda item: item.line_index)
+            for first, second in zip(ordered, ordered[1:], strict=False):
+                first_indent = _pdf_label_formula_indent(lines, first)
+                second_indent = _pdf_label_formula_indent(lines, second)
+                if first_indent is None or first_indent != second_indent:
+                    continue
+                for line in lines[first.line_index + 1 : second.line_index]:
+                    if _is_compact_independent_assignment(line, first_indent):
+                        return True
     return False
+
+
+def _pdf_label_formula_indent(
+    lines: list[str], candidate: _PDFLayoutLabelCandidate
+) -> int | None:
+    before_label = lines[candidate.line_index][: candidate.label_column].rstrip()
+    fragment = _pdf_formula_fragment(before_label)
+    if _pdf_formula_shape_score(fragment) < 3:
+        return None
+    return before_label.rfind(fragment)
+
+
+def _is_compact_independent_assignment(line: str, expected_indent: int) -> bool:
+    """Identify a short standalone assignment aligned with numbered displays."""
+
+    if re.search(r"\(\s*\d+\s*\)", line):
+        return False
+    indent = len(line) - len(line.lstrip())
+    if indent != expected_indent:
+        return False
+    return re.fullmatch(
+        r"[A-Za-zα-ωΑ-Ω][A-Za-z0-9_{}^]*\s*[=≡≈≃≤≥<>]\s*\S.{0,20}",
+        line.strip(),
+    ) is not None
 
 
 def _pages_for_math(pages: list[str], tex: str) -> list[int]:

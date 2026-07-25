@@ -1362,6 +1362,58 @@ def test_pdf_equation_sequence_rejects_unlabelled_logical_display_unit(tmp_path)
     )
 
 
+@pytest.mark.parametrize(
+    ("pdf_text", "warning"),
+    (
+        (
+            "          x = 1                                  (2)\n"
+            "          y = 2                                  (1)",
+            "printed labels are not in visual layout order",
+        ),
+        (
+            "          x = 1                                  (1)\n"
+            "          z = 9\n"
+            "          y = 2                                  (2)",
+            "unlabelled compact display block was detected",
+        ),
+        (
+            "we set x = 1 for the first case                  (1)\n"
+            "we set y = 2 for the second case                 (2)",
+            "complete numbered layout sequence is unavailable",
+        ),
+    ),
+)
+def test_pdf_layout_sequence_refuses_unsafe_same_page_evidence(
+    tmp_path,
+    pdf_text,
+    warning,
+):
+    repository = SourceRepository(tmp_path / "cache")
+    primary = _store(
+        repository,
+        b"""
+        <article><h1>Overview</h1>
+        <table class="ltx_equation">
+          <tr><td><math alttext="x = 1"></math></td><td><span class="ltx_tag">(4)</span></td></tr>
+          <tr><td><math alttext="y = 2"></math></td><td><span class="ltx_tag">(5)</span></td></tr>
+        </table></article>
+        """,
+        SourceFormat.HTML,
+    )
+    pdf_payload = b"%PDF unsafe same-page layout"
+    pdf = _store(repository, pdf_payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {pdf_payload: PDFTextLayer((f"Overview\n{pdf_text}",))}
+    )
+
+    outcome = RichDocumentParserService(
+        repository, pdf_text_extractor=extractor
+    ).parse(SourceBundle(primary=primary, validators=(pdf,)))
+
+    assert "equation_label_reconciliation" not in outcome.document.metadata
+    assert any(warning in item for item in outcome.warnings)
+
+
 def test_pdf_equation_sequence_rejects_unlabelled_primary_display_unit(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     primary = _store(
