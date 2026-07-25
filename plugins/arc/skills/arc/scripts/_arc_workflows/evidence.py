@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Mapping
 from typing import Any
 
@@ -13,8 +12,9 @@ from arc_llm import (
 )
 from arc_paper import (
     ArcPaperService,
+    PaperOperationResolver,
+    PaperOperationResult,
     get_operation,
-    normalize_paper_id,
 )
 
 
@@ -30,18 +30,6 @@ EVIDENCE_OPERATION_NAMES = (
     "search-arxiv-equations",
     "search-cached-full-text",
 )
-
-_SERVICE_METHODS = {
-    "get-metadata": "get_metadata",
-    "get-references": "get_references",
-    "get-citers": "get_citers",
-    "search-metadata": "search_metadata",
-    "get-arxiv-table-of-contents": "get_arxiv_table_of_contents",
-    "get-arxiv-section": "get_arxiv_section",
-    "search-arxiv-full-text": "search_arxiv_full_text",
-    "search-arxiv-equations": "search_arxiv_equations",
-    "search-cached-full-text": "search_cached_full_text",
-}
 
 
 def evidence_operation_contracts() -> dict[str, OperationContract]:
@@ -69,192 +57,93 @@ class ArcPaperEvidenceResolver:
         request_limit: int = EVIDENCE_REQUEST_LIMIT,
         service: ArcPaperService | None = None,
     ) -> None:
-        if (
-            isinstance(request_limit, bool)
-            or not isinstance(request_limit, int)
-            or request_limit < 1
-        ):
-            raise ValueError("request_limit must be a positive integer")
-        self.request_limit = request_limit
-        self.service = service or ArcPaperService()
-        self._request_count = 0
-        self._lock = threading.Lock()
-        self._service_lock = threading.Lock()
-        self.records: list[dict[str, Any]] = []
+        self._resolver = PaperOperationResolver(
+            allowed_operations=EVIDENCE_OPERATION_NAMES,
+            request_limit=request_limit,
+            service=service,
+        )
+
+    @property
+    def request_limit(self) -> int:
+        return self._resolver.request_limit
+
+    @property
+    def service(self) -> ArcPaperService:
+        return self._resolver.service
 
     @property
     def request_count(self) -> int:
-        with self._lock:
-            return self._request_count
+        return self._resolver.request_count
+
+    @property
+    def records(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for record in self._resolver.records:
+            document = record.to_document()
+            if record.result.error is not None:
+                code, message = _ideas_error(
+                    record.result,
+                    request_limit=self.request_limit,
+                )
+                document["error"] = {"code": code, "message": message}
+            records.append(document)
+        return records
 
     def resolve(self, request: InteractionRequest) -> InteractionResponse:
-        with self._lock:
-            self._request_count += 1
-            request_number = self._request_count
-        normalized = _normalize_parameters(request.operation, request.arguments)
-        spec = get_operation(request.operation)
-        if spec is None or request.operation not in EVIDENCE_OPERATION_NAMES:
-            return self._error(
-                request,
-                normalized,
-                code="evidence_operation_not_allowed",
-                message=f"operation is not in the ARC evidence allowlist: {request.operation}",
-                request_number=request_number,
-            )
-        if request_number > self.request_limit:
-            return self._error(
-                request,
-                normalized,
-                code="evidence_budget_exhausted",
-                message=(
-                    f"ideas evidence budget is limited to "
-                    f"{self.request_limit} arc-paper requests"
-                ),
-                request_number=request_number,
-            )
-        try:
-            data = self._invoke(request.operation, normalized)
-        except Exception as exc:
-            return self._error(
-                request,
-                normalized,
-                code=str(getattr(exc, "code", "evidence_operation_failed")),
-                message=str(exc) or type(exc).__name__,
-                request_number=request_number,
-            )
-        provenance = _provenance(
-            operation_id=spec.operation_id,
-            parameters=normalized,
-            data=data,
-            request_number=request_number,
-        )
-        record = {
-            "request_id": request.request_id,
-            "ok": True,
-            **provenance,
-        }
-        with self._lock:
-            self.records.append(record)
-        return InteractionResponse(
+        result = self._resolver.resolve(
+            request.operation,
+            request.arguments,
             request_id=request.request_id,
-            result={
-                "ok": True,
-                "operation_id": spec.operation_id,
-                "parameters": normalized,
-                "data": data,
-                "provenance": provenance,
-            },
         )
+        if result.ok:
+            return InteractionResponse(
+                request_id=request.request_id,
+                result=result.to_document(),
+            )
 
-    def _invoke(self, operation: str, parameters: Mapping[str, Any]) -> Any:
-        """Invoke one allowlisted service method through registry codecs.
-
-        The registry remains authoritative for input/output validation while the
-        batch keeps one ArcPaperService instance, including its ParsedDocument
-        memoization, for all evidence requests.
-        """
-
-        spec = get_operation(operation)
-        method_name = _SERVICE_METHODS.get(operation)
-        if spec is None or method_name is None:
-            raise RuntimeError(f"arc-paper operation is unavailable: {operation}")
-        decoded = spec.input_codec.decode(parameters)
-        method = getattr(self.service, method_name)
-        with self._service_lock:
-            return spec.output_codec.encode(method(**decoded))
-
-    def _error(
-        self,
-        request: InteractionRequest,
-        parameters: Mapping[str, Any],
-        *,
-        code: str,
-        message: str,
-        request_number: int,
-    ) -> InteractionResponse:
-        spec = get_operation(request.operation)
-        operation_id = (
-            spec.operation_id if spec is not None else str(request.operation)
+        code, message = _ideas_error(
+            result,
+            request_limit=self.request_limit,
         )
-        provenance = _provenance(
-            operation_id=operation_id,
-            parameters=parameters,
-            data=None,
-            request_number=request_number,
-        )
-        record = {
-            "request_id": request.request_id,
-            "ok": False,
-            **provenance,
-            "error": {"code": code, "message": message},
-        }
-        with self._lock:
-            self.records.append(record)
         return InteractionResponse(
             request_id=request.request_id,
             error={
                 "code": code,
                 "message": message,
-                "operation_id": operation_id,
-                "parameters": dict(parameters),
-                "provenance": provenance,
+                "operation_id": result.operation_id,
+                "parameters": dict(result.parameters),
+                "provenance": result.provenance.to_document(),
             },
         )
 
 
-def _normalize_parameters(
-    operation: str,
-    arguments: Mapping[str, Any],
-) -> dict[str, Any]:
-    parameters = dict(arguments)
-    identifier_key = (
-        "arxiv_id"
-        if operation.startswith(("get-arxiv-", "search-arxiv-"))
-        else "paper_id"
-    )
-    identifier = parameters.get(identifier_key)
-    if isinstance(identifier, str):
-        normalized = normalize_paper_id(identifier)
-        if normalized:
-            parameters[identifier_key] = normalized
-    return parameters
-
-
-def _provenance(
+def _ideas_error(
+    result: PaperOperationResult,
     *,
-    operation_id: str,
-    parameters: Mapping[str, Any],
-    data: Any,
-    request_number: int,
-) -> dict[str, Any]:
-    canonical_arxiv_id = ""
-    for key in ("arxiv_id", "paper_id"):
-        value = parameters.get(key)
-        if isinstance(value, str):
-            normalized = normalize_paper_id(value)
-            if normalized.startswith("arXiv:"):
-                canonical_arxiv_id = normalized
-                break
-    source_digest = ""
-    document_digest = ""
-    if isinstance(data, Mapping):
-        raw_provenance = data.get("provenance")
-        if isinstance(raw_provenance, Mapping):
-            canonical_arxiv_id = str(
-                raw_provenance.get("canonical_arxiv_id")
-                or canonical_arxiv_id
-            )
-            source_digest = str(raw_provenance.get("source_digest") or "")
-            document_digest = str(raw_provenance.get("document_digest") or "")
-    return {
-        "source": "arc-paper",
-        "operation_id": operation_id,
-        "parameters": dict(parameters),
-        "canonical_arxiv_id": canonical_arxiv_id,
-        "source_digest": source_digest,
-        "document_digest": document_digest,
-        "request_number": request_number,
-    }
+    request_limit: int,
+) -> tuple[str, str]:
+    failure = result.error
+    if failure is None:
+        raise ValueError("successful paper operation has no ideas error")
+    if failure.code == "operation_not_allowed":
+        operation = failure.message.removeprefix(
+            "operation is not allowed by this resolver: "
+        )
+        return (
+            "evidence_operation_not_allowed",
+            f"operation is not in the ARC evidence allowlist: {operation}",
+        )
+    if failure.code == "request_limit_exceeded":
+        return (
+            "evidence_budget_exhausted",
+            (
+                f"ideas evidence budget is limited to "
+                f"{request_limit} arc-paper requests"
+            ),
+        )
+    if failure.code == "operation_failed":
+        return "evidence_operation_failed", failure.message
+    return failure.code, failure.message
 
 
 def _response_schema(

@@ -149,7 +149,10 @@ class PaperOperationResolver:
             raise ValueError("allowed_operations must be an iterable of operation names")
 
         specs: dict[str, OperationSpec[Any]] = {}
+        allowed_tokens: dict[str, OperationSpec[Any]] = {}
         for operation in allowed_operations:
+            if not isinstance(operation, str):
+                raise ValueError("allowed operation names must be strings")
             spec = get_operation(operation)
             if spec is None:
                 raise ValueError(f"unknown arc-paper operation: {operation}")
@@ -159,12 +162,14 @@ class PaperOperationResolver:
                     f"{spec.name}"
                 )
             specs.setdefault(spec.name, spec)
+            allowed_tokens.setdefault(operation, spec)
         if not specs:
             raise ValueError("allowed_operations must not be empty")
 
         self.request_limit = request_limit
         self.service = service or ArcPaperService()
         self._specs = specs
+        self._allowed_tokens = allowed_tokens
         self._request_count = 0
         self._records: list[PaperOperationRecord] = []
         self._state_lock = threading.Lock()
@@ -182,12 +187,7 @@ class PaperOperationResolver:
     @property
     def records(self) -> tuple[PaperOperationRecord, ...]:
         with self._state_lock:
-            return tuple(
-                sorted(
-                    self._records,
-                    key=lambda record: record.result.provenance.request_number,
-                )
-            )
+            return tuple(self._records)
 
     def resolve(
         self,
@@ -201,7 +201,7 @@ class PaperOperationResolver:
             request_number = self._request_count
 
         spec = get_operation(operation)
-        allowed_spec = self._specs.get(spec.name) if spec is not None else None
+        allowed_spec = self._allowed_tokens.get(operation)
         normalized = _normalize_parameters(parameters)
         if allowed_spec is None:
             operation_id = spec.operation_id if spec is not None else str(operation)
@@ -238,7 +238,7 @@ class PaperOperationResolver:
                 parameters=normalized,
                 request_number=request_number,
                 code=str(getattr(exc, "code", "operation_failed")),
-                message=str(getattr(exc, "message", str(exc))) or type(exc).__name__,
+                message=str(exc) or type(exc).__name__,
             )
 
         provenance = _provenance(

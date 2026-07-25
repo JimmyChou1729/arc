@@ -52,9 +52,7 @@ def test_evidence_contracts_are_exactly_the_bounded_paper_allowlist() -> None:
     assert title_items["minLength"] == 1
     assert "abstracts" not in cached_output["properties"]
     assert "summaries" not in cached_output["properties"]
-    assert module._SERVICE_METHODS["search-cached-full-text"] == (
-        "search_cached_full_text"
-    )
+    assert not hasattr(module, "_SERVICE_METHODS")
 
 
 def test_evidence_resolver_routes_multi_term_cached_search() -> None:
@@ -226,8 +224,81 @@ def test_evidence_resolver_enforces_batch_budget_and_allowlist() -> None:
     forbidden = resolver.resolve(
         InteractionRequest("request-4", "import-source", {"path": "/tmp/paper"})
     )
+    aliased = resolver.resolve(
+        InteractionRequest(
+            "request-5",
+            "arc-paper.search-metadata.v1",
+            {"query": "alias must be explicit", "limit": 1},
+        )
+    )
 
     assert exhausted.error["code"] == "evidence_budget_exhausted"
+    assert exhausted.error["message"] == (
+        "ideas evidence budget is limited to 2 arc-paper requests"
+    )
     assert forbidden.error["code"] == "evidence_operation_not_allowed"
-    assert resolver.request_count == 4
-    assert [record["request_number"] for record in resolver.records] == [1, 2, 3, 4]
+    assert forbidden.error["message"] == (
+        "operation is not in the ARC evidence allowlist: import-source"
+    )
+    assert aliased.error["code"] == "evidence_operation_not_allowed"
+    assert aliased.error["message"] == (
+        "operation is not in the ARC evidence allowlist: "
+        "arc-paper.search-metadata.v1"
+    )
+    assert resolver.request_count == 5
+    assert [record["request_number"] for record in resolver.records] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+    ]
+
+
+def test_evidence_adapter_delegates_package_mechanics() -> None:
+    module = _module()
+    source = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "threading" not in source
+    assert "_service_lock" not in source
+    assert "_normalize_parameters" not in source
+    assert "normalize_paper_id" not in source
+
+
+def test_evidence_adapter_preserves_ideas_fallback_error() -> None:
+    module = _module()
+
+    class FailingService:
+        def search_metadata(self, query: str, *, limit: int = 20) -> list[object]:
+            raise RuntimeError("provider unavailable")
+
+    resolver = module.ArcPaperEvidenceResolver(
+        service=FailingService(),  # type: ignore[arg-type]
+    )
+    response = resolver.resolve(
+        InteractionRequest(
+            "failed",
+            "search-metadata",
+            {"query": "bounded query", "limit": 1},
+        )
+    )
+
+    assert response.error["code"] == "evidence_operation_failed"
+    assert response.error["message"] == "provider unavailable"
+    assert resolver.records == [
+        {
+            "request_id": "failed",
+            "ok": False,
+            "source": "arc-paper",
+            "operation_id": "arc-paper.search-metadata.v1",
+            "parameters": {"query": "bounded query", "limit": 1},
+            "canonical_arxiv_id": "",
+            "source_digest": "",
+            "document_digest": "",
+            "request_number": 1,
+            "error": {
+                "code": "evidence_operation_failed",
+                "message": "provider unavailable",
+            },
+        }
+    ]

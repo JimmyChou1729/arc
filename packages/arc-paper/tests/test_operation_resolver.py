@@ -151,7 +151,7 @@ def test_resolver_enforces_allowlist_and_limit_and_records_codec_failures() -> N
         request_id="invalid",
     )
     success = resolver.resolve(
-        "arc-paper.search-metadata.v1",
+        "search-metadata",
         {"query": "bounded query", "limit": 1},
         request_id="success",
     )
@@ -184,7 +184,50 @@ def test_resolver_enforces_allowlist_and_limit_and_records_codec_failures() -> N
         invalid.parameters["query"] = "mutated"  # type: ignore[index]
 
 
-def test_resolver_serializes_one_service_and_sorts_concurrent_records() -> None:
+def test_resolver_allowlist_matches_only_explicitly_configured_tokens() -> None:
+    class SearchService:
+        def search_metadata(
+            self, query: str, *, limit: int = 20
+        ) -> list[dict[str, Any]]:
+            return []
+
+    short_name_resolver = PaperOperationResolver(
+        allowed_operations=("search-metadata",),
+        request_limit=2,
+        service=SearchService(),  # type: ignore[arg-type]
+    )
+    operation_id_resolver = PaperOperationResolver(
+        allowed_operations=("arc-paper.search-metadata.v1",),
+        request_limit=2,
+        service=SearchService(),  # type: ignore[arg-type]
+    )
+
+    rejected_id = short_name_resolver.resolve(
+        "arc-paper.search-metadata.v1",
+        {"query": "query", "limit": 1},
+    )
+    accepted_name = short_name_resolver.resolve(
+        "search-metadata",
+        {"query": "query", "limit": 1},
+    )
+    rejected_name = operation_id_resolver.resolve(
+        "search-metadata",
+        {"query": "query", "limit": 1},
+    )
+    accepted_id = operation_id_resolver.resolve(
+        "arc-paper.search-metadata.v1",
+        {"query": "query", "limit": 1},
+    )
+
+    assert rejected_id.error is not None
+    assert rejected_id.error.code == "operation_not_allowed"
+    assert accepted_name.ok
+    assert rejected_name.error is not None
+    assert rejected_name.error.code == "operation_not_allowed"
+    assert accepted_id.ok
+
+
+def test_resolver_serializes_one_service_and_keeps_concurrent_records_safe() -> None:
     class ConcurrentService:
         def __init__(self) -> None:
             self.active = 0
@@ -224,6 +267,6 @@ def test_resolver_serializes_one_service_and_sorts_concurrent_records() -> None:
     assert all(result.ok for result in results)
     assert service.maximum_active == 1
     assert resolver.request_count == 12
-    assert [
+    assert sorted(
         record.result.provenance.request_number for record in resolver.records
-    ] == list(range(1, 13))
+    ) == list(range(1, 13))
