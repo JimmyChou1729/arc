@@ -7,6 +7,7 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 
+import arc_companion.cli as cli_module
 import arc_companion.project as project_module
 import arc_companion.release as release_module
 import pytest
@@ -18,6 +19,7 @@ from arc_jobs import (
     RunRepository,
     RunSpec,
     RunStatus,
+    file_lease,
 )
 from arc_companion.cli import _parser, main
 from arc_companion.contracts import (
@@ -174,6 +176,7 @@ def test_status_persists_source_diagnostics_and_stop_uses_same_run(
     assert status["data"]["selected_run"]["id"] == run_id
     assert status["data"]["active_release"] is None
     assert status["data"]["release_matches_selected_run"] is False
+    assert not project.delivery_lease.exists()
     assert status["warnings"] == [
         {
             "code": "source_diagnostic",
@@ -334,6 +337,118 @@ def test_status_warns_when_current_delivery_pair_is_invalid(
         if path.is_file()
     }
     assert after == before
+
+
+def test_status_waits_for_delivery_publication_before_reading_current(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    run_id = "companion-delivery-sync"
+    project.select_run(run_id)
+    repository = RunRepository(project.jobs_root)
+
+    class PausingHandler:
+        name = "arc.companion.build.v2"
+
+        def execute(self, _context):
+            return Paused(
+                Awaiting(ResumeReason.EXTERNAL_CONDITION, "resume", False)
+            )
+
+    class DistinctPdfRenderer(_FakeRenderer):
+        def render_all(self, book, *, web_dir: Path, pdf_path: Path):
+            super().render_all(book, web_dir=web_dir, pdf_path=pdf_path)
+            pdf_path.write_bytes(
+                b"%PDF-1.4\n% " + book.title.encode("utf-8") + b"\n"
+            )
+
+    RunEngine(repository).execute(
+        RunSpec(run_id, PausingHandler.name, {}),
+        PausingHandler(),
+    )
+    publisher = CompanionReleasePublisher(project, DistinctPdfRenderer())  # type: ignore[arg-type]
+    first = publisher.publish(_book(), run_id=run_id)
+    pdf_replaced = threading.Event()
+    continue_render = threading.Event()
+    status_lease_requested = threading.Event()
+    status_validating = threading.Event()
+    render_results = []
+    render_errors: list[BaseException] = []
+    status_results = []
+    status_errors: list[BaseException] = []
+    original_replace = publisher._replace_delivery_file
+    original_validate = cli_module.validate_current_delivery
+
+    def pause_after_pdf(staged: Path, target: Path) -> None:
+        original_replace(staged, target)
+        if target == project.delivery_pdf:
+            pdf_replaced.set()
+            assert continue_render.wait(timeout=5)
+
+    def observed_file_lease(path: Path, *, blocking: bool):
+        status_lease_requested.set()
+        return file_lease(path, blocking=blocking)
+
+    def observed_validate(paths, pointer) -> None:
+        status_validating.set()
+        original_validate(paths, pointer)
+
+    def render() -> None:
+        try:
+            render_results.append(
+                publisher.publish(
+                    replace(_book(), title="Second fixture"),
+                    run_id=run_id,
+                )
+            )
+        except BaseException as exc:
+            render_errors.append(exc)
+
+    def status() -> None:
+        try:
+            status_results.append(
+                cli_module._status(
+                    _parser().parse_args(
+                        ["status", "--project-dir", str(project.root)]
+                    )
+                )
+            )
+        except BaseException as exc:
+            status_errors.append(exc)
+
+    monkeypatch.setattr(publisher, "_replace_delivery_file", pause_after_pdf)
+    render_thread = threading.Thread(target=render)
+    render_thread.start()
+    assert pdf_replaced.wait(timeout=5)
+    assert project.delivery_pdf.read_bytes() != first.pdf.read_bytes()
+    assert first.release_id in project.delivery_html.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(cli_module, "file_lease", observed_file_lease)
+    monkeypatch.setattr(
+        cli_module,
+        "validate_current_delivery",
+        observed_validate,
+    )
+    status_thread = threading.Thread(target=status)
+    status_thread.start()
+    assert status_lease_requested.wait(timeout=5)
+    assert not status_validating.is_set()
+
+    continue_render.set()
+    render_thread.join(timeout=5)
+    status_thread.join(timeout=5)
+    assert not render_thread.is_alive()
+    assert not status_thread.is_alive()
+    assert render_errors == []
+    assert status_errors == []
+    assert status_validating.is_set()
+
+    result = status_results[0]
+    assert result.data["active_release"]["release_id"] == (
+        render_results[0].release_id
+    )
+    assert result.warnings == ()
 
 
 def test_stop_acknowledges_a_running_attempt_before_it_pauses(

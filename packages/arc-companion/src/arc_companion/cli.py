@@ -20,6 +20,7 @@ from arc_jobs import (
     RunStatus,
     command_result_from_snapshot,
     command_result_json,
+    file_lease,
     snapshot_data,
 )
 from arc_llm import ModelSelection
@@ -313,12 +314,11 @@ def _status(args: argparse.Namespace) -> CommandResult:
     run_id = _current_run(paths)
     view = CompanionService(paths.jobs_root).inspect(run_id)
     base = command_result_from_snapshot(view.snapshot)
-    current = paths.current_release()
+    current, release_warnings, delivery_warnings = _status_release_state(paths)
     selected_run = snapshot_data(view.snapshot)
     release_matches_selected_run = (
         current is not None and current["run_id"] == run_id
     )
-    release_warnings = _release_pointer_warnings(paths, current)
     data: dict[str, Any] = {
         "selected_run": selected_run,
         "active_release": current,
@@ -332,11 +332,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
         warnings=(
             *_source_warnings(paths, run_id),
             *release_warnings,
-            *_delivery_warnings(
-                paths,
-                current,
-                release_warnings=release_warnings,
-            ),
+            *delivery_warnings,
         ),
         error=base.error,
         resume=base.resume,
@@ -564,6 +560,28 @@ def _release_pointer_warnings(
             ),
         )
     return ()
+
+
+def _status_release_state(
+    paths: CompanionProjectPaths,
+) -> tuple[
+    dict[str, Any] | None,
+    tuple[CommandWarning, ...],
+    tuple[CommandWarning, ...],
+]:
+    # Do not create a lease file for a project that has never published. A
+    # concurrent first publication linearizes after this empty observation.
+    if paths.current_release() is None:
+        return None, (), ()
+    with file_lease(paths.delivery_lease, blocking=True):
+        current = paths.current_release()
+        release_warnings = _release_pointer_warnings(paths, current)
+        delivery_warnings = _delivery_warnings(
+            paths,
+            current,
+            release_warnings=release_warnings,
+        )
+        return current, release_warnings, delivery_warnings
 
 
 def _delivery_warnings(
