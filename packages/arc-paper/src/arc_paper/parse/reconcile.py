@@ -653,6 +653,7 @@ class _PDFLayoutLabelCandidate:
     line_index: int
     label_column: int
     score: int
+    has_direct_formula: bool
 
 
 def _pdf_layout_equation_units(
@@ -689,6 +690,9 @@ def _pdf_layout_equation_units(
     order_warning = _pdf_layout_order_warning(selected)
     if order_warning:
         return None, order_warning
+    evidence_warning = _pdf_layout_label_evidence_warning(selected)
+    if evidence_warning:
+        return None, evidence_warning
     if _has_independent_compact_unlabelled_formula(raw_pages, selected):
         return (
             None,
@@ -721,6 +725,7 @@ def _pdf_layout_label_candidates(
                 if region is None:
                     continue
                 side, text = region
+                direct_score = _pdf_layout_direct_formula_score(line, match, text)
                 score = _pdf_layout_formula_score(
                     lines,
                     line_index=line_index,
@@ -728,6 +733,7 @@ def _pdf_layout_label_candidates(
                     side=side,
                     own_text=text,
                 )
+                score = max(score, 8 * direct_score)
                 if score:
                     output.append(
                         _PDFLayoutLabelCandidate(
@@ -736,6 +742,7 @@ def _pdf_layout_label_candidates(
                             line_index=line_index,
                             label_column=match.start(),
                             score=score,
+                            has_direct_formula=direct_score >= 3,
                         )
                     )
     return output
@@ -778,6 +785,22 @@ def _pdf_layout_formula_score(
                 lines[index], label_column=label_column, side=side
             )
         )
+    return score
+
+
+def _pdf_layout_direct_formula_score(
+    line: str, match: re.Match[str], own_text: str
+) -> int:
+    """Require same-line formula evidence before trusting a short label token."""
+
+    score = _pdf_formula_shape_score(own_text)
+    suffix = line[match.end() :]
+    next_content = next(
+        (index for index, value in enumerate(suffix) if not value.isspace()),
+        None,
+    )
+    if next_content is not None and next_content >= 3:
+        score = max(score, _pdf_formula_shape_score(suffix[next_content:]))
     return score
 
 
@@ -847,6 +870,27 @@ def _pdf_layout_columns(
     return tuple(tuple(column) for column in columns)
 
 
+def _pdf_layout_label_evidence_warning(
+    selected: list[_PDFLayoutLabelCandidate],
+) -> str:
+    """Reject neighbor-promoted labels unless their tag column is established."""
+
+    columns = _pdf_layout_columns(selected)
+    for candidate in selected:
+        if candidate.has_direct_formula:
+            continue
+        column = next(column for column in columns if candidate in column)
+        if len(column) < 2 or not any(
+            item.has_direct_formula
+            and abs(item.label_column - candidate.label_column) <= 12
+            for item in column
+        ):
+            return (
+                "PDF equation labels were not canonically mapped: label-only layout tokens lack an established tag column"
+            )
+    return ""
+
+
 def _pdf_formula_shape_score(value: str) -> int:
     """Identify compact symbolic text without promoting ordinary prose."""
 
@@ -859,11 +903,21 @@ def _pdf_formula_shape_score(value: str) -> int:
         r"[^\sA-Za-z0-9.,;:()\[\]{}]", stripped
     )
     digits = re.findall(r"\d", stripped)
-    if strong_symbols and len(short_words) <= 4:
+    if _looks_like_prose_formula(stripped, short_words):
+        return 0
+    if strong_symbols:
         return 3
     if len(short_words) <= 3 and (non_prose_symbols or len(digits) >= 2):
         return 1
     return 0
+
+
+def _looks_like_prose_formula(value: str, words: list[str]) -> bool:
+    """Do not let ordinary sentence words turn ``x = 1`` into a display."""
+
+    if not words:
+        return False
+    return re.search(r"[+*/^_|]|[^\x00-\x7F]", value) is None
 
 
 def _pdf_formula_fragment(value: str) -> str:
@@ -924,7 +978,7 @@ def _is_compact_independent_assignment(line: str, expected_indent: int) -> bool:
     if indent != expected_indent:
         return False
     return re.fullmatch(
-        r"[A-Za-zα-ωΑ-Ω][A-Za-z0-9_{}^]*\s*[=≡≈≃≤≥<>]\s*\S.{0,20}",
+        r"[A-Za-zα-ωΑ-Ω][A-Za-z0-9_{}^]*(?:\s*\([^()]{1,20}\))?\s*[=≡≈≃≤≥<>]\s*\S.{0,20}",
         line.strip(),
     ) is not None
 
