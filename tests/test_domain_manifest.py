@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import importlib.util
+import hashlib
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,21 +13,35 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "plugins/arc/skills/arc/scripts/write-domain-manifest.py"
 SCRIPTS = SCRIPT.parent
+GROUPING_MODULE = (
+    SCRIPTS / "_arc_workflows/domain_field_grouping.py"
+)
+GROUPING_SCHEMA = (
+    ROOT
+    / "plugins/arc/skills/arc/workflows/json"
+    / "domain-field-grouping.schema.json"
+)
+
+sys.path.insert(0, str(SCRIPTS))
+try:
+    from _arc_workflows import (
+        domain_field_grouping as grouping,
+        domain_manifest_inputs as inputs,
+        domain_manifest_publish as publish,
+    )
+finally:
+    sys.path.remove(str(SCRIPTS))
 
 
-def _load_module():
-    spec = importlib.util.spec_from_file_location("write_domain_manifest", SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    old_dont_write_bytecode = sys.dont_write_bytecode
-    sys.dont_write_bytecode = True
-    sys.path.insert(0, str(SCRIPTS))
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.path.remove(str(SCRIPTS))
-        sys.dont_write_bytecode = old_dont_write_bytecode
-    return module
+def _plain_json(value):
+    if isinstance(value, Mapping):
+        return {
+            key: _plain_json(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_plain_json(item) for item in value]
+    return value
 
 
 def _write_domain(
@@ -100,27 +115,107 @@ def _write_orphan_pack(
 
 def test_manifest_helper_uses_source_bootstrap_and_typed_llm_contract() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
+    grouping_source = GROUPING_MODULE.read_text(encoding="utf-8")
 
     assert "bootstrap_arc_pythonpath()" in source
-    assert "LLMClient().generate" in source
-    assert "run_json" not in source
-    assert "LLMAbortScope" not in source
+    assert "LLMClient().generate" in grouping_source
+    assert "run_json" not in source + grouping_source
+    assert "LLMAbortScope" not in source + grouping_source
+
+
+def test_field_grouping_request_materialization_golden() -> None:
+    packages = [
+        {
+            "domain_package_id": "domain-b",
+            "seed_paper": "seed:b",
+            "foundation_paper_ids": ["seed:b"],
+            "title": "Beta",
+            "overview": "Second",
+            "task_focus": {"goal": "B"},
+            "methodology": ["m2"],
+            "paper_ids": ["p2"],
+            "citation_edges": [["p2", "p1"]],
+            "ignored": "x",
+        },
+        {
+            "domain_package_id": "domain-a",
+            "seed_paper": "seed:a",
+            "foundation_paper_ids": ["seed:a"],
+            "title": "Alpha",
+            "overview": "First",
+            "task_focus": {"goal": "A"},
+            "methodology": ["m1"],
+            "paper_ids": ["p1"],
+            "citation_edges": [],
+            "ignored": "y",
+        },
+    ]
+    calls = []
+
+    def runner(request, run_root):
+        calls.append((request, run_root))
+        return SimpleNamespace(outcome=None)
+
+    with pytest.raises(
+        grouping.GroupingLLMRunError,
+        match="returned no typed outcome",
+    ):
+        grouping._llm_grouping(
+            packages,
+            "桥接 intent",
+            run_root=Path("/tmp/run"),
+            runner=runner,
+        )
+
+    assert len(calls) == 1
+    request, run_root = calls[0]
+    assert request.task_id == (
+        "domain-field-grouping-4a42a2e27bb159f6e3b22489"
+    )
+    assert request.prompt == (
+        "Classify every unordered package pair as same_field, "
+        "distinct_field, or uncertain. Exact intent: 桥接 intent\n"
+        'Packages: [{"domain_package_id": "domain-b", '
+        '"seed_paper": "seed:b", "foundation_paper_ids": '
+        '["seed:b"], "title": "Beta", "overview": "Second", '
+        '"task_focus": {"goal": "B"}, "methodology": ["m2"], '
+        '"paper_ids": ["p2"], "citation_edges": [["p2", "p1"]]}, '
+        '{"domain_package_id": "domain-a", "seed_paper": '
+        '"seed:a", "foundation_paper_ids": ["seed:a"], '
+        '"title": "Alpha", "overview": "First", "task_focus": '
+        '{"goal": "A"}, "methodology": ["m1"], "paper_ids": '
+        '["p1"], "citation_edges": []}]'
+    )
+    expected_schema = json.loads(
+        GROUPING_SCHEMA.read_text(encoding="utf-8")
+    )
+    canonical_schema = json.dumps(
+        expected_schema,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert hashlib.sha256(canonical_schema).hexdigest() == (
+        "0ec499293698bfec75e3bc8efbfa92d96e077e9e7cafc7d7b7b"
+        "43d4912983ca0"
+    )
+    assert _plain_json(request.output.schema) == expected_schema
+    assert request.model.provider == "auto"
+    assert request.model.tier == "medium"
+    assert run_root == Path("/tmp/run")
 
 
 def test_json_reader_preserves_manifest_error_contract(tmp_path: Path) -> None:
-    module = _load_module()
     path = tmp_path / "context.json"
     path.write_text("[]", encoding="utf-8")
 
     with pytest.raises(
-        module.ManifestError,
+        inputs.ManifestError,
         match=f"JSON root must be an object: {path}",
     ):
-        module._read_object(path)
+        inputs._read_object(path)
 
 
 def test_manifest_uses_distinct_domain_ids_and_relative_paths(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(
@@ -131,7 +226,7 @@ def test_manifest_uses_distinct_domain_ids_and_relative_paths(tmp_path: Path) ->
     _write_domain(project, "b", "domain-b", "seed:b")
     _write_domain(project, "duplicate", "domain-a", "seed:a2")
 
-    payload = module.build_domain_manifest(project)
+    payload = publish.build_domain_manifest(project)
 
     assert payload["schema_version"] == "arc.workflow.domain_manifest.v2"
     assert payload["package_count"] == 2
@@ -150,7 +245,6 @@ def test_manifest_uses_distinct_domain_ids_and_relative_paths(tmp_path: Path) ->
 
 
 def test_manifest_preserves_requested_seed_order(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(
@@ -160,13 +254,12 @@ def test_manifest_preserves_requested_seed_order(tmp_path: Path) -> None:
     _write_domain(project, "a", "domain-a", "seed:a")
     _write_domain(project, "z", "domain-z", "seed:z")
 
-    payload = module.build_domain_manifest(project)
+    payload = publish.build_domain_manifest(project)
 
     assert [item["seed_paper"] for item in payload["domain_packages"]] == ["seed:z", "seed:a"]
 
 
 def test_manifest_indexes_mixed_v4_v5_summaries_without_rewriting_them(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(
@@ -176,7 +269,7 @@ def test_manifest_indexes_mixed_v4_v5_summaries_without_rewriting_them(tmp_path:
     _write_domain(project, "a", "domain-a", "seed:a", schema_version="arc.domain_summary.v4")
     _write_domain(project, "b", "domain-b", "seed:b", schema_version="arc.domain_summary.v5")
 
-    payload = module.build_domain_manifest(project)
+    payload = publish.build_domain_manifest(project)
 
     assert [item["domain_package_id"] for item in payload["domain_packages"]] == ["domain-a", "domain-b"]
     assert json.loads((project / "domain/a_domain_summary.json").read_text())["schema_version"] == (
@@ -191,7 +284,6 @@ def test_manifest_indexes_mixed_v4_v5_summaries_without_rewriting_them(tmp_path:
 
 
 def test_manifest_rejects_legacy_summary_identity_mismatch(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text("{}\n", encoding="utf-8")
@@ -201,12 +293,11 @@ def test_manifest_rejects_legacy_summary_identity_mismatch(tmp_path: Path) -> No
     summary["domain_id"] = "wrong-domain"
     summary_path.write_text(json.dumps(summary), encoding="utf-8")
 
-    with pytest.raises(module.ManifestError, match="does not match paper-pack"):
-        module.build_domain_manifest(project)
+    with pytest.raises(inputs.ManifestError, match="does not match paper-pack"):
+        publish.build_domain_manifest(project)
 
 
 def test_manifest_rejects_domain_id_in_closed_v5_summary(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text("{}\n", encoding="utf-8")
@@ -223,10 +314,10 @@ def test_manifest_rejects_domain_id_in_closed_v5_summary(tmp_path: Path) -> None
     summary_path.write_text(json.dumps(summary), encoding="utf-8")
 
     with pytest.raises(
-        module.ManifestError,
+        inputs.ManifestError,
         match="arc.domain_summary.v5 must not contain domain_id",
     ):
-        module.build_domain_manifest(project)
+        publish.build_domain_manifest(project)
 
 
 @pytest.mark.parametrize(
@@ -244,7 +335,6 @@ def test_manifest_rejects_missing_or_unknown_summary_schema(
     schema_version: str | None,
     message: str,
 ) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text("{}\n", encoding="utf-8")
@@ -257,8 +347,8 @@ def test_manifest_rejects_missing_or_unknown_summary_schema(
         summary["schema_version"] = schema_version
     summary_path.write_text(json.dumps(summary), encoding="utf-8")
 
-    with pytest.raises(module.ManifestError, match=message):
-        module.build_domain_manifest(project)
+    with pytest.raises(inputs.ManifestError, match=message):
+        publish.build_domain_manifest(project)
 
 
 @pytest.mark.parametrize(
@@ -273,7 +363,6 @@ def test_manifest_rejects_invalid_paper_pack_identity_contract(
     mutation: dict[str, object],
     message: str,
 ) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text("{}\n", encoding="utf-8")
@@ -283,14 +372,13 @@ def test_manifest_rejects_invalid_paper_pack_identity_contract(
     pack.update(mutation)
     pack_path.write_text(json.dumps(pack), encoding="utf-8")
 
-    with pytest.raises(module.ManifestError, match=message):
-        module.build_domain_manifest(project)
+    with pytest.raises(inputs.ManifestError, match=message):
+        publish.build_domain_manifest(project)
 
 
 def test_manifest_without_domain_records_uses_legacy_seed_fallback(
     tmp_path: Path,
 ) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     context_path = project / "context.json"
@@ -300,7 +388,7 @@ def test_manifest_without_domain_records_uses_legacy_seed_fallback(
     context["domain_records"] = []
     context_path.write_text(json.dumps(context), encoding="utf-8")
 
-    payload = module.build_domain_manifest(project)
+    payload = publish.build_domain_manifest(project)
 
     assert payload["domain_packages"][0]["domain_package_id"] == "domain-a"
     assert payload["domain_packages"][0]["seed_paper"] == "seed:a"
@@ -309,7 +397,6 @@ def test_manifest_without_domain_records_uses_legacy_seed_fallback(
 def test_manifest_nonempty_domain_records_must_cover_every_paper_pack(
     tmp_path: Path,
 ) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     context_path = project / "context.json"
@@ -325,16 +412,15 @@ def test_manifest_nonempty_domain_records_must_cover_every_paper_pack(
     context_path.write_text(json.dumps(context), encoding="utf-8")
 
     with pytest.raises(
-        module.ManifestError,
+        inputs.ManifestError,
         match="is missing copied paper-pack domain IDs: domain-b",
     ):
-        module.build_domain_manifest(project)
+        publish.build_domain_manifest(project)
 
 
 def test_manifest_rejects_orphan_pack_even_when_domain_records_cover_its_id(
     tmp_path: Path,
 ) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     context_path = project / "context.json"
@@ -348,19 +434,18 @@ def test_manifest_rejects_orphan_pack_even_when_domain_records_cover_its_id(
     context_path.write_text(json.dumps(context), encoding="utf-8")
 
     with pytest.raises(
-        module.ManifestError,
+        inputs.ManifestError,
         match=(
             "copied paper pack has no matching domain summary: "
             "domain/orphan_paper_json_pack.json"
         ),
     ):
-        module.build_domain_manifest(project)
+        publish.build_domain_manifest(project)
 
 
 def test_manifest_without_domain_records_ignores_orphan_pack(
     tmp_path: Path,
 ) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     context_path = project / "context.json"
@@ -371,7 +456,7 @@ def test_manifest_without_domain_records_ignores_orphan_pack(
     context["domain_records"] = []
     context_path.write_text(json.dumps(context), encoding="utf-8")
 
-    payload = module.build_domain_manifest(project)
+    payload = publish.build_domain_manifest(project)
 
     assert [
         package["domain_package_id"] for package in payload["domain_packages"]
@@ -381,7 +466,6 @@ def test_manifest_without_domain_records_ignores_orphan_pack(
 def test_manifest_rejects_domain_records_without_copied_packs(
     tmp_path: Path,
 ) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     context_path = project / "context.json"
@@ -394,14 +478,13 @@ def test_manifest_rejects_domain_records_without_copied_packs(
     context_path.write_text(json.dumps(context), encoding="utf-8")
 
     with pytest.raises(
-        module.ManifestError,
+        inputs.ManifestError,
         match="domain IDs with no copied paper pack: domain-extra",
     ):
-        module.build_domain_manifest(project)
+        publish.build_domain_manifest(project)
 
 
 def test_manifest_prefers_requested_seed_domain_records_over_foundation(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(
@@ -417,13 +500,12 @@ def test_manifest_prefers_requested_seed_domain_records_over_foundation(tmp_path
     )
     _write_domain(project, "a", "domain-a", "arXiv:9999.0001")
 
-    payload = module.build_domain_manifest(project)
+    payload = publish.build_domain_manifest(project)
 
     assert payload["domain_packages"][0]["seed_paper"] == "arXiv:1234.5678"
 
 
 def test_manifest_hard_separates_only_high_confidence_distinct_fields(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(json.dumps({"user_intent": "bridge", "seed_paper_list": ["seed:a", "seed:b"]}))
@@ -432,7 +514,7 @@ def test_manifest_hard_separates_only_high_confidence_distinct_fields(tmp_path: 
     pair = {"package_a": "domain-a", "package_b": "domain-b", "classification": "distinct_field",
             "confidence": 0.8, "reason": "different methods", "evidence": {"semantic": "x"}}
 
-    payload = module.build_domain_manifest(project, grouping_result={"pairs": [pair]})
+    payload = publish.build_domain_manifest(project, grouping_result={"pairs": [pair]})
 
     assert payload["field_count"] == 2
     assert payload["research_scope"] == "cross_domain"
@@ -440,7 +522,6 @@ def test_manifest_hard_separates_only_high_confidence_distinct_fields(tmp_path: 
 
 
 def test_manifest_low_confidence_or_failed_grouping_merges_conservatively(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(json.dumps({"user_intent": "same area"}))
@@ -449,8 +530,8 @@ def test_manifest_low_confidence_or_failed_grouping_merges_conservatively(tmp_pa
     pair = {"package_a": "domain-a", "package_b": "domain-b", "classification": "distinct_field",
             "confidence": 0.79, "reason": "weak", "evidence": {}}
 
-    low = module.build_domain_manifest(project, grouping_result={"pairs": [pair]})
-    failed = module.build_domain_manifest(project, grouping_result={"pairs": []})
+    low = publish.build_domain_manifest(project, grouping_result={"pairs": [pair]})
+    failed = publish.build_domain_manifest(project, grouping_result={"pairs": []})
 
     assert low["field_count"] == 1
     assert failed["field_count"] == 1
@@ -459,7 +540,6 @@ def test_manifest_low_confidence_or_failed_grouping_merges_conservatively(tmp_pa
 
 
 def test_manifest_three_package_grouping_is_deterministic_and_evidence_backed(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(json.dumps({"user_intent": "bridge"}), encoding="utf-8")
@@ -471,8 +551,8 @@ def test_manifest_three_package_grouping_is_deterministic_and_evidence_backed(tm
         {"package_a": "domain-b", "package_b": "domain-c", "classification": "distinct_field", "confidence": 0.88, "reason": "different objects", "evidence": {"semantic": "distinct"}},
     ]
 
-    first = module.build_domain_manifest(project, grouping_result={"pairs": pairs})
-    second = module.build_domain_manifest(project, grouping_result={"pairs": list(reversed(pairs))})
+    first = publish.build_domain_manifest(project, grouping_result={"pairs": pairs})
+    second = publish.build_domain_manifest(project, grouping_result={"pairs": list(reversed(pairs))})
 
     assert first["field_count"] == 2
     assert [item["field_id"] for item in first["field_groups"]] == [item["field_id"] for item in second["field_groups"]]
@@ -483,7 +563,6 @@ def test_manifest_three_package_grouping_is_deterministic_and_evidence_backed(tm
 
 
 def test_manifest_falls_back_on_nontransitive_grouping_across_hard_distinct_pair(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(json.dumps({"user_intent": "bridge"}), encoding="utf-8")
@@ -495,7 +574,7 @@ def test_manifest_falls_back_on_nontransitive_grouping_across_hard_distinct_pair
         {"package_a": "domain-a", "package_b": "domain-c", "classification": "distinct_field", "confidence": 0.95, "reason": "hard split", "evidence": {}},
     ]
 
-    payload = module.build_domain_manifest(project, grouping_result={"pairs": pairs})
+    payload = publish.build_domain_manifest(project, grouping_result={"pairs": pairs})
 
     assert payload["field_count"] == 1
     assert payload["research_scope"] == "single_domain"
@@ -506,7 +585,6 @@ def test_manifest_falls_back_on_nontransitive_grouping_across_hard_distinct_pair
 
 
 def test_manifest_requires_companion_artifacts(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     (project / "domain").mkdir(parents=True)
     (project / "context.json").write_text("{}\n", encoding="utf-8")
@@ -521,14 +599,13 @@ def test_manifest_requires_companion_artifacts(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(module.ManifestError, match="required domain artifact"):
-        module.build_domain_manifest(project)
+    with pytest.raises(inputs.ManifestError, match="required domain artifact"):
+        publish.build_domain_manifest(project)
 
 
 def test_write_manifest_uses_injected_typed_llm_runner(tmp_path: Path) -> None:
     from arc_llm import LLMCompleted
 
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(
@@ -566,7 +643,7 @@ def test_write_manifest_uses_injected_typed_llm_runner(tmp_path: Path) -> None:
             )
         )
 
-    destination = module.write_domain_manifest(project, grouping_runner=runner)
+    destination = publish.write_domain_manifest(project, grouping_runner=runner)
 
     assert destination == project / "domain" / "domain-manifest.json"
     assert len(calls) == 1
@@ -581,7 +658,6 @@ def test_write_manifest_uses_injected_typed_llm_runner(tmp_path: Path) -> None:
 
 
 def test_write_manifest_single_package_does_not_call_llm_runner(tmp_path: Path) -> None:
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(
@@ -593,7 +669,7 @@ def test_write_manifest_single_package_does_not_call_llm_runner(tmp_path: Path) 
     def unexpected_runner(*_args):
         raise AssertionError("single-package grouping must not invoke an LLM")
 
-    destination = module.write_domain_manifest(project, grouping_runner=unexpected_runner)
+    destination = publish.write_domain_manifest(project, grouping_runner=unexpected_runner)
 
     payload = json.loads(destination.read_text(encoding="utf-8"))
     assert payload["field_count"] == 1
@@ -604,7 +680,6 @@ def test_write_manifest_stops_for_typed_llm_pause(tmp_path: Path) -> None:
     from arc_jobs import ResumeReason
     from arc_llm import LLMPaused
 
-    module = _load_module()
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(
@@ -622,5 +697,5 @@ def test_write_manifest_stops_for_typed_llm_pause(tmp_path: Path) -> None:
             )
         )
 
-    with pytest.raises(module.GroupingLLMRunError, match="paused"):
-        module.write_domain_manifest(project, grouping_runner=paused_runner)
+    with pytest.raises(grouping.GroupingLLMRunError, match="paused"):
+        publish.write_domain_manifest(project, grouping_runner=paused_runner)

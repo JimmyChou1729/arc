@@ -1,0 +1,68 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "pairs"
+  ],
+  "properties": {
+    "pairs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "package_a",
+          "package_b",
+          "classification",
+          "confidence",
+          "reason",
+          "evidence"
+        ],
+        "properties": {
+          "package_a": {
+            "type": "string"
+          },
+          "package_b": {
+            "type": "string"
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "same_field",
+              "distinct_field",
+              "uncertain"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "reason": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "semantic",
+              "paper_overlap",
+              "citation_overlap"
+            ],
+            "properties": {
+              "semantic": {
+                "type": "string"
+              },
+              "paper_overlap": {
+                "type": "string"
+              },
+              "citation_overlap": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
