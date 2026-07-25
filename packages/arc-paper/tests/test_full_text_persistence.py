@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,8 +22,9 @@ from arc_paper import (
     ValidationPolicy,
 )
 from arc_paper._full_text_catalog import FullTextCatalog
-from arc_paper._parsed_document_cache import ParsedDocumentCache
-from arc_paper.parse.parser import ParseError
+from arc_paper._parsed_document_cache import PARSER_CONTRACT, ParsedDocumentCache
+from arc_paper.parse import service as parser_service_module
+from arc_paper.parse.parser import ParseError, parse_artifact_bytes
 from arc_paper.providers import Ar5ivProvider
 from arc_paper.rich_document import RichDocumentParserService
 
@@ -101,6 +103,75 @@ def test_public_parser_materializes_every_supported_format_and_reuses_across_ser
     entry = FullTextCatalog(repository.root).current_entries()[0]
     assert entry.kind == "local"
     assert entry.representations[0].document_digest == first.document_digest
+
+
+def test_parser_contract_rebuilds_from_legacy_derived_entry_without_removing_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = SourceRepository(tmp_path / "cache")
+    payload = b"<h1>Current title</h1><p>body</p>"
+    source = _store(repository, payload, SourceFormat.HTML)
+    legacy = ParsedDocumentCache(
+        repository=repository,
+        parser_contract="arc.paper.parser.v2",
+    )
+    legacy_document, _ = legacy.get_or_parse(
+        source,
+        lambda artifact: parse_artifact_bytes(
+            artifact, repository.read_bytes(artifact)
+        ),
+    )
+    legacy_key = legacy.cache_key(source)
+    legacy_path = legacy._entry_dir(legacy_key)
+    legacy_document_bytes = (legacy_path / "document.json").read_bytes()
+    legacy_manifest_bytes = (legacy_path / "manifest.json").read_bytes()
+    catalog = FullTextCatalog(repository.root)
+    catalog.record(
+        source,
+        legacy_document,
+        parser_contract=legacy.parser_contract,
+        parsed_cache_key=legacy_key,
+    )
+    assert PARSER_CONTRACT == "arc.paper.parser.v3"
+
+    current_calls: list[str] = []
+    original_parse = parser_service_module.parse_artifact_bytes
+
+    def parse_current(artifact, payload, **kwargs):
+        current_calls.append(artifact.artifact_digest)
+        return original_parse(artifact, payload, **kwargs)
+
+    monkeypatch.setattr(parser_service_module, "parse_artifact_bytes", parse_current)
+    current = PaperParserService(repository).parse_source(source)
+    current_cache = ParsedDocumentCache(repository=repository)
+    current_key = current_cache.cache_key(source)
+    representation = catalog.current_entries()[0].representations[0]
+
+    assert current_calls == [source.artifact_digest]
+    assert current_key != legacy_key
+    assert current_cache._entry_dir(current_key).joinpath("document.json").is_file()
+    assert (legacy_path / "document.json").read_bytes() == legacy_document_bytes
+    assert (legacy_path / "manifest.json").read_bytes() == legacy_manifest_bytes
+    assert repository.read_bytes(source) == payload
+    assert current.document_digest == representation.document_digest
+    assert representation.parser_contract == PARSER_CONTRACT
+    assert representation.parsed_cache_key == current_key
+    assert (
+        json.loads(
+            (current_cache._entry_dir(current_key) / "manifest.json").read_text()
+        )["parser_contract"]
+        == PARSER_CONTRACT
+    )
+    assert (
+        current_cache.read_verified_by_key(
+            current_key,
+            expected_source_identity=representation.source_identity,
+            expected_parser_contract=representation.parser_contract,
+            expected_document_digest=representation.document_digest,
+        ).document_digest
+        == current.document_digest
+    )
 
 
 def test_pdf_extractor_contract_is_required_and_isolates_cached_documents(
