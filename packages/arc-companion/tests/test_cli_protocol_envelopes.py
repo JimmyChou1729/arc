@@ -135,7 +135,11 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
         lambda *_args: "companion-fake",
     )
     monkeypatch.setattr(cli_module, "_snapshot_result", fake_snapshot_result)
-    monkeypatch.setattr(cli_module, "_publisher", lambda _paths: FakePublisher())
+    monkeypatch.setattr(
+        cli_module,
+        "_publisher",
+        lambda _paths, **_kwargs: FakePublisher(),
+    )
 
     assert main(
         [
@@ -183,9 +187,11 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
         "pdf",
         "web",
     }
-    assert all(
-        str(project / "releases") in item["path"]
-        for item in rendered["artifacts"]
+    artifacts = {item["role"]: item["path"] for item in rendered["artifacts"]}
+    assert artifacts["pdf"] == str(project / "companion.pdf")
+    assert artifacts["web"] == str(project / "companion.html")
+    assert artifacts["manifest"] == str(
+        project / "releases" / "release-fake" / "manifest.json"
     )
 
     paths = CompanionProjectPaths.load(project)

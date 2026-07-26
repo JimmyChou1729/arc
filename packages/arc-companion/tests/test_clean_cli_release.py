@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import shutil
 import threading
@@ -140,6 +141,67 @@ def test_unknown_nonempty_project_is_rejected_without_modification(
     assert result["error"]["code"] == "project_directory_not_empty"
     assert unknown.read_bytes() == before
     assert tuple(project.iterdir()) == (unknown,)
+
+
+def test_project_runtime_is_hidden_and_shared_arc_project_is_accepted(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    (project_root / ".arc" / "domain").mkdir(parents=True)
+
+    project = CompanionProjectPaths.open(project_root)
+
+    assert project.runtime_root == project_root / ".arc" / "companion"
+    assert project.marker == project.runtime_root / "project.json"
+    assert not (project_root / "companion-project.json").exists()
+    assert not (project.runtime_root / "paper-cache").exists()
+
+
+def test_publisher_freezes_source_assets_for_later_project_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    payload = b"project-owned source image"
+    digest = hashlib.sha256(payload).hexdigest()
+    calls: list[Path | None] = []
+
+    class _Repository:
+        def get_asset(self, requested: str):
+            assert requested == digest
+            return object()
+
+        def read_asset_bytes(self, _asset: object) -> bytes:
+            return payload
+
+    class _Paper:
+        def __init__(self, *, cache_root=None) -> None:
+            calls.append(cache_root)
+            self.repository = _Repository()
+
+    monkeypatch.setattr(cli_module, "ArcPaperService", _Paper)
+    publisher = cli_module._publisher(project, paper_cache_root=tmp_path / "shared")
+    loader = publisher.renderer._asset_loader
+    assert loader is not None
+    assert loader(digest) == payload
+    assert project.frozen_asset_path(digest).read_bytes() == payload
+    assert calls == [tmp_path / "shared"]
+
+    project.frozen_asset_path(digest).write_bytes(b"accidental corruption")
+    assert loader(digest) == payload
+    assert project.frozen_asset_path(digest).read_bytes() == payload
+    assert calls == [tmp_path / "shared"]
+
+    monkeypatch.setattr(
+        cli_module,
+        "ArcPaperService",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("frozen asset must not reopen the paper cache")
+        ),
+    )
+    later = cli_module._publisher(project)
+    later_loader = later.renderer._asset_loader
+    assert later_loader is not None
+    assert later_loader(digest) == payload
 
 
 def test_status_persists_source_diagnostics_and_stop_uses_same_run(
@@ -555,7 +617,7 @@ def test_release_is_immutable_reused_and_current_updates_last(
     assert release_parent_syncs[-1][2]
     current_parent_syncs = [
         event for event in events
-        if event[0] == "project" and event[1] == project.root
+        if event[0] == "project" and event[1] == project.runtime_root
     ]
     assert current_parent_syncs
     assert all(event[2] for event in current_parent_syncs)

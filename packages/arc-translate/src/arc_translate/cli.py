@@ -28,6 +28,11 @@ from .contracts import (
     GlossaryRequest,
     LanguageRequest,
 )
+from .delivery import (
+    TranslationDeliveryError,
+    publish_translation_html,
+    validate_translation_html,
+)
 from .project import TranslationProject, TranslationProjectError
 from .service import TranslationService, TranslationServiceError
 from .source import TranslationSourceError, resolve_translation_source
@@ -111,6 +116,7 @@ def _parser() -> _Parser:
     )
     _project_argument(resume)
     resume.add_argument("--input", help="JSON object or a path to one")
+    _paper_cache_argument(resume)
     return parser
 
 
@@ -122,6 +128,17 @@ def _generation_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--provider", default="auto", help="LLM provider (default: auto)")
     parser.add_argument("--model", help="provider-specific model name")
     parser.add_argument("--refresh", action="store_true", help="refresh cached source data")
+    _paper_cache_argument(parser)
+
+
+def _paper_cache_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--paper-cache-root",
+        help=(
+            "shared arc-paper cache root; defaults to ARC_PAPER_CACHE or the "
+            "global ARC paper cache"
+        ),
+    )
 
 
 def _help_command(arguments: list[str]) -> str:
@@ -162,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         TranslationProjectError,
         TranslationServiceError,
         TranslationSourceError,
+        TranslationDeliveryError,
     ) as exc:
         result = _failed(
             exc.code,
@@ -212,7 +230,7 @@ def _detect_language(args: argparse.Namespace) -> CommandResult:
     if not args.target_language.strip():
         raise _UsageError("--target-language must be non-empty")
     project = TranslationProject.open(args.project_dir)
-    paper = ArcPaperService(cache_root=project.paper_cache_root)
+    paper = ArcPaperService(cache_root=args.paper_cache_root)
     source = resolve_translation_source(
         paper, args.source, refresh=args.refresh
     )
@@ -222,7 +240,7 @@ def _detect_language(args: argparse.Namespace) -> CommandResult:
     )
     project.select("language", snapshot.run_id)
     snapshot = service.execute(snapshot.run_id)
-    return _snapshot_result(snapshot)
+    return _snapshot_result(project, service, snapshot)
 
 
 def _build_glossary(args: argparse.Namespace) -> CommandResult:
@@ -237,7 +255,7 @@ def _build_glossary(args: argparse.Namespace) -> CommandResult:
         raise TranslationServiceError(
             "prerequisite_invalid", "language prerequisite has the wrong type"
         )
-    paper = ArcPaperService(cache_root=project.paper_cache_root)
+    paper = ArcPaperService(cache_root=args.paper_cache_root)
     source = resolve_translation_source(
         paper, args.source, refresh=args.refresh
     )
@@ -256,7 +274,7 @@ def _build_glossary(args: argparse.Namespace) -> CommandResult:
         snapshot.run_id,
         keyword_provider=_keyword_provider(paper),
     )
-    return _snapshot_result(snapshot)
+    return _snapshot_result(project, service, snapshot)
 
 
 def _translate_blocks(args: argparse.Namespace) -> CommandResult:
@@ -273,7 +291,7 @@ def _translate_blocks(args: argparse.Namespace) -> CommandResult:
         raise TranslationServiceError(
             "prerequisite_invalid", "translation prerequisites have wrong types"
         )
-    paper = ArcPaperService(cache_root=project.paper_cache_root)
+    paper = ArcPaperService(cache_root=args.paper_cache_root)
     source = resolve_translation_source(
         paper, args.source, refresh=args.refresh
     )
@@ -289,7 +307,7 @@ def _translate_blocks(args: argparse.Namespace) -> CommandResult:
     )
     project.select("blocks", snapshot.run_id)
     snapshot = service.execute(snapshot.run_id)
-    return _snapshot_result(snapshot)
+    return _snapshot_result(project, service, snapshot)
 
 
 def _status(args: argparse.Namespace) -> CommandResult:
@@ -302,6 +320,17 @@ def _status(args: argparse.Namespace) -> CommandResult:
         selected = project.run_id(step)
         if selected is not None:
             steps[step] = snapshot_data(service.inspect(selected).snapshot)
+    selected_snapshot = service.inspect(run_id).snapshot
+    delivery_ok = (
+        selected_snapshot.status.value == "succeeded"
+        and project.delivery_html.is_file()
+    )
+    warnings = base.warnings
+    if selected_snapshot.status.value == "succeeded" and not delivery_ok:
+        warnings = (*warnings, CommandWarning(
+            "delivery_missing",
+            "successful translation has no visible HTML delivery; resume or rerun its publishing step",
+        ))
     return CommandResult(
         base.status,
         run=base.run,
@@ -310,7 +339,12 @@ def _status(args: argparse.Namespace) -> CommandResult:
             "run": snapshot_data(service.inspect(run_id).snapshot),
             "steps": steps,
         },
-        artifacts=base.artifacts,
+        artifacts=(
+            CommandArtifact("html", run_id, str(project.delivery_html)),
+        )
+        if delivery_ok
+        else (),
+        warnings=warnings,
         error=base.error,
         resume=base.resume,
     )
@@ -319,13 +353,17 @@ def _status(args: argparse.Namespace) -> CommandResult:
 def _resume(args: argparse.Namespace) -> CommandResult:
     project = TranslationProject.load(args.project_dir)
     run_id = _current_run(project)
-    paper = ArcPaperService(cache_root=project.paper_cache_root)
-    snapshot = TranslationService(project.jobs_root).resume(
+    service = TranslationService(project.jobs_root)
+    keyword_provider = None
+    if project.current_step == "glossary":
+        paper = ArcPaperService(cache_root=args.paper_cache_root)
+        keyword_provider = _keyword_provider(paper)
+    snapshot = service.resume(
         run_id,
         input=_json_input(args.input) if args.input is not None else None,
-        keyword_provider=_keyword_provider(paper),
+        keyword_provider=keyword_provider,
     )
-    return _snapshot_result(snapshot)
+    return _snapshot_result(project, service, snapshot)
 
 
 def _stop(args: argparse.Namespace) -> CommandResult:
@@ -353,10 +391,24 @@ def _validate(args: argparse.Namespace) -> CommandResult:
         snapshot = service.inspect(run_id).snapshot
         if snapshot.status.value == "succeeded":
             service.result(run_id)
+            validate_translation_html(project, run_id=run_id)
         return CommandResult(
             CommandStatus.COMPLETED,
             run=CommandRun(snapshot.run_id, snapshot.revision),
-            data={"valid": True, "issues": []},
+            data={
+                "valid": True,
+                "issues": [],
+                "delivery": (
+                    {"html": str(project.delivery_html)}
+                    if snapshot.status.value == "succeeded"
+                    else None
+                ),
+            },
+            artifacts=(
+                CommandArtifact("html", run_id, str(project.delivery_html)),
+            )
+            if snapshot.status.value == "succeeded"
+            else (),
         )
     return _failed(
         "run_invalid",
@@ -374,22 +426,35 @@ def _validate(args: argparse.Namespace) -> CommandResult:
     )
 
 
-def _snapshot_result(snapshot: Any) -> CommandResult:
+def _snapshot_result(
+    project: TranslationProject,
+    service: TranslationService,
+    snapshot: Any,
+) -> CommandResult:
     base = command_result_from_snapshot(snapshot)
-    artifacts = base.artifacts
-    if snapshot.result_ref is not None:
-        artifacts = (
-            CommandArtifact(
-                "result",
-                snapshot.result_ref.artifact_id,
-                snapshot.result_ref.relative_path,
-            ),
+    if snapshot.status.value != "succeeded":
+        return CommandResult(
+            base.status,
+            run=base.run,
+            data={"run": snapshot_data(snapshot)},
+            artifacts=base.artifacts,
+            warnings=base.warnings,
+            error=base.error,
+            resume=base.resume,
         )
+    delivery = publish_translation_html(
+        project,
+        run_id=snapshot.run_id,
+        result=service.result(snapshot.run_id),
+    )
     return CommandResult(
         base.status,
         run=base.run,
-        data={"run": snapshot_data(snapshot)},
-        artifacts=artifacts,
+        data={
+            "run": snapshot_data(snapshot),
+            "delivery": {"html": str(delivery)},
+        },
+        artifacts=(CommandArtifact("html", snapshot.run_id, str(delivery)),),
         warnings=base.warnings,
         error=base.error,
         resume=base.resume,

@@ -10,7 +10,7 @@ from typing import Any
 from arc_jobs import atomic_write_json
 
 
-PROJECT_SCHEMA = "arc.translate.project.v1"
+PROJECT_SCHEMA = "arc.translate.project.v2"
 _STEPS = {"language", "glossary", "blocks"}
 
 
@@ -27,13 +27,17 @@ class TranslationProject:
     @classmethod
     def open(cls, value: str | Path) -> "TranslationProject":
         root = Path(value)
-        marker = root / "arc-translate-project.json"
+        marker = root / ".arc" / "translate" / "project.json"
         if root.exists():
             if not root.is_dir():
                 raise TranslationProjectError(
                     "project_path_invalid", "project path is not a directory"
                 )
-            if tuple(root.iterdir()) and not marker.is_file():
+            if (
+                tuple(root.iterdir())
+                and not marker.is_file()
+                and not _has_arc_project_state(root)
+            ):
                 raise TranslationProjectError(
                     "project_state_conflict",
                     "project directory contains unrelated state",
@@ -49,7 +53,7 @@ class TranslationProject:
     @classmethod
     def load(cls, value: str | Path) -> "TranslationProject":
         root = Path(value)
-        marker = root / "arc-translate-project.json"
+        marker = root / ".arc" / "translate" / "project.json"
         if not root.is_dir() or not marker.is_file():
             raise TranslationProjectError(
                 "project_not_found", "arc-translate project does not exist"
@@ -60,19 +64,19 @@ class TranslationProject:
 
     @property
     def marker(self) -> Path:
-        return self.root / "arc-translate-project.json"
+        return self.runtime_root / "project.json"
 
     @property
     def runtime_root(self) -> Path:
-        return self.root / ".arc-translate-v1"
+        return self.root / ".arc" / "translate"
 
     @property
     def jobs_root(self) -> Path:
         return self.runtime_root / "jobs"
 
     @property
-    def paper_cache_root(self) -> Path:
-        return self.runtime_root / "paper-cache"
+    def delivery_html(self) -> Path:
+        return self.root / "translation.html"
 
     @property
     def current_run_id(self) -> str | None:
@@ -154,6 +158,18 @@ class TranslationProject:
                 "runs": dict(sorted(runs.items())),
             },
         )
+
+
+def _has_arc_project_state(root: Path) -> bool:
+    """Allow package-specific state under an already initialized ARC project."""
+
+    arc_root = root / ".arc"
+    if not arc_root.is_dir():
+        return False
+    return any(
+        (arc_root / name).exists()
+        for name in ("companion", "translate", "domain", "ideas", "calculate", "llm")
+    )
 
 
 __all__ = [

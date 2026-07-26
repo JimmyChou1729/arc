@@ -12,6 +12,7 @@ First detect whether translation is needed:
 ```bash
 arc-translate detect-language <source> \
   --project-dir <project-dir> \
+  --paper-cache-root <shared-paper-cache> \
   --target-language <language-tag>
 ```
 
@@ -21,16 +22,24 @@ build the glossary and translate all source blocks:
 ```bash
 arc-translate build-glossary <source> \
   --project-dir <project-dir> \
+  --paper-cache-root <shared-paper-cache> \
   --approx-term-count 50
 
 arc-translate translate-blocks <source> \
-  --project-dir <project-dir>
+  --project-dir <project-dir> \
+  --paper-cache-root <shared-paper-cache>
 ```
 
 Each command runs only its named step and verifies its prerequisites. The term
 count is approximate; deduplicated underfill is accepted. Glossary
 `matched_sentences` are literal source search hits for disambiguation, never
 definitions or explanations.
+
+`--paper-cache-root` is optional. Without it, ARC uses the shared reusable
+paper cache. Translation durable state lives only in
+`<project-dir>/.arc/translate/`, while every successful step publishes a
+human-readable `<project-dir>/translation.html` for direct delivery. No
+Markdown-only result is published.
 
 ## Inspect, Resume, and Validate
 

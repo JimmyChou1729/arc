@@ -13,11 +13,17 @@ Detect whether a verified source needs translation:
 ```bash
 arc-translate detect-language note.md \
   --target-language zh-CN \
-  --project-dir local/example/translation
+  --project-dir local/example/translation \
+  --paper-cache-root <shared-paper-cache>
 ```
 
 Use `arc-translate --help` and `arc-translate detect-language --help` for the
 three independent stages, their prerequisites, and durable project controls.
+
+`--paper-cache-root` is optional and otherwise resolves to ARC's shared paper
+cache. Durable state is project-local under `<project-dir>/.arc/translate/`.
+Each successful step publishes the human-readable
+`<project-dir>/translation.html`; no Markdown-only output is delivered.
 
 ## Tests
 

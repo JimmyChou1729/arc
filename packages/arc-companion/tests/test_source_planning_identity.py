@@ -261,7 +261,7 @@ def test_provider_model_and_prompt_contract_change_run_identity(
         )
 
 
-def test_workers_and_cache_root_are_operational_not_content_identity(
+def test_workers_and_paper_cache_root_are_operational_not_content_identity(
     tmp_path: Path,
 ) -> None:
     document = _document(tmp_path, "# Source\n\nBody.\n")
@@ -269,11 +269,11 @@ def test_workers_and_cache_root_are_operational_not_content_identity(
     recipe = CompanionGenerationRecipe()
     first = CompanionExecutionOptions(
         workers=1,
-        cache_root=tmp_path / "cache-one",
+        paper_cache_root=tmp_path / "cache-one",
     )
     second = CompanionExecutionOptions(
         workers=24,
-        cache_root=tmp_path / "cache-two",
+        paper_cache_root=tmp_path / "cache-two",
     )
 
     assert first != second

@@ -133,7 +133,7 @@ def test_companion_evidence_resume_reaches_keyword_glossary_and_book(
     service = CompanionService(RunRepository(tmp_path / "jobs"))
     translation = ArcTranslateAdapter(
         tasks,  # type: ignore[arg-type]
-        cache_root=tmp_path / "paper-cache",
+        paper_cache_root=tmp_path / "paper-cache",
     )
 
     first = service.build(

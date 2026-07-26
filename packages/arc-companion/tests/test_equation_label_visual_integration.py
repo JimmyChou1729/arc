@@ -214,7 +214,7 @@ def test_complete_visual_mapping_becomes_the_effective_build_source(
             source, validator_digests=(pdf.artifact_digest,)
         ),
         execution=CompanionExecutionOptions(
-            cache_root=repository.root
+            paper_cache_root=repository.root
         ),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=_Translation(),  # type: ignore[arg-type]
@@ -262,7 +262,7 @@ def test_incomplete_visual_mapping_warns_and_keeps_all_web_labels(
             source, validator_digests=(pdf.artifact_digest,)
         ),
         execution=CompanionExecutionOptions(
-            cache_root=repository.root
+            paper_cache_root=repository.root
         ),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=_Translation(),  # type: ignore[arg-type]
@@ -313,7 +313,7 @@ def test_visual_pause_propagates_and_resume_continues_the_build(
     request = CompanionBuildRequest(
         source, validator_digests=(pdf.artifact_digest,)
     )
-    execution = CompanionExecutionOptions(cache_root=repository.root)
+    execution = CompanionExecutionOptions(paper_cache_root=repository.root)
 
     prepared = service.prepare(request)
     paused = service.execute(
@@ -360,7 +360,7 @@ def test_effective_source_replays_after_a_later_build_pause(
     request = CompanionBuildRequest(
         source, validator_digests=(pdf.artifact_digest,)
     )
-    execution = CompanionExecutionOptions(cache_root=repository.root)
+    execution = CompanionExecutionOptions(paper_cache_root=repository.root)
 
     prepared = service.prepare(request)
     paused = service.execute(

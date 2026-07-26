@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from collections.abc import Mapping
@@ -108,6 +109,7 @@ def _parser() -> _Parser:
         "--approx-term-count", type=int, default=50, help="target glossary size (default: 50)"
     )
     build.add_argument("--refresh", action="store_true", help="refresh cached source data")
+    _paper_cache_argument(build)
 
     status = commands.add_parser(
         "status",
@@ -127,6 +129,7 @@ def _parser() -> _Parser:
         help="JSON object or path containing the current pause response",
     )
     resume.add_argument("--workers", type=int, default=4, help="parallel workers (default: 4)")
+    _paper_cache_argument(resume)
 
     stop = commands.add_parser(
         "stop",
@@ -148,6 +151,7 @@ def _parser() -> _Parser:
         default="all",
         help="artifact formats to report (default: all)",
     )
+    _paper_cache_argument(render)
 
     validate = commands.add_parser(
         "validate",
@@ -167,6 +171,16 @@ def _help_command(arguments: list[str]) -> str:
     )
     return " ".join(
         part for part in ("arc-companion", command, "--help") if part is not None
+    )
+
+
+def _paper_cache_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--paper-cache-root",
+        help=(
+            "shared arc-paper cache root; defaults to ARC_PAPER_CACHE or the "
+            "global ARC paper cache"
+        ),
     )
 
 
@@ -255,7 +269,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
     require_translation_runtime()
     # Unknown project state is refused before source/cache writes.
     paths = CompanionProjectPaths.open(args.project_dir)
-    paper = ArcPaperService(cache_root=paths.paper_cache_root)
+    paper = ArcPaperService(cache_root=args.paper_cache_root)
     rich, validators, warnings = _resolve_source(
         paper,
         args.source,
@@ -278,7 +292,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
     )
     execution = CompanionExecutionOptions(
         workers=args.workers,
-        cache_root=paths.paper_cache_root,
+        paper_cache_root=args.paper_cache_root,
     )
     run_id = companion_run_id(request, recipe)
     service = CompanionService(paths.jobs_root)
@@ -290,7 +304,12 @@ def _build(args: argparse.Namespace) -> CommandResult:
         run_id,
         execution=execution,
     )
-    return _snapshot_result(paths, snapshot, warnings=warnings)
+    return _snapshot_result(
+        paths,
+        snapshot,
+        warnings=warnings,
+        paper_cache_root=args.paper_cache_root,
+    )
 
 
 def _resume(args: argparse.Namespace) -> CommandResult:
@@ -304,10 +323,14 @@ def _resume(args: argparse.Namespace) -> CommandResult:
         input=value,
         execution=CompanionExecutionOptions(
             workers=args.workers,
-            cache_root=paths.paper_cache_root,
+            paper_cache_root=args.paper_cache_root,
         ),
     )
-    return _snapshot_result(paths, snapshot)
+    return _snapshot_result(
+        paths,
+        snapshot,
+        paper_cache_root=args.paper_cache_root,
+    )
 
 
 def _validate_workers(workers: int) -> None:
@@ -335,11 +358,31 @@ def _status(args: argparse.Namespace) -> CommandResult:
             paths.jobs_root
         ).build_diagnostics(run_id),
     }
+    artifacts = ()
+    if (
+        current is not None
+        and release_matches_selected_run
+        and not release_warnings
+        and not delivery_warnings
+    ):
+        artifacts = (
+            CommandArtifact(
+                "pdf", str(current["release_id"]), str(paths.delivery_pdf)
+            ),
+            CommandArtifact(
+                "web", str(current["release_id"]), str(paths.delivery_html)
+            ),
+            CommandArtifact(
+                "manifest",
+                str(current["release_id"]),
+                str(paths.root / str(current["manifest"])),
+            ),
+        )
     return CommandResult(
         base.status,
         run=base.run,
         data=data,
-        artifacts=base.artifacts,
+        artifacts=artifacts,
         warnings=(
             *_source_warnings(paths, run_id),
             *_build_warnings(paths, run_id),
@@ -378,18 +421,20 @@ def _render(args: argparse.Namespace) -> CommandResult:
     if snapshot.status is not RunStatus.SUCCEEDED:
         return command_result_from_snapshot(snapshot)
     book = service.accepted_book(run_id)
-    release = _publisher(paths).publish(book, run_id=run_id)
+    release = _publisher(
+        paths, paper_cache_root=args.paper_cache_root
+    ).publish(book, run_id=run_id)
     roles = {"pdf", "web"} if args.format == "all" else {args.format}
     artifacts = [
         CommandArtifact("manifest", release.release_id, str(release.manifest))
     ]
     if "pdf" in roles:
         artifacts.append(
-            CommandArtifact("pdf", release.release_id, str(release.pdf))
+            CommandArtifact("pdf", release.release_id, str(paths.delivery_pdf))
         )
     if "web" in roles:
         artifacts.append(
-            CommandArtifact("web", release.release_id, str(release.web_index))
+            CommandArtifact("web", release.release_id, str(paths.delivery_html))
         )
     return CommandResult(
         CommandStatus.COMPLETED,
@@ -419,8 +464,8 @@ def _validate(args: argparse.Namespace) -> CommandResult:
         },
         artifacts=(
             CommandArtifact("manifest", release.release_id, str(release.manifest)),
-            CommandArtifact("pdf", release.release_id, str(release.pdf)),
-            CommandArtifact("web", release.release_id, str(release.web_index)),
+            CommandArtifact("pdf", release.release_id, str(paths.delivery_pdf)),
+            CommandArtifact("web", release.release_id, str(paths.delivery_html)),
         ),
     )
 
@@ -430,6 +475,7 @@ def _snapshot_result(
     snapshot: Any,
     *,
     warnings: tuple[str, ...] = (),
+    paper_cache_root: str | Path | None = None,
 ) -> CommandResult:
     base = command_result_from_snapshot(snapshot)
     persisted = paths.source_diagnostics(snapshot.run_id)
@@ -453,7 +499,9 @@ def _snapshot_result(
         )
     service = CompanionService(paths.jobs_root)
     book = service.accepted_book(snapshot.run_id)
-    release = _publisher(paths).publish(book, run_id=snapshot.run_id)
+    release = _publisher(
+        paths, paper_cache_root=paper_cache_root
+    ).publish(book, run_id=snapshot.run_id)
     return CommandResult(
         CommandStatus.COMPLETED,
         run=base.run,
@@ -464,8 +512,8 @@ def _snapshot_result(
             "delivery": _delivery_paths(paths),
         },
         artifacts=(
-            CommandArtifact("pdf", release.release_id, str(release.pdf)),
-            CommandArtifact("web", release.release_id, str(release.web_index)),
+            CommandArtifact("pdf", release.release_id, str(paths.delivery_pdf)),
+            CommandArtifact("web", release.release_id, str(paths.delivery_html)),
             CommandArtifact(
                 "manifest", release.release_id, str(release.manifest)
             ),
@@ -563,13 +611,30 @@ def _resolve_source(
     )
 
 
-def _publisher(paths: CompanionProjectPaths) -> CompanionReleasePublisher:
-    paper = ArcPaperService(cache_root=paths.paper_cache_root)
+def _publisher(
+    paths: CompanionProjectPaths,
+    *,
+    paper_cache_root: str | Path | None = None,
+) -> CompanionReleasePublisher:
+    paper: ArcPaperService | None = None
 
     def load_asset(digest: str) -> bytes | None:
+        frozen = paths.frozen_asset_path(digest)
+        try:
+            if frozen.is_file():
+                payload = frozen.read_bytes()
+                if hashlib.sha256(payload).hexdigest() == digest:
+                    return payload
+        except OSError:
+            pass
+        nonlocal paper
+        if paper is None:
+            paper = ArcPaperService(cache_root=paper_cache_root)
         try:
             asset = paper.repository.get_asset(digest)
-            return paper.repository.read_asset_bytes(asset)
+            payload = paper.repository.read_asset_bytes(asset)
+            paths.freeze_asset(digest, payload)
+            return payload
         except Exception:
             return None
 

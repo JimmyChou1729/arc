@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from arc_jobs import atomic_write_json
+from arc_jobs import atomic_write_bytes, atomic_write_json
 
 
-PROJECT_SCHEMA = "arc.companion.project.v1"
-CURRENT_SCHEMA = "arc.companion.current_release.v1"
+PROJECT_SCHEMA = "arc.companion.project.v2"
+CURRENT_SCHEMA = "arc.companion.current_release.v2"
 DIAGNOSTICS_SCHEMA = "arc.companion.source_diagnostics.v1"
 
 
@@ -28,14 +30,14 @@ class CompanionProjectPaths:
     @classmethod
     def open(cls, value: str | Path) -> "CompanionProjectPaths":
         root = Path(value)
-        marker = root / "companion-project.json"
+        marker = root / ".arc" / "companion" / "project.json"
         if root.exists():
             if not root.is_dir():
                 raise CompanionProjectError(
                     "project_path_invalid", "project path is not a directory"
                 )
             entries = tuple(root.iterdir())
-            if entries and not marker.is_file():
+            if entries and not marker.is_file() and not _has_arc_project_state(root):
                 raise CompanionProjectError(
                     "project_directory_not_empty",
                     "project directory contains unrecognized or unrelated state; "
@@ -54,7 +56,7 @@ class CompanionProjectPaths:
         """Open an existing project without creating or changing files."""
 
         root = Path(value)
-        marker = root / "companion-project.json"
+        marker = root / ".arc" / "companion" / "project.json"
         if not root.is_dir() or not marker.is_file():
             raise CompanionProjectError(
                 "project_not_found",
@@ -66,19 +68,21 @@ class CompanionProjectPaths:
 
     @property
     def marker(self) -> Path:
-        return self.root / "companion-project.json"
+        return self.runtime_root / "project.json"
 
     @property
     def runtime_root(self) -> Path:
-        return self.root / ".arc-companion-v1"
+        return self.root / ".arc" / "companion"
 
     @property
     def jobs_root(self) -> Path:
         return self.runtime_root / "jobs"
 
     @property
-    def paper_cache_root(self) -> Path:
-        return self.runtime_root / "paper-cache"
+    def frozen_assets_root(self) -> Path:
+        """Project-owned copies of source assets needed for later rendering."""
+
+        return self.runtime_root / "frozen-assets"
 
     @property
     def releases_root(self) -> Path:
@@ -86,7 +90,7 @@ class CompanionProjectPaths:
 
     @property
     def current(self) -> Path:
-        return self.root / "current.json"
+        return self.runtime_root / "current.json"
 
     @property
     def delivery_pdf(self) -> Path:
@@ -164,6 +168,45 @@ class CompanionProjectPaths:
             )
         return tuple(value["warnings"])
 
+    def frozen_asset_path(self, digest: str) -> Path:
+        if not _is_digest(digest):
+            raise ValueError("asset digest must be a SHA-256 digest")
+        return self.frozen_assets_root / digest
+
+    def freeze_asset(self, digest: str, payload: bytes) -> Path:
+        """Persist one verified source asset with the project, atomically."""
+
+        if not isinstance(payload, bytes):
+            raise TypeError("asset payload must be bytes")
+        if _digest(payload) != digest:
+            raise CompanionProjectError(
+                "asset_digest_mismatch",
+                "source asset does not match its declared digest",
+            )
+        path = self.frozen_asset_path(digest)
+        if path.exists():
+            try:
+                existing = path.read_bytes()
+            except OSError as exc:
+                raise CompanionProjectError(
+                    "project_state_invalid",
+                    "frozen source asset is unreadable",
+                ) from exc
+            if _digest(existing) != digest:
+                # The filename is content-addressed; a mismatched existing
+                # payload is accidental project corruption and may be repaired
+                # from the verified shared cache payload.
+                atomic_write_bytes(path, payload)
+                return path
+            if existing != payload:
+                raise CompanionProjectError(
+                    "asset_digest_mismatch",
+                    "frozen source asset conflicts with its declared digest",
+                )
+            return path
+        atomic_write_bytes(path, payload)
+        return path
+
     def publish_current(
         self, *, release_id: str, manifest: Path, run_id: str
     ) -> None:
@@ -235,6 +278,26 @@ def _read_json(path: Path, description: str) -> dict[str, Any]:
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     atomic_write_json(path, value)
+
+
+def _has_arc_project_state(root: Path) -> bool:
+    """Allow packages to share a project root only after ARC state exists."""
+
+    arc_root = root / ".arc"
+    if not arc_root.is_dir():
+        return False
+    return any(
+        (arc_root / name).exists()
+        for name in ("companion", "translate", "domain", "ideas", "calculate", "llm")
+    )
+
+
+def _digest(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _is_digest(value: str) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
 __all__ = [

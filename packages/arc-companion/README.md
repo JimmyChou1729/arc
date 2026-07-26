@@ -46,8 +46,13 @@ Every successful publication also refreshes the managed project-root
 the canonical release PDF. The HTML contains a base link to the canonical
 `releases/<release-id>/reader/index.html`, so reader assets and fragment links
 continue to resolve inside the immutable release. Command artifacts still
-identify the canonical immutable files; command data reports the two delivery
-paths.
+identify the project-root PDF and HTML delivery files; command data reports
+the two delivery paths. Durable runs, diagnostics, and frozen source assets
+are stored under `<project-dir>/.arc/companion/`. Paper data remains in ARC's
+shared reusable paper cache unless `--paper-cache-root` selects another shared
+cache. Figure assets needed by a completed release are frozen into the project
+before publication completes, so later rendering does not depend on cache
+retention.
 
 ## Tests
 

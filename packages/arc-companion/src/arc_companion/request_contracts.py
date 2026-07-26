@@ -121,7 +121,7 @@ class CompanionExecutionOptions:
 
     workers: int = 4
     llm: LLMExecutionOptions = field(default_factory=LLMExecutionOptions)
-    cache_root: Path | None = None
+    paper_cache_root: Path | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.workers, bool) or not isinstance(
@@ -132,9 +132,9 @@ class CompanionExecutionOptions:
             raise ValueError("workers must be between 1 and 24")
         if not isinstance(self.llm, LLMExecutionOptions):
             raise ValueError("llm must be LLMExecutionOptions")
-        if self.cache_root is not None:
+        if self.paper_cache_root is not None:
             object.__setattr__(
-                self, "cache_root", Path(self.cache_root)
+                self, "paper_cache_root", Path(self.paper_cache_root)
             )
 
 

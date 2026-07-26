@@ -317,7 +317,7 @@ def test_default_adapter_wires_keyword_provider_to_companion_cache(
     tasks = FakeGuideTasks()
     adapter = ArcTranslateAdapter(
         tasks,  # type: ignore[arg-type]
-        cache_root=tmp_path / "paper-cache",
+        paper_cache_root=tmp_path / "paper-cache",
     )
 
     service, source = adapter._service_and_source(_document(tmp_path))

@@ -19,6 +19,7 @@ A PDF validator checks fidelity and supplies page mapping:
 arc-companion build <source.md> \
   --pdf <validator.pdf> \
   --project-dir <project-dir> \
+  --paper-cache-root <shared-paper-cache> \
   --target-language <language-tag>
 ```
 
@@ -34,6 +35,7 @@ For a remote arXiv paper, let ARC fetch the PDF validator:
 arc-companion build <arxiv-id> \
   --pdf fetch \
   --project-dir <project-dir> \
+  --paper-cache-root <shared-paper-cache> \
   --target-language <language-tag>
 ```
 
@@ -41,6 +43,10 @@ The build reuses compatible verified source, glossary, translation, and
 chapter artifacts. Language detection and translation belong to
 `arc-translate`; after the glossary barrier, translation and guide generation
 may proceed in parallel. The glossary size is approximate.
+
+`--paper-cache-root` is optional. Without it, Companion uses ARC's shared,
+reusable paper cache. Companion's durable runs, diagnostics, and frozen source
+assets are project-local under `<project-dir>/.arc/companion/`.
 
 ## Inspect and Recover
 
@@ -74,6 +80,11 @@ base at `releases/<release-id>/reader/index.html` so canonical assets and links
 remain in the immutable release. The release manifest and CLI artifacts remain
 the authoritative immutable records. Do not place unrelated files at either
 managed root path.
+
+Companion freezes every source figure asset needed for its accepted release in
+the project runtime before publication completes. A completed project can
+therefore render and validate after the corresponding shared paper-cache entry
+has been removed.
 
 ## Help
 

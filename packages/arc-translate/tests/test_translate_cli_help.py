@@ -39,6 +39,22 @@ def test_help_has_no_obsolete_json_flag(
     assert "--json" not in output
 
 
+def test_only_paper_access_commands_accept_a_paper_cache_root(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for command in (
+        "detect-language",
+        "build-glossary",
+        "translate-blocks",
+        "resume",
+    ):
+        assert main([command, "--help"]) == 0
+        assert "--paper-cache-root" in capsys.readouterr().out
+    for command in ("status", "stop", "validate"):
+        assert main([command, "--help"]) == 0
+        assert "--paper-cache-root" not in capsys.readouterr().out
+
+
 def test_usage_error_points_to_contextual_help(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

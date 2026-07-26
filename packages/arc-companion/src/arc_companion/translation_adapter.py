@@ -99,11 +99,13 @@ class ArcTranslateAdapter:
         self,
         task_service: LLMTaskService | None = None,
         *,
-        cache_root: str | Path | None = None,
+        paper_cache_root: str | Path | None = None,
     ) -> None:
         self.task_service = task_service
-        self.cache_root = (
-            Path(cache_root) if cache_root is not None else None
+        self.paper_cache_root = (
+            Path(paper_cache_root)
+            if paper_cache_root is not None
+            else None
         )
 
     def detect_language(
@@ -197,7 +199,7 @@ class ArcTranslateAdapter:
             TranslationWorkflowService(
                 task_service=self.task_service,
                 keyword_provider=KeywordInventoryService(
-                    TermInventoryStore(self.cache_root),
+                    TermInventoryStore(self.paper_cache_root),
                     task_service=self.task_service,
                 ),
             ),

@@ -27,11 +27,11 @@ from arc_llm import (
     LLMTaskService,
 )
 from arc_paper import (
+    ArcPaperService,
     EquationLabelReviewService,
     PdftoppmFullPageRenderer,
     RichDocument,
     SourceFormat,
-    SourceRepository,
     SourceRepositoryError,
     apply_visual_equation_labels,
     detect_suspicious_equation_labels,
@@ -130,7 +130,7 @@ class CompanionBuildHandler:
         self.task_service = task_service or LLMTaskService()
         self.translation_adapter = translation_adapter or ArcTranslateAdapter(
             self.task_service,
-            cache_root=self.execution.cache_root,
+            paper_cache_root=self.execution.paper_cache_root,
         )
 
     def semantic_input(self) -> dict[str, Any]:
@@ -337,14 +337,11 @@ class CompanionBuildHandler:
                 "PDF visual equation-label review was not run: exactly one PDF "
                 "validator is required; retaining web equation labels."
             )
-        elif self.execution.cache_root is None:
-            warning = (
-                "PDF visual equation-label review was not run: the paper cache "
-                "root is unavailable; retaining web equation labels."
-            )
         else:
             digest = self.request.validator_digests[0]
-            repository = SourceRepository(self.execution.cache_root)
+            repository = ArcPaperService(
+                cache_root=self.execution.paper_cache_root
+            ).repository
             try:
                 pdf = repository.get(SourceFormat.PDF, digest)
                 pdf_bytes = repository.read_bytes(pdf)
