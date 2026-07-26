@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_JSON = ROOT / "plugins/arc/skills/arc/workflows/json"
 SCRIPTS = ROOT / "plugins/arc/skills/arc/scripts"
 RUNNER = SCRIPTS / "run-ideas.py"
+IDEAS_MODULES = SCRIPTS / "_arc_workflows"
 
 
 def _load_runner_module():
@@ -484,3 +485,33 @@ def test_partial_delivery_failure_only_adds_warning(
         "loops": [{"committed_rounds": 1}],
     }
     assert warnings == ["partial_ideas_delivery_failed: RuntimeError"]
+
+
+def test_ideas_template_modules_have_one_way_dependencies() -> None:
+    templates = (IDEAS_MODULES / "ideas_templates.py").read_text(
+        encoding="utf-8"
+    )
+    models = (IDEAS_MODULES / "ideas_models.py").read_text(encoding="utf-8")
+    template_io = (IDEAS_MODULES / "ideas_template_io.py").read_text(
+        encoding="utf-8"
+    )
+    workers = (IDEAS_MODULES / "ideas_worker_templates.py").read_text(
+        encoding="utf-8"
+    )
+    context = (IDEAS_MODULES / "ideas_context.py").read_text(encoding="utf-8")
+
+    assert len(templates.splitlines()) <= 100
+    assert len(models.splitlines()) <= 50
+    assert len(template_io.splitlines()) <= 120
+    assert len(workers.splitlines()) <= 150
+    assert len(context.splitlines()) <= 400
+    assert "_arc_workflows.ideas_templates import" not in models
+    assert "_arc_workflows.ideas_templates import" not in template_io
+    assert "_arc_workflows.ideas_templates import" not in workers
+    assert "_arc_workflows.ideas_templates import" not in context
+    assert "_arc_workflows.ideas_models import" in workers
+    assert "_arc_workflows.ideas_models import" in context
+    assert "_arc_workflows.ideas_template_io import" in workers
+    assert "_arc_workflows.ideas_template_io import" in context
+    assert "_arc_workflows.ideas_worker_templates import" in templates
+    assert "_arc_workflows.ideas_context import" in templates

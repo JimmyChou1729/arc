@@ -1282,7 +1282,7 @@ def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
     try:
         config_module = importlib.import_module("_arc_workflows.ideas_config")
         templates_module = importlib.import_module(
-            "_arc_workflows.ideas_templates"
+            "_arc_workflows.ideas_worker_templates"
         )
     finally:
         sys.dont_write_bytecode = old_dont_write_bytecode

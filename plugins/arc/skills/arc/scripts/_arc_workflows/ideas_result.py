@@ -21,7 +21,7 @@ from _arc_workflows.ideas_ranking import (
     normalized_review_marks,
     proposal_title,
 )
-from _arc_workflows.ideas_templates import IdeaPlan
+from _arc_workflows.ideas_models import IdeaPlan
 
 
 IDEAS_RESULT_SCHEMA = "arc.workflow.ideas.result.v3"

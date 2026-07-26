@@ -1364,6 +1364,12 @@ def test_calculate_modules_have_one_way_dependencies() -> None:
     consensus = (CALCULATE_MODULES / "calculate_consensus.py").read_text(
         encoding="utf-8"
     )
+    consensus_policy = (
+        CALCULATE_MODULES / "calculate_consensus_policy.py"
+    ).read_text(encoding="utf-8")
+    step_results = (
+        CALCULATE_MODULES / "calculate_step_results.py"
+    ).read_text(encoding="utf-8")
     context = (CALCULATE_MODULES / "calculate_context.py").read_text(
         encoding="utf-8"
     )
@@ -1384,9 +1390,20 @@ def test_calculate_modules_have_one_way_dependencies() -> None:
     assert "def run_calculation(" not in entry
     assert "_arc_workflows.calculate_runner import" in entry
     assert "_arc_workflows.calculate_" not in config
-    assert "_arc_workflows.calculate_config import" in consensus
+    assert len(consensus.splitlines()) <= 400
+    assert "_arc_workflows.calculate_consensus_policy import" in consensus
+    assert "_arc_workflows.calculate_config" not in consensus
     assert "_arc_workflows.calculate_prompts" not in consensus
     assert "_arc_workflows.calculate_runner" not in consensus
+    assert len(consensus_policy.splitlines()) <= 300
+    assert "_arc_workflows.calculate_config import" in consensus_policy
+    assert "_arc_workflows.calculate_consensus import" not in consensus_policy
+    assert "_arc_workflows.calculate_runner" not in consensus_policy
+    assert len(step_results.splitlines()) <= 400
+    assert "_arc_workflows.calculate_config import" in step_results
+    assert "_arc_workflows.calculate_consensus_policy import" in step_results
+    assert "_arc_workflows.calculate_consensus import" not in step_results
+    assert "_arc_workflows.calculate_runner" not in step_results
     assert "_arc_workflows.calculate_config import" in context
     assert "_arc_workflows.calculate_prompts" not in context
     assert "_arc_workflows.calculate_runner" not in context
@@ -1395,13 +1412,15 @@ def test_calculate_modules_have_one_way_dependencies() -> None:
     assert "_arc_workflows.calculate_prompt_builders import" in prompts
     assert "_arc_workflows.calculate_runner" not in prompts
     assert "_arc_workflows.calculate_config import" in prompt_builders
-    assert "_arc_workflows.calculate_consensus import" in prompt_builders
+    assert "_arc_workflows.calculate_consensus_policy import" in prompt_builders
     assert "_arc_workflows.calculate_reviewer_schema import" in prompt_builders
     assert "_arc_workflows.calculate_runner" not in prompt_builders
     assert "_arc_workflows.calculate_config import" in reviewer_schema
     assert "_arc_workflows.calculate_runner" not in reviewer_schema
     assert "_arc_workflows.calculate_config import" in runner
     assert "_arc_workflows.calculate_consensus import" in runner
+    assert "_arc_workflows.calculate_consensus_policy import" in runner
+    assert "_arc_workflows.calculate_step_results import" in runner
     assert "_arc_workflows.calculate_prompts import" in runner
 
 
@@ -1425,6 +1444,8 @@ def test_runner_has_no_retired_llm_or_private_artifact_dependencies() -> None:
             *(CALCULATE_MODULES / name for name in (
                 "calculate_config.py",
                 "calculate_consensus.py",
+                "calculate_consensus_policy.py",
+                "calculate_step_results.py",
                 "calculate_prompts.py",
                 "calculate_runner.py",
             )),

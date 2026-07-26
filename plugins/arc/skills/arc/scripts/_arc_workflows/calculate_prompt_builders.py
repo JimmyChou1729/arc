@@ -15,7 +15,7 @@ from _arc_workflows.calculate_config import (
     _dict,
     _read_template,
 )
-from _arc_workflows.calculate_consensus import (
+from _arc_workflows.calculate_consensus_policy import (
     _human_gate_pause_statuses_from_mapping,
 )
 from _arc_workflows.calculate_reviewer_schema import reviewer_output_schema
