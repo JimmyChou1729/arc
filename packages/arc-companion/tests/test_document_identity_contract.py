@@ -194,7 +194,7 @@ def test_request_identity_encodes_authors_and_complete_reader_labels(
     encoded = encode_build_request(supplied)
     decoded = decode_build_request(encoded)
 
-    assert encoded["schema_version"] == "arc.companion.build_request.v4"
+    assert encoded["schema_version"] == "arc.companion.build_request.v5"
     assert encoded["authors"] == ["First Author", "Second Author"]
     assert encoded["reader_labels"]["notes"] == "自定义伴读"
     assert decoded.authors == supplied.authors
@@ -237,6 +237,23 @@ def test_request_decoder_accepts_v2_and_v3_defaults(
         decoded = decode_build_request(legacy)
         assert decoded.authors == ()
         assert dict(decoded.reader_labels or {}) == reader_labels("zh-CN")
+
+
+def test_request_decoder_accepts_v4_source_page_label(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, "# Source\n\nBody.\n")
+    labels = reader_labels("zh-CN")
+    current = encode_build_request(
+        CompanionBuildRequest(document, reader_labels=labels)
+    )
+    current["schema_version"] = "arc.companion.build_request.v4"
+    current["reader_labels"]["source_page"] = "原文第 {page} 页"
+
+    decoded = decode_build_request(current)
+
+    assert "source_page" not in (decoded.reader_labels or {})
+    assert dict(decoded.reader_labels or {}) == labels
 
 
 def test_recipe_identity_reserves_author_prompt_and_decodes_v5(

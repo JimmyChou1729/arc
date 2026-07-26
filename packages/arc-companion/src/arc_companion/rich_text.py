@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from html import escape as escape_html
 from typing import Any
 
@@ -69,14 +69,23 @@ def validate_rich_markdown(
 
 
 def render_html(
-    tokens: Sequence[Token], *, citation_numbers: Mapping[str, int]
+    tokens: Sequence[Token],
+    *,
+    citation_numbers: Mapping[str, int],
+    text_renderer: Callable[[str], str] = escape_html,
 ) -> str:
     """Render a previously parsed token stream to release-safe HTML."""
 
     values: list[str] = []
     for token in tokens:
         if token.type == "inline":
-            values.append(_render_html_inline(token.children or (), citation_numbers))
+            values.append(
+                _render_html_inline(
+                    token.children or (),
+                    citation_numbers,
+                    text_renderer,
+                )
+            )
         elif token.type == "paragraph_open":
             values.append("<p>")
         elif token.type == "paragraph_close":
@@ -111,22 +120,32 @@ def render_html(
         elif token.type in {"hr", "hardbreak"}:
             values.append("<hr>")
         elif token.type in {"softbreak", "text"}:
-            values.append(escape_html(token.content))
+            values.append(text_renderer(token.content))
         else:
             raise RichTextError(f"unsupported CommonMark block token: {token.type}")
     return "".join(values)
 
 
 def render_tex(
-    tokens: Sequence[Token], *, citation_numbers: Mapping[str, int]
+    tokens: Sequence[Token],
+    *,
+    citation_numbers: Mapping[str, int],
+    text_renderer: Callable[[str], str] | None = None,
 ) -> str:
     """Render the same CommonMark token stream to conservative XeLaTeX."""
 
+    resolved_text_renderer = text_renderer or _tex_escape
     values: list[str] = []
     list_depth = 0
     for token in tokens:
         if token.type == "inline":
-            values.append(_render_tex_inline(token.children or (), citation_numbers))
+            values.append(
+                _render_tex_inline(
+                    token.children or (),
+                    citation_numbers,
+                    resolved_text_renderer,
+                )
+            )
         elif token.type == "paragraph_open":
             values.append("")
         elif token.type == "paragraph_close":
@@ -163,7 +182,7 @@ def render_tex(
         elif token.type == "hr":
             values.append(r"\par\hrule\par")
         elif token.type in {"softbreak", "text"}:
-            values.append(_tex_escape(token.content))
+            values.append(resolved_text_renderer(token.content))
         else:
             raise RichTextError(f"unsupported CommonMark block token: {token.type}")
     if list_depth:
@@ -246,12 +265,14 @@ def _reject_raw_html(tokens: Sequence[Token]) -> None:
 
 
 def _render_html_inline(
-    tokens: Sequence[Token], citation_numbers: Mapping[str, int]
+    tokens: Sequence[Token],
+    citation_numbers: Mapping[str, int],
+    text_renderer: Callable[[str], str],
 ) -> str:
     values: list[str] = []
     for token in tokens:
         if token.type == "text":
-            values.append(escape_html(token.content))
+            values.append(text_renderer(token.content))
         elif token.type == "softbreak":
             values.append("\n")
         elif token.type == "hardbreak":
@@ -305,12 +326,14 @@ def _render_html_inline(
 
 
 def _render_tex_inline(
-    tokens: Sequence[Token], citation_numbers: Mapping[str, int]
+    tokens: Sequence[Token],
+    citation_numbers: Mapping[str, int],
+    text_renderer: Callable[[str], str],
 ) -> str:
     values: list[str] = []
     for token in tokens:
         if token.type == "text":
-            values.append(_tex_escape(token.content))
+            values.append(text_renderer(token.content))
         elif token.type in {"softbreak", "hardbreak"}:
             values.append(r"\newline{} ")
         elif token.type == "code_inline":

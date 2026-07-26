@@ -441,7 +441,7 @@ def test_reuse_digest_is_semantic_without_changing_default_request_identity(
     reused = replace(plain, translation_reuse_digest=digest)
     recipe = CompanionGenerationRecipe()
 
-    assert encoded["schema_version"] == "arc.companion.build_request.v4"
+    assert encoded["schema_version"] == "arc.companion.build_request.v5"
     assert encoded["translation_reuse_digest"] is None
     assert encode_build_request(reused)["translation_reuse_digest"] == digest
     assert companion_run_id(plain, recipe) != companion_run_id(reused, recipe)

@@ -18,6 +18,7 @@ import unicodedata
 from urllib.parse import quote, unquote, urlparse
 
 from .contracts import AcceptedBook, LearningUnit, SourceAnchor
+from .glossary_matching import GlossaryMatcher, glossary_tooltip
 from .reader_labels import ReaderLabelError, resolve_reader_labels
 from .reading_order import iter_visible_learning_units
 from .rich_text import RichTextError, citation_ids_from_tokens, parse_markdown
@@ -25,9 +26,17 @@ from . import rich_text
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v6"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v7"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v7"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v8"
 _SOURCE_DATE_EPOCH = "946684800"
+_GLOSSARY_PROTECTED_TEXT = re.compile(
+    r"(?:https?://|mailto:)[^\s<>{}\[\]]+"
+    r"|(?P<code>`{1,3})[^\n]*?(?P=code)"
+    r"|(?P<math>\${1,2})[^\n]*?(?P=math)"
+    r"|\\\([^\n]*?\\\)"
+    r"|\\\[[^\n]*?\\\]",
+    re.IGNORECASE,
+)
 _AssetLoader = Callable[[str], bytes | None]
 
 
@@ -63,9 +72,19 @@ class _ReleaseLinks:
             else target
         )
 
-    def tex_link(self, target: str, text: str) -> str:
+    def tex_link(
+        self,
+        target: str,
+        text: str,
+        *,
+        rendered_text: str | None = None,
+    ) -> str:
         block_id = self._fragment_block(target)
-        label = _tex_escape(text)
+        label = (
+            rendered_text
+            if rendered_text is not None
+            else _tex_escape(text)
+        )
         if block_id is not None:
             return (
                 rf"\hyperlink{{anchor-{_anchor_token(block_id)}}}"
@@ -449,6 +468,8 @@ def _render_html(
     release_links: _ReleaseLinks,
 ) -> str:
     labels = _labels(book)
+    source_matcher = GlossaryMatcher(book.glossary, translated=False)
+    target_matcher = GlossaryMatcher(book.glossary, translated=True)
     chapters = "\n".join(
         _render_html_chapter(
             book,
@@ -456,10 +477,17 @@ def _render_html(
             source_assets=source_assets,
             release_links=release_links,
             labels=labels,
+            source_matcher=source_matcher,
+            target_matcher=target_matcher,
         )
         for chapter in book.chapters
     )
-    glossary = _render_html_glossary(book, labels=labels)
+    glossary = _render_html_glossary(
+        book,
+        labels=labels,
+        source_matcher=source_matcher,
+        target_matcher=target_matcher,
+    )
     bibliography = _render_html_bibliography(book, labels=labels)
     authors = (
         '<p class="book-authors"><span class="reader-label">'
@@ -482,10 +510,11 @@ def _render_html(
 </head>
 <body data-book-digest="{book.content_digest}">
   <header class="book-header">
-    <h1>{escape_html(book.title)}</h1>
+    <h1>{_html_glossary_text(book.title, source_matcher, labels)}</h1>
     {authors}
   </header>
   <main>{chapters}{glossary}{bibliography}</main>
+  <div id="glossary-tooltip" class="glossary-tooltip" role="tooltip" hidden></div>
 </body>
 </html>
 """
@@ -498,6 +527,8 @@ def _render_html_chapter(
     source_assets: Mapping[str, _SourceAssetReference],
     release_links: _ReleaseLinks,
     labels: Mapping[str, str],
+    source_matcher: GlossaryMatcher,
+    target_matcher: GlossaryMatcher,
 ) -> str:
     translation_by_id = {item.block_id: item for item in chapter.translations}
     inline_units = tuple(
@@ -518,16 +549,27 @@ def _render_html_chapter(
             source_assets=source_assets,
             release_links=release_links,
             labels=labels,
+            matcher=source_matcher,
         )
         translation = translation_by_id.get(anchor.block_id)
+        translation_matcher = (
+            target_matcher
+            if anchor.kind not in {"code", "equation"}
+            else None
+        )
         translated = (
             f'<section class="translation-layer" lang="{escape_html(book.target_language)}">'
-            f"<p>{_html_text(translation.text)}</p></section>"
+            f"<p>{_html_target_prose(translation.text, translation_matcher, labels)}</p></section>"
             if translation is not None
             else ""
         )
         units = "".join(
-            _render_html_learning(book, unit, labels=labels)
+            _render_html_learning(
+                book,
+                unit,
+                labels=labels,
+                matcher=target_matcher,
+            )
             for unit in units_by_anchor.get(anchor.block_id, ())
         )
         learning = (
@@ -535,26 +577,26 @@ def _render_html_chapter(
             if units
             else '<aside class="learning-layer learning-empty" aria-hidden="true"></aside>'
         )
-        page = (
-            f'<span class="source-page">{escape_html(labels["source_page"].format(page=anchor.page_number))}</span>'
-            if anchor.page_number is not None
-            else ""
-        )
         anchors.append(
             f'<article class="source-anchor" '
             f'id="anchor-{_anchor_token(anchor.block_id)}" '
             f'data-source-anchor="{escape_html(anchor.block_id)}">'
-            f"{page}<div class=\"anchor-grid\">"
+            f'<div class="anchor-grid">'
             f'<section class="source-layer" lang="{escape_html(book.source_language)}">'
             f"{source}</section>{translated}{learning}</div></article>"
         )
     guide = (
-        f'<p class="chapter-guide">{_html_model_prose(chapter.guide)}</p>'
+        f'<p class="chapter-guide">{_html_glossary_text(_normalize_model_prose_breaks(chapter.guide), target_matcher, labels, preserve_breaks=True)}</p>'
         if chapter.guide
         else ""
     )
     chapter_learning = "".join(
-        _render_html_learning(book, unit, labels=labels)
+        _render_html_learning(
+            book,
+            unit,
+            labels=labels,
+            matcher=target_matcher,
+        )
         for unit in chapter_units
     )
     chapter_learning = (
@@ -566,7 +608,7 @@ def _render_html_chapter(
     heading = (
         ""
         if len(book.chapters) == 1 and chapter.title.strip() == book.title.strip()
-        else f"<h2>{escape_html(chapter.title)}</h2>"
+        else f"<h2>{_html_glossary_text(chapter.title, source_matcher, labels)}</h2>"
     )
     return (
         f'<section class="chapter" id="chapter-{escape_html(chapter.chapter_id)}">'
@@ -582,19 +624,24 @@ def _render_html_source(
     source_assets: Mapping[str, _SourceAssetReference],
     release_links: _ReleaseLinks,
     labels: Mapping[str, str],
+    matcher: GlossaryMatcher,
 ) -> str:
     payload = anchor.payload
     if anchor.kind == "heading":
         level = max(3, min(6, int(payload["level"]) + 2))
-        return f"<h{level}>{escape_html(str(payload['text']))}</h{level}>"
+        return (
+            f"<h{level}>"
+            f"{_html_glossary_text(str(payload['text']), matcher, labels)}"
+            f"</h{level}>"
+        )
     if anchor.kind == "paragraph":
         return (
-            f"<p>{_render_html_inline(payload['inline_spans'], release_links)}</p>"
+            f"<p>{_render_html_inline(payload['inline_spans'], release_links, matcher=matcher, labels=labels)}</p>"
         )
     if anchor.kind == "list":
         tag = "ol" if payload["ordered"] else "ul"
         items = "".join(
-            f"<li>{_render_html_inline(item['inline_spans'], release_links)}</li>"
+            f"<li>{_render_html_inline(item['inline_spans'], release_links, matcher=matcher, labels=labels)}</li>"
             for item in payload["items"]
         )
         return f"<{tag}>{items}</{tag}>"
@@ -624,21 +671,32 @@ def _render_html_source(
             f'{escape_html(str(payload["tex"]))}</div>{label}{source_note}'
         )
     if anchor.kind == "table":
-        headers = "".join(f"<th>{_html_text(item)}</th>" for item in payload["headers"])
+        headers = "".join(
+            f"<th>{_html_glossary_text(str(item), matcher, labels, preserve_breaks=True)}</th>"
+            for item in payload["headers"]
+        )
         rows = "".join(
-            "<tr>" + "".join(f"<td>{_html_text(cell)}</td>" for cell in row) + "</tr>"
+            "<tr>"
+            + "".join(
+                f"<td>{_html_glossary_text(str(cell), matcher, labels, preserve_breaks=True)}</td>"
+                for cell in row
+            )
+            + "</tr>"
             for row in payload["rows"]
         )
         caption = (
-            f"<caption>{_html_text(str(payload['caption']))}</caption>"
+            f"<caption>{_html_glossary_text(str(payload['caption']), matcher, labels, preserve_breaks=True)}</caption>"
             if payload["caption"]
             else ""
         )
         head = f"<thead><tr>{headers}</tr></thead>" if headers else ""
         return f"<table>{caption}{head}<tbody>{rows}</tbody></table>"
     source = source_assets.get(anchor.block_id)
-    caption = escape_html(str(payload["caption"]))
-    alt = escape_html(str(payload["alt_text"]))
+    caption = _html_glossary_text(
+        str(payload["caption"]), matcher, labels
+    )
+    alt_text = str(payload["alt_text"])
+    alt = escape_html(alt_text)
     if source is None:
         target = str(payload["target"])
         link = (
@@ -647,7 +705,11 @@ def _render_html_source(
             if target
             else ""
         )
-        description = alt or labels["figure_unfrozen"]
+        description = (
+            _html_glossary_text(alt_text, matcher, labels)
+            if alt_text
+            else escape_html(labels["figure_unfrozen"])
+        )
         return (
             '<figure class="figure-unfrozen">'
             f"<p>{description}{link}</p><figcaption>{caption}</figcaption></figure>"
@@ -665,14 +727,23 @@ def _render_html_source(
 
 
 def _render_html_learning(
-    book: AcceptedBook, unit: LearningUnit, *, labels: Mapping[str, str]
+    book: AcceptedBook,
+    unit: LearningUnit,
+    *,
+    labels: Mapping[str, str],
+    matcher: GlossaryMatcher,
 ) -> str:
-    del labels
     numbers = _citation_numbers(book)
     markdown = _unit_markdown(unit)
     try:
         tokens = parse_markdown(markdown)
-        body = rich_text.render_html(tokens, citation_numbers=numbers)
+        body = rich_text.render_html(
+            tokens,
+            citation_numbers=numbers,
+            text_renderer=lambda value: _html_glossary_text(
+                value, matcher, labels
+            ),
+        )
         inline_citations = citation_ids_from_tokens(tokens)
     except RichTextError as exc:
         raise CompanionRenderError(str(exc)) from exc
@@ -683,19 +754,25 @@ def _render_html_learning(
     return (
         '<section class="learning-unit" '
         f'data-learning-unit="{escape_html(unit.unit_id)}">'
-        f"<h4>{escape_html(unit.title)}</h4>"
+        f"<h4>{_html_glossary_text(unit.title, matcher, labels)}</h4>"
         f"{body}{fallback}</section>"
     )
 
 
-def _render_html_glossary(book: AcceptedBook, *, labels: Mapping[str, str]) -> str:
+def _render_html_glossary(
+    book: AcceptedBook,
+    *,
+    labels: Mapping[str, str],
+    source_matcher: GlossaryMatcher,
+    target_matcher: GlossaryMatcher,
+) -> str:
     if not book.glossary:
         return ""
     rows = "".join(
         "<div class=\"glossary-row\">"
-        f"<dt>{escape_html(item.term)}</dt>"
-        f'<dd class="translated-term">{escape_html(item.translated_term)}</dd>'
-        f"<dd>{_html_text(item.definition)}{_html_citation_markers(item.citations, _citation_numbers(book))}</dd>"
+        f"<dt>{_html_glossary_text(item.term, source_matcher, labels)}</dt>"
+        f'<dd class="translated-term">{_html_glossary_text(item.translated_term, target_matcher, labels)}</dd>'
+        f"<dd>{_html_glossary_text(item.definition, target_matcher, labels, preserve_breaks=True)}{_html_citation_markers(item.citations, _citation_numbers(book))}</dd>"
         "</div>"
         for item in book.glossary
     )
@@ -731,7 +808,11 @@ def _render_html_bibliography(book: AcceptedBook, *, labels: Mapping[str, str]) 
 
 
 def _render_html_inline(
-    spans: Sequence[Mapping[str, Any]], release_links: _ReleaseLinks
+    spans: Sequence[Mapping[str, Any]],
+    release_links: _ReleaseLinks,
+    *,
+    matcher: GlossaryMatcher,
+    labels: Mapping[str, str],
 ) -> str:
     values: list[str] = []
     for item in spans:
@@ -740,7 +821,7 @@ def _render_html_inline(
             target = release_links.html_target(str(item["target"]))
             values.append(
                 f'<a href="{escape_html(target)}">'
-                f'{escape_html(str(item["text"]))}</a>'
+                f'{_html_glossary_text(str(item["text"]), matcher, labels)}</a>'
             )
         elif kind == "math":
             values.append(
@@ -749,7 +830,14 @@ def _render_html_inline(
                 f'{escape_html(str(item["source"]))}</span>'
             )
         else:
-            values.append(_html_text(str(item["text"])))
+            values.append(
+                _html_glossary_text(
+                    str(item["text"]),
+                    matcher,
+                    labels,
+                    preserve_breaks=True,
+                )
+            )
     return "".join(values)
 
 
@@ -769,12 +857,65 @@ def _html_citation_markers(
     return '<span class="citations">' + " ".join(values) + "</span>"
 
 
-def _html_text(value: str) -> str:
-    return escape_html(value).replace("\n", "<br>")
+def _html_glossary_text(
+    value: str,
+    matcher: GlossaryMatcher,
+    labels: Mapping[str, str],
+    *,
+    preserve_breaks: bool = False,
+) -> str:
+    values: list[str] = []
+    for text, entries in _glossary_segments(str(value), matcher):
+        visible = escape_html(text)
+        if preserve_breaks:
+            visible = visible.replace("\n", "<br>")
+        if not entries:
+            values.append(visible)
+            continue
+        tooltip = glossary_tooltip(entries, labels=labels)
+        entry_ids = " ".join(entry.entry_id for entry in entries)
+        values.append(
+            '<span class="glossary-term" tabindex="0" '
+            f'data-glossary-entry-ids="{escape_html(entry_ids)}" '
+            f'data-glossary-tooltip="{escape_html(tooltip)}" '
+            f'aria-describedby="glossary-tooltip">{visible}</span>'
+        )
+    return "".join(values)
 
 
-def _html_model_prose(value: str) -> str:
-    return _html_text(_normalize_model_prose_breaks(value))
+def _glossary_segments(
+    value: str,
+    matcher: GlossaryMatcher,
+) -> tuple[tuple[str, tuple[Any, ...]], ...]:
+    values: list[tuple[str, tuple[Any, ...]]] = []
+    cursor = 0
+    for protected in _GLOSSARY_PROTECTED_TEXT.finditer(value):
+        if protected.start() > cursor:
+            values.extend(
+                matcher.segments(value[cursor : protected.start()])
+            )
+        values.append((protected.group(0), ()))
+        cursor = protected.end()
+    if cursor < len(value):
+        values.extend(matcher.segments(value[cursor:]))
+    if not values:
+        values.extend(matcher.segments(value))
+    return tuple(values)
+
+
+def _html_target_prose(
+    value: str,
+    matcher: GlossaryMatcher | None,
+    labels: Mapping[str, str],
+) -> str:
+    if matcher is None:
+        return escape_html(value).replace("\n", "<br>")
+    return _html_glossary_text(
+        value,
+        matcher,
+        labels,
+        preserve_breaks=True,
+    )
 
 
 def _render_tex(
@@ -785,6 +926,8 @@ def _render_tex(
 ) -> str:
     exact_links = release_links or _release_links(book)
     labels = _labels(book)
+    source_matcher = GlossaryMatcher(book.glossary, translated=False)
+    target_matcher = GlossaryMatcher(book.glossary, translated=True)
     chapters = "\n".join(
         _render_tex_chapter(
             book,
@@ -792,10 +935,17 @@ def _render_tex(
             source_paths=source_paths,
             release_links=exact_links,
             labels=labels,
+            source_matcher=source_matcher,
+            target_matcher=target_matcher,
         )
         for chapter in book.chapters
     )
-    glossary = _render_tex_glossary(book, labels=labels)
+    glossary = _render_tex_glossary(
+        book,
+        labels=labels,
+        source_matcher=source_matcher,
+        target_matcher=target_matcher,
+    )
     bibliography = _render_tex_bibliography(book, labels=labels)
     authors = ", ".join(book.authors)
     author_line = (
@@ -814,6 +964,7 @@ def _render_tex(
 \usepackage[breakable]{{tcolorbox}}
 \usepackage{{xurl}}
 \usepackage[colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black]{{hyperref}}
+\usepackage{{pdfcomment}}
 \usepackage{{enumitem}}
 \setmainfont{{Noto Sans}}
 \setsansfont{{Noto Sans}}
@@ -822,12 +973,13 @@ def _render_tex(
 \setCJKsansfont{{Noto Sans CJK SC}}
 \definecolor{{TranslationBg}}{{HTML}}{{EFF6FF}}
 \definecolor{{LearningBg}}{{HTML}}{{FFF7E6}}
+\definecolor{{GlossaryBlue}}{{HTML}}{{1469B8}}
 \setlength{{\parindent}}{{0pt}}
 \setlength{{\parskip}}{{5pt}}
 \hypersetup{{pdftitle={{{_tex_escape(book.title)}}},pdfauthor={{{_tex_escape(authors)}}}}}
 \begin{{document}}
 \begin{{center}}
-{{\LARGE\bfseries {_tex_escape(book.title)}}}\\[4pt]
+{{\LARGE\bfseries {_tex_glossary_text(book.title, source_matcher, labels)}}}\\[4pt]
 {author_line}
 \end{{center}}
 {chapters}
@@ -844,6 +996,8 @@ def _render_tex_chapter(
     source_paths: Mapping[str, str],
     release_links: _ReleaseLinks,
     labels: Mapping[str, str],
+    source_matcher: GlossaryMatcher,
+    target_matcher: GlossaryMatcher,
 ) -> str:
     translations = {item.block_id: item for item in chapter.translations}
     units = _units_by_first_anchor(
@@ -856,45 +1010,55 @@ def _render_tex_chapter(
     values = (
         []
         if len(book.chapters) == 1 and chapter.title.strip() == book.title.strip()
-        else [rf"\section{{{_tex_escape(chapter.title)}}}"]
+        else [
+            rf"\section{{{_tex_glossary_text(chapter.title, source_matcher, labels)}}}"
+        ]
     )
     if chapter.guide:
         values.append(
-            rf"{_render_tex_prose(chapter.guide, model_generated=True)}"
+            rf"{_render_tex_prose(chapter.guide, model_generated=True, matcher=target_matcher, labels=labels)}"
         )
     for unit in chapter.learning_units:
         if unit.placement == "chapter":
-            values.append(_render_tex_learning(book, unit))
+            values.append(
+                _render_tex_learning(
+                    book, unit, matcher=target_matcher, labels=labels
+                )
+            )
     for anchor in chapter.source_anchors:
-        page = (
-            rf"\par\noindent\hfill{{\footnotesize {_tex_escape(labels['source_page'].format(page=anchor.page_number))}}}\par{{}} "
-            if anchor.page_number is not None
-            else ""
-        )
         anchor_target = (
             rf"\par\noindent"
             rf"\hypertarget{{anchor-{_anchor_token(anchor.block_id)}}}{{}}"
-            rf"{page}"
         )
         source = _render_tex_source(
             anchor,
             source_paths=source_paths,
             release_links=release_links,
             labels=labels,
+            matcher=source_matcher,
         )
         # Original source stays unboxed.  In particular, longtable remains in
         # the main vertical list so it may split safely across pages.
         values.append(anchor_target + source + r"\par ")
         translation = translations.get(anchor.block_id)
         if translation is not None:
+            translation_matcher = (
+                target_matcher
+                if anchor.kind not in {"code", "equation"}
+                else None
+            )
             values.append(
                 rf"\begin{{tcolorbox}}[breakable,colback=TranslationBg,colframe=TranslationBg,"
                 rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
-                rf"{_render_tex_prose(translation.text)}"
+                rf"{_render_tex_prose(translation.text, matcher=translation_matcher, labels=labels)}"
                 rf"\end{{tcolorbox}}"
             )
         for unit in units.get(anchor.block_id, ()):
-            values.append(_render_tex_learning(book, unit))
+            values.append(
+                _render_tex_learning(
+                    book, unit, matcher=target_matcher, labels=labels
+                )
+            )
         values.append(r"\medskip")
     return "\n".join(values)
 
@@ -905,16 +1069,22 @@ def _render_tex_source(
     source_paths: Mapping[str, str],
     release_links: _ReleaseLinks,
     labels: Mapping[str, str],
+    matcher: GlossaryMatcher,
 ) -> str:
     payload = anchor.payload
     if anchor.kind == "heading":
-        return rf"\textbf{{{_tex_escape(payload['text'])}}}"
+        return rf"\textbf{{{_tex_glossary_text(str(payload['text']), matcher, labels)}}}"
     if anchor.kind == "paragraph":
-        return _render_tex_inline(payload["inline_spans"], release_links)
+        return _render_tex_inline(
+            payload["inline_spans"],
+            release_links,
+            matcher=matcher,
+            labels=labels,
+        )
     if anchor.kind == "list":
         environment = "enumerate" if payload["ordered"] else "itemize"
         items = "\n".join(
-            rf"\item {_render_tex_inline(item['inline_spans'], release_links)}"
+            rf"\item {_render_tex_inline(item['inline_spans'], release_links, matcher=matcher, labels=labels)}"
             for item in payload["items"]
         )
         return rf"\begin{{{environment}}}[leftmargin=*]{items}\end{{{environment}}}"
@@ -941,13 +1111,20 @@ def _render_tex_source(
         rows_value = payload["rows"]
         width = len(headers) or (len(rows_value[0]) if rows_value else 1)
         columns = " ".join([r">{\raggedright\arraybackslash}p{" + f"{0.88 / width:.3f}" + r"\linewidth}"] * width)
-        header = " & ".join(_tex_escape(item) for item in headers) + r" \\"
+        header = " & ".join(
+            _tex_glossary_text(str(item), matcher, labels)
+            for item in headers
+        ) + r" \\"
         rows = "\n".join(
-            " & ".join(_tex_escape(cell) for cell in row) + r" \\"
+            " & ".join(
+                _tex_glossary_text(str(cell), matcher, labels)
+                for cell in row
+            )
+            + r" \\"
             for row in rows_value
         )
         caption = (
-            rf"\textit{{{_tex_escape(payload['caption'])}}}\par"
+            rf"\textit{{{_tex_glossary_text(str(payload['caption']), matcher, labels)}}}\par"
             if payload["caption"]
             else ""
         )
@@ -969,7 +1146,9 @@ def _render_tex_source(
             + r"\bottomrule\end{longtable}"
         )
     source = source_paths.get(anchor.block_id)
-    caption = _tex_escape(payload["caption"])
+    caption = _tex_glossary_text(
+        str(payload["caption"]), matcher, labels
+    )
     if source and not urlparse(source).scheme:
         image = rf"\includegraphics[width=0.82\linewidth]{{\detokenize{{{source}}}}}"
     else:
@@ -981,17 +1160,24 @@ def _render_tex_source(
         )
         image = (
             rf"\textit{{{_tex_escape(labels['figure_unfrozen'])}}} "
-            rf"{_tex_escape(payload['alt_text'])}{link}"
+            rf"{_tex_glossary_text(str(payload['alt_text']), matcher, labels)}{link}"
         )
     return rf"\begin{{center}}{image}\par{{\footnotesize {caption}}}\end{{center}}"
 
 
-def _render_tex_glossary(book: AcceptedBook, *, labels: Mapping[str, str]) -> str:
+def _render_tex_glossary(
+    book: AcceptedBook,
+    *,
+    labels: Mapping[str, str],
+    source_matcher: GlossaryMatcher,
+    target_matcher: GlossaryMatcher,
+) -> str:
     if not book.glossary:
         return ""
     rows = "\n".join(
-        rf"\textbf{{{_tex_escape(item.term)}}} & "
-        rf"{_tex_escape(item.translated_term)} & {_render_tex_prose(item.definition)}"
+        rf"\textbf{{{_tex_glossary_text(item.term, source_matcher, labels)}}} & "
+        rf"{_tex_glossary_text(item.translated_term, target_matcher, labels)} & "
+        rf"{_render_tex_prose(item.definition, matcher=target_matcher, labels=labels)}"
         + _tex_citation_markers(item.citations, _citation_numbers(book))
         + r" \\"
         for item in book.glossary
@@ -1006,13 +1192,23 @@ def _render_tex_glossary(book: AcceptedBook, *, labels: Mapping[str, str]) -> st
 
 
 def _render_tex_learning(
-    book: AcceptedBook, unit: LearningUnit
+    book: AcceptedBook,
+    unit: LearningUnit,
+    *,
+    matcher: GlossaryMatcher,
+    labels: Mapping[str, str],
 ) -> str:
     numbers = _citation_numbers(book)
     markdown = _unit_markdown(unit)
     try:
         tokens = parse_markdown(markdown)
-        body = rich_text.render_tex(tokens, citation_numbers=numbers)
+        body = rich_text.render_tex(
+            tokens,
+            citation_numbers=numbers,
+            text_renderer=lambda value: _tex_glossary_text(
+                value, matcher, labels
+            ),
+        )
         inline_citations = citation_ids_from_tokens(tokens)
     except RichTextError as exc:
         raise CompanionRenderError(str(exc)) from exc
@@ -1024,7 +1220,7 @@ def _render_tex_learning(
     return (
         rf"\begin{{tcolorbox}}[breakable,colback=LearningBg,colframe=LearningBg,"
         rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
-        rf"\textbf{{{_tex_escape(unit.title)}}}\par "
+        rf"\textbf{{{_tex_glossary_text(unit.title, matcher, labels)}}}\par "
         rf"{body}"
         rf"{citations}\end{{tcolorbox}}"
     )
@@ -1065,7 +1261,11 @@ def _render_tex_bibliography(book: AcceptedBook, *, labels: Mapping[str, str]) -
 
 
 def _render_tex_inline(
-    spans: Sequence[Mapping[str, Any]], release_links: _ReleaseLinks
+    spans: Sequence[Mapping[str, Any]],
+    release_links: _ReleaseLinks,
+    *,
+    matcher: GlossaryMatcher,
+    labels: Mapping[str, str],
 ) -> str:
     values: list[str] = []
     for item in spans:
@@ -1075,12 +1275,19 @@ def _render_tex_inline(
                 release_links.tex_link(
                     str(item["target"]),
                     str(item["text"]),
+                    rendered_text=_tex_glossary_text(
+                        str(item["text"]), matcher, labels
+                    ),
                 )
             )
         elif kind == "math":
             values.append(rf"\({_sanitize_math(item['tex'])}\)")
         else:
-            values.append(_tex_escape(item["text"]))
+            values.append(
+                _tex_glossary_text(
+                    str(item["text"]), matcher, labels
+                )
+            )
     return "".join(values)
 
 
@@ -1094,7 +1301,11 @@ def _render_tex_code(value: str) -> str:
 
 
 def _render_tex_prose(
-    value: Any, *, model_generated: bool = False
+    value: Any,
+    *,
+    model_generated: bool = False,
+    matcher: GlossaryMatcher | None = None,
+    labels: Mapping[str, str] | None = None,
 ) -> str:
     """Render plain prose while preserving authored line and paragraph breaks."""
 
@@ -1109,8 +1320,13 @@ def _render_tex_prose(
         for paragraph in re.split(r"\n[ \t]*\n+", normalized)
         if paragraph.strip()
     ]
+    renderer = (
+        (lambda text: _tex_glossary_text(text, matcher, labels))
+        if matcher is not None and labels is not None
+        else _tex_escape
+    )
     return r"\par ".join(
-        r"\newline{} ".join(_tex_escape(line) for line in paragraph.split("\n"))
+        r"\newline{} ".join(renderer(line) for line in paragraph.split("\n"))
         for paragraph in paragraphs
     )
 
@@ -1153,6 +1369,11 @@ def _pdf_search_alternatives(
 
     text = _normalize_pdf_characters(extracted)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(
+        r"\n[ \t]*[0-9]+[ \t]*\n(?:[ \t]*\n)*[ \t]*\f[ \t]*",
+        " ",
+        text,
+    )
     line_break = r"(?:\n|\f|\v|\u2028|\u2029)"
     values = [_normalize_pdf_search_text(text)]
     hyphen_preserved = re.sub(
@@ -1235,6 +1456,22 @@ def _compile_tex(tex_path: Path, content_digest: str) -> Path:
     latexmk = shutil.which("latexmk")
     if latexmk is None:
         raise CompanionRenderError("latexmk is required to render a companion PDF")
+    kpsewhich = shutil.which("kpsewhich")
+    if kpsewhich is None:
+        raise CompanionRenderError(
+            "kpsewhich is required to verify Companion PDF packages"
+        )
+    pdfcomment = subprocess.run(
+        [kpsewhich, "pdfcomment.sty"],
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if pdfcomment.returncode != 0 or not pdfcomment.stdout.strip():
+        raise CompanionRenderError(
+            "the TeX pdfcomment package is required for glossary tooltips"
+        )
     jobname = f"arc-companion-{content_digest[:16]}"
     command = [
         latexmk,
@@ -1451,6 +1688,33 @@ def _tex_escape(value: Any) -> str:
     return "".join(replacements.get(char, char) for char in str(value))
 
 
+def _tex_glossary_text(
+    value: str,
+    matcher: GlossaryMatcher,
+    labels: Mapping[str, str],
+) -> str:
+    values: list[str] = []
+    for text, entries in _glossary_segments(str(value), matcher):
+        visible = _tex_escape(text)
+        if not entries:
+            values.append(visible)
+            continue
+        tooltip = glossary_tooltip(
+            entries,
+            labels=labels,
+            separator=" | ",
+        )
+        tooltip = re.sub(r"\s+", " ", tooltip).strip()
+        values.append(
+            r"\pdftooltip{\textcolor{GlossaryBlue}{"
+            + visible
+            + "}}{"
+            + _tex_escape(tooltip)
+            + "}"
+        )
+    return "".join(values)
+
+
 def _sanitize_math(value: Any) -> str:
     text = str(value).strip()
     if "\x00" in text or r"\write18" in text or r"\input" in text:
@@ -1490,6 +1754,7 @@ _WEB_CSS = """\
   --line: #dfe4e9;
   --translation: #eef5ff;
   --learning: #fff7e7;
+  --glossary-blue: #1469b8;
 }
 * { box-sizing: border-box; }
 body {
@@ -1508,7 +1773,6 @@ a { color: #235b83; text-underline-offset: .15em; }
 .chapter > h2 { font-size: clamp(1.45rem, 3vw, 2.25rem); }
 .chapter-guide { max-width: 70rem; padding: 1rem 1.2rem; border-left: .25rem solid #86a3ba; background: #edf3f7; }
 .source-anchor { position: relative; margin: 1.3rem 0; scroll-margin-top: 1rem; }
-.source-page { display: block; margin-bottom: .25rem; color: var(--muted); font-size: .8rem; }
 .anchor-grid { display: grid; gap: .8rem; }
 .translation-layer, .learning-layer {
   min-width: 0;
@@ -1534,6 +1798,34 @@ figure { margin: .7rem 0; text-align: center; }
 figure img { max-width: 100%; max-height: 38rem; object-fit: contain; }
 figcaption, .citations, .source-links { color: var(--muted); font-size: .84rem; }
 .citation-marker { margin-left: .12em; white-space: nowrap; }
+.glossary-term {
+  color: var(--glossary-blue);
+  cursor: help;
+  border-radius: .15em;
+  outline-offset: .12em;
+}
+.glossary-term:focus-visible {
+  outline: 2px solid #5b92c3;
+}
+.glossary-tooltip {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  max-width: min(32rem, calc(100vw - 1.5rem));
+  max-height: min(40vh, 18rem);
+  overflow: auto;
+  padding: .6rem .75rem;
+  border: 1px solid #9db8d0;
+  border-radius: .45rem;
+  color: #17212b;
+  background: #f7fbff;
+  box-shadow: 0 .35rem 1.2rem rgb(23 49 73 / 18%);
+  font-size: .88rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  pointer-events: none;
+}
+.glossary-tooltip[hidden] { display: none; }
 .glossary { margin: 5rem 0; padding-top: 1.5rem; border-top: 1px solid var(--line); }
 .glossary dl { margin: 0; background: white; border: 1px solid var(--line); border-radius: .6rem; overflow: hidden; }
 .glossary-row { display: grid; grid-template-columns: minmax(8rem,.6fr) minmax(8rem,.6fr) minmax(14rem,1.4fr); }
@@ -1572,6 +1864,66 @@ _WEB_JS = """\
       }
     });
   }
+  var tooltip = document.getElementById("glossary-tooltip");
+  var activeTerm = null;
+  function closeTooltip() {
+    if (!tooltip) return;
+    tooltip.hidden = true;
+    tooltip.textContent = "";
+    activeTerm = null;
+  }
+  function openTooltip(term) {
+    if (!tooltip || !term) return;
+    var content = term.dataset.glossaryTooltip || "";
+    if (!content) return;
+    activeTerm = term;
+    tooltip.textContent = content;
+    tooltip.hidden = false;
+    var termRect = term.getBoundingClientRect();
+    var tipRect = tooltip.getBoundingClientRect();
+    var gap = 8;
+    var top = termRect.bottom + gap;
+    if (top + tipRect.height > window.innerHeight - gap) {
+      top = Math.max(gap, termRect.top - tipRect.height - gap);
+    }
+    var left = Math.min(
+      Math.max(gap, termRect.left),
+      Math.max(gap, window.innerWidth - tipRect.width - gap)
+    );
+    tooltip.style.top = Math.round(top) + "px";
+    tooltip.style.left = Math.round(left) + "px";
+  }
+  document.addEventListener("mouseover", function (event) {
+    var term = event.target.closest && event.target.closest(".glossary-term");
+    if (term) openTooltip(term);
+  });
+  document.addEventListener("mouseout", function (event) {
+    var term = event.target.closest && event.target.closest(".glossary-term");
+    if (term && (!event.relatedTarget || !term.contains(event.relatedTarget))) {
+      closeTooltip();
+    }
+  });
+  document.addEventListener("focusin", function (event) {
+    if (event.target.matches && event.target.matches(".glossary-term")) {
+      openTooltip(event.target);
+    }
+  });
+  document.addEventListener("focusout", function (event) {
+    if (event.target === activeTerm) closeTooltip();
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") {
+      closeTooltip();
+      if (document.activeElement &&
+          document.activeElement.matches(".glossary-term")) {
+        document.activeElement.blur();
+      }
+    }
+  });
+  window.addEventListener("resize", function () {
+    if (activeTerm) openTooltip(activeTerm);
+  });
+  window.addEventListener("scroll", closeTooltip, {passive: true});
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", typeset, {once: true});
   } else {

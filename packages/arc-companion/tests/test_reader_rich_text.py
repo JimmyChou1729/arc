@@ -65,7 +65,8 @@ def test_renderer_uses_localized_chrome_and_compact_markers() -> None:
     assert "<h1>The Death of the Author</h1>" in html
     assert "<h2>The Death of the Author</h2>" not in html
     assert "作者:</span> Roland Barthes" in html
-    assert "原文第 2 页" in html
+    assert "原文第 2 页" not in html
+    assert "原文第 2 页" not in tex
     assert "术语表" not in html
     assert "参考文献" in html
     assert 'href="#reference-evidence">[1]</a>' in html
@@ -111,7 +112,12 @@ def test_model_markdown_images_are_cross_format_unfrozen_links() -> None:
 
 def test_reader_labels_are_complete_and_target_aware() -> None:
     assert resolve_reader_labels("zh-TW")["references"] == "參考文獻"
+    assert "source_page" not in resolve_reader_labels("zh-TW")
     with pytest.raises(ReaderLabelError, match="supply a complete"):
         resolve_reader_labels("fr")
     with pytest.raises(ReaderLabelError, match="incomplete"):
         resolve_reader_labels("en", custom_labels={"references": "References"})
+    current = resolve_reader_labels("en")
+    current["source_page"] = "Source page {page}"
+    with pytest.raises(ReaderLabelError, match="unknown source_page"):
+        resolve_reader_labels("en", custom_labels=current)

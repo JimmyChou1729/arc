@@ -17,8 +17,13 @@ from types import MappingProxyType
 from typing import Any
 
 
-ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v4"
+ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v5"
 _LEGACY_ACCEPTED_BOOK_SCHEMAS = {
+    "arc.companion.accepted_book.v2",
+    "arc.companion.accepted_book.v3",
+    "arc.companion.accepted_book.v4",
+}
+_LEGACY_LEARNING_SCHEMAS = {
     "arc.companion.accepted_book.v2",
     "arc.companion.accepted_book.v3",
 }
@@ -299,16 +304,20 @@ class AcceptedBook:
         if len(set(authors)) != len(authors):
             raise ValueError("accepted book authors must be unique")
         labels = dict(self.reader_labels)
+        from .reader_labels import resolve_reader_labels
+
         if not labels:
             # Direct construction and legacy decoding remain usable. New build
             # requests resolve and persist a target-language pack explicitly.
-            from .reader_labels import resolve_reader_labels
-
             labels = dict(
                 resolve_reader_labels(
                     self.target_language,
                     allow_legacy_fallback=True,
                 )
+            )
+        else:
+            labels = dict(
+                resolve_reader_labels(self.target_language, labels)
             )
         if any(
             not isinstance(key, str)
@@ -554,7 +563,7 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
         and schema_version not in _LEGACY_ACCEPTED_BOOK_SCHEMAS
     ):
         raise ValueError("unsupported accepted book schema")
-    legacy = schema_version in _LEGACY_ACCEPTED_BOOK_SCHEMAS
+    legacy = schema_version in _LEGACY_LEARNING_SCHEMAS
     legacy_v2 = schema_version == "arc.companion.accepted_book.v2"
     expected_book_fields = {
         "schema_version",
@@ -767,6 +776,19 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
             )
             if evidence_id in bibliography_by_id
         ]
+    decoded_reader_labels = (
+        {}
+        if legacy
+        else {
+            str(key): _string(item, "accepted book reader label")
+            for key, item in _mapping(
+                value["reader_labels"], "accepted book reader_labels"
+            ).items()
+        }
+    )
+    if schema_version == "arc.companion.accepted_book.v4":
+        # v4 persisted this now-reader-invisible provenance label.
+        decoded_reader_labels.pop("source_page", None)
     return AcceptedBook(
         schema_version=ACCEPTED_BOOK_SCHEMA,
         document_digest=_string(
@@ -784,16 +806,7 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
         target_language=_string(
             value["target_language"], "accepted book target_language"
         ),
-        reader_labels=(
-            {}
-            if legacy
-            else {
-                str(key): _string(item, "accepted book reader label")
-                for key, item in _mapping(
-                    value["reader_labels"], "accepted book reader_labels"
-                ).items()
-            }
-        ),
+        reader_labels=decoded_reader_labels,
         translation_mode=_string(
             value["translation_mode"], "accepted book translation_mode"
         ),

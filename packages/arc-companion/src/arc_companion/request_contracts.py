@@ -28,7 +28,10 @@ from .prompts import (
 from .reader_labels import resolve_reader_labels
 
 
-COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v4"
+COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v5"
+_LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4 = (
+    "arc.companion.build_request.v4"
+)
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3 = "arc.companion.build_request.v3"
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2 = "arc.companion.build_request.v2"
 COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v7"
@@ -286,7 +289,10 @@ def decode_build_request(
         "user_intent",
         "content_contract",
     }
-    if schema_version == COMPANION_BUILD_REQUEST_SCHEMA:
+    if schema_version in {
+        COMPANION_BUILD_REQUEST_SCHEMA,
+        _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4,
+    }:
         fields = legacy_fields | {
             "translation_reuse_digest",
             "authors",
@@ -307,7 +313,10 @@ def decode_build_request(
         raise ValueError("validator_digests must be an array of strings")
     authors: tuple[str, ...] = ()
     reader_labels: Mapping[str, str] | None = None
-    if schema_version == COMPANION_BUILD_REQUEST_SCHEMA:
+    if schema_version in {
+        COMPANION_BUILD_REQUEST_SCHEMA,
+        _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4,
+    }:
         raw_authors = request["authors"]
         if not isinstance(raw_authors, list) or any(
             not isinstance(item, str) for item in raw_authors
@@ -317,6 +326,12 @@ def decode_build_request(
         reader_labels = _optional_string_mapping(
             request["reader_labels"], "reader_labels"
         )
+        if (
+            schema_version == _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4
+            and reader_labels is not None
+        ):
+            reader_labels = dict(reader_labels)
+            reader_labels.pop("source_page", None)
     else:
         reader_labels = resolve_reader_labels(
             _string(request, "target_language"),
@@ -333,6 +348,7 @@ def decode_build_request(
             if schema_version
             in {
                 COMPANION_BUILD_REQUEST_SCHEMA,
+                _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4,
                 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3,
             }
             else None

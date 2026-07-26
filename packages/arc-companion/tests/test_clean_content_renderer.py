@@ -98,6 +98,7 @@ showpage
 _PDF_TOOLS = (
     "latexmk",
     "xelatex",
+    "kpsewhich",
     "pdfinfo",
     "pdftotext",
     "pdffonts",
@@ -371,6 +372,64 @@ def accepted_book() -> AcceptedBook:
     )
 
 
+def _book_with_glossary_highlights(
+    accepted_book: AcceptedBook,
+    *,
+    target_language: str = "es",
+    translated_term: str = "entropia",
+) -> AcceptedBook:
+    chapter = accepted_book.chapters[0]
+    intro = chapter.source_anchors[0]
+    learning = replace(
+        chapter.learning_units[0],
+        title=f"Cómo leer {translated_term}",
+        content_markdown=(
+            f"{translated_term} aparece en prosa, `{translated_term}` en código, "
+            f"${translated_term}$ en una fórmula y "
+            f"[https://example.test/{translated_term}]"
+            f"(https://example.test/{translated_term})."
+        ),
+    )
+    highlighted_chapter = replace(
+        chapter,
+        guide=(
+            f"Conecte {translated_term} con la normalización; conserve "
+            f"`{translated_term}` y ${translated_term}$ como fragmentos."
+        ),
+        translations=(
+            replace(
+                chapter.translations[0],
+                text=(
+                    f"La {translated_term} cuantifica la incertidumbre; "
+                    f"`{translated_term}` y ${translated_term}$ son literales."
+                ),
+            ),
+            *chapter.translations[1:],
+        ),
+        learning_units=(learning, *chapter.learning_units[1:]),
+    )
+    first = replace(
+        accepted_book.glossary[0],
+        translated_term=translated_term,
+        definition=f"Definición de {translated_term}.",
+    )
+    second = GlossaryEntry(
+        entry_id="uncertainty",
+        term="uncertainty",
+        translated_term=translated_term,
+        definition="A distinct sense sharing the translated surface.",
+        anchor_ids=(intro.block_id,),
+        citations=("glossary:entropy-reference",),
+    )
+    return replace(
+        accepted_book,
+        target_language=target_language,
+        reader_labels={},
+        chapters=(highlighted_chapter,),
+        glossary=(first, second),
+    )
+
+
 def test_accepted_book_codec_is_canonical_strict_and_immutable(
     accepted_book: AcceptedBook,
 ) -> None:
@@ -405,7 +464,7 @@ def test_accepted_book_codec_is_canonical_strict_and_immutable(
         CompanionContentCodec.from_document(document)
 
 
-def test_accepted_book_v2_decodes_to_v4_markdown_contract(
+def test_accepted_book_v2_decodes_to_v5_markdown_contract(
     accepted_book: AcceptedBook,
 ) -> None:
     document = CompanionContentCodec.to_document(accepted_book)
@@ -421,17 +480,36 @@ def test_accepted_book_v2_decodes_to_v4_markdown_contract(
 
     migrated = CompanionContentCodec.from_document(document)
 
-    assert migrated.schema_version == "arc.companion.accepted_book.v4"
+    assert migrated.schema_version == "arc.companion.accepted_book.v5"
     unit = migrated.chapters[0].learning_units[0]
     assert unit.placement == "inline"
     assert unit.content_markdown == f"*{unit.title}*\n\nNormalization says the alternatives exhaust the state space."
 
 
+def test_accepted_book_v4_drops_legacy_source_page_label(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    document = CompanionContentCodec.to_document(accepted_book)
+    document["schema_version"] = "arc.companion.accepted_book.v4"
+    document["reader_labels"]["source_page"] = "Source page {page}"
+
+    migrated = CompanionContentCodec.from_document(document)
+    html = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    ).render_web(migrated, tmp_path / "reader").read_text(encoding="utf-8")
+
+    assert migrated.schema_version == "arc.companion.accepted_book.v5"
+    assert "source_page" not in migrated.reader_labels
+    assert "Source page" not in BeautifulSoup(
+        html, "html.parser"
+    ).get_text(" ", strip=True)
+
+
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
-    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v7"
-    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v6"
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v8"
+    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v7"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
         == r"first line\newline{} second line\par third paragraph"
@@ -650,6 +728,193 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
     ).resolve() == figure_asset.resolve()
     for forbidden in ("provider", "cache", "run_id", "schema_version", "warning"):
         assert forbidden not in html.casefold()
+
+
+def test_web_glossary_terms_cover_reader_layers_and_exclude_metadata(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    book = _book_with_glossary_highlights(accepted_book)
+    reader = tmp_path / "glossary-reader"
+    html = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    ).render_web(book, reader).read_text(encoding="utf-8")
+    parsed = BeautifulSoup(html, "html.parser")
+
+    assert parsed.select(".source-layer .glossary-term")
+    assert parsed.select(".translation-layer .glossary-term")
+    assert parsed.select(".learning-layer h4 .glossary-term")
+    assert parsed.select(".learning-layer p .glossary-term")
+    assert parsed.select(".chapter-guide .glossary-term")
+    assert parsed.select(".glossary dt .glossary-term")
+    assert parsed.select(".glossary .translated-term .glossary-term")
+    assert not parsed.select("code .glossary-term")
+    assert not parsed.select(".math .glossary-term")
+    assert not parsed.select(".bibliography .glossary-term")
+    assert len(parsed.select(".chapter-guide .glossary-term")) == 1
+    assert (
+        len(
+            parsed.select(
+                '[data-source-anchor="b-intro"] '
+                ".translation-layer .glossary-term"
+            )
+        )
+        == 1
+    )
+    assert (
+        len(
+            parsed.select(
+                '[data-learning-unit="intuition"] p .glossary-term'
+            )
+        )
+        == 1
+    )
+    visible_url = parsed.find(
+        "a", string="https://example.test/entropia"
+    )
+    assert visible_url is not None
+    assert not visible_url.select(".glossary-term")
+
+    translated = next(
+        item
+        for item in parsed.select(".glossary-term")
+        if item.get_text() == "entropia"
+        and "uncertainty" in item["data-glossary-tooltip"]
+    )
+    assert translated["tabindex"] == "0"
+    assert translated["aria-describedby"] == "glossary-tooltip"
+    assert translated["data-glossary-entry-ids"] == "entropy uncertainty"
+    assert "entropy" in translated["data-glossary-tooltip"]
+    assert "uncertainty" in translated["data-glossary-tooltip"]
+    assert len(parsed.select("#glossary-tooltip[role=tooltip]")) == 1
+
+    css = (reader / "assets" / "reader.css").read_text(encoding="utf-8")
+    javascript = (reader / "assets" / "reader.js").read_text(encoding="utf-8")
+    assert ".glossary-term" in css
+    assert "--glossary-blue: #1469b8" in css
+    assert "color: var(--glossary-blue)" in css
+    assert 'event.key === "Escape"' in javascript
+    assert '"focusin"' in javascript
+    assert '"focusout"' in javascript
+    assert '"mouseover"' in javascript
+    assert '"mouseout"' in javascript
+
+
+def test_code_and_equation_anchor_translations_exclude_glossary_matching(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    anchors = list(chapter.source_anchors)
+    anchors[3] = replace(
+        anchors[3],
+        kind="code",
+        payload={
+            "text": "entropy remains literal in code",
+            "language": "text",
+        },
+    )
+    translations = tuple(
+        replace(item, text="Equation translation entropia")
+        if item.block_id == "b-equation"
+        else replace(item, text="Code translation entropia")
+        if item.block_id == "b-list"
+        else item
+        for item in chapter.translations
+    )
+    book = replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                source_anchors=tuple(anchors),
+                translations=translations,
+            ),
+        ),
+    )
+    html = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    ).render_web(book, tmp_path / "reader").read_text(encoding="utf-8")
+    parsed = BeautifulSoup(html, "html.parser")
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
+
+    for block_id in ("b-equation", "b-list"):
+        anchor = parsed.select_one(
+            f'[data-source-anchor="{block_id}"]'
+        )
+        assert anchor is not None
+        assert not anchor.select(".translation-layer .glossary-term")
+    assert not parsed.select("code .glossary-term")
+    assert "Equation translation entropia" in tex
+    assert "Code translation entropia" in tex
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in _PDF_TOOLS + ("qpdf",)),
+    reason="offline PDF validation toolchain is unavailable",
+)
+def test_pdf_glossary_terms_are_blue_unicode_tooltip_annotations(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    from pypdf import PdfReader
+
+    book = _book_with_glossary_highlights(
+        accepted_book,
+        target_language="zh-CN",
+        translated_term="熵",
+    )
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
+    output = renderer.render_pdf(book, tmp_path / "glossary.pdf")
+    extracted = subprocess.run(
+        ["pdftotext", str(output), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    annotations = [
+        annotation.get_object()
+        for page in PdfReader(output).pages
+        for annotation in (page.get("/Annots") or ())
+    ]
+    tooltips = [
+        str(annotation.get("/TU"))
+        for annotation in annotations
+        if annotation.get("/TU")
+    ]
+
+    assert r"\usepackage{pdfcomment}" in tex
+    assert r"\definecolor{GlossaryBlue}" in tex
+    assert r"\pdftooltip{\textcolor{GlossaryBlue}" in tex
+    assert "`熵`" in tex
+    assert r"\$熵\$" in tex
+    assert any(
+        "原文术语: entropy" in tooltip
+        and "译名: 熵" in tooltip
+        and "释义:" in tooltip
+        for tooltip in tooltips
+    )
+    assert any(
+        "原文术语: uncertainty" in tooltip
+        and "原文术语: entropy" in tooltip
+        for tooltip in tooltips
+    )
+    assert "entropy" in extracted
+    assert "熵" in extracted
+    assert "Source page" not in extracted
+    assert "原文第" not in extracted
+    subprocess.run(
+        ["qpdf", "--check", str(output)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_source_fragment_links_resolve_to_release_anchors(

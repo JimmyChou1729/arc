@@ -10,7 +10,6 @@ READER_LABEL_KEYS = frozenset(
         "author",
         "glossary",
         "references",
-        "source_page",
         "source_term",
         "source_equation_label",
         "translation",
@@ -27,7 +26,6 @@ _EN = {
     "author": "Author",
     "glossary": "Glossary",
     "references": "References",
-    "source_page": "Source page {page}",
     "source_term": "Source term",
     "source_equation_label": "Source equation label: {label}",
     "translation": "Translation",
@@ -42,7 +40,6 @@ _ZH_HANS = {
     "author": "作者",
     "glossary": "术语表",
     "references": "参考文献",
-    "source_page": "原文第 {page} 页",
     "source_term": "原文术语",
     "source_equation_label": "原文公式编号：{label}",
     "translation": "译名",
@@ -57,7 +54,6 @@ _ZH_HANT = {
     "author": "作者",
     "glossary": "術語表",
     "references": "參考文獻",
-    "source_page": "原文第 {page} 頁",
     "source_term": "原文術語",
     "source_equation_label": "原文公式編號：{label}",
     "translation": "譯名",
@@ -102,12 +98,10 @@ def reader_labels(
         if any(not isinstance(value, str) or not value.strip() for value in result.values()):
             raise ReaderLabelError("reader labels must be non-empty strings")
         try:
-            result["source_page"].format(page=1)
             result["source_equation_label"].format(label="1")
         except (KeyError, ValueError) as exc:
             raise ReaderLabelError(
-                "reader labels must accept source_page {page} and "
-                "source_equation_label {label}"
+                "reader labels must accept source_equation_label {label}"
             ) from exc
         return result
 

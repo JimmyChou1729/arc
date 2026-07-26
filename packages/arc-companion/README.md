@@ -7,7 +7,7 @@ and reusable language, glossary, and translation results from `arc-translate`.
 Its public build API is the split translation/guide workflow:
 `CompanionBuildRequest`, `CompanionGenerationRecipe`, and
 `CompanionBuildHandler` are the sole durable build lineage. Published content
-uses the `arc.companion.accepted_book.v4` delivery contract and embeds the
+uses the `arc.companion.accepted_book.v5` delivery contract and embeds the
 current RichDocument v2 inline-span payloads directly.
 
 A build or resume requires the complete installed runtime, including the
@@ -125,6 +125,20 @@ status, with placement chosen case by case. Units that merely summarize,
 paraphrase, or repeat the source are removed; retained units must add a
 distinct motivation, presentation, implication, reasoning step, connection,
 reliable context, or useful later development.
+
+Planning audits every source block against a type-aware default reader.
+Popular or directional writing assumes a generally educated adult without
+specialist training. Research papers assume a professional student who has
+completed the relevant foundational courses. Textbooks assume a student who
+has completed the standard prerequisites, without assuming that difficult
+prerequisite material is already mastered. Explicit reader background in the
+user intent overrides these defaults.
+
+Reader HTML and PDF render glossary terms in blue in the source, translation,
+and guide layers. HTML terms expose hover and keyboard-focus tooltips; PDF
+terms carry tooltip annotations through the TeX `pdfcomment` package. Source
+page numbers remain available as internal provenance but are not printed in
+reader-facing output.
 
 ## Tests
 
