@@ -1663,8 +1663,9 @@ def test_arc_runtime_and_job_docs_cover_unified_context_and_lifecycle() -> None:
     assert "does not create or resume package work" in jobs
     assert "owning package" in jobs
     assert "background-command facility" in skill
-    assert "no absolute runtime limit" in skill
-    assert "30 minutes" in skill
+    assert "no default runtime or inactivity timeout" in skill
+    assert "explicit positive idle timeout" in skill
+    assert "30 minutes" not in skill
     assert "credentials" in llm
     for retired in ("arc-jobs submit", "arc-jobs list", "arc-jobs watch", "arc-jobs result"):
         assert retired not in jobs
@@ -1724,14 +1725,13 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
     assert "lifecycle is `succeeded`" in ideas
     assert "failed, pending, running, paused" in ideas
     for text in (skill,):
-        assert "no absolute runtime limit" in text
-        assert "ARC_*_IDLE_TIMEOUT_SECONDS" in text
-        assert "30-minute" in text or "30 minutes" in text
-    assert "no absolute runtime limit" in ideas
-    assert "30 minutes" in ideas
+        assert "no default runtime or inactivity timeout" in text
+        assert "explicit positive idle timeout" in text
+    assert "no default runtime or inactivity timeout" in ideas
+    assert "30 minutes" not in ideas
     assert "owning package's status command" in skill
     assert "background-command facility" in skill
-    assert "streams batch, loop, round,\nand worker boundary progress JSON" in ideas
+    assert "streams batch, loop, round, worker, and available provider-message progress" in ideas
     assert "arc-proposer-reviewer inspect" in ideas
     assert "arc-proposer-reviewer stop" in ideas
     assert "Use stop cautiously" in ideas

@@ -76,11 +76,10 @@ python3 <skill-dir>/scripts/run-ideas.py \
   --json
 ```
 
-LLM calls have no absolute runtime limit and stop after 30 minutes with no
-substantive provider output. The foreground runner streams batch, loop, round,
-and worker boundary progress JSON to stderr. Keep its terminal session active;
-theoretical research can take a long time, so do not interrupt merely because
-the run is slow.
+LLM calls have no default runtime or inactivity timeout. The foreground runner
+streams batch, loop, round, worker, and available provider-message progress
+JSON to stderr. Keep its terminal session active; theoretical research can take
+a long time, so do not interrupt merely because the run is slow or quiet.
 
 If one loop or worker is clearly slower than its peers or than the scientific
 task reasonably suggests, or if several loops fail, inspect the public

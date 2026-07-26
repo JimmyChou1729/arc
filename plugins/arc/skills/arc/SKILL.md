@@ -45,12 +45,12 @@ explicitly asks to review or confirm steps. Example: `use arc to download
 papers that cited 0911.3380 since 2024 and create a full summary of these
 papers` is direct ARC tool orchestration, not a managed workflow mode prompt.
 
-ARC LLM calls have no absolute runtime limit. They stop after 30 minutes with
-no substantive provider output, using the applicable owning-command option or
-`ARC_*_IDLE_TIMEOUT_SECONDS` variable when an override is needed. Use the
-owning package's status command or the host's background-command facility for
-long-running work. Do not stop merely because the call is long. An explicit
-stop pauses the current attempt for same-run resume.
+ARC LLM calls have no default runtime or inactivity timeout. A caller may set
+an explicit positive idle timeout through the owning command when operationally
+needed. Use the owning package's status command or the host's
+background-command facility for long-running work. Do not stop merely because
+the call is long or quiet. An explicit user stop pauses the current attempt for
+same-run resume.
 
 ## Required References
 
