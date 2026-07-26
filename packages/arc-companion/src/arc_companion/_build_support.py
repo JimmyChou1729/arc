@@ -27,23 +27,19 @@ from .generation_validation import CompanionContentError
 
 _EVIDENCE_ARTIFACT = "planning/evidence"
 _EVIDENCE_REQUEST_ARTIFACT = "planning/evidence-request"
-_EVIDENCE_INTERACTION_SCHEMA = "arc.companion.evidence_response.v1"
+_EVIDENCE_INTERACTION_SCHEMA = "arc.companion.evidence_response.v2"
 _SUPERVISION_SCHEMA = "arc.companion.review_supervision.v1"
 
 
 def collect_evidence(
     context: RunContext,
-    plans: Sequence[Mapping[str, Any]],
-) -> tuple[dict[str, Any], ...] | Paused:
-    """Freeze caller-supplied evidence requested by the current chapter plans."""
+    request_plan: Mapping[str, Any],
+) -> dict[str, tuple[dict[str, Any], ...]] | Paused:
+    """Freeze a multi-candidate research log and its selected evidence."""
 
-    requests = [
-        dict(item)
-        for plan in plans
-        for item in mapping_list(
-            plan.get("evidence_requests"), "evidence requests"
-        )
-    ]
+    requests = mapping_list(
+        request_plan.get("requests"), "literature requests"
+    )
     request_ids = [str(item["request_id"]) for item in requests]
     if len(set(request_ids)) != len(request_ids):
         raise CompanionContentError(
@@ -53,21 +49,26 @@ def collect_evidence(
     existing = context.artifacts.find(_EVIDENCE_ARTIFACT)
     if existing is not None:
         document = read_json(context, existing, "frozen evidence")
-        return tuple(
-            _validate_evidence_responses(
-                document.get("items"), requests=requests
+        if set(document) != {
+            "schema_version",
+            "research_log",
+            "selected_evidence",
+        } or document.get("schema_version") != _EVIDENCE_INTERACTION_SCHEMA:
+            raise CompanionContentError(
+                "evidence_response_invalid",
+                "frozen evidence has invalid fields",
             )
+        collection = _validate_evidence_responses(
+            document.get("research_log"), requests=requests
         )
-    if not requests:
-        context.artifacts.publish_json(
-            _EVIDENCE_ARTIFACT,
-            {
-                "schema_version": _EVIDENCE_INTERACTION_SCHEMA,
-                "items": [],
-            },
-        )
-        return ()
-
+        if list(collection["selected_evidence"]) != document.get(
+            "selected_evidence"
+        ):
+            raise CompanionContentError(
+                "evidence_response_invalid",
+                "frozen selected evidence does not match the research log",
+            )
+        return collection
     digest = hashlib.sha256(canonical_json_bytes(requests)).hexdigest()
     resume_key = f"evidence-{digest[:24]}"
     value = context.resume_input
@@ -82,26 +83,35 @@ def collect_evidence(
                 "evidence_response_invalid",
                 "evidence response schema is unsupported",
             )
-        items = _validate_evidence_responses(
+        collection = _validate_evidence_responses(
             value.get("responses"), requests=requests
         )
         context.artifacts.publish_json(
             _EVIDENCE_ARTIFACT,
             {
                 "schema_version": _EVIDENCE_INTERACTION_SCHEMA,
-                "items": items,
+                "research_log": list(collection["research_log"]),
+                "selected_evidence": list(
+                    collection["selected_evidence"]
+                ),
             },
         )
-        return tuple(items)
+        return collection
 
     request_ref = context.artifacts.find(_EVIDENCE_REQUEST_ARTIFACT)
     if request_ref is None:
         request_ref = context.artifacts.publish_json(
             _EVIDENCE_REQUEST_ARTIFACT,
             {
-                "schema_version": "arc.companion.evidence_request.v1",
+                "schema_version": "arc.companion.evidence_request.v2",
                 "resume_key": resume_key,
                 "response_schema": _evidence_response_schema(request_ids),
+                "minimum_candidate_count": 20,
+                "candidate_categories": [
+                    "source_named",
+                    "important_prior_history",
+                    "later_core_debate",
+                ],
                 "requests": [
                     {
                         "request_id": item["request_id"],
@@ -195,23 +205,27 @@ def planned_source_documents(
     """Keep only source blocks explicitly anchored by selective chapter work."""
 
     anchored: set[str] = set()
-    for field in ("learning_units", "evidence_requests"):
-        for item in mapping_list(
-            plan.get(field), field.replace("_", " ")
-        ):
-            block_ids = item.get("anchor_block_ids")
-            if not isinstance(block_ids, list):
-                raise CompanionContentError(
-                    "chapter_plan_invalid",
-                    f"{field} anchor_block_ids must be an array",
-                )
-            anchored.update(str(block_id) for block_id in block_ids)
+    for item in mapping_list(
+        plan.get("learning_units"), "learning units"
+    ):
+        block_ids = item.get("anchor_block_ids")
+        if not isinstance(block_ids, list):
+            raise CompanionContentError(
+                "chapter_plan_invalid",
+                "learning_units anchor_block_ids must be an array",
+            )
+        anchored.update(str(block_id) for block_id in block_ids)
     return [block for block in blocks if block.get("block_id") in anchored]
 
 
 def bibliography_contracts(
     evidence: Sequence[Mapping[str, Any]],
+    *,
+    cited_ids: Sequence[str] | None = None,
 ) -> tuple[EvidenceSource, ...]:
+    allowed = (
+        set(cited_ids) if cited_ids is not None else None
+    )
     return tuple(
         EvidenceSource(
             evidence_id=str(item["evidence_id"]),
@@ -219,6 +233,7 @@ def bibliography_contracts(
             source=str(item["source"]),
         )
         for item in evidence
+        if allowed is None or str(item["evidence_id"]) in allowed
     )
 
 
@@ -299,51 +314,109 @@ def _validate_evidence_responses(
     value: Any,
     *,
     requests: Sequence[Mapping[str, Any]],
-) -> list[dict[str, Any]]:
+) -> dict[str, tuple[dict[str, Any], ...]]:
     responses = mapping_list(value, "evidence responses")
     expected_ids = [str(item["request_id"]) for item in requests]
     by_request: dict[str, dict[str, Any]] = {}
     evidence_ids: set[str] = set()
+    selected: list[dict[str, Any]] = []
     expected_fields = {
         "request_id",
-        "evidence_id",
-        "title",
-        "content",
-        "source",
+        "candidates",
+        "selected_evidence_ids",
+        "selection_rationale",
     }
     for response in responses:
         if set(response) != expected_fields:
             raise CompanionContentError(
                 "evidence_response_invalid",
                 "each evidence response must contain exactly request_id, "
-                "evidence_id, title, content, and source",
+                "candidates, selected_evidence_ids, and selection_rationale",
             )
-        if any(
-            not isinstance(response[field], str)
-            or not str(response[field]).strip()
-            for field in expected_fields
+        request_id = response["request_id"]
+        rationale = response["selection_rationale"]
+        if (
+            not isinstance(request_id, str)
+            or not request_id.strip()
+            or not isinstance(rationale, str)
+            or not rationale.strip()
         ):
             raise CompanionContentError(
                 "evidence_response_invalid",
-                "evidence response fields must be non-empty strings",
+                "evidence response identity and rationale must be non-empty strings",
             )
-        request_id = str(response["request_id"])
-        evidence_id = str(response["evidence_id"])
         if request_id in by_request:
             raise CompanionContentError(
                 "evidence_response_invalid",
                 f"duplicate evidence response for request {request_id}",
             )
-        if evidence_id in evidence_ids:
+        candidates = mapping_list(
+            response["candidates"], "evidence candidates"
+        )
+        candidate_by_id: dict[str, dict[str, Any]] = {}
+        for candidate in candidates:
+            if set(candidate) != {
+                "evidence_id",
+                "title",
+                "content",
+                "source",
+            } or any(
+                not isinstance(candidate[field], str)
+                or not str(candidate[field]).strip()
+                for field in (
+                    "evidence_id",
+                    "title",
+                    "content",
+                    "source",
+                )
+            ):
+                raise CompanionContentError(
+                    "evidence_response_invalid",
+                    "evidence candidates require non-empty evidence_id, "
+                    "title, content, and source",
+                )
+            evidence_id = str(candidate["evidence_id"]).strip()
+            if evidence_id in evidence_ids:
+                raise CompanionContentError(
+                    "evidence_response_invalid",
+                    f"duplicate evidence ID {evidence_id}",
+                )
+            normalized = {
+                "evidence_id": evidence_id,
+                "title": str(candidate["title"]).strip(),
+                "content": str(candidate["content"]).strip(),
+                "source": str(candidate["source"]).strip(),
+            }
+            candidate_by_id[evidence_id] = normalized
+            evidence_ids.add(evidence_id)
+        selected_ids = response["selected_evidence_ids"]
+        if (
+            not isinstance(selected_ids, list)
+            or any(
+                not isinstance(item, str)
+                or item not in candidate_by_id
+                for item in selected_ids
+            )
+            or len(selected_ids) != len(set(selected_ids))
+        ):
             raise CompanionContentError(
                 "evidence_response_invalid",
-                f"duplicate evidence ID {evidence_id}",
+                "selected evidence IDs must be unique candidates from the same request",
             )
-        by_request[request_id] = {
-            field: str(response[field]).strip()
-            for field in expected_fields
+        normalized_response = {
+            "request_id": request_id,
+            "candidates": list(candidate_by_id.values()),
+            "selected_evidence_ids": list(selected_ids),
+            "selection_rationale": rationale.strip(),
         }
-        evidence_ids.add(evidence_id)
+        by_request[request_id] = normalized_response
+        selected.extend(
+            {
+                "request_id": request_id,
+                **candidate_by_id[evidence_id],
+            }
+            for evidence_id in selected_ids
+        )
     if (
         set(by_request) != set(expected_ids)
         or len(by_request) != len(expected_ids)
@@ -352,7 +425,17 @@ def _validate_evidence_responses(
             "evidence_response_invalid",
             "evidence responses must exactly cover every planned request ID",
         )
-    return [by_request[request_id] for request_id in expected_ids]
+    if requests and len(evidence_ids) < 20:
+        raise CompanionContentError(
+            "evidence_response_invalid",
+            "the research log must inspect at least 20 distinct candidates",
+        )
+    return {
+        "research_log": tuple(
+            by_request[request_id] for request_id in expected_ids
+        ),
+        "selected_evidence": tuple(selected),
+    }
 
 
 def _evidence_response_schema(
@@ -377,17 +460,37 @@ def _evidence_response_schema(
                             "type": "string",
                             "enum": list(request_ids),
                         },
-                        "evidence_id": nonempty,
-                        "title": nonempty,
-                        "content": nonempty,
-                        "source": nonempty,
+                        "candidates": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "evidence_id": nonempty,
+                                    "title": nonempty,
+                                    "content": nonempty,
+                                    "source": nonempty,
+                                },
+                                "required": [
+                                    "evidence_id",
+                                    "title",
+                                    "content",
+                                    "source",
+                                ],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "selected_evidence_ids": {
+                            "type": "array",
+                            "items": nonempty,
+                            "uniqueItems": True,
+                        },
+                        "selection_rationale": nonempty,
                     },
                     "required": [
                         "request_id",
-                        "evidence_id",
-                        "title",
-                        "content",
-                        "source",
+                        "candidates",
+                        "selected_evidence_ids",
+                        "selection_rationale",
                     ],
                     "additionalProperties": False,
                 },

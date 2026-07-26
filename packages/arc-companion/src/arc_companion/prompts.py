@@ -1,4 +1,4 @@
-"""Guide-only prompt contracts for the current Companion workflow."""
+"""Evidence-first prompt contracts for the current Companion workflow."""
 
 from __future__ import annotations
 
@@ -7,10 +7,25 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v2"
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-guide-prompt.v1"
+LITERATURE_REQUEST_PROMPT_VERSION = (
+    "arc.companion.literature-request-prompt.v1"
+)
+LITERATURE_SURVEY_PROMPT_VERSION = (
+    "arc.companion.literature-survey-prompt.v1"
+)
+CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v3"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v2"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-guide-review-prompt.v1"
+    "arc.companion.chapter-learning-review-prompt.v2"
+)
+VALUE_DIMENSIONS = (
+    "motivation_or_argument_role",
+    "genuinely_different_presentation",
+    "deeper_or_nonconventional_implication",
+    "omitted_intermediate_reasoning",
+    "substantive_connection",
+    "reliable_history_or_fact",
+    "materially_useful_later_development",
 )
 
 
@@ -32,6 +47,64 @@ _BLOCK_IDS = {
     "minItems": 1,
     "uniqueItems": True,
 }
+_STRING_IDS = {
+    "type": "array",
+    "items": _NONEMPTY,
+    "uniqueItems": True,
+}
+_LITERATURE_REQUEST = _closed(
+    {
+        "request_id": _NONEMPTY,
+        "kind": {
+            "type": "string",
+            "enum": ["paper", "web", "user"],
+        },
+        "query": _NONEMPTY,
+        "purpose": _NONEMPTY,
+        "anchor_block_ids": _BLOCK_IDS,
+    },
+    ("request_id", "kind", "query", "purpose", "anchor_block_ids"),
+)
+LITERATURE_REQUEST_PLAN_SCHEMA = _closed(
+    {
+        "requests": {
+            "type": "array",
+            "items": _LITERATURE_REQUEST,
+            "minItems": 1,
+        }
+    },
+    ("requests",),
+)
+_SURVEY_THEME = _closed(
+    {
+        "theme_id": _NONEMPTY,
+        "title": _NONEMPTY,
+        "synthesis": _NONEMPTY,
+        "anchor_block_ids": _BLOCK_IDS,
+        "evidence_ids": {
+            **_STRING_IDS,
+            "minItems": 1,
+        },
+    },
+    (
+        "theme_id",
+        "title",
+        "synthesis",
+        "anchor_block_ids",
+        "evidence_ids",
+    ),
+)
+LITERATURE_SURVEY_SCHEMA = _closed(
+    {
+        "themes": {"type": "array", "items": _SURVEY_THEME},
+        "limitations": {
+            "type": "array",
+            "items": _NONEMPTY,
+            "uniqueItems": True,
+        },
+    },
+    ("themes", "limitations"),
+)
 _PLANNED_UNIT = _closed(
     {
         "unit_id": _NONEMPTY,
@@ -48,77 +121,125 @@ _PLANNED_UNIT = _closed(
         },
         "title": _NONEMPTY,
         "anchor_block_ids": _BLOCK_IDS,
-        "purpose": _NONEMPTY,
-    },
-    ("unit_id", "kind", "title", "anchor_block_ids", "purpose"),
-)
-_EVIDENCE_REQUEST = _closed(
-    {
-        "request_id": _NONEMPTY,
-        "kind": {
+        "placement": {
             "type": "string",
-            "enum": ["paper", "web", "user"],
+            "enum": ["inline", "chapter"],
         },
-        "query": _NONEMPTY,
-        "purpose": _NONEMPTY,
-        "anchor_block_ids": _BLOCK_IDS,
+        "reader_question": _NONEMPTY,
+        "added_value": _NONEMPTY,
+        "value_dimensions": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": list(VALUE_DIMENSIONS),
+            },
+            "uniqueItems": True,
+            "minItems": 1,
+        },
+        "evidence_ids": _STRING_IDS,
     },
-    ("request_id", "kind", "query", "purpose", "anchor_block_ids"),
+    (
+        "unit_id",
+        "kind",
+        "title",
+        "anchor_block_ids",
+        "placement",
+        "reader_question",
+        "added_value",
+        "value_dimensions",
+        "evidence_ids",
+    ),
 )
 CHAPTER_PLAN_SCHEMA = _closed(
     {
         "chapter_id": _NONEMPTY,
-        "guide": _NONEMPTY,
         "learning_units": {"type": "array", "items": _PLANNED_UNIT},
-        "evidence_requests": {
-            "type": "array",
-            "items": _EVIDENCE_REQUEST,
-        },
     },
-    ("chapter_id", "guide", "learning_units", "evidence_requests"),
+    ("chapter_id", "learning_units"),
 )
-
 _LEARNING_UNIT = _closed(
     {
-        "unit_id": _NONEMPTY,
-        "kind": _NONEMPTY,
-        "title": _NONEMPTY,
-        "anchor_block_ids": _BLOCK_IDS,
+        **_PLANNED_UNIT["properties"],
         "content": _NONEMPTY,
-        "citations": {
-            "type": "array",
-            "items": _NONEMPTY,
-            "uniqueItems": True,
-        },
     },
-    ("unit_id", "kind", "title", "anchor_block_ids", "content", "citations"),
+    (*_PLANNED_UNIT["required"], "content"),
 )
 CHAPTER_GUIDE_SCHEMA = _closed(
     {
         "chapter_id": _NONEMPTY,
-        "guide": _NONEMPTY,
         "learning_units": {"type": "array", "items": _LEARNING_UNIT},
     },
-    ("chapter_id", "guide", "learning_units"),
+    ("chapter_id", "learning_units"),
 )
-_TEXT_PATCH = _closed(
+_REVIEW_DECISION = _closed(
     {
-        "id": _NONEMPTY,
-        "replacement": {"type": "string"},
+        "unit_id": _NONEMPTY,
+        "decision": {
+            "type": "string",
+            "enum": ["keep", "replace", "remove"],
+        },
+        "replacement": {"type": ["string", "null"]},
+        "reason": _NONEMPTY,
     },
-    ("id", "replacement"),
+    ("unit_id", "decision", "replacement", "reason"),
 )
 CHAPTER_GUIDE_REVIEW_SCHEMA = _closed(
     {
-        "guide_replacement": {"type": ["string", "null"]},
-        "learning_unit_patches": {
+        "decisions": {
             "type": "array",
-            "items": _TEXT_PATCH,
+            "items": _REVIEW_DECISION,
         },
-        "summary": _NONEMPTY,
     },
-    ("guide_replacement", "learning_unit_patches", "summary"),
+    ("decisions",),
 )
+
+
+def literature_request_prompt(
+    *,
+    blocks: Sequence[Mapping[str, Any]],
+    intent: str,
+) -> str:
+    return _prompt(
+        LITERATURE_REQUEST_PROMPT_VERSION,
+        """
+        Inspect the complete source before any chapter planning. Request only
+        literature or caller evidence that can add concrete explanatory value
+        beyond the source. The ensuing research log must inspect at least 20
+        distinct candidates across three categories: sources explicitly named
+        by the document, important prior history, and later work central to the
+        main debates. Each request must state the reader need it serves and
+        anchor that need to existing source block IDs. Candidate coverage is a
+        research requirement, not an inclusion quota: select only directly
+        relevant evidence, and never force a source into a learning unit or
+        bibliography merely to meet the candidate count. Avoid requests whose
+        only purpose is to summarize or restate the source. Never invent or
+        modify source block IDs.
+        """,
+        {"intent": intent, "blocks": list(blocks)},
+    )
+
+
+def literature_survey_prompt(
+    *,
+    blocks: Sequence[Mapping[str, Any]],
+    intent: str,
+    selected_evidence: Sequence[Mapping[str, Any]],
+) -> str:
+    return _prompt(
+        LITERATURE_SURVEY_PROMPT_VERSION,
+        """
+        Build a document-level, evidence-grounded literature survey for later
+        chapter planning. Synthesize only claims supported by the selected
+        evidence and source blocks. Every theme must cite supplied evidence IDs
+        and existing block IDs. Record limitations explicitly; do not invent
+        sources, identifiers, or unsupported consensus.
+        """,
+        {
+            "intent": intent,
+            "blocks": list(blocks),
+            "selected_evidence": list(selected_evidence),
+        },
+    )
 
 
 def chapter_plan_prompt(
@@ -128,16 +249,28 @@ def chapter_plan_prompt(
     blocks: Sequence[Mapping[str, Any]],
     target_language: str,
     intent: str,
+    literature_survey: Mapping[str, Any] | None = None,
+    selected_evidence: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     return _prompt(
         CHAPTER_PLAN_PROMPT_VERSION,
         """
-        Plan a selective textbook companion for this source chapter. The source
-        is authoritative. Write the guide in the target language, select only
-        genuinely useful learning units, and anchor every proposed unit and
-        evidence request to existing block IDs. Terminology and translation are
-        owned by a separate workflow: do not propose glossary candidates and do
-        not translate. Never invent or modify source block IDs.
+        Plan selective textbook additions for this source chapter after reading
+        the document-level literature survey. Do not write a chapter summary or
+        guide. Propose a learning unit only when it answers a concrete reader
+        question and adds value not already supplied by the source. The allowed
+        value dimensions are motivation_or_argument_role,
+        genuinely_different_presentation, deeper_or_nonconventional_implication,
+        omitted_intermediate_reasoning, substantive_connection,
+        reliable_history_or_fact, and materially_useful_later_development.
+        added_value must name the concrete increment absent from the source.
+        Paraphrase, same-meaning rewrite, repeated reasoning, and generic
+        summary are not added value. State inline or chapter placement, exact
+        source anchors, and selected evidence IDs. Treat inline and chapter
+        placement as equally valid choices; there is no placement quota.
+        Evidence IDs may be empty for a purely source-grounded clarification.
+        Terminology and translation are owned by a separate workflow. Never
+        invent source or evidence IDs.
         """,
         {
             "chapter_id": chapter_id,
@@ -145,6 +278,11 @@ def chapter_plan_prompt(
             "target_language": target_language,
             "intent": intent,
             "blocks": list(blocks),
+            "literature_survey": dict(
+                literature_survey
+                or {"themes": [], "limitations": []}
+            ),
+            "selected_evidence": list(selected_evidence),
         },
     )
 
@@ -161,13 +299,15 @@ def chapter_guide_prompt(
     return _prompt(
         CHAPTER_GUIDE_PROMPT_VERSION,
         """
-        Produce the chapter guide and only the planned learning units. A
-        translation lane, when needed, runs independently and will be joined
-        locally; do not translate or return translations. Learning-unit IDs and
-        anchors must exactly match the plan. The supplied glossary contains only
-        source terms that occur literally in this chapter. Use those entries
-        consistently. Cite supplied frozen evidence by evidence_id and do not
-        invent evidence identifiers.
+        Write only the planned learning units; do not write a chapter summary or
+        guide. Unit IDs, kinds, titles, anchors, placement, reader questions,
+        added-value statements, value dimensions, and evidence IDs must exactly
+        match the plan. Do not turn a planned increment into paraphrase,
+        same-meaning rewrite, repeated reasoning, or generic summary. Inline
+        and chapter units are equally important and have no quota. A translation
+        lane runs independently. Use the supplied chapter glossary consistently.
+        Ground literature claims only in the selected evidence assigned to each
+        unit.
         """,
         {
             "target_language": target_language,
@@ -175,7 +315,7 @@ def chapter_guide_prompt(
             "plan": dict(plan),
             "blocks": list(blocks),
             "glossary": list(glossary),
-            "frozen_evidence": list(evidence),
+            "selected_evidence": list(evidence),
         },
     )
 
@@ -186,22 +326,28 @@ def chapter_guide_review_prompt(
     draft: Mapping[str, Any],
     blocks: Sequence[Mapping[str, Any]],
     glossary: Sequence[Mapping[str, Any]],
+    evidence: Sequence[Mapping[str, Any]],
 ) -> str:
     return _prompt(
         CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
         """
-        Review only this source-anchored chapter guide and its learning units.
-        Return text replacements for the guide or learning-unit content. Patch
-        IDs must already exist in the draft. You cannot change source text,
-        block IDs, anchors, learning-unit kinds or titles, citations, glossary
-        entries, or any translation output. Use null or an empty patch list when
-        no change is needed.
+        Review every proposed learning unit against its reader question,
+        added-value claim, source anchors, and selected evidence. Return exactly
+        one keep, replace, or remove decision for every draft unit in draft
+        order. A replacement changes content only and must remain grounded in
+        the immutable source/evidence identities. Remove any unit that is only
+        paraphrase, same-meaning rewrite, repeated reasoning, or generic summary,
+        or whose added_value does not identify an increment absent from the
+        source. Judge inline and chapter placements by the same value standard;
+        keep no quota for either. Use null replacement for keep and remove. Do
+        not add units or write a summary.
         """,
         {
             "plan": dict(plan),
             "draft": dict(draft),
             "source_blocks": list(blocks),
             "glossary": list(glossary),
+            "selected_evidence": list(evidence),
         },
     )
 
@@ -229,7 +375,14 @@ __all__ = [
     "CHAPTER_GUIDE_SCHEMA",
     "CHAPTER_PLAN_PROMPT_VERSION",
     "CHAPTER_PLAN_SCHEMA",
+    "LITERATURE_REQUEST_PLAN_SCHEMA",
+    "LITERATURE_REQUEST_PROMPT_VERSION",
+    "LITERATURE_SURVEY_PROMPT_VERSION",
+    "LITERATURE_SURVEY_SCHEMA",
+    "VALUE_DIMENSIONS",
     "chapter_guide_prompt",
     "chapter_guide_review_prompt",
     "chapter_plan_prompt",
+    "literature_request_prompt",
+    "literature_survey_prompt",
 ]

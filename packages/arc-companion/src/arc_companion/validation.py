@@ -8,6 +8,7 @@ import re
 from urllib.parse import urlparse
 
 from .contracts import AcceptedBook, SourceAnchor
+from .prompts import VALUE_DIMENSIONS
 
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -45,6 +46,7 @@ def validate_accepted_book(
     anchor_ids: set[str] = set()
     ordinals: list[int] = []
     bibliography_ids: set[str] = set()
+    cited_ids: set[str] = set()
     for evidence_index, evidence in enumerate(book.bibliography):
         path = f"bibliography[{evidence_index}]"
         if evidence.evidence_id in bibliography_ids:
@@ -134,6 +136,35 @@ def validate_accepted_book(
                     f"{path}.anchor_ids",
                     f"learning unit refers to unknown anchors: {sorted(unknown)}",
                 )
+            if unit.placement not in {"inline", "chapter"}:
+                _issue(
+                    issues,
+                    "learning_placement_invalid",
+                    f"{path}.placement",
+                    "learning-unit placement must be inline or chapter",
+                )
+            if (
+                not unit.reader_question.strip()
+                or not unit.added_value.strip()
+                or not unit.value_dimensions
+            ):
+                _issue(
+                    issues,
+                    "learning_value_contract_invalid",
+                    path,
+                    "learning units require a reader question, added value, and value dimensions",
+                )
+            unsupported_dimensions = sorted(
+                set(unit.value_dimensions) - set(VALUE_DIMENSIONS)
+            )
+            if unsupported_dimensions:
+                _issue(
+                    issues,
+                    "learning_value_dimension_invalid",
+                    f"{path}.value_dimensions",
+                    "learning-unit value dimensions are unsupported: "
+                    f"{unsupported_dimensions}",
+                )
             if unit.kind == "further_reading" and not unit.citations:
                 _issue(
                     issues,
@@ -147,6 +178,7 @@ def validate_accepted_book(
                 path=f"{path}.citations",
                 issues=issues,
             )
+            cited_ids.update(unit.citations)
 
     if ordinals != sorted(ordinals):
         _issue(
@@ -204,6 +236,15 @@ def validate_accepted_book(
             allowed=bibliography_ids,
             path=f"{path}.citations",
             issues=issues,
+        )
+        cited_ids.update(entry.citations)
+    unused = bibliography_ids - cited_ids
+    for evidence_id in sorted(unused):
+        _issue(
+            issues,
+            "uncited_bibliography_entry",
+            "bibliography",
+            f"bibliography evidence is not cited: {evidence_id}",
         )
     return tuple(issues)
 

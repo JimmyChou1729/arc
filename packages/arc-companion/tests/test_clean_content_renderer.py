@@ -319,6 +319,10 @@ def accepted_book() -> AcceptedBook:
                 kind="intuition",
                 title="Conservation intuition",
                 anchor_ids=("b-intro",),
+                placement="inline",
+                reader_question="Why must alternatives normalize?",
+                added_value="Connects normalization to exhaustive alternatives.",
+                value_dimensions=("substantive_connection",),
                 content="Normalization says the alternatives exhaust the state space.",
             ),
             LearningUnit(
@@ -326,6 +330,10 @@ def accepted_book() -> AcceptedBook:
                 kind="derivation",
                 title="Entropy derivation",
                 anchor_ids=("b-equation", "b-table"),
+                placement="chapter",
+                reader_question="How does the table enter the entropy sum?",
+                added_value="Makes the substitution step explicit.",
+                value_dimensions=("omitted_intermediate_reasoning",),
                 content="Insert the table weights into the displayed sum.",
             ),
             LearningUnit(
@@ -333,6 +341,10 @@ def accepted_book() -> AcceptedBook:
                 kind="further_reading",
                 title="Further reading",
                 anchor_ids=("b-figure",),
+                placement="inline",
+                reader_question="Where can the construction be studied further?",
+                added_value="Provides a directly relevant reading path.",
+                value_dimensions=("materially_useful_later_development",),
                 content="Compare the state-space picture with the cited construction.",
                 citations=("paper:1234.56789",),
             ),
@@ -402,6 +414,30 @@ def test_accepted_book_codec_is_canonical_strict_and_immutable(
     }
     with pytest.raises(ContentCodecError, match="finite"):
         CompanionContentCodec.from_document(document)
+
+
+def test_accepted_book_v2_decodes_to_v3_value_contract(
+    accepted_book: AcceptedBook,
+) -> None:
+    document = CompanionContentCodec.to_document(accepted_book)
+    document["schema_version"] = "arc.companion.accepted_book.v2"
+    for chapter in document["chapters"]:
+        for unit in chapter["learning_units"]:
+            del unit["placement"]
+            del unit["reader_question"]
+            del unit["added_value"]
+            del unit["value_dimensions"]
+
+    migrated = CompanionContentCodec.from_document(document)
+
+    assert migrated.schema_version == "arc.companion.accepted_book.v3"
+    unit = migrated.chapters[0].learning_units[0]
+    assert unit.placement == "inline"
+    assert unit.reader_question == unit.title
+    assert unit.added_value == unit.content
+    assert unit.value_dimensions == (
+        "genuinely_different_presentation",
+    )
 
 
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
@@ -500,24 +536,17 @@ def test_renderer_public_import_does_not_load_llm_runtime() -> None:
         chapter_id="intro",
         title="Introduction",
         block_ids=("b-intro",),
-        guide="Start from normalization.",
         learning_units=(
             PlannedLearningUnit(
                 unit_id="intuition",
                 kind="intuition",
                 title="Why normalize?",
                 anchor_ids=("b-intro",),
-                purpose="Connect the equation to exhaustive alternatives.",
-            ),
-        ),
-        glossary_candidates=("entropy",),
-        evidence_requests=(
-            EvidenceRequest(
-                request_id="paper-request",
-                kind="paper",
-                query="1234.56789",
-                purpose="Support further reading.",
-                anchor_ids=("b-intro",),
+                placement="inline",
+                reader_question="Why normalize?",
+                added_value="Connect the equation to exhaustive alternatives.",
+                value_dimensions=("substantive_connection",),
+                evidence_ids=("paper:1234.56789",),
             ),
         ),
     )
@@ -595,6 +624,7 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
     html = first.decode("utf-8")
     css = (reader / "assets" / "reader.css").read_text(encoding="utf-8")
     javascript = (reader / "assets" / "reader.js").read_text(encoding="utf-8")
+    visible_text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
     assert '@media (min-width: 900px)' in css
     assert '@media (max-width: 899px)' in css
     assert "grid-template-columns: minmax(0,1fr) minmax(0,1fr) minmax(18rem,.85fr)" in css
@@ -618,12 +648,14 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
     )
     assert html.count(">source note</a>") == 1
     assert "source-links" not in html
-    assert "paper:1234.56789" in html
+    assert "paper:1234.56789" not in visible_text
     assert "entropia" in html
     assert "<h2>References</h2>" in html
+    assert "[1] A reference paper" in visible_text
     assert "A reference paper" in html
     assert "https://example.test/paper" in html
-    assert "glossary:entropy-reference" in html
+    assert "glossary:entropy-reference" not in visible_text
+    assert 'href="#reference-paper:1234.56789"' in html
     assert "window.katex.render" in javascript
     assert "innerHTML" not in javascript
     assert (reader / "assets" / "katex" / "LICENSE").is_file()
@@ -760,6 +792,65 @@ def test_bibliography_uses_canonical_paper_landing_links(
     assert all(row.find("li") is None for row in rows)
 
 
+def test_reader_citations_hide_internal_evidence_ids(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    bibliography = (
+        replace(
+            accepted_book.bibliography[0],
+            evidence_id="ev-private-paper",
+        ),
+        replace(
+            accepted_book.bibliography[1],
+            evidence_id="ev-private-glossary",
+        ),
+    )
+    book = replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                learning_units=(
+                    *chapter.learning_units[:-1],
+                    replace(
+                        chapter.learning_units[-1],
+                        citations=("ev-private-paper",),
+                    ),
+                ),
+            ),
+        ),
+        glossary=(
+            replace(
+                accepted_book.glossary[0],
+                citations=("ev-private-glossary",),
+            ),
+        ),
+        bibliography=bibliography,
+    )
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+
+    html = renderer.render_web(
+        book, tmp_path / "private-evidence-reader"
+    ).read_text(encoding="utf-8")
+    visible = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
+
+    assert "ev-private-paper" not in visible
+    assert "ev-private-glossary" not in visible
+    assert "ev-private-paper" not in tex
+    assert "ev-private-glossary" not in tex
+    assert "[1] A reference paper" in visible
+    assert "[2] Entropy reference" in visible
+    assert 'href="#reference-ev-private-paper"' in html
+    assert r"Evidence: [1] A reference paper" in tex
+
+
 def test_pdf_search_normalization_matches_unicode_and_line_wrapping() -> None:
     extracted = (
         "A \N{LATIN SMALL LIGATURE FI}nite decomposition at "
@@ -887,8 +978,8 @@ def test_pdf_is_searchable_complete_and_anchor_interleaved(
     ) < extracted.index("Conservation intuition")
     assert "Two-state example" in extracted
     assert "State-space diagram" in extracted
-    assert "paper:1234.56789" in extracted
-    assert "glossary:entropy-reference" in extracted
+    assert "paper:1234.56789" not in extracted
+    assert "glossary:entropy-reference" not in extracted
     assert "entropia" in extracted
     assert "References" in extracted
     assert "A reference paper" in extracted
@@ -1332,7 +1423,12 @@ def test_pdf_cards_break_across_pages_for_long_paragraph_and_code(
         ),
         learning_units=(),
     )
-    book = replace(accepted_book, chapters=(chapter,), glossary=())
+    book = replace(
+        accepted_book,
+        chapters=(chapter,),
+        glossary=(),
+        bibliography=(),
+    )
 
     output = CompanionRenderer().render_pdf(book, tmp_path / "multipage.pdf")
     info = subprocess.run(

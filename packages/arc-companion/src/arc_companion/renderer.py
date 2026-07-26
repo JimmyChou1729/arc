@@ -218,7 +218,6 @@ class CompanionRenderer:
             if any(
                 escape_html(value) not in text
                 for value in (
-                    evidence.evidence_id,
                     evidence.title,
                     evidence.source,
                 )
@@ -299,7 +298,6 @@ class CompanionRenderer:
                 if any(
                     not _pdf_bibliography_text_contains(text, value)
                     for value in (
-                        evidence.evidence_id,
                         evidence.title,
                         evidence.source,
                     )
@@ -454,7 +452,17 @@ def _render_html_chapter(
     release_links: _ReleaseLinks,
 ) -> str:
     translation_by_id = {item.block_id: item for item in chapter.translations}
-    units_by_anchor = _units_by_first_anchor(chapter.learning_units)
+    inline_units = tuple(
+        item
+        for item in chapter.learning_units
+        if item.placement == "inline"
+    )
+    chapter_units = tuple(
+        item
+        for item in chapter.learning_units
+        if item.placement == "chapter"
+    )
+    units_by_anchor = _units_by_first_anchor(inline_units)
     anchors: list[str] = []
     for anchor in chapter.source_anchors:
         source = _render_html_source(
@@ -470,7 +478,7 @@ def _render_html_chapter(
             else ""
         )
         units = "".join(
-            _render_html_learning(unit)
+            _render_html_learning(book, unit)
             for unit in units_by_anchor.get(anchor.block_id, ())
         )
         learning = (
@@ -491,10 +499,25 @@ def _render_html_chapter(
             f'<section class="source-layer" lang="{escape_html(book.source_language)}">'
             f"<h3>Source</h3>{source}</section>{translated}{learning}</div></article>"
         )
+    guide = (
+        f'<p class="chapter-guide">{_html_text(chapter.guide)}</p>'
+        if chapter.guide
+        else ""
+    )
+    chapter_learning = "".join(
+        _render_html_learning(book, unit)
+        for unit in chapter_units
+    )
+    chapter_learning = (
+        '<aside class="chapter-learning"><h3>Chapter notes</h3>'
+        f"{chapter_learning}</aside>"
+        if chapter_learning
+        else ""
+    )
     return (
         f'<section class="chapter" id="chapter-{escape_html(chapter.chapter_id)}">'
         f"<h2>{escape_html(chapter.title)}</h2>"
-        f'<p class="chapter-guide">{_html_text(chapter.guide)}</p>'
+        f"{guide}{chapter_learning}"
         f'{"".join(anchors)}</section>'
     )
 
@@ -585,12 +608,15 @@ def _render_html_source(
     )
 
 
-def _render_html_learning(unit: LearningUnit) -> str:
-    citations = _html_citations(unit.citations)
+def _render_html_learning(
+    book: AcceptedBook, unit: LearningUnit
+) -> str:
+    citations = _html_citations(book, unit.citations)
     return (
         f'<section class="learning-unit learning-{escape_html(unit.kind)}" '
         f'data-learning-unit="{escape_html(unit.unit_id)}">'
         f"<h4>{escape_html(unit.title)}</h4>"
+        f'<p class="reader-question">{escape_html(unit.reader_question)}</p>'
         f"<p>{_html_text(unit.content)}</p>{citations}</section>"
     )
 
@@ -602,7 +628,7 @@ def _render_html_glossary(book: AcceptedBook) -> str:
         "<div class=\"glossary-row\">"
         f"<dt>{escape_html(item.term)}</dt>"
         f'<dd class="translated-term">{escape_html(item.translated_term)}</dd>'
-        f"<dd>{_html_text(item.definition)}{_html_citations(item.citations)}</dd>"
+        f"<dd>{_html_text(item.definition)}{_html_citations(book, item.citations)}</dd>"
         "</div>"
         for item in book.glossary
     )
@@ -621,15 +647,15 @@ def _render_html_bibliography(book: AcceptedBook) -> str:
     if not book.bibliography:
         return ""
     rows: list[str] = []
-    for item in book.bibliography:
+    for number, item in enumerate(book.bibliography, 1):
         title = f"<strong>{escape_html(item.title)}</strong>"
         landing_url = _paper_landing_url(item.source)
         if landing_url is not None:
             title = f'<a href="{escape_html(landing_url)}">{title}</a>'
         rows.append(
             f'<li id="reference-{escape_html(item.evidence_id)}">'
-            f"{title} — {escape_html(item.source)} "
-            f'<code>{escape_html(item.evidence_id)}</code></li>'
+            f'<span class="reference-number">[{number}]</span> '
+            f"{title} — {escape_html(item.source)}</li>"
         )
     return (
         '<section class="bibliography" id="references">'
@@ -660,12 +686,28 @@ def _render_html_inline(
     return "".join(values)
 
 
-def _html_citations(citations: Sequence[str]) -> str:
+def _html_citations(
+    book: AcceptedBook, citations: Sequence[str]
+) -> str:
     if not citations:
         return ""
-    return '<p class="citations">' + " · ".join(
-        escape_html(item) for item in citations
-    ) + "</p>"
+    by_id = {
+        item.evidence_id: (number, item)
+        for number, item in enumerate(book.bibliography, 1)
+    }
+    values = []
+    for evidence_id in citations:
+        reference = by_id.get(evidence_id)
+        label = (
+            f"[{reference[0]}] {reference[1].title}"
+            if reference is not None
+            else "Unknown reference"
+        )
+        values.append(
+            f'<a href="#reference-{escape_html(evidence_id)}">'
+            f"{escape_html(label)}</a>"
+        )
+    return '<p class="citations">Evidence: ' + " · ".join(values) + "</p>"
 
 
 def _html_text(value: str) -> str:
@@ -732,11 +774,21 @@ def _render_tex_chapter(
     release_links: _ReleaseLinks,
 ) -> str:
     translations = {item.block_id: item for item in chapter.translations}
-    units = _units_by_first_anchor(chapter.learning_units)
-    values = [
-        rf"\section{{{_tex_escape(chapter.title)}}}",
-        rf"\textbf{{Chapter guide.}} {_render_tex_prose(chapter.guide)}",
-    ]
+    units = _units_by_first_anchor(
+        tuple(
+            item
+            for item in chapter.learning_units
+            if item.placement == "inline"
+        )
+    )
+    values = [rf"\section{{{_tex_escape(chapter.title)}}}"]
+    if chapter.guide:
+        values.append(
+            rf"\textbf{{Chapter guide.}} {_render_tex_prose(chapter.guide)}"
+        )
+    for unit in chapter.learning_units:
+        if unit.placement == "chapter":
+            values.append(_render_tex_learning(book, unit))
     for anchor in chapter.source_anchors:
         page = (
             rf"\par\noindent\hfill{{\footnotesize source p. {anchor.page_number}}}\par"
@@ -778,17 +830,7 @@ def _render_tex_chapter(
                 rf"\end{{tcolorbox}}"
             )
         for unit in units.get(anchor.block_id, ()):
-            citations = (
-                rf"\par{{\footnotesize\itshape Evidence: {_tex_escape('; '.join(unit.citations))}}}"
-                if unit.citations
-                else ""
-            )
-            values.append(
-                rf"\begin{{tcolorbox}}[breakable,colback=LearningBg,colframe=LearningBg,"
-                rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
-                rf"\textbf{{{_tex_escape(unit.title)}}}\par "
-                rf"{_render_tex_prose(unit.content)}{citations}\end{{tcolorbox}}"
-            )
+            values.append(_render_tex_learning(book, unit))
         values.append(r"\medskip")
     return "\n".join(values)
 
@@ -887,7 +929,7 @@ def _render_tex_glossary(book: AcceptedBook) -> str:
         rf"{_tex_escape(item.translated_term)} & {_render_tex_prose(item.definition)}"
         + (
             rf"\par{{\footnotesize\itshape Evidence: "
-            rf"{_tex_escape('; '.join(item.citations))}}}"
+            rf"{_tex_escape(_citation_titles(book, item.citations))}}}"
             if item.citations
             else ""
         )
@@ -903,6 +945,36 @@ def _render_tex_glossary(book: AcceptedBook) -> str:
     )
 
 
+def _render_tex_learning(
+    book: AcceptedBook, unit: LearningUnit
+) -> str:
+    citations = (
+        rf"\par{{\footnotesize\itshape Evidence: "
+        rf"{_tex_escape(_citation_titles(book, unit.citations))}}}"
+        if unit.citations
+        else ""
+    )
+    return (
+        rf"\begin{{tcolorbox}}[breakable,colback=LearningBg,colframe=LearningBg,"
+        rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
+        rf"\textbf{{{_tex_escape(unit.title)}}}\par "
+        rf"\textit{{Reader question: {_tex_escape(unit.reader_question)}}}\par "
+        rf"{_render_tex_prose(unit.content)}{citations}\end{{tcolorbox}}"
+    )
+
+
+def _citation_titles(
+    book: AcceptedBook, citations: Sequence[str]
+) -> str:
+    by_id = {
+        item.evidence_id: f"[{number}] {item.title}"
+        for number, item in enumerate(book.bibliography, 1)
+    }
+    return "; ".join(
+        by_id.get(item, "Unknown reference") for item in citations
+    )
+
+
 def _render_tex_bibliography(book: AcceptedBook) -> str:
     if not book.bibliography:
         return ""
@@ -912,10 +984,7 @@ def _render_tex_bibliography(book: AcceptedBook) -> str:
         landing_url = _paper_landing_url(item.source)
         if landing_url is not None:
             title = rf"\href{{{_tex_url(landing_url)}}}{{{title}}}"
-        rows.append(
-            rf"\item {title} --- {_tex_escape(item.source)} "
-            rf"[{_tex_escape(item.evidence_id)}]"
-        )
+        rows.append(rf"\item {title} --- {_tex_escape(item.source)}")
     return (
         r"\section{References}\begin{enumerate}"
         + "\n".join(rows)

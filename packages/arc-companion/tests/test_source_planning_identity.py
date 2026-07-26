@@ -19,9 +19,17 @@ import arc_companion.request_contracts as request_contracts
 from arc_companion import __all__ as public_names
 from arc_companion.build import CompanionBuildHandler
 from arc_companion.contracts import AcceptedBook, AcceptedChapter, SourceAnchor
+from arc_companion.generation_validation import (
+    CompanionContentError,
+    validate_chapter_plan,
+    validate_literature_request_plan,
+)
 from arc_companion.prompts import (
     CHAPTER_PLAN_SCHEMA,
+    LITERATURE_REQUEST_PLAN_SCHEMA,
+    VALUE_DIMENSIONS,
     chapter_plan_prompt,
+    literature_request_prompt,
 )
 from arc_companion.request_contracts import (
     NEUTRAL_TEXTBOOK_INTENT,
@@ -74,8 +82,85 @@ def _prompt_payload(prompt: str) -> dict:
 def test_companion_provider_enum_nodes_declare_string_types() -> None:
     planned_unit = CHAPTER_PLAN_SCHEMA["properties"]["learning_units"]["items"]
     assert planned_unit["properties"]["kind"]["type"] == "string"
-    evidence = CHAPTER_PLAN_SCHEMA["properties"]["evidence_requests"]["items"]
+    evidence = LITERATURE_REQUEST_PLAN_SCHEMA["properties"]["requests"]["items"]
     assert evidence["properties"]["kind"]["type"] == "string"
+    assert LITERATURE_REQUEST_PLAN_SCHEMA["properties"]["requests"][
+        "minItems"
+    ] == 1
+
+
+def test_evidence_first_prompts_encode_selective_value_contract() -> None:
+    request = literature_request_prompt(
+        blocks=[{"block_id": "b1", "text": "source"}],
+        intent="Explain only useful omissions.",
+    )
+    plan = chapter_plan_prompt(
+        chapter_id="chapter",
+        title="Chapter",
+        blocks=[{"block_id": "b1", "text": "source"}],
+        target_language="en",
+        intent="Explain only useful omissions.",
+    )
+
+    assert "at least 20 distinct candidates" in request
+    for category in (
+        "sources explicitly named by the document",
+        "important prior history",
+        "later work central to the main debates",
+    ):
+        assert category in request
+    assert "not an inclusion quota" in request
+    assert "Do not write a chapter summary or guide" in plan
+    for prohibited in (
+        "Paraphrase",
+        "same-meaning rewrite",
+        "repeated reasoning",
+        "generic summary",
+    ):
+        assert prohibited in plan
+    assert "no placement quota" in plan
+    assert tuple(
+        CHAPTER_PLAN_SCHEMA["properties"]["learning_units"]["items"][
+            "properties"
+        ]["value_dimensions"]["items"]["enum"]
+    ) == VALUE_DIMENSIONS
+
+
+def test_chapter_plan_rejects_unknown_value_dimension() -> None:
+    with pytest.raises(
+        CompanionContentError, match="value dimension is unsupported"
+    ):
+        validate_chapter_plan(
+            {
+                "chapter_id": "chapter",
+                "learning_units": [
+                    {
+                        "unit_id": "unit",
+                        "kind": "intuition",
+                        "title": "A useful addition",
+                        "anchor_block_ids": ["b1"],
+                        "placement": "inline",
+                        "reader_question": "What is missing?",
+                        "added_value": "Adds a distinct physical interpretation.",
+                        "value_dimensions": ["generic_summary"],
+                        "evidence_ids": [],
+                    }
+                ],
+            },
+            chapter_id="chapter",
+            block_ids=("b1",),
+        )
+
+
+def test_literature_plan_rejects_empty_research_log() -> None:
+    with pytest.raises(
+        CompanionContentError,
+        match="must inspect candidate evidence",
+    ):
+        validate_literature_request_plan(
+            {"requests": []},
+            block_ids=("b1",),
+        )
 
 
 def test_source_chapters_cover_front_matter_and_mixed_headings_exactly(

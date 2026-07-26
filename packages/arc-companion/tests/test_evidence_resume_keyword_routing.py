@@ -25,6 +25,8 @@ from arc_companion.prompts import (
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
+    LITERATURE_REQUEST_PROMPT_VERSION,
+    LITERATURE_SURVEY_PROMPT_VERSION,
 )
 from arc_companion.request_contracts import CompanionBuildRequest
 from arc_companion.service import CompanionService
@@ -39,19 +41,48 @@ class _EvidenceResumeTasks:
 
     def execute_or_resume(self, _context, request, *, input=None, options=None):
         contract, payload = _prompt(request.prompt)
-        if contract == CHAPTER_PLAN_PROMPT_VERSION:
+        if contract == LITERATURE_REQUEST_PROMPT_VERSION:
             block_id = payload["blocks"][0]["block_id"]
             value = {
-                "chapter_id": payload["chapter_id"],
-                "guide": "A source-anchored guide.",
-                "learning_units": [],
-                "evidence_requests": [
+                "requests": [
                     {
                         "request_id": "supporting-paper",
                         "kind": "paper",
                         "query": "A bounded supporting result",
                         "purpose": "Provide a cited reading path.",
                         "anchor_block_ids": [block_id],
+                    }
+                ],
+            }
+        elif contract == LITERATURE_SURVEY_PROMPT_VERSION:
+            block_id = payload["blocks"][0]["block_id"]
+            value = {
+                "themes": [
+                    {
+                        "theme_id": "support",
+                        "title": "Supporting literature",
+                        "synthesis": "The selected source adds context.",
+                        "anchor_block_ids": [block_id],
+                        "evidence_ids": ["support-1"],
+                    }
+                ],
+                "limitations": [],
+            }
+        elif contract == CHAPTER_PLAN_PROMPT_VERSION:
+            block_id = payload["blocks"][0]["block_id"]
+            value = {
+                "chapter_id": payload["chapter_id"],
+                "learning_units": [
+                    {
+                        "unit_id": "reading",
+                        "kind": "further_reading",
+                        "title": "Supporting result",
+                        "anchor_block_ids": [block_id],
+                        "placement": "inline",
+                        "reader_question": "Where can I read further?",
+                        "added_value": "Connects the source to supporting work.",
+                        "value_dimensions": ["materially_useful_later_development"],
+                        "evidence_ids": ["support-1"],
                     }
                 ],
             }
@@ -91,14 +122,23 @@ class _EvidenceResumeTasks:
         elif contract == CHAPTER_GUIDE_PROMPT_VERSION:
             value = {
                 "chapter_id": payload["plan"]["chapter_id"],
-                "guide": payload["plan"]["guide"],
-                "learning_units": [],
+                "learning_units": [
+                    {
+                        **payload["plan"]["learning_units"][0],
+                        "content": "Read the selected supporting result.",
+                    }
+                ],
             }
         elif contract == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION:
             value = {
-                "guide_replacement": None,
-                "learning_unit_patches": [],
-                "summary": "No changes.",
+                "decisions": [
+                    {
+                        "unit_id": "reading",
+                        "decision": "keep",
+                        "replacement": None,
+                        "reason": "The unit is directly grounded.",
+                    }
+                ],
             }
         else:  # pragma: no cover - contract drift guard
             raise AssertionError(contract)
@@ -143,20 +183,27 @@ def test_companion_evidence_resume_reaches_keyword_glossary_and_book(
 
     assert first.status is RunStatus.PAUSED
     assert first.awaiting is not None
-    assert first.awaiting.response_contract == "arc.companion.evidence_response.v1"
+    assert first.awaiting.response_contract == "arc.companion.evidence_response.v2"
 
     resumed = service.resume(
         first.run_id,
         input={
-            "schema_version": "arc.companion.evidence_response.v1",
+            "schema_version": "arc.companion.evidence_response.v2",
             "resume_key": first.awaiting.resume_key,
             "responses": [
                 {
                     "request_id": "supporting-paper",
-                    "evidence_id": "support-1",
-                    "title": "Supporting result",
-                    "content": "A bounded offline evidence excerpt.",
-                    "source": "fixture",
+                    "candidates": [
+                        {
+                            "evidence_id": f"support-{index}",
+                            "title": f"Supporting result {index}",
+                            "content": "A bounded offline evidence excerpt.",
+                            "source": f"fixture:{index}",
+                        }
+                        for index in range(1, 21)
+                    ],
+                    "selected_evidence_ids": ["support-1"],
+                    "selection_rationale": "Only the first source is directly relevant.",
                 }
             ],
         },
@@ -167,5 +214,6 @@ def test_companion_evidence_resume_reaches_keyword_glossary_and_book(
     assert resumed.status is RunStatus.SUCCEEDED
     assert tasks.keyword_resume_inputs == [None]
     book = service.accepted_book(resumed.run_id)
-    assert book.bibliography[0].evidence_id == "support-1"
+    assert [item.evidence_id for item in book.bibliography] == ["support-1"]
+    assert book.bibliography[0].title == "Supporting result 1"
     assert book.translation_mode == "enabled"

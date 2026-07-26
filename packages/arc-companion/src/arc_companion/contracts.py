@@ -17,7 +17,8 @@ from types import MappingProxyType
 from typing import Any
 
 
-ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v2"
+ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v3"
+_LEGACY_ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v2"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _BLOCK_KINDS = {
     "heading",
@@ -116,16 +117,31 @@ class PlannedLearningUnit:
     kind: str
     title: str
     anchor_ids: tuple[str, ...]
-    purpose: str
+    placement: str
+    reader_question: str
+    added_value: str
+    value_dimensions: tuple[str, ...]
+    evidence_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.unit_id or self.kind not in _LEARNING_KINDS:
             raise ValueError("planned learning unit identity is invalid")
-        if not self.title or not self.purpose or not self.anchor_ids:
+        if (
+            not self.title
+            or self.placement not in {"inline", "chapter"}
+            or not self.reader_question
+            or not self.added_value
+            or not self.value_dimensions
+            or not self.anchor_ids
+        ):
             raise ValueError("planned learning unit content is incomplete")
         if any(not item for item in self.anchor_ids):
             raise ValueError("planned learning unit contains an empty anchor")
         object.__setattr__(self, "anchor_ids", tuple(self.anchor_ids))
+        object.__setattr__(
+            self, "value_dimensions", tuple(self.value_dimensions)
+        )
+        object.__setattr__(self, "evidence_ids", tuple(self.evidence_ids))
 
 
 @dataclass(frozen=True)
@@ -155,10 +171,7 @@ class ChapterPlan:
     chapter_id: str
     title: str
     block_ids: tuple[str, ...]
-    guide: str
     learning_units: tuple[PlannedLearningUnit, ...] = ()
-    glossary_candidates: tuple[str, ...] = ()
-    evidence_requests: tuple[EvidenceRequest, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.chapter_id or not self.title or not self.block_ids:
@@ -167,10 +180,6 @@ class ChapterPlan:
             raise ValueError("chapter plan contains duplicate block IDs")
         object.__setattr__(self, "block_ids", tuple(self.block_ids))
         object.__setattr__(self, "learning_units", tuple(self.learning_units))
-        object.__setattr__(
-            self, "glossary_candidates", tuple(self.glossary_candidates)
-        )
-        object.__setattr__(self, "evidence_requests", tuple(self.evidence_requests))
 
 
 @dataclass(frozen=True)
@@ -209,17 +218,32 @@ class LearningUnit:
     kind: str
     title: str
     anchor_ids: tuple[str, ...]
+    placement: str
+    reader_question: str
+    added_value: str
+    value_dimensions: tuple[str, ...]
     content: str
     citations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.unit_id or self.kind not in _LEARNING_KINDS:
             raise ValueError("learning unit identity is invalid")
-        if not self.title or not self.content or not self.anchor_ids:
+        if (
+            not self.title
+            or self.placement not in {"inline", "chapter"}
+            or not self.reader_question
+            or not self.added_value
+            or not self.value_dimensions
+            or not self.content
+            or not self.anchor_ids
+        ):
             raise ValueError("learning unit content is incomplete")
         if any(not item for item in self.anchor_ids):
             raise ValueError("learning unit contains an empty anchor")
         object.__setattr__(self, "anchor_ids", tuple(self.anchor_ids))
+        object.__setattr__(
+            self, "value_dimensions", tuple(self.value_dimensions)
+        )
         object.__setattr__(self, "citations", tuple(self.citations))
 
 
@@ -227,8 +251,8 @@ class LearningUnit:
 class AcceptedChapter:
     chapter_id: str
     title: str
-    guide: str
     source_anchors: tuple[SourceAnchor, ...]
+    guide: str | None = None
     translations: tuple[TranslatedBlock, ...] = ()
     learning_units: tuple[LearningUnit, ...] = ()
 
@@ -236,8 +260,13 @@ class AcceptedChapter:
         if (
             not self.chapter_id
             or not self.title
-            or not isinstance(self.guide, str)
-            or not self.guide.strip()
+            or not (
+                self.guide is None
+                or (
+                    isinstance(self.guide, str)
+                    and self.guide.strip()
+                )
+            )
             or not self.source_anchors
         ):
             raise ValueError("accepted chapter identity and source are required")
@@ -394,27 +423,19 @@ def _plan_to_document(plan: ChapterPlan) -> dict[str, Any]:
         "chapter_id": plan.chapter_id,
         "title": plan.title,
         "block_ids": list(plan.block_ids),
-        "guide": plan.guide,
         "learning_units": [
             {
                 "unit_id": item.unit_id,
                 "kind": item.kind,
                 "title": item.title,
                 "anchor_ids": list(item.anchor_ids),
-                "purpose": item.purpose,
+                "placement": item.placement,
+                "reader_question": item.reader_question,
+                "added_value": item.added_value,
+                "value_dimensions": list(item.value_dimensions),
+                "evidence_ids": list(item.evidence_ids),
             }
             for item in plan.learning_units
-        ],
-        "glossary_candidates": list(plan.glossary_candidates),
-        "evidence_requests": [
-            {
-                "request_id": item.request_id,
-                "kind": item.kind,
-                "query": item.query,
-                "purpose": item.purpose,
-                "anchor_ids": list(item.anchor_ids),
-            }
-            for item in plan.evidence_requests
         ],
     }
 
@@ -426,10 +447,7 @@ def _plan_from_document(value: Mapping[str, Any]) -> ChapterPlan:
             "chapter_id",
             "title",
             "block_ids",
-            "guide",
             "learning_units",
-            "glossary_candidates",
-            "evidence_requests",
         },
         "chapter plan",
     )
@@ -438,7 +456,17 @@ def _plan_from_document(value: Mapping[str, Any]) -> ChapterPlan:
         item = _mapping(raw, "planned learning unit")
         _fields(
             item,
-            {"unit_id", "kind", "title", "anchor_ids", "purpose"},
+            {
+                "unit_id",
+                "kind",
+                "title",
+                "anchor_ids",
+                "placement",
+                "reader_question",
+                "added_value",
+                "value_dimensions",
+                "evidence_ids",
+            },
             "planned learning unit",
         )
         learning_units.append(
@@ -449,36 +477,32 @@ def _plan_from_document(value: Mapping[str, Any]) -> ChapterPlan:
                 anchor_ids=_strings(
                     item["anchor_ids"], "planned learning unit anchors"
                 ),
-                purpose=_string(item["purpose"], "planned learning unit purpose"),
-            )
-        )
-    evidence_requests = []
-    for raw in _sequence(value["evidence_requests"], "evidence requests"):
-        item = _mapping(raw, "evidence request")
-        _fields(
-            item,
-            {"request_id", "kind", "query", "purpose", "anchor_ids"},
-            "evidence request",
-        )
-        evidence_requests.append(
-            EvidenceRequest(
-                request_id=_string(item["request_id"], "evidence request request_id"),
-                kind=_string(item["kind"], "evidence request kind"),
-                query=_string(item["query"], "evidence request query"),
-                purpose=_string(item["purpose"], "evidence request purpose"),
-                anchor_ids=_strings(item["anchor_ids"], "evidence request anchors"),
+                placement=_string(
+                    item["placement"], "planned learning unit placement"
+                ),
+                reader_question=_string(
+                    item["reader_question"],
+                    "planned learning unit reader question",
+                ),
+                added_value=_string(
+                    item["added_value"],
+                    "planned learning unit added value",
+                ),
+                value_dimensions=_strings(
+                    item["value_dimensions"],
+                    "planned learning unit value dimensions",
+                ),
+                evidence_ids=_strings(
+                    item["evidence_ids"],
+                    "planned learning unit evidence IDs",
+                ),
             )
         )
     return ChapterPlan(
         chapter_id=_string(value["chapter_id"], "chapter plan chapter_id"),
         title=_string(value["title"], "chapter plan title"),
         block_ids=_strings(value["block_ids"], "chapter plan block_ids"),
-        guide=_string(value["guide"], "chapter plan guide"),
         learning_units=tuple(learning_units),
-        glossary_candidates=_strings(
-            value["glossary_candidates"], "chapter plan glossary_candidates"
-        ),
-        evidence_requests=tuple(evidence_requests),
     )
 
 
@@ -514,6 +538,10 @@ def _learning_to_document(unit: LearningUnit) -> dict[str, Any]:
         "kind": unit.kind,
         "title": unit.title,
         "anchor_ids": list(unit.anchor_ids),
+        "placement": unit.placement,
+        "reader_question": unit.reader_question,
+        "added_value": unit.added_value,
+        "value_dimensions": list(unit.value_dimensions),
         "content": unit.content,
         "citations": list(unit.citations),
     }
@@ -546,6 +574,15 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
         },
         "accepted book",
     )
+    schema_version = _string(
+        value["schema_version"], "accepted book schema_version"
+    )
+    if schema_version not in {
+        ACCEPTED_BOOK_SCHEMA,
+        _LEGACY_ACCEPTED_BOOK_SCHEMA,
+    }:
+        raise ValueError("unsupported accepted book schema")
+    legacy = schema_version == _LEGACY_ACCEPTED_BOOK_SCHEMA
     chapters = []
     for raw in _sequence(value["chapters"], "accepted book chapters"):
         item = _mapping(raw, "accepted chapter")
@@ -605,25 +642,69 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
         learning_units = []
         for unit_raw in _sequence(item["learning_units"], "learning units"):
             unit = _mapping(unit_raw, "learning unit")
-            _fields(
-                unit,
-                {
-                    "unit_id",
-                    "kind",
-                    "title",
-                    "anchor_ids",
-                    "content",
-                    "citations",
-                },
-                "learning unit",
+            expected_unit_fields = {
+                "unit_id",
+                "kind",
+                "title",
+                "anchor_ids",
+                "content",
+                "citations",
+            }
+            if not legacy:
+                expected_unit_fields.update(
+                    {
+                        "placement",
+                        "reader_question",
+                        "added_value",
+                        "value_dimensions",
+                    }
+                )
+            _fields(unit, expected_unit_fields, "learning unit")
+            title = _string(
+                unit["title"], "learning unit title"
+            )
+            content = _string(
+                unit["content"], "learning unit content"
             )
             learning_units.append(
                 LearningUnit(
                     unit_id=_string(unit["unit_id"], "learning unit unit_id"),
                     kind=_string(unit["kind"], "learning unit kind"),
-                    title=_string(unit["title"], "learning unit title"),
+                    title=title,
                     anchor_ids=_strings(unit["anchor_ids"], "learning unit anchors"),
-                    content=_string(unit["content"], "learning unit content"),
+                    placement=(
+                        "inline"
+                        if legacy
+                        else _string(
+                            unit["placement"],
+                            "learning unit placement",
+                        )
+                    ),
+                    reader_question=(
+                        title
+                        if legacy
+                        else _string(
+                            unit["reader_question"],
+                            "learning unit reader question",
+                        )
+                    ),
+                    added_value=(
+                        content
+                        if legacy
+                        else _string(
+                            unit["added_value"],
+                            "learning unit added value",
+                        )
+                    ),
+                    value_dimensions=(
+                        ("genuinely_different_presentation",)
+                        if legacy
+                        else _strings(
+                            unit["value_dimensions"],
+                            "learning unit value dimensions",
+                        )
+                    ),
+                    content=content,
                     citations=_strings(unit["citations"], "learning unit citations"),
                 )
             )
@@ -631,7 +712,15 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
             AcceptedChapter(
                 chapter_id=_string(item["chapter_id"], "accepted chapter chapter_id"),
                 title=_string(item["title"], "accepted chapter title"),
-                guide=_string(item["guide"], "accepted chapter guide"),
+                guide=(
+                    _string(
+                        item["guide"], "accepted chapter guide"
+                    )
+                    if legacy
+                    else _optional_string(
+                        item["guide"], "accepted chapter guide"
+                    )
+                ),
                 source_anchors=tuple(anchors),
                 translations=tuple(translations),
                 learning_units=tuple(learning_units),
@@ -680,7 +769,7 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
             )
         )
     return AcceptedBook(
-        schema_version=_string(value["schema_version"], "accepted book schema_version"),
+        schema_version=ACCEPTED_BOOK_SCHEMA,
         document_digest=_string(
             value["document_digest"], "accepted book document_digest"
         ),
@@ -779,6 +868,12 @@ def _string(value: Any, description: str) -> str:
     if not isinstance(value, str):
         raise ContentCodecError(f"{description} must be a string")
     return value
+
+
+def _optional_string(value: Any, description: str) -> str | None:
+    if value is None:
+        return None
+    return _string(value, description)
 
 
 def _integer(value: Any, description: str) -> int:

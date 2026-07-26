@@ -26,6 +26,7 @@ from arc_companion.prompts import (
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
+    LITERATURE_REQUEST_PROMPT_VERSION,
 )
 from arc_companion.request_contracts import (
     CompanionBuildRequest,
@@ -46,9 +47,11 @@ class FakeGuideTasks:
         *,
         guide_started: Event | None = None,
         translation_started: Event | None = None,
+        remove_second_unit: bool = False,
     ) -> None:
         self.guide_started = guide_started
         self.translation_started = translation_started
+        self.remove_second_unit = remove_second_unit
         self.counts: Counter[str] = Counter()
         self.guide_glossaries: dict[str, list[dict]] = {}
         self._completed = {}
@@ -62,15 +65,57 @@ class FakeGuideTasks:
         contract, payload = _request_payload(request.prompt)
         with self._lock:
             self.counts[contract] += 1
-        if contract == CHAPTER_PLAN_PROMPT_VERSION:
+        if contract == LITERATURE_REQUEST_PROMPT_VERSION:
+            value = {
+                "requests": [
+                    {
+                        "request_id": "research-log",
+                        "kind": "paper",
+                        "query": "Inspect directly relevant literature.",
+                        "purpose": "Test the frozen research-log boundary.",
+                        "anchor_block_ids": [
+                            payload["blocks"][0]["block_id"]
+                        ],
+                    }
+                ]
+            }
+        elif contract == CHAPTER_PLAN_PROMPT_VERSION:
+            block_id = payload["blocks"][0]["block_id"]
+            units = [
+                {
+                    "unit_id": "intuition",
+                    "kind": "intuition",
+                    "title": f"Question for {payload['title']}",
+                    "anchor_block_ids": [block_id],
+                    "placement": "inline",
+                    "reader_question": "What does this source claim mean?",
+                    "added_value": "Makes one implicit connection explicit.",
+                    "value_dimensions": ["substantive_connection"],
+                    "evidence_ids": [],
+                }
+            ]
+            if self.remove_second_unit:
+                units.append(
+                    {
+                        "unit_id": "redundant",
+                        "kind": "intuition",
+                        "title": "Restatement",
+                        "anchor_block_ids": [block_id],
+                        "placement": "chapter",
+                        "reader_question": "Can the source be repeated?",
+                        "added_value": "Claims to repeat the source.",
+                        "value_dimensions": [
+                            "genuinely_different_presentation"
+                        ],
+                        "evidence_ids": [],
+                    }
+                )
             value = {
                 "chapter_id": payload["chapter_id"],
-                "guide": f"Guide for {payload['title']}",
-                "learning_units": [],
-                "evidence_requests": [],
+                "learning_units": units,
             }
         elif contract == CHAPTER_GUIDE_PROMPT_VERSION:
-            self.guide_glossaries[str(payload["plan"]["guide"])] = list(
+            self.guide_glossaries[str(payload["plan"]["chapter_id"])] = list(
                 payload["glossary"]
             )
             if self.guide_started is not None:
@@ -79,15 +124,38 @@ class FakeGuideTasks:
                 assert self.translation_started.wait(timeout=5)
             value = {
                 "chapter_id": payload["plan"]["chapter_id"],
-                "guide": payload["plan"]["guide"],
-                "learning_units": [],
+                "learning_units": [
+                    {
+                        **item,
+                        "content": (
+                            "A focused source-anchored explanation."
+                            if item["unit_id"] == "intuition"
+                            else "The source says the same thing again."
+                        ),
+                    }
+                    for item in payload["plan"]["learning_units"]
+                ],
             }
         elif contract == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION:
             assert "translations" not in payload["draft"]
             value = {
-                "guide_replacement": None,
-                "learning_unit_patches": [],
-                "summary": "The guide is source faithful.",
+                "decisions": [
+                    {
+                        "unit_id": item["unit_id"],
+                        "decision": (
+                            "remove"
+                            if item["unit_id"] == "redundant"
+                            else "keep"
+                        ),
+                        "replacement": None,
+                        "reason": (
+                            "It merely restates the source."
+                            if item["unit_id"] == "redundant"
+                            else "It adds a focused explanation."
+                        ),
+                    }
+                    for item in payload["draft"]["learning_units"]
+                ],
             }
         else:
             raise AssertionError(f"unexpected guide contract: {contract}")
@@ -211,6 +279,32 @@ def _request_payload(prompt: str) -> tuple[str, dict]:
     return first.removeprefix("Contract: "), json.loads(payload)
 
 
+def _evidence_input(snapshot) -> dict:
+    assert snapshot.awaiting is not None
+    return {
+        "schema_version": "arc.companion.evidence_response.v2",
+        "resume_key": snapshot.awaiting.resume_key,
+        "responses": [
+            {
+                "request_id": "research-log",
+                "candidates": [
+                    {
+                        "evidence_id": f"candidate-{index}",
+                        "title": f"Candidate {index}",
+                        "content": "Inspected but not selected.",
+                        "source": f"fixture:{index}",
+                    }
+                    for index in range(1, 21)
+                ],
+                "selected_evidence_ids": [],
+                "selection_rationale": (
+                    "None adds value beyond this self-contained fixture."
+                ),
+            }
+        ],
+    }
+
+
 def test_translation_and_guide_share_post_glossary_group(
     tmp_path: Path,
 ) -> None:
@@ -234,22 +328,34 @@ def test_translation_and_guide_share_post_glossary_group(
     assert service.repository.read_spec(
         prepared.run_id
     ).handler == COMPANION_BUILD_HANDLER
-    completed = service.execute(
+    paused = service.execute(
         prepared.run_id,
+        execution=CompanionExecutionOptions(workers=2),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=translation,
+    )
+    assert paused.status is RunStatus.PAUSED
+    completed = service.resume(
+        paused.run_id,
+        input=_evidence_input(paused),
         execution=CompanionExecutionOptions(workers=2),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,
     )
 
     assert completed.status is RunStatus.SUCCEEDED
-    assert translation.calls[0:2] == ["language", "glossary"]
+    assert translation.calls[0:3] == [
+        "language",
+        "language",
+        "glossary",
+    ]
     assert translation.approx_counts == [73]
     assert tasks.counts[CHAPTER_PLAN_PROMPT_VERSION] == 2
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
     assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 2
     assert [
         item["term"]
-        for item in tasks.guide_glossaries["Guide for Chapter"]
+        for item in next(iter(tasks.guide_glossaries.values()))
     ] == ["quantum field"]
 
     book = service.accepted_book(completed.run_id)
@@ -285,19 +391,56 @@ def test_same_language_skips_all_translation_owned_steps(
         ),
     )
 
-    completed = service.build(
+    paused = service.build(
         CompanionBuildRequest(document, target_language="en-US"),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=translation,
+    )
+    assert paused.status is RunStatus.PAUSED
+    completed = service.resume(
+        paused.run_id,
+        input=_evidence_input(paused),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,
     )
 
     assert completed.status is RunStatus.SUCCEEDED
-    assert translation.calls == ["language"]
+    assert translation.calls == ["language", "language"]
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
     book = service.accepted_book(completed.run_id)
     assert book.translation_mode == "skipped"
     assert book.glossary == ()
     assert book.chapters[0].translations == ()
+
+
+def test_review_remove_publishes_ordered_subset_without_retry(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path)
+    tasks = FakeGuideTasks(remove_second_unit=True)
+    translation = FakeTranslationAdapter(mode="skipped")
+    service = CompanionService(tmp_path / "jobs")
+
+    paused = service.build(
+        CompanionBuildRequest(document, target_language="en"),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=translation,
+    )
+    assert paused.status is RunStatus.PAUSED
+    completed = service.resume(
+        paused.run_id,
+        input=_evidence_input(paused),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=translation,
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
+    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 2
+    assert [
+        [unit.unit_id for unit in chapter.learning_units]
+        for chapter in service.accepted_book(completed.run_id).chapters
+    ] == [["intuition"], ["intuition"]]
 
 
 @pytest.mark.parametrize("value", [0, 201, True])
