@@ -7,6 +7,7 @@ import hashlib
 import json
 import sys
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,11 @@ from .service import (
 from .translation_adapter import (
     CompanionTranslationRuntimeError,
     require_translation_runtime,
+)
+from .translation_reuse import (
+    TranslationReuseError,
+    TranslationReuseReceipt,
+    TranslationReuseSource,
 )
 
 
@@ -109,6 +115,13 @@ def _parser() -> _Parser:
         "--approx-term-count", type=int, default=50, help="target glossary size (default: 50)"
     )
     build.add_argument("--refresh", action="store_true", help="refresh cached source data")
+    build.add_argument(
+        "--reuse-translation-from",
+        help=(
+            "reuse exact language, glossary, and translation results from the "
+            "selected successful run in another Companion project"
+        ),
+    )
     _host_authority_argument(build)
     _paper_cache_argument(build)
 
@@ -223,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         CompanionRenderError,
         CompanionServiceError,
         CompanionTranslationRuntimeError,
+        TranslationReuseError,
         RichDocumentValidationError,
     ) as exc:
         code = str(exc.code)
@@ -310,10 +324,28 @@ def _build(args: argparse.Namespace) -> CommandResult:
         approx_term_count=args.approx_term_count,
     )
     execution = _execution_options(args)
-    run_id = companion_run_id(request, recipe)
     service = CompanionService(paths.jobs_root)
+    reuse_source = (
+        TranslationReuseSource(args.reuse_translation_from)
+        if args.reuse_translation_from is not None
+        else None
+    )
+    reuse_plan = None
+    if reuse_source is not None:
+        reuse_plan = service.plan_translation_reuse(
+            reuse_source, request, recipe
+        )
+        request = replace(
+            request, translation_reuse_digest=reuse_plan.reuse_digest
+        )
+    run_id = companion_run_id(request, recipe)
     prepared = service.prepare(request, recipe=recipe, run_id=run_id)
     run_id = prepared.run_id
+    if reuse_source is not None:
+        assert reuse_plan is not None
+        service.stage_translation_reuse(
+            run_id, reuse_source, plan=reuse_plan
+        )
     paths.select_run(run_id)
     paths.write_source_diagnostics(run_id, warnings)
     snapshot = service.execute(
@@ -371,6 +403,11 @@ def _status(args: argparse.Namespace) -> CommandResult:
             paths.jobs_root
         ).build_diagnostics(run_id),
     }
+    receipt = CompanionService(paths.jobs_root).translation_reuse_receipt(
+        run_id
+    )
+    if receipt is not None:
+        data["translation_reuse"] = dict(receipt.document)
     artifacts = ()
     if (
         current is not None
@@ -390,6 +427,11 @@ def _status(args: argparse.Namespace) -> CommandResult:
                 str(current["release_id"]),
                 str(paths.root / str(current["manifest"])),
             ),
+        )
+    if receipt is not None:
+        artifacts = (
+            *artifacts,
+            _translation_reuse_command_artifact(paths, run_id, receipt),
         )
     return CommandResult(
         base.status,
@@ -515,6 +557,7 @@ def _snapshot_result(
     release = _publisher(
         paths, paper_cache_root=paper_cache_root
     ).publish(book, run_id=snapshot.run_id)
+    receipt = service.translation_reuse_receipt(snapshot.run_id)
     return CommandResult(
         CommandStatus.COMPLETED,
         run=base.run,
@@ -523,6 +566,11 @@ def _snapshot_result(
             "release_id": release.release_id,
             "reused": release.reused,
             "delivery": _delivery_paths(paths),
+            **(
+                {"translation_reuse": dict(receipt.document)}
+                if receipt is not None
+                else {}
+            ),
         },
         artifacts=(
             CommandArtifact("pdf", release.release_id, str(paths.delivery_pdf)),
@@ -530,8 +578,34 @@ def _snapshot_result(
             CommandArtifact(
                 "manifest", release.release_id, str(release.manifest)
             ),
+            *(
+                (
+                    _translation_reuse_command_artifact(
+                        paths, snapshot.run_id, receipt
+                    ),
+                )
+                if receipt is not None
+                else ()
+            ),
         ),
         warnings=command_warnings,
+    )
+
+
+def _translation_reuse_command_artifact(
+    paths: CompanionProjectPaths,
+    run_id: str,
+    receipt: TranslationReuseReceipt,
+) -> CommandArtifact:
+    return CommandArtifact(
+        "translation_reuse_receipt",
+        receipt.artifact_ref.artifact_id,
+        str(
+            paths.jobs_root
+            / "runs"
+            / run_id
+            / receipt.artifact_ref.relative_path
+        ),
     )
 
 

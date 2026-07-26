@@ -88,6 +88,15 @@ def __getattr__(name: str) -> Any:
         from .translation_adapter import CompanionTranslationRuntimeError
 
         return CompanionTranslationRuntimeError
+    if name in {
+        "TranslationReuseError",
+        "TranslationReusePlan",
+        "TranslationReuseReceipt",
+        "TranslationReuseSource",
+    }:
+        from . import translation_reuse
+
+        return getattr(translation_reuse, name)
     raise AttributeError(name)
 
 __all__ = [
@@ -122,6 +131,10 @@ __all__ = [
     "RenderedCompanion",
     "SourceAnchor",
     "TranslatedBlock",
+    "TranslationReuseError",
+    "TranslationReusePlan",
+    "TranslationReuseReceipt",
+    "TranslationReuseSource",
     "ValidationIssue",
     "companion_run_id",
     "release_id_for",

@@ -38,6 +38,15 @@ from .translation_adapter import (
     CompanionTranslationAdapter,
     require_translation_runtime,
 )
+from .translation_reuse import (
+    StagedTranslationReuseAdapter,
+    TranslationReusePlan,
+    TranslationReuseReceipt,
+    TranslationReuseSource,
+    plan_translation_reuse,
+    read_translation_reuse_receipt,
+    stage_translation_reuse_plan,
+)
 
 
 class CompanionServiceError(RuntimeError):
@@ -148,6 +157,11 @@ class CompanionService:
             request, recipe = decode_handler_semantic_input(
                 spec.semantic_input
             )
+            if request.translation_reuse_digest is not None:
+                translation_adapter = StagedTranslationReuseAdapter(
+                    request.translation_reuse_digest,
+                    approx_term_count=recipe.approx_term_count,
+                )
             return CompanionBuildHandler(
                 request,
                 recipe,
@@ -158,6 +172,50 @@ class CompanionService:
         raise CompanionServiceError(
             "run_handler_invalid", "run is not a Companion build"
         )
+
+    def plan_translation_reuse(
+        self,
+        source: TranslationReuseSource,
+        request: CompanionBuildRequest,
+        recipe: CompanionGenerationRecipe | None = None,
+    ) -> TranslationReusePlan:
+        """Resolve and verify exact reusable translation content."""
+
+        return plan_translation_reuse(
+            source, request, _recipe_for_request(request, recipe)
+        )
+
+    def stage_translation_reuse(
+        self,
+        run_id: str,
+        source: TranslationReuseSource,
+        *,
+        plan: TranslationReusePlan | None = None,
+    ) -> TranslationReuseReceipt | None:
+        """Copy a verified source bundle into target-owned durable working state."""
+
+        spec = self.repository.read_spec(run_id)
+        request, recipe = decode_handler_semantic_input(spec.semantic_input)
+        if request.translation_reuse_digest is None:
+            raise CompanionServiceError(
+                "translation_reuse_not_requested",
+                "target run semantic input does not request translation reuse",
+            )
+        resolved = plan or plan_translation_reuse(source, request, recipe)
+        if resolved.reuse_digest != request.translation_reuse_digest:
+            raise CompanionServiceError(
+                "translation_reuse_digest_mismatch",
+                "resolved translation reuse differs from the target run",
+            )
+        stage_translation_reuse_plan(self.repository, run_id, resolved)
+        return self.translation_reuse_receipt(run_id)
+
+    def translation_reuse_receipt(
+        self, run_id: str
+    ) -> TranslationReuseReceipt | None:
+        """Return the verified consumed-reuse receipt, when present."""
+
+        return read_translation_reuse_receipt(self.repository, run_id)
 
     def inspect(self, run_id: str) -> RunView:
         return self.repository.inspect(run_id)

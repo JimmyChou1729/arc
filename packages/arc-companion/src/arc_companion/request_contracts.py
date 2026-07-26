@@ -22,7 +22,8 @@ from .prompts import (
 )
 
 
-COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v2"
+COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v3"
+_LEGACY_COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v2"
 COMPANION_GENERATION_RECIPE_SCHEMA = (
     "arc.companion.generation_recipe.v4"
 )
@@ -43,6 +44,7 @@ class CompanionBuildRequest:
     target_language: str = "zh-CN"
     user_intent: str = ""
     content_contract: str = COMPANION_CONTENT_CONTRACT
+    translation_reuse_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, RichDocument):
@@ -63,6 +65,13 @@ class CompanionBuildRequest:
             raise ValueError("user_intent must be a string")
         if self.content_contract != COMPANION_CONTENT_CONTRACT:
             raise ValueError("unsupported Companion content contract")
+        if self.translation_reuse_digest is not None and (
+            not isinstance(self.translation_reuse_digest, str)
+            or _SHA256.fullmatch(self.translation_reuse_digest) is None
+        ):
+            raise ValueError(
+                "translation_reuse_digest must be a SHA-256 digest or null"
+            )
         object.__setattr__(self, "validator_digests", validators)
         object.__setattr__(
             self, "target_language", self.target_language.strip()
@@ -141,14 +150,21 @@ class CompanionExecutionOptions:
 def encode_build_request(
     request: CompanionBuildRequest,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": COMPANION_BUILD_REQUEST_SCHEMA,
+    document = {
+        "schema_version": (
+            COMPANION_BUILD_REQUEST_SCHEMA
+            if request.translation_reuse_digest is not None
+            else _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA
+        ),
         "source": rich_document_to_document(request.source),
         "validator_digests": list(request.validator_digests),
         "target_language": request.target_language,
         "user_intent": request.effective_intent,
         "content_contract": request.content_contract,
     }
+    if request.translation_reuse_digest is not None:
+        document["translation_reuse_digest"] = request.translation_reuse_digest
+    return document
 
 
 def encode_generation_recipe(
@@ -186,20 +202,20 @@ def encode_handler_semantic_input(
 def decode_build_request(
     document: Mapping[str, Any],
 ) -> CompanionBuildRequest:
-    request = _exact(
-        document,
-        {
-            "schema_version",
-            "source",
-            "validator_digests",
-            "target_language",
-            "user_intent",
-            "content_contract",
-        },
-        "build request",
-    )
-    if request["schema_version"] != COMPANION_BUILD_REQUEST_SCHEMA:
+    schema_version = document.get("schema_version")
+    fields = {
+        "schema_version",
+        "source",
+        "validator_digests",
+        "target_language",
+        "user_intent",
+        "content_contract",
+    }
+    if schema_version == COMPANION_BUILD_REQUEST_SCHEMA:
+        fields.add("translation_reuse_digest")
+    elif schema_version != _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA:
         raise ValueError("unsupported Companion build-request schema")
+    request = _exact(document, fields, "build request")
     source = _mapping(request["source"], "rich source")
     validators = request["validator_digests"]
     if not isinstance(validators, list) or any(
@@ -212,6 +228,11 @@ def decode_build_request(
         target_language=_string(request, "target_language"),
         user_intent=_string(request, "user_intent"),
         content_contract=_string(request, "content_contract"),
+        translation_reuse_digest=(
+            _optional_string(request, "translation_reuse_digest")
+            if schema_version == COMPANION_BUILD_REQUEST_SCHEMA
+            else None
+        ),
     )
 
 
@@ -309,6 +330,13 @@ def _integer(value: Mapping[str, Any], key: str) -> int:
     item = value.get(key)
     if isinstance(item, bool) or not isinstance(item, int):
         raise ValueError(f"{key} must be an integer")
+    return item
+
+
+def _optional_string(value: Mapping[str, Any], key: str) -> str | None:
+    item = value.get(key)
+    if item is not None and not isinstance(item, str):
+        raise ValueError(f"{key} must be a string or null")
     return item
 
 
