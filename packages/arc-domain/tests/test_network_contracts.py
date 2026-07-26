@@ -333,6 +333,72 @@ def test_network_scores_recompute_across_initial_citer_and_reference_stages() ->
         assert item["domain_score"] == pytest.approx(round(expected, 4))
 
 
+def test_secondary_score_ties_use_first_public_date_not_bibliographic_year() -> None:
+    older_publication = {
+        "paper_id": "doi:10.1000/older-publication",
+        "published": "2020-01-01",
+        "year": 2025,
+        "citation_count": 10,
+        "citation_per_year": 1.0,
+        "recency": 0.5,
+        "intent_overlap": 0.0,
+        "intent_boost": 0.0,
+        "in_graph_citer_count": 0,
+        "in_graph_citer_score": 0.0,
+        "reference_edge_count": 0,
+        "reference_edge_score": 0.0,
+    }
+    newer_publication = {
+        **older_publication,
+        "paper_id": "doi:10.1000/newer-publication",
+        "published": "2021-01-01",
+        "year": 2019,
+    }
+    papers = [older_publication, newer_publication]
+
+    after_citers = network._add_in_graph_citer_scores(
+        papers,
+        refs_by_selected={},
+    )
+    after_references = network._add_reference_edge_scores(
+        papers,
+        foundation_id=FOUNDATION,
+        parent_foundations=[],
+        common_references=[],
+        refs_by_selected={},
+    )
+
+    expected = "doi:10.1000/newer-publication"
+    assert after_citers[0]["paper_id"] == expected
+    assert after_references[0]["paper_id"] == expected
+
+    no_public_date = [
+        {
+            **older_publication,
+            "paper_id": "doi:10.1000/input-first",
+            "published": "",
+            "year": 2019,
+        },
+        {
+            **older_publication,
+            "paper_id": "doi:10.1000/input-second",
+            "published": "",
+            "year": 2025,
+        },
+    ]
+    assert network._add_in_graph_citer_scores(
+        no_public_date,
+        refs_by_selected={},
+    )[0]["paper_id"] == "doi:10.1000/input-first"
+    assert network._add_reference_edge_scores(
+        no_public_date,
+        foundation_id=FOUNDATION,
+        parent_foundations=[],
+        common_references=[],
+        refs_by_selected={},
+    )[0]["paper_id"] == "doi:10.1000/input-first"
+
+
 def test_graph_role_precedence_is_defensive_and_globally_unique() -> None:
     selected = _paper(
         PAPER_A,

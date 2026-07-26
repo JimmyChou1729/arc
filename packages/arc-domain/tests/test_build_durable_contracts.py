@@ -103,11 +103,16 @@ def _request_with_modes(
     )
 
 
-def _failure(category: FailureCategory) -> LLMFailed:
+def _failure(
+    category: FailureCategory,
+    *,
+    details: dict | None = None,
+) -> LLMFailed:
     return LLMFailed(
         ProviderFailure(
             "fake provider failure",
             category=category,
+            details=details,
         )
     )
 
@@ -308,7 +313,17 @@ class TransientSummaryOnceService(DomainTaskService):
             self.summary_attempts += 1
             if self.summary_attempts == 1:
                 self.requests.append(request)
-                return _failure(FailureCategory.TIMEOUT)
+                return _failure(
+                    FailureCategory.TIMEOUT,
+                    details={
+                        "provider_failure": {
+                            "category": "timeout",
+                            "diagnostic_artifact_id": (
+                                "diagnostics/provider-failure"
+                            ),
+                        }
+                    },
+                )
         return super().execute_or_resume(context, request, **kwargs)
 
 
@@ -373,6 +388,36 @@ class CompletedReferenceService:
                         "evidence_urls": ["https://example.test/foundation"],
                         "reasoning": "verified foundation",
                     },
+                ),
+                rejected_candidates=(),
+                provenance=None,
+            )
+        )
+
+
+class ManyCompletedReferencesService:
+    def __init__(self, paper_ids: tuple[str, ...]) -> None:
+        self.paper_ids = paper_ids
+
+    def infer(self, context, text: str, **kwargs):
+        del context, text, kwargs
+        return ReferenceInferenceCompleted(
+            ReferenceInferenceResult(
+                request_digest="1" * 64,
+                paper_ids=self.paper_ids,
+                focus_scope="more_than_two_domains",
+                warnings=(),
+                verified_references=tuple(
+                    {
+                        "paper_id": paper_id,
+                        "evidence_urls": [
+                            f"https://example.test/{index}"
+                        ],
+                        "reasoning": "verified foundation",
+                    }
+                    for index, paper_id in enumerate(
+                        self.paper_ids, start=1
+                    )
                 ),
                 rejected_candidates=(),
                 provenance=None,
@@ -509,6 +554,17 @@ def test_transient_summary_failure_pauses_then_retries_without_marker(
     assert paused.awaiting is not None
     assert paused.awaiting.reason is ResumeReason.EXTERNAL_CONDITION
     assert paused.awaiting.input_required is False
+    assert paused.awaiting.details["llm_error"] == {
+        "code": "provider_timeout",
+        "details": {
+            "provider_failure": {
+                "category": "timeout",
+                "diagnostic_artifact_id": (
+                    "diagnostics/provider-failure"
+                ),
+            }
+        },
+    }
     store = ImmutableArtifactStore(
         repository.run_directory(paused.run_id), repository_root=repository.root
     )
@@ -715,6 +771,67 @@ def test_verified_reference_inference_candidate_is_available_to_selection(
     assert selection["selected_foundation"]["paper_id"] == INFERRED_FOUNDATION
 
 
+def test_domain_expansion_keeps_only_two_verified_reference_ids(
+    tmp_path: Path,
+) -> None:
+    extra_a = "arXiv:1801.00001"
+    extra_b = "arXiv:1701.00001"
+
+    class ExpandedPaperAccess(FakePaperAccess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.metadata_by_id[extra_a] = _metadata(
+                extra_a,
+                title="Second verified foundation",
+                year=2018,
+                citations=700,
+            )
+            self.metadata_by_id[extra_b] = _metadata(
+                extra_b,
+                title="Third verified foundation",
+                year=2017,
+                citations=800,
+            )
+
+    repository = RunRepository(tmp_path / "runs")
+    snapshot = DomainBuildRunner(repository).execute(
+        _request(),
+        paper_access=ExpandedPaperAccess(),
+        task_service=DomainTaskService(
+            expand_audit=True,
+            selected_foundation=INFERRED_FOUNDATION,
+        ),
+        reference_service=ManyCompletedReferencesService(
+            (INFERRED_FOUNDATION, extra_a, extra_b)
+        ),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    result, store = _result(repository, snapshot)
+    candidates_ref = store.find("foundation/candidates")
+    assert candidates_ref is not None
+    candidates = json.loads(
+        store.read_bytes(candidates_ref).decode("utf-8")
+    )
+    expansion = candidates["expansion"]
+    assert expansion["added_papers"] == [
+        INFERRED_FOUNDATION,
+        extra_a,
+    ]
+    assert extra_b not in {
+        item["paper_id"] for item in candidates["candidates"]
+    }
+    assert any(
+        item.startswith(
+            "domain_foundation_expansion_verified_ids_truncated:"
+        )
+        for item in expansion["warnings"]
+    )
+    assert "foundation_expansion_truncated" in {
+        warning.code for warning in result.warnings
+    }
+
+
 def test_fixed_seed_repairs_an_llm_attempt_to_move_the_foundation(
     tmp_path: Path,
 ) -> None:
@@ -733,6 +850,84 @@ def test_fixed_seed_repairs_an_llm_attempt_to_move_the_foundation(
     assert selection["selected_foundation"]["paper_id"] == SEED
     assert any(item.startswith("fixed_seed_foundation_enforced:") for item in selection["warnings"])
     assert graph["foundation_paper"] == SEED
+
+
+def test_fixed_seed_normalizes_model_parents_against_authoritative_seed(
+    tmp_path: Path,
+) -> None:
+    parent_id = "arXiv:2301.00002"
+
+    class ParentPaperAccess(FakePaperAccess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.metadata_by_id[parent_id] = _metadata(
+                parent_id,
+                title="Valid parent",
+                year=2023,
+                citations=400,
+            )
+
+        def references(self, paper_id: str) -> list[dict]:
+            if paper_id == SEED:
+                return [
+                    dict(self.metadata_by_id[FOUNDATION]),
+                    dict(self.metadata_by_id[parent_id]),
+                ]
+            return super().references(paper_id)
+
+    class WrongFoundationSelection(DomainTaskService):
+        def execute_or_resume(self, context, request, **kwargs):
+            if _request_stage(request.task_id) == "selection":
+                self.requests.append(request)
+                wrong = {
+                    "paper_id": FOUNDATION,
+                    "title": "Wrong selected foundation",
+                    "reason": "model moved the anchor",
+                }
+                return _completed(
+                    {
+                        "schema_version": (
+                            "arc.domain_foundation_selection.v1"
+                        ),
+                        "selected_foundation": wrong,
+                        "best_reference_paper": wrong,
+                        "parent_foundations": [
+                            {
+                                "paper_id": parent_id,
+                                "title": "Valid parent",
+                                "reason": "earlier than authoritative seed",
+                            }
+                        ],
+                        "rejected_candidates": [],
+                        "reasoning": "fixture",
+                        "warnings": [],
+                    }
+                )
+            return super().execute_or_resume(
+                context, request, **kwargs
+            )
+
+    repository = RunRepository(tmp_path / "runs")
+    snapshot = DomainBuildRunner(repository).execute(
+        _request_with_modes(fixed_seed=True),
+        paper_access=ParentPaperAccess(),
+        task_service=WrongFoundationSelection(),
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    result, store = _result(repository, snapshot)
+    selection = json.loads(
+        store.read_bytes(result.foundation_selection).decode("utf-8")
+    )
+    graph = json.loads(store.read_bytes(result.graph).decode("utf-8"))
+    assert selection["selected_foundation"]["paper_id"] == SEED
+    assert [
+        item["paper_id"] for item in selection["parent_foundations"]
+    ] == [parent_id]
+    assert {
+        item["paper_id"]: item["role"] for item in graph["nodes"]
+    }[parent_id] == "parent_foundation"
 
 
 def test_strict_window_excludes_undated_and_old_citers_before_ranking(

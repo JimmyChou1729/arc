@@ -128,6 +128,7 @@ _FOUNDATION_RECENT_CITER_WITNESS_LIMIT = 50
 _FOUNDATION_WITNESS_LIMIT = 60
 _MIN_DOMAIN_BUILD_WORKERS = 1
 _MAX_DOMAIN_BUILD_WORKERS = 24
+_MAX_FOUNDATION_EXPANSION_REFERENCES = 2
 _RECENCY_STAT_KEYS = {
     "unique_citers",
     "eligible_citers",
@@ -468,7 +469,22 @@ class DomainBuildHandler:
                 options=self.llm,
             )
             if isinstance(reference_outcome, ReferenceInferenceCompleted):
-                result_document = reference_outcome.result.to_document()
+                result_document, omitted_expansion_ids = (
+                    _bounded_foundation_expansion(
+                        reference_outcome.result.to_document()
+                    )
+                )
+                if omitted_expansion_ids:
+                    warnings.append(
+                        DomainBuildWarning(
+                            "foundation_expansion_truncated",
+                            "Retained the first two verified foundation "
+                            "expansion references and omitted "
+                            f"{len(omitted_expansion_ids)} additional "
+                            "verified reference(s).",
+                            "foundation",
+                        )
+                    )
                 expansion_metadata: dict[str, dict[str, Any]] = {}
                 for paper_id in result_document.get("paper_ids", []):
                     try:
@@ -538,9 +554,23 @@ class DomainBuildHandler:
             options=self.llm,
         )
         if isinstance(selection_outcome, LLMCompleted):
+            selection_document = _mapping(
+                selection_outcome.value, "foundation selection"
+            )
+            normalization_candidates = candidates
+            if self.request.policy.foundation_mode == "fixed_seed":
+                (
+                    selection_document,
+                    normalization_candidates,
+                ) = _fixed_seed_normalization_input(
+                    selection_document,
+                    candidates,
+                    seed_paper_id=seed_id,
+                    seed_metadata=seed_metadata,
+                )
             selection = normalize_foundation_selection(
-                _mapping(selection_outcome.value, "foundation selection"),
-                candidates,
+                selection_document,
+                normalization_candidates,
                 intent=self.request.intent,
             )
         elif isinstance(selection_outcome, LLMPaused):
@@ -1148,6 +1178,14 @@ class DomainBuildHandler:
         if isinstance(outcome, LLMFailed):
             if not is_transient_failure(outcome):
                 return Failed(run_error_from_failure(outcome))
+            llm_error: dict[str, JsonValue] = {
+                "code": outcome.error.code.value,
+            }
+            safe_error_details = _safe_json_mapping(
+                outcome.error.details
+            )
+            if safe_error_details:
+                llm_error["details"] = safe_error_details
             return Paused(
                 Awaiting(
                     ResumeReason.EXTERNAL_CONDITION,
@@ -1156,6 +1194,7 @@ class DomainBuildHandler:
                     details={
                         "code": "domain_summary_provider_unavailable",
                         "message": str(outcome.error),
+                        "llm_error": llm_error,
                     },
                 )
             )
@@ -1529,6 +1568,114 @@ def _warning_document(warning: DomainBuildWarning) -> dict[str, JsonValue]:
         "stage": warning.stage,
         "paper_id": warning.paper_id,
     }
+
+
+def _safe_json_mapping(value: Mapping[str, Any]) -> dict[str, JsonValue]:
+    """Normalize already-redacted error details to durable JSON values."""
+
+    try:
+        normalized = json.loads(
+            canonical_json_bytes(dict(value)).decode("utf-8")
+        )
+    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return normalized if isinstance(normalized, dict) else {}
+
+
+def _fixed_seed_normalization_input(
+    selection: Mapping[str, Any],
+    candidates: list[dict[str, Any]],
+    *,
+    seed_paper_id: str,
+    seed_metadata: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Anchor parent validation to authoritative seed metadata."""
+
+    seed_id = normalize_paper_id(seed_paper_id)
+    seed = dict(seed_metadata)
+    seed["paper_id"] = seed_id
+    document = dict(selection)
+    warnings = [
+        str(item)
+        for item in document.get("warnings", [])
+        if str(item)
+    ]
+    selected = document.get("selected_foundation")
+    selected_id = (
+        normalize_paper_id(
+            str(selected.get("paper_id") or "")
+        )
+        if isinstance(selected, Mapping)
+        else ""
+    )
+    if selected_id != seed_id:
+        warnings.append(f"fixed_seed_foundation_enforced:{seed_id}")
+    document["warnings"] = warnings
+    document["selected_foundation"] = {
+        "paper_id": seed_id,
+        "title": str(seed.get("title") or ""),
+        "reason": (
+            "Fixed-seed mode uses the requested seed as the "
+            "authoritative foundation."
+        ),
+    }
+    return document, [*candidates, seed]
+
+
+def _bounded_foundation_expansion(
+    document: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Apply the domain workflow's two-reference expansion budget."""
+
+    result = dict(document)
+    verified = [
+        dict(item)
+        for item in result.get("verified_references", [])
+        if isinstance(item, Mapping)
+    ]
+    verified_ids = {
+        normalize_paper_id(str(item.get("paper_id") or ""))
+        for item in verified
+        if normalize_paper_id(str(item.get("paper_id") or ""))
+    }
+    eligible_ids: list[str] = []
+    for value in result.get("paper_ids", []):
+        paper_id = normalize_paper_id(str(value or ""))
+        if (
+            paper_id
+            and paper_id in verified_ids
+            and paper_id not in eligible_ids
+        ):
+            eligible_ids.append(paper_id)
+    retained = eligible_ids[
+        :_MAX_FOUNDATION_EXPANSION_REFERENCES
+    ]
+    omitted = eligible_ids[
+        _MAX_FOUNDATION_EXPANSION_REFERENCES:
+    ]
+    if not omitted:
+        return result, []
+    retained_set = set(retained)
+    warning = (
+        "domain_foundation_expansion_verified_ids_truncated:"
+        f"{len(eligible_ids)}->{len(retained)}"
+    )
+    result["paper_ids"] = retained
+    result["verified_references"] = [
+        item
+        for item in verified
+        if normalize_paper_id(str(item.get("paper_id") or ""))
+        in retained_set
+    ]
+    result["warnings"] = [
+        *[
+            str(item)
+            for item in result.get("warnings", [])
+            if str(item)
+        ],
+        warning,
+    ]
+    return result, omitted
 
 
 def _extend_stored_warnings(

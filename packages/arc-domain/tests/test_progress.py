@@ -138,42 +138,49 @@ def test_progress_degrades_for_missing_and_corrupt_event_logs(tmp_path) -> None:
     )["diagnostic_code"] == "domain_progress_incomplete_tail"
 
 
-def test_progress_marks_valid_tail_history_as_truncated(
-    tmp_path, monkeypatch
+def test_progress_reads_operation_and_counts_before_large_event_history(
+    tmp_path,
 ) -> None:
     repository = RunRepository(tmp_path / "runs")
     snapshot = _pending(repository)
     path = repository.run_directory(snapshot.run_id) / "events.jsonl"
-    path.touch()
-
-    class TailOnlyEvents:
-        def __init__(self, *_args, **_kwargs) -> None:
-            pass
-
-        def validate(self) -> None:
-            pass
-
-        def tail(self):
-            return (
-                {
-                    "sequence": 9,
-                    "event": "domain_operation_started",
-                    "emitted_at": "2026-07-26T00:00:00+00:00",
-                    "data": {
-                        "stage": "summary",
-                        "operation": "domain_summary_llm",
-                        "total_units": 1,
-                    },
-                },
-            )
-
-    monkeypatch.setattr(progress, "EventWriter", TailOnlyEvents)
+    writer = EventWriter(path, run_id=snapshot.run_id)
+    writer.emit(
+        "domain_operation_started",
+        {
+            "stage": "network",
+            "operation": "network-selected-references",
+            "group_id": "network-selected-references",
+            "total_units": 2,
+        },
+    )
+    writer.emit(
+        "group_unit_finished",
+        {
+            "group_id": "network-selected-references",
+            "unit_id": "paper-a",
+            "status": "succeeded",
+        },
+    )
+    for index in range(60):
+        writer.emit(
+            "llm_provider_activity",
+            {
+                "event_count": index,
+                "padding": "x" * 20_000,
+            },
+        )
 
     projected = progress.project_domain_progress(repository, snapshot)
 
-    assert projected["diagnostic_code"] == "domain_progress_history_truncated"
-    assert projected["event_sequence"] == 9
-    assert projected["stage"] == "summary"
+    assert path.stat().st_size > 1024 * 1024
+    assert projected["diagnostic_code"] is None
+    assert projected["event_sequence"] == 62
+    assert projected["stage"] == "network"
+    assert projected["operation"] == "network-selected-references"
+    assert projected["completed_units"] == 1
+    assert projected["failed_units"] == 0
+    assert projected["total_units"] == 2
 
 
 def test_succeeded_lifecycle_completes_latest_synchronous_operation(

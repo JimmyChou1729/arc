@@ -236,6 +236,95 @@ def test_selection_rejects_later_parent_foundation() -> None:
     assert [choice["paper_id"] for choice in selection["rejected_candidates"]] == [later["paper_id"]]
 
 
+def test_fixed_seed_validates_parents_against_authoritative_seed_metadata() -> None:
+    seed_id = "arXiv:2401.00001"
+    stale_seed = _paper(
+        seed_id, title="Stale seed", year=2020, citations=10
+    )
+    authoritative_seed = _paper(
+        seed_id, title="Seed", year=2024, citations=10
+    )
+    parent = _paper(
+        "arXiv:2301.00001",
+        title="Parent",
+        year=2023,
+        citations=500,
+    )
+
+    result = foundation.enforce_fixed_seed_foundation(
+        {
+            "selected_foundation": {
+                "paper_id": seed_id,
+                "title": "",
+                "reason": "",
+            },
+            "best_reference_paper": {
+                "paper_id": seed_id,
+                "title": "",
+                "reason": "",
+            },
+            "parent_foundations": [
+                {
+                    "paper_id": parent["paper_id"],
+                    "title": "",
+                    "reason": "explicit parent",
+                }
+            ],
+            "rejected_candidates": [],
+            "warnings": [],
+        },
+        [stale_seed, parent],
+        seed_paper_id=seed_id,
+        seed_metadata=authoritative_seed,
+    )
+
+    assert result["selected_foundation"]["title"] == "Seed"
+    assert [
+        item["paper_id"] for item in result["parent_foundations"]
+    ] == [parent["paper_id"]]
+
+
+def test_fixed_seed_does_not_promote_best_reference_to_parent() -> None:
+    seed = _paper(
+        "arXiv:2401.00001",
+        title="Seed",
+        year=2024,
+        citations=10,
+    )
+    reference = _paper(
+        "arXiv:2201.00001",
+        title="Reading reference",
+        year=2022,
+        citations=500,
+    )
+
+    result = foundation.enforce_fixed_seed_foundation(
+        {
+            "selected_foundation": {
+                "paper_id": seed["paper_id"],
+                "title": "",
+                "reason": "",
+            },
+            "best_reference_paper": {
+                "paper_id": reference["paper_id"],
+                "title": "",
+                "reason": "best exposition",
+            },
+            "parent_foundations": [],
+            "rejected_candidates": [],
+            "warnings": [],
+        },
+        [seed, reference],
+        seed_paper_id=str(seed["paper_id"]),
+        seed_metadata=seed,
+    )
+
+    assert result["best_reference_paper"]["paper_id"] == (
+        reference["paper_id"]
+    )
+    assert result["parent_foundations"] == []
+
+
 def test_foundation_core_has_no_io_or_private_cross_package_imports() -> None:
     path = Path(foundation.__file__)
     tree = ast.parse(path.read_text(encoding="utf-8"))

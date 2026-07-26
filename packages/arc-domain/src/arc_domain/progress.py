@@ -47,8 +47,7 @@ def project_domain_progress(
                 handle.seek(size - 1)
                 incomplete_tail = handle.read(1) not in {b"\n", b"\r"}
         writer = EventWriter(path, run_id=snapshot.run_id)
-        writer.validate()
-        events = writer.tail()
+        events = writer.read_all()
     except (ArcJobsError, ValueError):
         progress["diagnostic_code"] = "domain_progress_integrity_error"
         return progress
@@ -64,10 +63,6 @@ def project_domain_progress(
         return progress
     if incomplete_tail:
         progress["diagnostic_code"] = "domain_progress_incomplete_tail"
-    first_sequence = events[0].get("sequence")
-    if type(first_sequence) is int and first_sequence != 1:
-        progress["diagnostic_code"] = "domain_progress_history_truncated"
-
     current: Mapping[str, Any] | None = None
     finished: dict[tuple[str, str], str] = {}
     for document in events:

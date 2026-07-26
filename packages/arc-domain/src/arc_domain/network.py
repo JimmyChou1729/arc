@@ -412,11 +412,7 @@ def _select_domain_papers(
         key=lambda item: (
             item["domain_score"],
             item.get("citation_count") or 0,
-            (
-                _first_public_date_evidence(item).lower.toordinal()
-                if _first_public_date_evidence(item) is not None
-                else 0
-            ),
+            _first_public_sort_ordinal(item),
         ),
         reverse=True,
     )
@@ -484,7 +480,7 @@ def _add_in_graph_citer_scores(
             item["domain_score"],
             item.get("in_graph_citer_count") or 0,
             item.get("citation_count") or 0,
-            item.get("year") or 0,
+            _first_public_sort_ordinal(item),
         ),
         reverse=True,
     )
@@ -549,7 +545,7 @@ def _add_reference_edge_scores(
             item.get("reference_edge_count") or 0,
             item.get("in_graph_citer_count") or 0,
             item.get("citation_count") or 0,
-            item.get("year") or 0,
+            _first_public_sort_ordinal(item),
         ),
         reverse=True,
     )
@@ -895,6 +891,8 @@ def _paper_date_evidence(record: dict[str, Any]) -> _DateEvidence | None:
 
 def _first_public_date_evidence(
     record: dict[str, Any],
+    *,
+    include_bibliographic_year: bool = True,
 ) -> _DateEvidence | None:
     evidence = _select_first_public_evidence(
         _paper_date_evidence(record),
@@ -902,12 +900,20 @@ def _first_public_date_evidence(
         left_priority=0,
         right_priority=1,
     )
-    if evidence is not None:
+    if evidence is not None or not include_bibliographic_year:
         return evidence
     return _parse_date_evidence(
         str(record.get("year") or "").strip(),
         basis="bibliographic_year",
     )
+
+
+def _first_public_sort_ordinal(record: dict[str, Any]) -> int:
+    evidence = _first_public_date_evidence(
+        record,
+        include_bibliographic_year=False,
+    )
+    return evidence.lower.toordinal() if evidence is not None else 0
 
 
 def _merge_citer_metadata(

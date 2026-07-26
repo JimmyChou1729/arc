@@ -650,16 +650,15 @@ def enforce_fixed_seed_foundation(
         for candidate in candidates
         if _paper_id(candidate)
     }
-    seed = candidate_by_id.get(normalized_seed)
     result = dict(selection)
     warnings = _string_list(result.get("warnings"))
-    if seed is None:
+    if normalized_seed not in candidate_by_id:
         # Candidate scanning deliberately prioritizes high-witness papers and
         # can omit the seed.  Fixed-seed mode keeps independently acquired
         # seed metadata as an anchor even in that bounded candidate case.
-        seed = dict(seed_metadata)
-        seed["paper_id"] = normalized_seed
         warnings.append("fixed_seed_recovered_from_seed_metadata")
+    seed = dict(seed_metadata)
+    seed["paper_id"] = normalized_seed
 
     previous_id = _choice_id(result.get("selected_foundation"))
     result["selected_foundation"] = _choice(
@@ -676,16 +675,6 @@ def enforce_fixed_seed_foundation(
         for item in result.get("rejected_candidates", [])
         if isinstance(item, Mapping)
     ]
-    best_reference_id = _choice_id(result.get("best_reference_paper"))
-    best_reference = candidate_by_id.get(best_reference_id)
-    if (
-        best_reference is not None
-        and best_reference_id != normalized_seed
-        and _is_valid_parent_year(_candidate_year(best_reference), seed_year)
-    ):
-        parents.append(
-            _known_choice(result["best_reference_paper"], best_reference)
-        )
     for choice in result.get("parent_foundations", []):
         parent_id = _choice_id(choice)
         parent = candidate_by_id.get(parent_id)
