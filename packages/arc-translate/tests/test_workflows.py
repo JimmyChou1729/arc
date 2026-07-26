@@ -35,6 +35,7 @@ from arc_translate import (
     source_blocks,
 )
 from arc_translate.prompts import (
+    GLOSSARY_SCHEMA,
     GLOSSARY_PROMPT_VERSION,
     LANGUAGE_PROMPT_VERSION,
     REVIEW_PROMPT_VERSION,
@@ -204,6 +205,23 @@ def _prompt(prompt: str) -> tuple[str, dict[str, Any]]:
     contract = prompt.splitlines()[0].removeprefix("Contract: ")
     payload = json.loads(prompt.split("Input JSON:\n", 1)[1])
     return contract, payload
+
+
+def test_glossary_schema_fully_types_copied_keyword_evidence():
+    entry = GLOSSARY_SCHEMA["properties"]["entries"]["items"]
+    properties = entry["properties"]
+
+    assert properties["source_refs"]["items"] == {"type": "string"}
+    matched = properties["matched_sentences"]["items"]
+    assert matched["type"] == "object"
+    assert matched["additionalProperties"] is False
+    assert matched["required"] == [
+        "text",
+        "section_id",
+        "page_number",
+        "matched_surface",
+        "clipped",
+    ]
 
 
 def test_language_same_primary_skips_but_mixed_stays_enabled(tmp_path):

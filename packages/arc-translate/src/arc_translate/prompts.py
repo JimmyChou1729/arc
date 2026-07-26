@@ -25,6 +25,16 @@ def _closed(
 
 
 _NONEMPTY = {"type": "string", "minLength": 1}
+_MATCHED_SENTENCE = _closed(
+    {
+        "text": {"type": "string"},
+        "section_id": _NONEMPTY,
+        "page_number": {"type": ["integer", "null"]},
+        "matched_surface": _NONEMPTY,
+        "clipped": {"type": "boolean"},
+    },
+    ("text", "section_id", "page_number", "matched_surface", "clipped"),
+)
 _SOURCE_IDENTITY = _closed(
     {
         "equations": {"type": "array", "items": {"type": "string"}},
@@ -67,8 +77,14 @@ GLOSSARY_SCHEMA = _closed(
                         "type": "integer",
                         "minimum": 0,
                     },
-                    "source_refs": {"type": "array", "items": {}},
-                    "matched_sentences": {"type": "array", "items": {}},
+                    "source_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "matched_sentences": {
+                        "type": "array",
+                        "items": _MATCHED_SENTENCE,
+                    },
                     "preferred_translation": _NONEMPTY,
                     "target_definition": _NONEMPTY,
                 },
