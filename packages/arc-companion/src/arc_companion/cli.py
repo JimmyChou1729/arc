@@ -36,6 +36,7 @@ from arc_paper import (
 )
 
 from .project import CompanionProjectError, CompanionProjectPaths
+from .reader_labels import ReaderLabelError, resolve_reader_labels
 from .release import (
     CompanionReleaseError,
     CompanionReleasePublisher,
@@ -107,6 +108,16 @@ def _parser() -> _Parser:
         default="zh-CN",
         help="target language (default: zh-CN)",
     )
+    build.add_argument(
+        "--author",
+        action="append",
+        default=[],
+        help="author name supplied by the user; repeat for multiple authors",
+    )
+    build.add_argument(
+        "--reader-labels",
+        help="path to a complete JSON object of reader UI labels",
+    )
     build.add_argument("--user-intent", default="", help="reader intent used to focus the guide")
     build.add_argument("--provider", default="auto", help="LLM provider (default: auto)")
     build.add_argument("--model", help="provider-specific model name")
@@ -119,7 +130,8 @@ def _parser() -> _Parser:
         "--reuse-translation-from",
         help=(
             "reuse exact language, glossary, and translation results from the "
-            "selected successful run in another Companion project"
+            "selected successful run in another Companion project, and supply "
+            "its prior guide as optional model context"
         ),
     )
     _host_authority_argument(build)
@@ -293,6 +305,20 @@ def _build(args: argparse.Namespace) -> CommandResult:
         raise _UsageError(
             "--approx-term-count must be between 1 and 200"
         )
+    authors = tuple(author.strip() for author in args.author)
+    if any(not author for author in authors):
+        raise _UsageError("--author must be non-empty")
+    supplied_reader_labels = (
+        _reader_labels_file(args.reader_labels)
+        if args.reader_labels is not None
+        else None
+    )
+    try:
+        reader_labels = resolve_reader_labels(
+            args.target_language, supplied_reader_labels
+        )
+    except ReaderLabelError as exc:
+        raise _UsageError(str(exc)) from exc
     if (
         args.pdf is not None
         and args.pdf != "fetch"
@@ -314,6 +340,8 @@ def _build(args: argparse.Namespace) -> CommandResult:
         validator_digests=validators,
         target_language=args.target_language,
         user_intent=args.user_intent,
+        authors=authors,
+        reader_labels=reader_labels,
     )
     recipe = CompanionGenerationRecipe(
         model=ModelSelection(
@@ -843,6 +871,36 @@ def _json_input(value: str) -> Mapping[str, Any]:
     if not isinstance(document, Mapping):
         raise _UsageError("--input must contain a JSON object")
     return dict(document)
+
+
+def _reader_labels_file(value: str) -> dict[str, str]:
+    path = Path(value)
+    if not path.is_file():
+        raise _UsageError("--reader-labels must be an existing JSON file")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise _UsageError(
+            f"--reader-labels must contain valid JSON: {exc}"
+        ) from exc
+    if not isinstance(document, Mapping) or not document:
+        raise _UsageError(
+            "--reader-labels must contain a non-empty JSON object"
+        )
+    if any(
+        not isinstance(key, str)
+        or not key.strip()
+        or not isinstance(item, str)
+        or not item.strip()
+        for key, item in document.items()
+    ):
+        raise _UsageError(
+            "--reader-labels must contain only non-empty string keys and values"
+        )
+    return {
+        str(key).strip(): str(item).strip()
+        for key, item in document.items()
+    }
 
 
 def _failed(

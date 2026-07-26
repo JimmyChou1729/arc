@@ -316,36 +316,24 @@ def accepted_book() -> AcceptedBook:
         learning_units=(
             LearningUnit(
                 unit_id="intuition",
-                kind="intuition",
                 title="Conservation intuition",
                 anchor_ids=("b-intro",),
                 placement="inline",
-                reader_question="Why must alternatives normalize?",
-                added_value="Connects normalization to exhaustive alternatives.",
-                value_dimensions=("substantive_connection",),
-                content="Normalization says the alternatives exhaust the state space.",
+                content_markdown="Normalization says the alternatives exhaust the state space.",
             ),
             LearningUnit(
                 unit_id="derivation",
-                kind="derivation",
                 title="Entropy derivation",
                 anchor_ids=("b-equation", "b-table"),
                 placement="chapter",
-                reader_question="How does the table enter the entropy sum?",
-                added_value="Makes the substitution step explicit.",
-                value_dimensions=("omitted_intermediate_reasoning",),
-                content="Insert the table weights into the displayed sum.",
+                content_markdown="Insert the table weights into the displayed sum.",
             ),
             LearningUnit(
                 unit_id="reading",
-                kind="further_reading",
                 title="Further reading",
                 anchor_ids=("b-figure",),
                 placement="inline",
-                reader_question="Where can the construction be studied further?",
-                added_value="Provides a directly relevant reading path.",
-                value_dimensions=("materially_useful_later_development",),
-                content="Compare the state-space picture with the cited construction.",
+                content_markdown="Compare the state-space picture with the cited construction. [@paper:1234.56789]",
                 citations=("paper:1234.56789",),
             ),
         ),
@@ -353,6 +341,7 @@ def accepted_book() -> AcceptedBook:
     return AcceptedBook(
         document_digest="d" * 64,
         title="A compact fixture companion",
+        authors=("Fixture Author",),
         source_language="en",
         target_language="es",
         translation_mode="enabled",
@@ -416,35 +405,32 @@ def test_accepted_book_codec_is_canonical_strict_and_immutable(
         CompanionContentCodec.from_document(document)
 
 
-def test_accepted_book_v2_decodes_to_v3_value_contract(
+def test_accepted_book_v2_decodes_to_v4_markdown_contract(
     accepted_book: AcceptedBook,
 ) -> None:
     document = CompanionContentCodec.to_document(accepted_book)
     document["schema_version"] = "arc.companion.accepted_book.v2"
+    del document["authors"]
+    del document["reader_labels"]
     for chapter in document["chapters"]:
         for unit in chapter["learning_units"]:
             del unit["placement"]
-            del unit["reader_question"]
-            del unit["added_value"]
-            del unit["value_dimensions"]
+            unit["kind"] = "intuition"
+            unit["content"] = unit.pop("content_markdown")
 
     migrated = CompanionContentCodec.from_document(document)
 
-    assert migrated.schema_version == "arc.companion.accepted_book.v3"
+    assert migrated.schema_version == "arc.companion.accepted_book.v4"
     unit = migrated.chapters[0].learning_units[0]
     assert unit.placement == "inline"
-    assert unit.reader_question == unit.title
-    assert unit.added_value == unit.content
-    assert unit.value_dimensions == (
-        "genuinely_different_presentation",
-    )
+    assert unit.content_markdown == f"*{unit.title}*\n\nNormalization says the alternatives exhaust the state space."
 
 
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
-    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v6"
-    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v5"
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v7"
+    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v6"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
         == r"first line\newline{} second line\par third paragraph"
@@ -466,7 +452,7 @@ def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
         learning_units=(
             replace(
                 accepted_book.chapters[0].learning_units[0],
-                content=(
+                content_markdown=(
                     "Learning line one\nLearning line two"
                     "\n\nLearning paragraph two"
                 ),
@@ -539,13 +525,9 @@ def test_renderer_public_import_does_not_load_llm_runtime() -> None:
         learning_units=(
             PlannedLearningUnit(
                 unit_id="intuition",
-                kind="intuition",
-                title="Why normalize?",
                 anchor_ids=("b-intro",),
                 placement="inline",
-                reader_question="Why normalize?",
-                added_value="Connect the equation to exhaustive alternatives.",
-                value_dimensions=("substantive_connection",),
+                purpose="Connect the equation to exhaustive alternatives.",
                 evidence_ids=("paper:1234.56789",),
             ),
         ),
@@ -596,7 +578,7 @@ def test_business_validation_enforces_coverage_translation_and_evidence(
         ),
     )
     codes = {item.code for item in validate_accepted_book(invalid_units)}
-    assert {"unknown_learning_anchor", "missing_evidence_citation"} <= codes
+    assert {"unknown_learning_anchor", "uncited_bibliography_entry"} <= codes
 
 
 def test_accepted_content_rejects_empty_guide_and_translation(
@@ -813,9 +795,13 @@ def test_reader_citations_hide_internal_evidence_ids(
                 chapter,
                 learning_units=(
                     *chapter.learning_units[:-1],
-                    replace(
-                        chapter.learning_units[-1],
-                        citations=("ev-private-paper",),
+                        replace(
+                            chapter.learning_units[-1],
+                            content_markdown=(
+                                "Compare the state-space picture with the cited "
+                                "construction. [@ev-private-paper]"
+                            ),
+                            citations=("ev-private-paper",),
                     ),
                 ),
             ),
@@ -848,7 +834,8 @@ def test_reader_citations_hide_internal_evidence_ids(
     assert "[1] A reference paper" in visible
     assert "[2] Entropy reference" in visible
     assert 'href="#reference-ev-private-paper"' in html
-    assert r"Evidence: [1] A reference paper" in tex
+    assert r"\hyperlink{reference-" in tex
+    assert "Evidence:" not in tex
 
 
 def test_model_escaped_paragraphs_render_as_paragraphs(
@@ -857,7 +844,7 @@ def test_model_escaped_paragraphs_render_as_paragraphs(
     chapter = accepted_book.chapters[0]
     unit = replace(
         chapter.learning_units[0],
-        content=r"First paragraph.\n\nSecond paragraph.",
+        content_markdown=r"First paragraph.\n\nSecond paragraph.",
     )
     book = replace(
         accepted_book,
@@ -1154,7 +1141,7 @@ def test_pdf_preserves_multiline_prose_without_pipeline_diagnostics(
         learning_units=(
             replace(
                 accepted_book.chapters[0].learning_units[0],
-                content=(
+                content_markdown=(
                     "LEARNING-LINE-ONE\nLEARNING-LINE-TWO"
                     "\n\nLEARNING-PARAGRAPH-TWO"
                 ),

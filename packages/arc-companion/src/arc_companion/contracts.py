@@ -17,8 +17,11 @@ from types import MappingProxyType
 from typing import Any
 
 
-ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v3"
-_LEGACY_ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v2"
+ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v4"
+_LEGACY_ACCEPTED_BOOK_SCHEMAS = {
+    "arc.companion.accepted_book.v2",
+    "arc.companion.accepted_book.v3",
+}
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _BLOCK_KINDS = {
     "heading",
@@ -29,16 +32,6 @@ _BLOCK_KINDS = {
     "table",
     "figure",
 }
-_LEARNING_KINDS = {
-    "prerequisite",
-    "intuition",
-    "derivation",
-    "example",
-    "misconception",
-    "further_reading",
-}
-
-
 class ContentCodecError(ValueError):
     """An accepted-content document is malformed or not canonical."""
 
@@ -114,33 +107,23 @@ class SourceAnchor:
 @dataclass(frozen=True)
 class PlannedLearningUnit:
     unit_id: str
-    kind: str
-    title: str
     anchor_ids: tuple[str, ...]
     placement: str
-    reader_question: str
-    added_value: str
-    value_dimensions: tuple[str, ...]
+    purpose: str
     evidence_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.unit_id or self.kind not in _LEARNING_KINDS:
+        if not self.unit_id:
             raise ValueError("planned learning unit identity is invalid")
         if (
-            not self.title
-            or self.placement not in {"inline", "chapter"}
-            or not self.reader_question
-            or not self.added_value
-            or not self.value_dimensions
+            self.placement not in {"inline", "chapter"}
+            or not self.purpose
             or not self.anchor_ids
         ):
             raise ValueError("planned learning unit content is incomplete")
         if any(not item for item in self.anchor_ids):
             raise ValueError("planned learning unit contains an empty anchor")
         object.__setattr__(self, "anchor_ids", tuple(self.anchor_ids))
-        object.__setattr__(
-            self, "value_dimensions", tuple(self.value_dimensions)
-        )
         object.__setattr__(self, "evidence_ids", tuple(self.evidence_ids))
 
 
@@ -215,35 +198,25 @@ class TranslatedBlock:
 @dataclass(frozen=True)
 class LearningUnit:
     unit_id: str
-    kind: str
     title: str
     anchor_ids: tuple[str, ...]
     placement: str
-    reader_question: str
-    added_value: str
-    value_dimensions: tuple[str, ...]
-    content: str
+    content_markdown: str
     citations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.unit_id or self.kind not in _LEARNING_KINDS:
+        if not self.unit_id:
             raise ValueError("learning unit identity is invalid")
         if (
             not self.title
             or self.placement not in {"inline", "chapter"}
-            or not self.reader_question
-            or not self.added_value
-            or not self.value_dimensions
-            or not self.content
+            or not self.content_markdown
             or not self.anchor_ids
         ):
             raise ValueError("learning unit content is incomplete")
         if any(not item for item in self.anchor_ids):
             raise ValueError("learning unit contains an empty anchor")
         object.__setattr__(self, "anchor_ids", tuple(self.anchor_ids))
-        object.__setattr__(
-            self, "value_dimensions", tuple(self.value_dimensions)
-        )
         object.__setattr__(self, "citations", tuple(self.citations))
 
 
@@ -296,6 +269,8 @@ class AcceptedBook:
     target_language: str
     translation_mode: str
     chapters: tuple[AcceptedChapter, ...]
+    authors: tuple[str, ...] = ()
+    reader_labels: Mapping[str, str] = field(default_factory=dict)
     glossary: tuple[GlossaryEntry, ...] = ()
     bibliography: tuple[EvidenceSource, ...] = ()
     schema_version: str = ACCEPTED_BOOK_SCHEMA
@@ -315,8 +290,40 @@ class AcceptedBook:
             raise ValueError("accepted book metadata and chapters are required")
         if self.translation_mode not in {"enabled", "skipped"}:
             raise ValueError("translation mode must be enabled or skipped")
+        authors = tuple(self.authors)
+        if any(
+            not isinstance(author, str) or not author.strip()
+            for author in authors
+        ):
+            raise ValueError("accepted book authors must be non-empty strings")
+        if len(set(authors)) != len(authors):
+            raise ValueError("accepted book authors must be unique")
+        labels = dict(self.reader_labels)
+        if not labels:
+            # Direct construction and legacy decoding remain usable. New build
+            # requests resolve and persist a target-language pack explicitly.
+            from .reader_labels import resolve_reader_labels
+
+            labels = dict(
+                resolve_reader_labels(
+                    self.target_language,
+                    allow_legacy_fallback=True,
+                )
+            )
+        if any(
+            not isinstance(key, str)
+            or not key
+            or not isinstance(value, str)
+            or not value
+            for key, value in labels.items()
+        ):
+            raise ValueError(
+                "accepted book reader labels must be non-empty strings"
+            )
         object.__setattr__(self, "document_digest", digest)
         object.__setattr__(self, "chapters", tuple(self.chapters))
+        object.__setattr__(self, "authors", authors)
+        object.__setattr__(self, "reader_labels", _freeze_mapping(labels))
         object.__setattr__(self, "glossary", tuple(self.glossary))
         object.__setattr__(self, "bibliography", tuple(self.bibliography))
 
@@ -402,8 +409,10 @@ def _book_to_document(book: AcceptedBook) -> dict[str, Any]:
         "schema_version": book.schema_version,
         "document_digest": book.document_digest,
         "title": book.title,
+        "authors": list(book.authors),
         "source_language": book.source_language,
         "target_language": book.target_language,
+        "reader_labels": dict(book.reader_labels),
         "translation_mode": book.translation_mode,
         "chapters": [_chapter_to_document(item) for item in book.chapters],
         "glossary": [_glossary_to_document(item) for item in book.glossary],
@@ -426,13 +435,9 @@ def _plan_to_document(plan: ChapterPlan) -> dict[str, Any]:
         "learning_units": [
             {
                 "unit_id": item.unit_id,
-                "kind": item.kind,
-                "title": item.title,
                 "anchor_ids": list(item.anchor_ids),
                 "placement": item.placement,
-                "reader_question": item.reader_question,
-                "added_value": item.added_value,
-                "value_dimensions": list(item.value_dimensions),
+                "purpose": item.purpose,
                 "evidence_ids": list(item.evidence_ids),
             }
             for item in plan.learning_units
@@ -458,13 +463,9 @@ def _plan_from_document(value: Mapping[str, Any]) -> ChapterPlan:
             item,
             {
                 "unit_id",
-                "kind",
-                "title",
                 "anchor_ids",
                 "placement",
-                "reader_question",
-                "added_value",
-                "value_dimensions",
+                "purpose",
                 "evidence_ids",
             },
             "planned learning unit",
@@ -472,25 +473,15 @@ def _plan_from_document(value: Mapping[str, Any]) -> ChapterPlan:
         learning_units.append(
             PlannedLearningUnit(
                 unit_id=_string(item["unit_id"], "planned learning unit unit_id"),
-                kind=_string(item["kind"], "planned learning unit kind"),
-                title=_string(item["title"], "planned learning unit title"),
                 anchor_ids=_strings(
                     item["anchor_ids"], "planned learning unit anchors"
                 ),
                 placement=_string(
                     item["placement"], "planned learning unit placement"
                 ),
-                reader_question=_string(
-                    item["reader_question"],
-                    "planned learning unit reader question",
-                ),
-                added_value=_string(
-                    item["added_value"],
-                    "planned learning unit added value",
-                ),
-                value_dimensions=_strings(
-                    item["value_dimensions"],
-                    "planned learning unit value dimensions",
+                purpose=_string(
+                    item["purpose"],
+                    "planned learning unit purpose",
                 ),
                 evidence_ids=_strings(
                     item["evidence_ids"],
@@ -535,14 +526,10 @@ def _anchor_to_document(anchor: SourceAnchor) -> dict[str, Any]:
 def _learning_to_document(unit: LearningUnit) -> dict[str, Any]:
     return {
         "unit_id": unit.unit_id,
-        "kind": unit.kind,
         "title": unit.title,
         "anchor_ids": list(unit.anchor_ids),
         "placement": unit.placement,
-        "reader_question": unit.reader_question,
-        "added_value": unit.added_value,
-        "value_dimensions": list(unit.value_dimensions),
-        "content": unit.content,
+        "content_markdown": unit.content_markdown,
         "citations": list(unit.citations),
     }
 
@@ -559,30 +546,30 @@ def _glossary_to_document(entry: GlossaryEntry) -> dict[str, Any]:
 
 
 def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
-    _fields(
-        value,
-        {
-            "schema_version",
-            "document_digest",
-            "title",
-            "source_language",
-            "target_language",
-            "translation_mode",
-            "chapters",
-            "glossary",
-            "bibliography",
-        },
-        "accepted book",
-    )
     schema_version = _string(
         value["schema_version"], "accepted book schema_version"
     )
-    if schema_version not in {
-        ACCEPTED_BOOK_SCHEMA,
-        _LEGACY_ACCEPTED_BOOK_SCHEMA,
-    }:
+    if (
+        schema_version != ACCEPTED_BOOK_SCHEMA
+        and schema_version not in _LEGACY_ACCEPTED_BOOK_SCHEMAS
+    ):
         raise ValueError("unsupported accepted book schema")
-    legacy = schema_version == _LEGACY_ACCEPTED_BOOK_SCHEMA
+    legacy = schema_version in _LEGACY_ACCEPTED_BOOK_SCHEMAS
+    legacy_v2 = schema_version == "arc.companion.accepted_book.v2"
+    expected_book_fields = {
+        "schema_version",
+        "document_digest",
+        "title",
+        "source_language",
+        "target_language",
+        "translation_mode",
+        "chapters",
+        "glossary",
+        "bibliography",
+    }
+    if not legacy:
+        expected_book_fields.update({"authors", "reader_labels"})
+    _fields(value, expected_book_fields, "accepted book")
     chapters = []
     for raw in _sequence(value["chapters"], "accepted book chapters"):
         item = _mapping(raw, "accepted chapter")
@@ -642,70 +629,77 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
         learning_units = []
         for unit_raw in _sequence(item["learning_units"], "learning units"):
             unit = _mapping(unit_raw, "learning unit")
-            expected_unit_fields = {
-                "unit_id",
-                "kind",
-                "title",
-                "anchor_ids",
-                "content",
-                "citations",
-            }
-            if not legacy:
-                expected_unit_fields.update(
-                    {
-                        "placement",
-                        "reader_question",
-                        "added_value",
-                        "value_dimensions",
-                    }
-                )
+            expected_unit_fields = (
+                {
+                    "unit_id",
+                    "kind",
+                    "title",
+                    "anchor_ids",
+                    "content",
+                    "citations",
+                }
+                if legacy_v2
+                else {
+                    "unit_id",
+                    "kind",
+                    "title",
+                    "anchor_ids",
+                    "placement",
+                    "reader_question",
+                    "added_value",
+                    "value_dimensions",
+                    "content",
+                    "citations",
+                }
+                if legacy
+                else {
+                    "unit_id",
+                    "title",
+                    "anchor_ids",
+                    "placement",
+                    "content_markdown",
+                    "citations",
+                }
+            )
             _fields(unit, expected_unit_fields, "learning unit")
-            title = _string(
-                unit["title"], "learning unit title"
+            title = _string(unit["title"], "learning unit title")
+            citations = _strings(
+                unit["citations"], "learning unit citations"
             )
-            content = _string(
-                unit["content"], "learning unit content"
-            )
-            learning_units.append(
-                LearningUnit(
-                    unit_id=_string(unit["unit_id"], "learning unit unit_id"),
-                    kind=_string(unit["kind"], "learning unit kind"),
-                    title=title,
-                    anchor_ids=_strings(unit["anchor_ids"], "learning unit anchors"),
-                    placement=(
-                        "inline"
-                        if legacy
-                        else _string(
-                            unit["placement"],
-                            "learning unit placement",
-                        )
-                    ),
-                    reader_question=(
+            content_markdown = (
+                _legacy_learning_markdown(
+                    (
                         title
-                        if legacy
+                        if legacy_v2
                         else _string(
                             unit["reader_question"],
                             "learning unit reader question",
                         )
                     ),
-                    added_value=(
-                        content
-                        if legacy
+                    _string(unit["content"], "learning unit content"),
+                    citations,
+                )
+                if legacy
+                else _string(
+                    unit["content_markdown"],
+                    "learning unit content_markdown",
+                )
+            )
+            learning_units.append(
+                LearningUnit(
+                    unit_id=_string(unit["unit_id"], "learning unit unit_id"),
+                    title=title,
+                    anchor_ids=_strings(unit["anchor_ids"], "learning unit anchors"),
+                    placement=(
+                        "inline"
+                        if legacy_v2
                         else _string(
-                            unit["added_value"],
-                            "learning unit added value",
+                            unit["placement"],
+                            "learning unit placement",
                         )
                     ),
-                    value_dimensions=(
-                        ("genuinely_different_presentation",)
-                        if legacy
-                        else _strings(
-                            unit["value_dimensions"],
-                            "learning unit value dimensions",
-                        )
-                    ),
-                    content=content,
-                    citations=_strings(unit["citations"], "learning unit citations"),
+                    content_markdown=content_markdown,
+                    citations=citations,
                 )
             )
         chapters.append(
@@ -768,17 +762,43 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
                 source=_string(item["source"], "evidence source source"),
             )
         )
+    if legacy:
+        bibliography_by_id = {
+            item.evidence_id: item for item in bibliography
+        }
+        bibliography = [
+            bibliography_by_id[evidence_id]
+            for evidence_id in _legacy_visible_citation_order(
+                chapters, glossary
+            )
+            if evidence_id in bibliography_by_id
+        ]
     return AcceptedBook(
         schema_version=ACCEPTED_BOOK_SCHEMA,
         document_digest=_string(
             value["document_digest"], "accepted book document_digest"
         ),
         title=_string(value["title"], "accepted book title"),
+        authors=(
+            ()
+            if legacy
+            else _strings(value["authors"], "accepted book authors")
+        ),
         source_language=_string(
             value["source_language"], "accepted book source_language"
         ),
         target_language=_string(
             value["target_language"], "accepted book target_language"
+        ),
+        reader_labels=(
+            {}
+            if legacy
+            else {
+                str(key): _string(item, "accepted book reader label")
+                for key, item in _mapping(
+                    value["reader_labels"], "accepted book reader_labels"
+                ).items()
+            }
         ),
         translation_mode=_string(
             value["translation_mode"], "accepted book translation_mode"
@@ -787,6 +807,51 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
         glossary=tuple(glossary),
         bibliography=tuple(bibliography),
     )
+
+
+def _legacy_learning_markdown(
+    question: str,
+    content: str,
+    citations: Sequence[str],
+) -> str:
+    """Preserve legacy question/prose without retaining a mandatory UI label."""
+
+    markers = " ".join(f"[@{item}]" for item in citations)
+    suffix = f"\n\n{markers}" if markers else ""
+    return (
+        f"*{_markdown_escape(question)}*\n\n"
+        f"{_markdown_escape(content)}{suffix}"
+    )
+
+
+def _markdown_escape(value: str) -> str:
+    return re.sub(r"([\\`*_[\]<>#])", r"\\\1", value)
+
+
+def _legacy_visible_citation_order(
+    chapters: Sequence[AcceptedChapter],
+    glossary: Sequence[GlossaryEntry],
+) -> tuple[str, ...]:
+    values: list[str] = []
+    for chapter in chapters:
+        values.extend(
+            citation
+            for unit in chapter.learning_units
+            if unit.placement == "chapter"
+            for citation in unit.citations
+        )
+        for anchor in chapter.source_anchors:
+            values.extend(
+                citation
+                for unit in chapter.learning_units
+                if unit.placement == "inline"
+                and unit.anchor_ids[0] == anchor.block_id
+                for citation in unit.citations
+            )
+    values.extend(
+        citation for entry in glossary for citation in entry.citations
+    )
+    return tuple(dict.fromkeys(values))
 
 
 def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:

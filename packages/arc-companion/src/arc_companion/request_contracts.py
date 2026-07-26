@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from arc_llm import LLMExecutionOptions, ModelSelection
@@ -16,17 +17,26 @@ from arc_paper import (
 )
 
 from .prompts import (
+    AUTHOR_IDENTITY_PROMPT_VERSION,
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
     LITERATURE_REQUEST_PROMPT_VERSION,
     LITERATURE_SURVEY_PROMPT_VERSION,
 )
+from .reader_labels import resolve_reader_labels
 
 
-COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v3"
-_LEGACY_COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v2"
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v5"
+COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v4"
+_LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3 = "arc.companion.build_request.v3"
+_LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2 = "arc.companion.build_request.v2"
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v6"
+_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V5 = (
+    "arc.companion.generation_recipe.v5"
+)
+_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V4 = (
+    "arc.companion.generation_recipe.v4"
+)
 COMPANION_CONTENT_CONTRACT = "arc.companion.source_anchored_textbook.v1"
 NEUTRAL_TEXTBOOK_INTENT = (
     "Explain the source faithfully as a neutral textbook companion for an "
@@ -45,6 +55,8 @@ class CompanionBuildRequest:
     user_intent: str = ""
     content_contract: str = COMPANION_CONTENT_CONTRACT
     translation_reuse_digest: str | None = None
+    authors: tuple[str, ...] = ()
+    reader_labels: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, RichDocument):
@@ -72,11 +84,58 @@ class CompanionBuildRequest:
             raise ValueError(
                 "translation_reuse_digest must be a SHA-256 digest or null"
             )
+        if isinstance(self.authors, (str, bytes, bytearray)):
+            raise ValueError("authors must be a sequence of author names")
+        authors = tuple(self.authors)
+        if any(
+            not isinstance(author, str) or not author.strip()
+            for author in authors
+        ):
+            raise ValueError("authors must contain non-empty strings")
+        labels: Mapping[str, str] | None = self.reader_labels
+        if labels is not None:
+            if not isinstance(labels, Mapping) or not labels:
+                raise ValueError(
+                    "reader_labels must be a non-empty string mapping or null"
+                )
+            normalized_labels: dict[str, str] = {}
+            for key, value in labels.items():
+                if (
+                    not isinstance(key, str)
+                    or not key.strip()
+                    or not isinstance(value, str)
+                    or not value.strip()
+                ):
+                    raise ValueError(
+                        "reader_labels must contain non-empty string keys and values"
+                    )
+                normalized_key = key.strip()
+                if normalized_key in normalized_labels:
+                    raise ValueError(
+                        "reader_labels contains duplicate normalized keys"
+                    )
+                normalized_labels[normalized_key] = value.strip()
+            labels = MappingProxyType(
+                dict(
+                    sorted(
+                        resolve_reader_labels(
+                            self.target_language,
+                            normalized_labels,
+                        ).items()
+                    )
+                )
+            )
         object.__setattr__(self, "validator_digests", validators)
         object.__setattr__(
             self, "target_language", self.target_language.strip()
         )
         object.__setattr__(self, "user_intent", self.user_intent.strip())
+        object.__setattr__(
+            self,
+            "authors",
+            tuple(author.strip() for author in authors),
+        )
+        object.__setattr__(self, "reader_labels", labels)
 
     @property
     def effective_intent(self) -> str:
@@ -91,6 +150,7 @@ class CompanionGenerationRecipe:
     approx_term_count: int = 50
     literature_request_prompt: str = LITERATURE_REQUEST_PROMPT_VERSION
     literature_survey_prompt: str = LITERATURE_SURVEY_PROMPT_VERSION
+    author_identity_prompt: str = AUTHOR_IDENTITY_PROMPT_VERSION
     chapter_plan_prompt: str = CHAPTER_PLAN_PROMPT_VERSION
     chapter_guide_prompt: str = CHAPTER_GUIDE_PROMPT_VERSION
     chapter_guide_review_prompt: str = (
@@ -114,6 +174,7 @@ class CompanionGenerationRecipe:
         expected = {
             "literature_request_prompt": LITERATURE_REQUEST_PROMPT_VERSION,
             "literature_survey_prompt": LITERATURE_SURVEY_PROMPT_VERSION,
+            "author_identity_prompt": AUTHOR_IDENTITY_PROMPT_VERSION,
             "chapter_plan_prompt": CHAPTER_PLAN_PROMPT_VERSION,
             "chapter_guide_prompt": CHAPTER_GUIDE_PROMPT_VERSION,
             "chapter_guide_review_prompt": (
@@ -154,21 +215,21 @@ class CompanionExecutionOptions:
 def encode_build_request(
     request: CompanionBuildRequest,
 ) -> dict[str, Any]:
-    document = {
-        "schema_version": (
-            COMPANION_BUILD_REQUEST_SCHEMA
-            if request.translation_reuse_digest is not None
-            else _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA
-        ),
+    return {
+        "schema_version": COMPANION_BUILD_REQUEST_SCHEMA,
         "source": rich_document_to_document(request.source),
         "validator_digests": list(request.validator_digests),
         "target_language": request.target_language,
         "user_intent": request.effective_intent,
         "content_contract": request.content_contract,
+        "translation_reuse_digest": request.translation_reuse_digest,
+        "authors": list(request.authors),
+        "reader_labels": (
+            dict(request.reader_labels)
+            if request.reader_labels is not None
+            else None
+        ),
     }
-    if request.translation_reuse_digest is not None:
-        document["translation_reuse_digest"] = request.translation_reuse_digest
-    return document
 
 
 def encode_generation_recipe(
@@ -184,6 +245,7 @@ def encode_generation_recipe(
         "approx_term_count": recipe.approx_term_count,
         "literature_request_prompt": recipe.literature_request_prompt,
         "literature_survey_prompt": recipe.literature_survey_prompt,
+        "author_identity_prompt": recipe.author_identity_prompt,
         "chapter_plan_prompt": recipe.chapter_plan_prompt,
         "chapter_guide_prompt": recipe.chapter_guide_prompt,
         "chapter_guide_review_prompt": (
@@ -209,7 +271,7 @@ def decode_build_request(
     document: Mapping[str, Any],
 ) -> CompanionBuildRequest:
     schema_version = document.get("schema_version")
-    fields = {
+    legacy_fields = {
         "schema_version",
         "source",
         "validator_digests",
@@ -218,8 +280,16 @@ def decode_build_request(
         "content_contract",
     }
     if schema_version == COMPANION_BUILD_REQUEST_SCHEMA:
-        fields.add("translation_reuse_digest")
-    elif schema_version != _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA:
+        fields = legacy_fields | {
+            "translation_reuse_digest",
+            "authors",
+            "reader_labels",
+        }
+    elif schema_version == _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3:
+        fields = legacy_fields | {"translation_reuse_digest"}
+    elif schema_version == _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2:
+        fields = legacy_fields
+    else:
         raise ValueError("unsupported Companion build-request schema")
     request = _exact(document, fields, "build request")
     source = _mapping(request["source"], "rich source")
@@ -228,6 +298,23 @@ def decode_build_request(
         not isinstance(item, str) for item in validators
     ):
         raise ValueError("validator_digests must be an array of strings")
+    authors: tuple[str, ...] = ()
+    reader_labels: Mapping[str, str] | None = None
+    if schema_version == COMPANION_BUILD_REQUEST_SCHEMA:
+        raw_authors = request["authors"]
+        if not isinstance(raw_authors, list) or any(
+            not isinstance(item, str) for item in raw_authors
+        ):
+            raise ValueError("authors must be an array of strings")
+        authors = tuple(raw_authors)
+        reader_labels = _optional_string_mapping(
+            request["reader_labels"], "reader_labels"
+        )
+    else:
+        reader_labels = resolve_reader_labels(
+            _string(request, "target_language"),
+            allow_legacy_fallback=True,
+        )
     return CompanionBuildRequest(
         source=rich_document_from_document(source),
         validator_digests=tuple(validators),
@@ -236,37 +323,47 @@ def decode_build_request(
         content_contract=_string(request, "content_contract"),
         translation_reuse_digest=(
             _optional_string(request, "translation_reuse_digest")
-            if schema_version == COMPANION_BUILD_REQUEST_SCHEMA
+            if schema_version
+            in {
+                COMPANION_BUILD_REQUEST_SCHEMA,
+                _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3,
+            }
             else None
         ),
+        authors=authors,
+        reader_labels=reader_labels,
     )
 
 
 def decode_generation_recipe(
     document: Mapping[str, Any],
 ) -> CompanionGenerationRecipe:
-    raw_recipe = _exact(
-        document,
-        {
-            "schema_version",
-            "model",
-            "approx_term_count",
+    schema_version = document.get("schema_version")
+    common_fields = {
+        "schema_version",
+        "model",
+        "approx_term_count",
+        "chapter_plan_prompt",
+        "chapter_guide_prompt",
+        "chapter_guide_review_prompt",
+        "equation_label_visual_prompt",
+    }
+    if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA:
+        fields = common_fields | {
             "literature_request_prompt",
             "literature_survey_prompt",
-            "chapter_plan_prompt",
-            "chapter_guide_prompt",
-            "chapter_guide_review_prompt",
-            "equation_label_visual_prompt",
-        },
-        "generation recipe",
-    )
-    if (
-        raw_recipe["schema_version"]
-        != COMPANION_GENERATION_RECIPE_SCHEMA
-    ):
-        raise ValueError(
-            "unsupported Companion generation-recipe schema"
-        )
+            "author_identity_prompt",
+        }
+    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V5:
+        fields = common_fields | {
+            "literature_request_prompt",
+            "literature_survey_prompt",
+        }
+    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V4:
+        fields = common_fields
+    else:
+        raise ValueError("unsupported Companion generation-recipe schema")
+    raw_recipe = _exact(document, fields, "generation recipe")
     model = _exact(
         _mapping(raw_recipe["model"], "model"),
         {"provider", "model", "tier"},
@@ -275,6 +372,18 @@ def decode_generation_recipe(
     exact_model = model["model"]
     if exact_model is not None and not isinstance(exact_model, str):
         raise ValueError("model.model must be a string or null")
+    for key in common_fields - {
+        "schema_version",
+        "model",
+        "approx_term_count",
+    }:
+        _string(raw_recipe, key)
+    if schema_version != _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V4:
+        _string(raw_recipe, "literature_request_prompt")
+        _string(raw_recipe, "literature_survey_prompt")
+    if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA:
+        _string(raw_recipe, "author_identity_prompt")
+    legacy_recipe = schema_version != COMPANION_GENERATION_RECIPE_SCHEMA
     return CompanionGenerationRecipe(
         model=ModelSelection(
             provider=_string(model, "provider"),
@@ -282,23 +391,40 @@ def decode_generation_recipe(
             tier=_string(model, "tier"),  # type: ignore[arg-type]
         ),
         approx_term_count=_integer(raw_recipe, "approx_term_count"),
-        literature_request_prompt=_string(
-            raw_recipe, "literature_request_prompt"
+        literature_request_prompt=(
+            LITERATURE_REQUEST_PROMPT_VERSION
+            if legacy_recipe
+            else _string(raw_recipe, "literature_request_prompt")
         ),
-        literature_survey_prompt=_string(
-            raw_recipe, "literature_survey_prompt"
+        literature_survey_prompt=(
+            LITERATURE_SURVEY_PROMPT_VERSION
+            if legacy_recipe
+            else _string(raw_recipe, "literature_survey_prompt")
         ),
-        chapter_plan_prompt=_string(
-            raw_recipe, "chapter_plan_prompt"
+        author_identity_prompt=(
+            _string(raw_recipe, "author_identity_prompt")
+            if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA
+            else AUTHOR_IDENTITY_PROMPT_VERSION
         ),
-        chapter_guide_prompt=_string(
-            raw_recipe, "chapter_guide_prompt"
+        chapter_plan_prompt=(
+            CHAPTER_PLAN_PROMPT_VERSION
+            if legacy_recipe
+            else _string(raw_recipe, "chapter_plan_prompt")
         ),
-        chapter_guide_review_prompt=_string(
-            raw_recipe, "chapter_guide_review_prompt"
+        chapter_guide_prompt=(
+            CHAPTER_GUIDE_PROMPT_VERSION
+            if legacy_recipe
+            else _string(raw_recipe, "chapter_guide_prompt")
         ),
-        equation_label_visual_prompt=_string(
-            raw_recipe, "equation_label_visual_prompt"
+        chapter_guide_review_prompt=(
+            CHAPTER_GUIDE_REVIEW_PROMPT_VERSION
+            if legacy_recipe
+            else _string(raw_recipe, "chapter_guide_review_prompt")
+        ),
+        equation_label_visual_prompt=(
+            EQUATION_LABEL_VISUAL_PROMPT_VERSION
+            if legacy_recipe
+            else _string(raw_recipe, "equation_label_visual_prompt")
         ),
     )
 
@@ -352,6 +478,19 @@ def _optional_string(value: Mapping[str, Any], key: str) -> str | None:
     if item is not None and not isinstance(item, str):
         raise ValueError(f"{key} must be a string or null")
     return item
+
+
+def _optional_string_mapping(
+    value: Any, description: str
+) -> Mapping[str, str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or any(
+        not isinstance(key, str) or not isinstance(item, str)
+        for key, item in value.items()
+    ):
+        raise ValueError(f"{description} must be an object of strings or null")
+    return dict(value)
 
 
 __all__ = [

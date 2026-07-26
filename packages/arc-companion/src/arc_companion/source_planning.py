@@ -10,6 +10,8 @@ from typing import Any
 from arc_jobs import canonical_json_bytes
 from arc_paper import RichBlock, RichBlockKind, RichDocument, rich_block_to_document
 
+from .source_identity import resolve_document_identity
+
 
 @dataclass(frozen=True)
 class SourceChapter:
@@ -131,8 +133,7 @@ def _chapter(
 
 
 def _document_title(document: RichDocument) -> str:
-    title = document.metadata.get("title")
-    return str(title).strip() if isinstance(title, str) and title.strip() else "Document"
+    return resolve_document_identity(document).title or "Document"
 
 
 __all__ = [

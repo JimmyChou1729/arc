@@ -223,17 +223,23 @@ def bibliography_contracts(
     *,
     cited_ids: Sequence[str] | None = None,
 ) -> tuple[EvidenceSource, ...]:
-    allowed = (
-        set(cited_ids) if cited_ids is not None else None
+    by_id = {
+        str(item["evidence_id"]): item
+        for item in evidence
+    }
+    ordered_ids = (
+        tuple(by_id)
+        if cited_ids is None
+        else tuple(dict.fromkeys(str(item) for item in cited_ids))
     )
     return tuple(
         EvidenceSource(
-            evidence_id=str(item["evidence_id"]),
-            title=str(item["title"]),
-            source=str(item["source"]),
+            evidence_id=evidence_id,
+            title=str(by_id[evidence_id]["title"]),
+            source=str(by_id[evidence_id]["source"]),
         )
-        for item in evidence
-        if allowed is None or str(item["evidence_id"]) in allowed
+        for evidence_id in ordered_ids
+        if evidence_id in by_id
     )
 
 

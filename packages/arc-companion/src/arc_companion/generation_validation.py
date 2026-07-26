@@ -6,7 +6,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .prompts import VALUE_DIMENSIONS
+from .rich_text import RichTextError, validate_rich_markdown
+
 
 class CompanionContentError(ValueError):
     def __init__(self, code: str, message: str) -> None:
@@ -158,6 +159,60 @@ def validate_chapter_plan(
     return {"chapter_id": chapter_id, "learning_units": normalized}
 
 
+def validate_author_identity(
+    value: Any,
+    *,
+    block_ids: Sequence[str],
+) -> dict[str, Any]:
+    """Validate a conservative publication-author attribution.
+
+    Authorship is accepted only as high-confidence publication identity.  The
+    validator deliberately makes uncertain output non-assertive rather than
+    trying to rank or repair names.
+    """
+
+    result = _exact(
+        value,
+        {"authors", "confidence", "basis", "anchor_block_ids"},
+        "author identity",
+    )
+    confidence = result["confidence"]
+    if confidence not in {"high", "medium", "low"}:
+        raise CompanionContentError(
+            "author_identity_invalid", "author confidence is invalid"
+        )
+    authors = _string_ids(result["authors"], "authors")
+    anchors = _string_ids(
+        result["anchor_block_ids"], "author identity anchors"
+    )
+    if any(anchor not in set(block_ids) for anchor in anchors):
+        raise CompanionContentError(
+            "source_anchor_invalid",
+            "author identity anchors must be existing block IDs",
+        )
+    if confidence != "high" and authors:
+        raise CompanionContentError(
+            "author_identity_uncertain",
+            "medium- or low-confidence author identity must be empty",
+        )
+    if confidence == "high" and not authors:
+        raise CompanionContentError(
+            "author_identity_invalid",
+            "high-confidence author identity requires at least one author",
+        )
+    if confidence == "high" and not anchors:
+        raise CompanionContentError(
+            "source_anchor_invalid",
+            "high-confidence author identity requires source anchors",
+        )
+    return {
+        "authors": authors,
+        "confidence": confidence,
+        "basis": _nonempty(result["basis"], "author identity basis"),
+        "anchor_block_ids": anchors,
+    }
+
+
 def validate_chapter_guide(
     value: Any,
     *,
@@ -197,49 +252,50 @@ def validate_chapter_guide(
                 else "learning-unit IDs must exactly match the selective plan"
             ),
         )
-    allowed_evidence = set(evidence_ids)
     normalized: list[dict[str, Any]] = []
-    immutable = (
-        "kind",
-        "title",
-        "anchor_block_ids",
-        "placement",
-        "reader_question",
-        "added_value",
-        "value_dimensions",
-        "evidence_ids",
-    )
     for item in units:
-        if set(item) != {
-            "unit_id",
-            *immutable,
-            "content",
-        }:
+        planned_item = planned[str(item["unit_id"])]
+        minimal_fields = {"unit_id", "title", "content_markdown"}
+        attached_fields = {
+            *planned_item,
+            "title",
+            "content_markdown",
+            "citations",
+        }
+        if set(item) not in {frozenset(minimal_fields), frozenset(attached_fields)}:
             raise CompanionContentError(
                 "chapter_guide_invalid",
                 "learning unit has invalid fields",
             )
-        planned_item = planned[str(item["unit_id"])]
-        for field in immutable:
-            if item.get(field) != planned_item.get(field):
-                raise CompanionContentError(
-                    "learning_unit_anchor_invalid",
-                    f"learning unit changed planned {field}",
-                )
-        cited = _string_ids(
-            item["evidence_ids"], "learning-unit evidence"
+        if set(item) == attached_fields:
+            for key, value in planned_item.items():
+                if item.get(key) != value:
+                    raise CompanionContentError(
+                        "learning_unit_anchor_invalid",
+                        f"learning unit changed planned {key}",
+                    )
+        content_markdown = _model_prose(
+            item.get("content_markdown"),
+            "learning-unit Markdown",
         )
-        if any(item not in allowed_evidence for item in cited):
-            raise CompanionContentError(
-                "evidence_citation_invalid",
-                "learning unit cites unknown selected evidence",
+        try:
+            citations = validate_rich_markdown(
+                content_markdown,
+                allowed_evidence_ids=tuple(
+                    str(value)
+                    for value in planned_item.get("evidence_ids", [])
+                ),
             )
+        except RichTextError as exc:
+            raise CompanionContentError(
+                "learning_markdown_invalid", str(exc)
+            ) from exc
         normalized.append(
             {
                 **dict(planned_item),
-                "content": _model_prose(
-                    item.get("content"), "learning-unit content"
-                ),
+                "title": _nonempty(item.get("title"), "learning-unit title"),
+                "content_markdown": content_markdown,
+                "citations": list(citations),
             }
         )
     return {
@@ -289,7 +345,8 @@ def apply_safe_guide_review(
         if set(raw) != {
             "unit_id",
             "decision",
-            "replacement",
+            "replacement_title",
+            "replacement_markdown",
             "reason",
         }:
             raise CompanionContentError(
@@ -297,21 +354,31 @@ def apply_safe_guide_review(
                 "review decision has invalid fields",
             )
         decision = raw["decision"]
-        replacement = raw["replacement"]
+        replacement_title = raw["replacement_title"]
+        replacement_markdown = raw["replacement_markdown"]
         reason = _nonempty(raw["reason"], "review reason")
         if decision not in {"keep", "replace", "remove"}:
             raise CompanionContentError(
                 "review_patch_unsafe", "review decision is invalid"
             )
         if decision == "replace":
-            replacement = _model_prose(
-                replacement, "review replacement"
+            replacement_title = _nonempty(
+                replacement_title, "review replacement title"
             )
-            output.append({**unit, "content": replacement})
-        elif replacement is not None:
+            replacement_markdown = _model_prose(
+                replacement_markdown, "review replacement Markdown"
+            )
+            output.append(
+                {
+                    **unit,
+                    "title": replacement_title,
+                    "content_markdown": replacement_markdown,
+                }
+            )
+        elif replacement_title is not None or replacement_markdown is not None:
             raise CompanionContentError(
                 "review_patch_unsafe",
-                "keep/remove decisions require null replacement",
+                "keep/remove decisions require null replacement fields",
             )
         elif decision == "keep":
             output.append(unit)
@@ -339,31 +406,15 @@ def _validate_planned_unit(
 ) -> dict[str, Any]:
     expected = {
         "unit_id",
-        "kind",
-        "title",
         "anchor_block_ids",
         "placement",
-        "reader_question",
-        "added_value",
-        "value_dimensions",
+        "purpose",
         "evidence_ids",
     }
     if set(item) != expected:
         raise CompanionContentError(
             "chapter_plan_invalid",
             "planned learning unit has invalid fields",
-        )
-    kind = item["kind"]
-    if kind not in {
-        "prerequisite",
-        "intuition",
-        "derivation",
-        "example",
-        "misconception",
-        "further_reading",
-    }:
-        raise CompanionContentError(
-            "chapter_plan_invalid", "learning-unit kind is invalid"
         )
     placement = item["placement"]
     if placement not in {"inline", "chapter"}:
@@ -378,39 +429,13 @@ def _validate_planned_unit(
             "chapter_plan_invalid",
             "planned learning unit cites unknown selected evidence",
         )
-    if kind == "further_reading" and not evidence:
-        raise CompanionContentError(
-            "chapter_plan_invalid",
-            "further-reading units require selected evidence",
-        )
-    value_dimensions = _string_ids(
-        item["value_dimensions"],
-        "learning-unit value dimensions",
-        allow_empty=False,
-    )
-    if any(
-        dimension not in VALUE_DIMENSIONS
-        for dimension in value_dimensions
-    ):
-        raise CompanionContentError(
-            "chapter_plan_invalid",
-            "learning-unit value dimension is unsupported",
-        )
     return {
         "unit_id": _nonempty(item["unit_id"], "learning-unit ID"),
-        "kind": kind,
-        "title": _nonempty(item["title"], "learning-unit title"),
         "anchor_block_ids": _validate_anchors(
             item["anchor_block_ids"], allowed_blocks
         ),
         "placement": placement,
-        "reader_question": _nonempty(
-            item["reader_question"], "reader question"
-        ),
-        "added_value": _nonempty(
-            item["added_value"], "added value"
-        ),
-        "value_dimensions": value_dimensions,
+        "purpose": _nonempty(item["purpose"], "learning-unit purpose"),
         "evidence_ids": evidence,
     }
 
@@ -508,6 +533,7 @@ def _string_ids(
 __all__ = [
     "CompanionContentError",
     "apply_safe_guide_review",
+    "validate_author_identity",
     "validate_chapter_guide",
     "validate_chapter_plan",
     "validate_literature_request_plan",

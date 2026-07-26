@@ -39,6 +39,7 @@ _BUNDLE_CANDIDATE = "translation-reuse/bundle.json"
 _OBJECTS_PREFIX = "translation-reuse/objects"
 _LANGUAGE_ARTIFACT = "translation-v2/language/result"
 _GLOSSARY_ARTIFACT = "translation-v2/glossary/result"
+_PRIOR_COMPANION_ARTIFACT = "translation-reuse/prior-companion"
 
 
 class TranslationReuseError(RuntimeError):
@@ -200,6 +201,13 @@ def plan_translation_reuse(
     language_artifact = _read_artifact(
         store, snapshot.recovery_epoch, _LANGUAGE_ARTIFACT, role="language"
     )
+    prior_companion_artifact = _SourceArtifact(
+        role="prior_companion",
+        source_artifact_id=book_ref.artifact_id,
+        target_artifact_id=_PRIOR_COMPANION_ARTIFACT,
+        media_type=book_ref.media_type,
+        payload=store.read_bytes(book_ref),
+    )
     try:
         language = LanguageResult.from_document(
             _json_payload(language_artifact.payload, "language result")
@@ -225,7 +233,7 @@ def plan_translation_reuse(
             "source language result does not match the accepted book",
         )
 
-    artifacts = [language_artifact]
+    artifacts = [language_artifact, prior_companion_artifact]
     glossary_digest: str | None = None
     if language.mode == "enabled":
         glossary_artifact = _read_artifact(
@@ -325,6 +333,7 @@ def plan_translation_reuse(
         "approx_term_count": recipe.approx_term_count,
         "mode": language.mode,
         "language_result_digest": language_artifact.digest,
+        "prior_companion_digest": prior_companion_artifact.digest,
         "glossary_result_digest": glossary_digest,
         "chapters": [
             {

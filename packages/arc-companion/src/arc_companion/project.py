@@ -84,6 +84,24 @@ class CompanionProjectPaths:
         return self.runtime_root / "frozen-assets"
 
     @property
+    def diagnostics_visual_root(self) -> Path:
+        """Project-owned visual diagnostics, grouped by logical run."""
+
+        return self.runtime_root / "diagnostics" / "visual"
+
+    def diagnostics_visual_run_path(self, run_id: str) -> Path:
+        return self.diagnostics_visual_root / _validate_run_id(run_id)
+
+    @property
+    def operator_inputs_root(self) -> Path:
+        """Project-owned explicit operator inputs, grouped by logical run."""
+
+        return self.runtime_root / "operator-inputs"
+
+    def operator_inputs_run_path(self, run_id: str) -> Path:
+        return self.operator_inputs_root / _validate_run_id(run_id)
+
+    @property
     def releases_root(self) -> Path:
         return self.root / "releases"
 
@@ -267,14 +285,11 @@ class CompanionProjectPaths:
         return None
 
     def _diagnostics_path(self, run_id: str) -> Path:
-        if (
-            not run_id
-            or "/" in run_id
-            or "\\" in run_id
-            or run_id in {".", ".."}
-        ):
-            raise ValueError("run_id must be a local identifier")
-        return self.runtime_root / "diagnostics" / f"{run_id}.json"
+        return (
+            self.runtime_root
+            / "diagnostics"
+            / f"{_validate_run_id(run_id)}.json"
+        )
 
 
 def _read_json(path: Path, description: str) -> dict[str, Any]:
@@ -289,6 +304,18 @@ def _read_json(path: Path, description: str) -> dict[str, Any]:
             "project_state_invalid", f"{description} must be an object"
         )
     return value
+
+
+def _validate_run_id(run_id: str) -> str:
+    if (
+        not isinstance(run_id, str)
+        or not run_id
+        or "/" in run_id
+        or "\\" in run_id
+        or run_id in {".", ".."}
+    ):
+        raise ValueError("run_id must be a local identifier")
+    return run_id
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:

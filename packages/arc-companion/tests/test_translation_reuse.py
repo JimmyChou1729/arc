@@ -30,12 +30,14 @@ from arc_companion.build import (
     COMPANION_BUILD_DIAGNOSTICS_SCHEMA,
     COMPANION_BUILD_HANDLER,
     _glossary_contracts,
+    _prior_companion_reference,
 )
 from arc_companion.cli import main
 from arc_companion.contracts import (
     AcceptedBook,
     AcceptedChapter,
     CompanionContentCodec,
+    LearningUnit,
     SourceAnchor,
     TranslatedBlock,
 )
@@ -178,6 +180,17 @@ class _PublishedTranslationHandler:
                             text=item["text"],
                         )
                         for item in translations
+                    ),
+                    learning_units=(
+                        LearningUnit(
+                            unit_id="prior-reading",
+                            title="旧伴读中的可取舍洞见",
+                            anchor_ids=(chapter.block_ids[0],),
+                            placement="inline",
+                            content_markdown=(
+                                "这是供下一轮模型深化、重组或舍弃的旧伴读内容。"
+                            ),
+                        ),
                     ),
                 )
             )
@@ -344,6 +357,19 @@ def test_exact_translation_reuse_is_target_owned_and_provider_free(
         target_language=target_request.target_language,
     )
     assert not isinstance(language, RunError)
+    prior_ref = context.artifacts.find(
+        "translation-reuse/prior-companion"
+    )
+    assert prior_ref is not None
+    prior = _prior_companion_reference(context)
+    assert prior is not None
+    assert prior["chapters"][0]["learning_units"][0][
+        "content_markdown"
+    ].startswith("这是供下一轮模型")
+    assert any(
+        item["role"] == "prior_companion"
+        for item in plan.bundle["artifacts"]
+    )
     glossary = adapter.build_glossary(
         context,
         source_request.source,
@@ -415,8 +441,8 @@ def test_reuse_digest_is_semantic_without_changing_default_request_identity(
     reused = replace(plain, translation_reuse_digest=digest)
     recipe = CompanionGenerationRecipe()
 
-    assert encoded["schema_version"] == "arc.companion.build_request.v2"
-    assert "translation_reuse_digest" not in encoded
+    assert encoded["schema_version"] == "arc.companion.build_request.v4"
+    assert encoded["translation_reuse_digest"] is None
     assert encode_build_request(reused)["translation_reuse_digest"] == digest
     assert companion_run_id(plain, recipe) != companion_run_id(reused, recipe)
 
@@ -444,6 +470,7 @@ def test_legacy_v4_recipe_can_supply_exact_translation_identity(
         for key, value in current.items()
         if key
         not in {
+            "author_identity_prompt",
             "literature_request_prompt",
             "literature_survey_prompt",
         }

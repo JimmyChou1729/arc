@@ -22,6 +22,7 @@ from arc_translate.prompts import (
 )
 
 from arc_companion.prompts import (
+    AUTHOR_IDENTITY_PROMPT_VERSION,
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
@@ -41,7 +42,14 @@ class _EvidenceResumeTasks:
 
     def execute_or_resume(self, _context, request, *, input=None, options=None):
         contract, payload = _prompt(request.prompt)
-        if contract == LITERATURE_REQUEST_PROMPT_VERSION:
+        if contract == AUTHOR_IDENTITY_PROMPT_VERSION:
+            value = {
+                "authors": [],
+                "confidence": "low",
+                "basis": "No author is confirmed by this fixture.",
+                "anchor_block_ids": [],
+            }
+        elif contract == LITERATURE_REQUEST_PROMPT_VERSION:
             block_id = payload["blocks"][0]["block_id"]
             value = {
                 "requests": [
@@ -75,13 +83,9 @@ class _EvidenceResumeTasks:
                 "learning_units": [
                     {
                         "unit_id": "reading",
-                        "kind": "further_reading",
-                        "title": "Supporting result",
                         "anchor_block_ids": [block_id],
                         "placement": "inline",
-                        "reader_question": "Where can I read further?",
-                        "added_value": "Connects the source to supporting work.",
-                        "value_dimensions": ["materially_useful_later_development"],
+                        "purpose": "Connects the source to supporting work.",
                         "evidence_ids": ["support-1"],
                     }
                 ],
@@ -124,8 +128,11 @@ class _EvidenceResumeTasks:
                 "chapter_id": payload["plan"]["chapter_id"],
                 "learning_units": [
                     {
-                        **payload["plan"]["learning_units"][0],
-                        "content": "Read the selected supporting result.",
+                        "unit_id": "reading",
+                        "title": "Supporting result",
+                        "content_markdown": (
+                            "Read the selected supporting result [@support-1]."
+                        ),
                     }
                 ],
             }
@@ -135,7 +142,8 @@ class _EvidenceResumeTasks:
                     {
                         "unit_id": "reading",
                         "decision": "keep",
-                        "replacement": None,
+                        "replacement_title": None,
+                        "replacement_markdown": None,
                         "reason": "The unit is directly grounded.",
                     }
                 ],

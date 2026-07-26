@@ -81,7 +81,14 @@ class _GuideTasks:
 
     def execute_or_resume(self, _context, request, **_kwargs):
         contract, payload = _request_payload(request.prompt)
-        if "literature-request-prompt" in contract:
+        if "author-identity-prompt" in contract:
+            value = {
+                "authors": [],
+                "confidence": "low",
+                "basis": "No author is confirmed by this fixture.",
+                "anchor_block_ids": [],
+            }
+        elif "literature-request-prompt" in contract:
             value = {
                 "requests": [
                     {

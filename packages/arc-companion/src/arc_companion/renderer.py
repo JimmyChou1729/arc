@@ -18,11 +18,15 @@ import unicodedata
 from urllib.parse import quote, unquote, urlparse
 
 from .contracts import AcceptedBook, LearningUnit, SourceAnchor
+from .reader_labels import ReaderLabelError, resolve_reader_labels
+from .reading_order import iter_visible_learning_units
+from .rich_text import RichTextError, citation_ids_from_tokens, parse_markdown
+from . import rich_text
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v5"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v6"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v6"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v7"
 _SOURCE_DATE_EPOCH = "946684800"
 _AssetLoader = Callable[[str], bytes | None]
 
@@ -124,6 +128,34 @@ def _release_links(book: AcceptedBook) -> _ReleaseLinks:
     return links
 
 
+def _labels(book: AcceptedBook) -> Mapping[str, str]:
+    try:
+        return resolve_reader_labels(
+            book.target_language,
+            getattr(book, "reader_labels", None),
+            allow_legacy_fallback=not bool(getattr(book, "reader_labels", {})),
+        )
+    except ReaderLabelError as exc:
+        raise CompanionRenderError(str(exc)) from exc
+
+
+def _citation_numbers(book: AcceptedBook) -> dict[str, int]:
+    return {
+        item.evidence_id: number
+        for number, item in enumerate(book.bibliography, 1)
+    }
+
+
+def _unit_markdown(unit: LearningUnit) -> str:
+    return str(getattr(unit, "content_markdown", ""))
+
+
+def _unit_fallback_citation_ids(unit: LearningUnit) -> tuple[str, ...]:
+    """Keep pre-Markdown accepted books readable without a second parse."""
+
+    return tuple(unit.citations)
+
+
 class CompanionRenderer:
     """Render one validated accepted book without loading an LLM runtime."""
 
@@ -214,6 +246,13 @@ class CompanionRenderer:
         positions = [text.find(f'data-source-anchor="{escape_html(item)}"') for item in expected]
         if any(item < 0 for item in positions) or positions != sorted(positions):
             raise CompanionRenderError("Web reader source-anchor order is invalid")
+        visible_units = tuple(iter_visible_learning_units(book.chapters))
+        unit_positions = [
+            text.find(f'data-learning-unit="{escape_html(item.unit_id)}"')
+            for item in visible_units
+        ]
+        if any(item < 0 for item in unit_positions) or unit_positions != sorted(unit_positions):
+            raise CompanionRenderError("Web reader learning-unit order is invalid")
         for evidence in book.bibliography:
             if any(
                 escape_html(value) not in text
@@ -409,17 +448,25 @@ def _render_html(
     source_assets: Mapping[str, _SourceAssetReference],
     release_links: _ReleaseLinks,
 ) -> str:
+    labels = _labels(book)
     chapters = "\n".join(
         _render_html_chapter(
             book,
             chapter,
             source_assets=source_assets,
             release_links=release_links,
+            labels=labels,
         )
         for chapter in book.chapters
     )
-    glossary = _render_html_glossary(book)
-    bibliography = _render_html_bibliography(book)
+    glossary = _render_html_glossary(book, labels=labels)
+    bibliography = _render_html_bibliography(book, labels=labels)
+    authors = (
+        '<p class="book-authors"><span class="reader-label">'
+        f'{escape_html(labels["author"])}:</span> {escape_html(", ".join(book.authors))}</p>'
+        if book.authors
+        else ""
+    )
     language = escape_html(book.target_language)
     return f"""<!doctype html>
 <html lang="{language}">
@@ -435,8 +482,8 @@ def _render_html(
 </head>
 <body data-book-digest="{book.content_digest}">
   <header class="book-header">
-    <p class="eyebrow">Source-anchored textbook companion</p>
     <h1>{escape_html(book.title)}</h1>
+    {authors}
   </header>
   <main>{chapters}{glossary}{bibliography}</main>
 </body>
@@ -450,6 +497,7 @@ def _render_html_chapter(
     *,
     source_assets: Mapping[str, _SourceAssetReference],
     release_links: _ReleaseLinks,
+    labels: Mapping[str, str],
 ) -> str:
     translation_by_id = {item.block_id: item for item in chapter.translations}
     inline_units = tuple(
@@ -469,25 +517,26 @@ def _render_html_chapter(
             anchor,
             source_assets=source_assets,
             release_links=release_links,
+            labels=labels,
         )
         translation = translation_by_id.get(anchor.block_id)
         translated = (
             f'<section class="translation-layer" lang="{escape_html(book.target_language)}">'
-            f"<h3>Translation</h3><p>{_html_text(translation.text)}</p></section>"
+            f"<p>{_html_text(translation.text)}</p></section>"
             if translation is not None
             else ""
         )
         units = "".join(
-            _render_html_learning(book, unit)
+            _render_html_learning(book, unit, labels=labels)
             for unit in units_by_anchor.get(anchor.block_id, ())
         )
         learning = (
-            f'<aside class="learning-layer"><h3>Textbook notes</h3>{units}</aside>'
+            f'<aside class="learning-layer">{units}</aside>'
             if units
             else '<aside class="learning-layer learning-empty" aria-hidden="true"></aside>'
         )
         page = (
-            f'<span class="source-page">source p. {anchor.page_number}</span>'
+            f'<span class="source-page">{escape_html(labels["source_page"].format(page=anchor.page_number))}</span>'
             if anchor.page_number is not None
             else ""
         )
@@ -497,7 +546,7 @@ def _render_html_chapter(
             f'data-source-anchor="{escape_html(anchor.block_id)}">'
             f"{page}<div class=\"anchor-grid\">"
             f'<section class="source-layer" lang="{escape_html(book.source_language)}">'
-            f"<h3>Source</h3>{source}</section>{translated}{learning}</div></article>"
+            f"{source}</section>{translated}{learning}</div></article>"
         )
     guide = (
         f'<p class="chapter-guide">{_html_model_prose(chapter.guide)}</p>'
@@ -505,18 +554,23 @@ def _render_html_chapter(
         else ""
     )
     chapter_learning = "".join(
-        _render_html_learning(book, unit)
+        _render_html_learning(book, unit, labels=labels)
         for unit in chapter_units
     )
     chapter_learning = (
-        '<aside class="chapter-learning"><h3>Chapter notes</h3>'
+        '<aside class="chapter-learning">'
         f"{chapter_learning}</aside>"
         if chapter_learning
         else ""
     )
+    heading = (
+        ""
+        if len(book.chapters) == 1 and chapter.title.strip() == book.title.strip()
+        else f"<h2>{escape_html(chapter.title)}</h2>"
+    )
     return (
         f'<section class="chapter" id="chapter-{escape_html(chapter.chapter_id)}">'
-        f"<h2>{escape_html(chapter.title)}</h2>"
+        f"{heading}"
         f"{guide}{chapter_learning}"
         f'{"".join(anchors)}</section>'
     )
@@ -527,6 +581,7 @@ def _render_html_source(
     *,
     source_assets: Mapping[str, _SourceAssetReference],
     release_links: _ReleaseLinks,
+    labels: Mapping[str, str],
 ) -> str:
     payload = anchor.payload
     if anchor.kind == "heading":
@@ -561,7 +616,8 @@ def _render_html_source(
         ):
             source_note = (
                 '<span class="equation-source-label">'
-                f'Rich-source label: {escape_html(provenance["source_label"])}</span>'
+                f'{escape_html(labels["source_equation_label"].format(label=provenance["source_label"]))}'
+                "</span>"
             )
         return (
             f'<div class="math math-display" data-tex="{escape_html(str(payload["tex"]))}">'
@@ -587,11 +643,11 @@ def _render_html_source(
         target = str(payload["target"])
         link = (
             f' <a href="{escape_html(release_links.html_target(target))}">'
-            "Original figure URL</a>"
+            f'{escape_html(labels["figure_original"])}</a>'
             if target
             else ""
         )
-        description = alt or "Figure asset was not frozen with the source."
+        description = alt or labels["figure_unfrozen"]
         return (
             '<figure class="figure-unfrozen">'
             f"<p>{description}{link}</p><figcaption>{caption}</figcaption></figure>"
@@ -600,7 +656,7 @@ def _render_html_source(
     if source.display_path != source.original_path:
         original_link = (
             f' <a class="figure-original" href="{escape_html(source.original_path)}" '
-            f'type="{escape_html(source.media_type)}">Open original figure</a>'
+            f'type="{escape_html(source.media_type)}">{escape_html(labels["figure_original"])}</a>'
         )
     return (
         f'<figure><img src="{escape_html(source.display_path)}" alt="{alt}">'
@@ -609,30 +665,41 @@ def _render_html_source(
 
 
 def _render_html_learning(
-    book: AcceptedBook, unit: LearningUnit
+    book: AcceptedBook, unit: LearningUnit, *, labels: Mapping[str, str]
 ) -> str:
-    citations = _html_citations(book, unit.citations)
+    del labels
+    numbers = _citation_numbers(book)
+    markdown = _unit_markdown(unit)
+    try:
+        tokens = parse_markdown(markdown)
+        body = rich_text.render_html(tokens, citation_numbers=numbers)
+        inline_citations = citation_ids_from_tokens(tokens)
+    except RichTextError as exc:
+        raise CompanionRenderError(str(exc)) from exc
+    cited = _unit_fallback_citation_ids(unit)
+    fallback = ""
+    if not inline_citations and cited:
+        fallback = _html_citation_markers(cited, numbers)
     return (
-        f'<section class="learning-unit learning-{escape_html(unit.kind)}" '
+        '<section class="learning-unit" '
         f'data-learning-unit="{escape_html(unit.unit_id)}">'
         f"<h4>{escape_html(unit.title)}</h4>"
-        f'<p class="reader-question">{escape_html(unit.reader_question)}</p>'
-        f"<p>{_html_model_prose(unit.content)}</p>{citations}</section>"
+        f"{body}{fallback}</section>"
     )
 
 
-def _render_html_glossary(book: AcceptedBook) -> str:
+def _render_html_glossary(book: AcceptedBook, *, labels: Mapping[str, str]) -> str:
     if not book.glossary:
         return ""
     rows = "".join(
         "<div class=\"glossary-row\">"
         f"<dt>{escape_html(item.term)}</dt>"
         f'<dd class="translated-term">{escape_html(item.translated_term)}</dd>'
-        f"<dd>{_html_text(item.definition)}{_html_citations(book, item.citations)}</dd>"
+        f"<dd>{_html_text(item.definition)}{_html_citation_markers(item.citations, _citation_numbers(book))}</dd>"
         "</div>"
         for item in book.glossary
     )
-    return f'<section class="glossary" id="glossary"><h2>Glossary</h2><dl>{rows}</dl></section>'
+    return f'<section class="glossary" id="glossary"><h2>{escape_html(labels["glossary"])}</h2><dl>{rows}</dl></section>'
 
 
 def _paper_landing_url(identifier: str) -> str | None:
@@ -643,7 +710,7 @@ def _paper_landing_url(identifier: str) -> str | None:
     return paper_landing_url(identifier)
 
 
-def _render_html_bibliography(book: AcceptedBook) -> str:
+def _render_html_bibliography(book: AcceptedBook, *, labels: Mapping[str, str]) -> str:
     if not book.bibliography:
         return ""
     rows: list[str] = []
@@ -659,7 +726,7 @@ def _render_html_bibliography(book: AcceptedBook) -> str:
         )
     return (
         '<section class="bibliography" id="references">'
-        f"<h2>References</h2><ol>{''.join(rows)}</ol></section>"
+        f"<h2>{escape_html(labels['references'])}</h2><ol>{''.join(rows)}</ol></section>"
     )
 
 
@@ -686,28 +753,20 @@ def _render_html_inline(
     return "".join(values)
 
 
-def _html_citations(
-    book: AcceptedBook, citations: Sequence[str]
+def _html_citation_markers(
+    citations: Sequence[str], numbers: Mapping[str, int]
 ) -> str:
     if not citations:
         return ""
-    by_id = {
-        item.evidence_id: (number, item)
-        for number, item in enumerate(book.bibliography, 1)
-    }
     values = []
     for evidence_id in citations:
-        reference = by_id.get(evidence_id)
-        label = (
-            f"[{reference[0]}] {reference[1].title}"
-            if reference is not None
-            else "Unknown reference"
-        )
+        number = numbers.get(evidence_id)
+        if number is None:
+            raise CompanionRenderError(f"citation is not in bibliography: {evidence_id}")
         values.append(
-            f'<a href="#reference-{escape_html(evidence_id)}">'
-            f"{escape_html(label)}</a>"
+            f'<a class="citation-marker" href="#reference-{escape_html(evidence_id)}">[{number}]</a>'
         )
-    return '<p class="citations">Evidence: ' + " · ".join(values) + "</p>"
+    return '<span class="citations">' + " ".join(values) + "</span>"
 
 
 def _html_text(value: str) -> str:
@@ -725,17 +784,25 @@ def _render_tex(
     release_links: _ReleaseLinks | None = None,
 ) -> str:
     exact_links = release_links or _release_links(book)
+    labels = _labels(book)
     chapters = "\n".join(
         _render_tex_chapter(
             book,
             chapter,
             source_paths=source_paths,
             release_links=exact_links,
+            labels=labels,
         )
         for chapter in book.chapters
     )
-    glossary = _render_tex_glossary(book)
-    bibliography = _render_tex_bibliography(book)
+    glossary = _render_tex_glossary(book, labels=labels)
+    bibliography = _render_tex_bibliography(book, labels=labels)
+    authors = ", ".join(book.authors)
+    author_line = (
+        rf"{{\small {_tex_escape(labels['author'])}: {_tex_escape(authors)}}}"
+        if authors
+        else ""
+    )
     return rf"""\documentclass[10pt]{{article}}
 \usepackage[margin=21mm]{{geometry}}
 \usepackage{{fontspec}}
@@ -753,16 +820,15 @@ def _render_tex(
 \setmonofont{{Noto Sans Mono CJK SC}}
 \setCJKmainfont{{Noto Sans CJK SC}}
 \setCJKsansfont{{Noto Sans CJK SC}}
-\definecolor{{SourceBg}}{{HTML}}{{F6F8FA}}
 \definecolor{{TranslationBg}}{{HTML}}{{EFF6FF}}
 \definecolor{{LearningBg}}{{HTML}}{{FFF7E6}}
 \setlength{{\parindent}}{{0pt}}
 \setlength{{\parskip}}{{5pt}}
-\hypersetup{{pdftitle={{{_tex_escape(book.title)}}},pdfauthor={{ARC Companion}}}}
+\hypersetup{{pdftitle={{{_tex_escape(book.title)}}},pdfauthor={{{_tex_escape(authors)}}}}}
 \begin{{document}}
 \begin{{center}}
 {{\LARGE\bfseries {_tex_escape(book.title)}}}\\[4pt]
-{{\small Source-anchored textbook companion}}
+{author_line}
 \end{{center}}
 {chapters}
 {glossary}
@@ -777,6 +843,7 @@ def _render_tex_chapter(
     *,
     source_paths: Mapping[str, str],
     release_links: _ReleaseLinks,
+    labels: Mapping[str, str],
 ) -> str:
     translations = {item.block_id: item for item in chapter.translations}
     units = _units_by_first_anchor(
@@ -786,10 +853,13 @@ def _render_tex_chapter(
             if item.placement == "inline"
         )
     )
-    values = [rf"\section{{{_tex_escape(chapter.title)}}}"]
+    values = (
+        []
+        if len(book.chapters) == 1 and chapter.title.strip() == book.title.strip()
+        else [rf"\section{{{_tex_escape(chapter.title)}}}"]
+    )
     if chapter.guide:
         values.append(
-            rf"\textbf{{Chapter guide.}} "
             rf"{_render_tex_prose(chapter.guide, model_generated=True)}"
         )
     for unit in chapter.learning_units:
@@ -797,7 +867,7 @@ def _render_tex_chapter(
             values.append(_render_tex_learning(book, unit))
     for anchor in chapter.source_anchors:
         page = (
-            rf"\par\noindent\hfill{{\footnotesize source p. {anchor.page_number}}}\par"
+            rf"\par\noindent\hfill{{\footnotesize {_tex_escape(labels['source_page'].format(page=anchor.page_number))}}}\par{{}} "
             if anchor.page_number is not None
             else ""
         )
@@ -810,29 +880,17 @@ def _render_tex_chapter(
             anchor,
             source_paths=source_paths,
             release_links=release_links,
+            labels=labels,
         )
-        if anchor.kind == "table":
-            # longtable must remain in the main vertical list to split across
-            # pages.  Nesting it in a tcolorbox/tabular silently clips rows.
-            values.append(
-                anchor_target
-                + r"\textbf{Source}\par"
-                + source
-            )
-        else:
-            values.append(
-                anchor_target
-                + rf"\begin{{tcolorbox}}[breakable,colback=SourceBg,colframe=SourceBg,"
-                rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
-                rf"\textbf{{Source}}\par {source}"
-                rf"\end{{tcolorbox}}"
-            )
+        # Original source stays unboxed.  In particular, longtable remains in
+        # the main vertical list so it may split safely across pages.
+        values.append(anchor_target + source + r"\par ")
         translation = translations.get(anchor.block_id)
         if translation is not None:
             values.append(
                 rf"\begin{{tcolorbox}}[breakable,colback=TranslationBg,colframe=TranslationBg,"
                 rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
-                rf"\textbf{{Translation}}\par {_render_tex_prose(translation.text)}"
+                rf"{_render_tex_prose(translation.text)}"
                 rf"\end{{tcolorbox}}"
             )
         for unit in units.get(anchor.block_id, ()):
@@ -846,6 +904,7 @@ def _render_tex_source(
     *,
     source_paths: Mapping[str, str],
     release_links: _ReleaseLinks,
+    labels: Mapping[str, str],
 ) -> str:
     payload = anchor.payload
     if anchor.kind == "heading":
@@ -873,8 +932,8 @@ def _render_tex_source(
             and isinstance(provenance.get("source_label"), str)
         ):
             source_note = (
-                rf"\par{{\footnotesize\itshape Rich-source label: "
-                rf"{_tex_escape(provenance['source_label'])}}}"
+                rf"\par{{\footnotesize\itshape "
+                rf"{_tex_escape(labels['source_equation_label'].format(label=provenance['source_label']))}}}"
             )
         return rf"\[{_sanitize_math(payload['tex'])}{label}\]" + source_note
     if anchor.kind == "table":
@@ -916,36 +975,31 @@ def _render_tex_source(
     else:
         target = str(payload["target"])
         link = (
-            rf"\par {release_links.tex_link(target, target)}"
+            rf"\par {release_links.tex_link(target, labels['figure_original'])}"
             if target
             else ""
         )
         image = (
-            rf"\textit{{Figure asset was not frozen with the source.}} "
+            rf"\textit{{{_tex_escape(labels['figure_unfrozen'])}}} "
             rf"{_tex_escape(payload['alt_text'])}{link}"
         )
     return rf"\begin{{center}}{image}\par{{\footnotesize {caption}}}\end{{center}}"
 
 
-def _render_tex_glossary(book: AcceptedBook) -> str:
+def _render_tex_glossary(book: AcceptedBook, *, labels: Mapping[str, str]) -> str:
     if not book.glossary:
         return ""
     rows = "\n".join(
         rf"\textbf{{{_tex_escape(item.term)}}} & "
         rf"{_tex_escape(item.translated_term)} & {_render_tex_prose(item.definition)}"
-        + (
-            rf"\par{{\footnotesize\itshape Evidence: "
-            rf"{_tex_escape(_citation_titles(book, item.citations))}}}"
-            if item.citations
-            else ""
-        )
+        + _tex_citation_markers(item.citations, _citation_numbers(book))
         + r" \\"
         for item in book.glossary
     )
     return (
-        r"\section{Glossary}"
+        rf"\section{{{_tex_escape(labels['glossary'])}}}"
         r"\begin{longtable}{p{0.2\linewidth}p{0.2\linewidth}p{0.5\linewidth}}"
-        r"\toprule Source term & Translation & Definition \\\midrule "
+        rf"\toprule {_tex_escape(labels['source_term'])} & {_tex_escape(labels['translation'])} & {_tex_escape(labels['definition'])} \\\midrule "
         + rows
         + r"\bottomrule\end{longtable}"
     )
@@ -954,35 +1008,41 @@ def _render_tex_glossary(book: AcceptedBook) -> str:
 def _render_tex_learning(
     book: AcceptedBook, unit: LearningUnit
 ) -> str:
+    numbers = _citation_numbers(book)
+    markdown = _unit_markdown(unit)
+    try:
+        tokens = parse_markdown(markdown)
+        body = rich_text.render_tex(tokens, citation_numbers=numbers)
+        inline_citations = citation_ids_from_tokens(tokens)
+    except RichTextError as exc:
+        raise CompanionRenderError(str(exc)) from exc
     citations = (
-        rf"\par{{\footnotesize\itshape Evidence: "
-        rf"{_tex_escape(_citation_titles(book, unit.citations))}}}"
-        if unit.citations
+        _tex_citation_markers(_unit_fallback_citation_ids(unit), numbers)
+        if not inline_citations
         else ""
     )
     return (
         rf"\begin{{tcolorbox}}[breakable,colback=LearningBg,colframe=LearningBg,"
         rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
         rf"\textbf{{{_tex_escape(unit.title)}}}\par "
-        rf"\textit{{Reader question: {_tex_escape(unit.reader_question)}}}\par "
-        rf"{_render_tex_prose(unit.content, model_generated=True)}"
+        rf"{body}"
         rf"{citations}\end{{tcolorbox}}"
     )
 
 
-def _citation_titles(
-    book: AcceptedBook, citations: Sequence[str]
+def _tex_citation_markers(
+    citations: Sequence[str], numbers: Mapping[str, int]
 ) -> str:
-    by_id = {
-        item.evidence_id: f"[{number}] {item.title}"
-        for number, item in enumerate(book.bibliography, 1)
-    }
-    return "; ".join(
-        by_id.get(item, "Unknown reference") for item in citations
-    )
+    values = []
+    for evidence_id in citations:
+        number = numbers.get(evidence_id)
+        if number is None:
+            raise CompanionRenderError(f"citation is not in bibliography: {evidence_id}")
+        values.append(rf"\hyperlink{{reference-{_reference_token(evidence_id)}}}{{[{number}]}}")
+    return (r"\, " + " ".join(values)) if values else ""
 
 
-def _render_tex_bibliography(book: AcceptedBook) -> str:
+def _render_tex_bibliography(book: AcceptedBook, *, labels: Mapping[str, str]) -> str:
     if not book.bibliography:
         return ""
     rows: list[str] = []
@@ -996,9 +1056,9 @@ def _render_tex_bibliography(book: AcceptedBook) -> str:
             if _allows_pdf_line_concat(item.source)
             else _tex_escape(item.source)
         )
-        rows.append(rf"\item {title} --- {source}")
+        rows.append(rf"\item \hypertarget{{reference-{_reference_token(item.evidence_id)}}}{{}}{title} --- {source}")
     return (
-        r"\section{References}\begin{enumerate}"
+        rf"\section{{{_tex_escape(labels['references'])}}}\begin{{enumerate}}"
         + "\n".join(rows)
         + r"\end{enumerate}"
     )
@@ -1418,13 +1478,16 @@ def _anchor_token(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _reference_token(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
+
+
 _WEB_CSS = """\
 :root {
   color-scheme: light;
   --ink: #20262e;
   --muted: #68717c;
   --line: #dfe4e9;
-  --source: #f7f9fb;
   --translation: #eef5ff;
   --learning: #fff7e7;
 }
@@ -1439,27 +1502,25 @@ a { color: #235b83; text-underline-offset: .15em; }
 .book-header, main { width: min(100% - 2rem, 94rem); margin-inline: auto; }
 .book-header { padding: 3rem 0 1.5rem; border-bottom: 1px solid var(--line); }
 .book-header h1 { margin: .2rem 0 0; font-size: clamp(1.8rem, 4vw, 3.1rem); }
-.eyebrow { margin: 0; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.book-authors { margin: .45rem 0 0; color: var(--muted); }
+.reader-label { font-weight: 700; }
 .chapter { margin: 3rem 0 5rem; }
 .chapter > h2 { font-size: clamp(1.45rem, 3vw, 2.25rem); }
 .chapter-guide { max-width: 70rem; padding: 1rem 1.2rem; border-left: .25rem solid #86a3ba; background: #edf3f7; }
 .source-anchor { position: relative; margin: 1.3rem 0; scroll-margin-top: 1rem; }
 .source-page { display: block; margin-bottom: .25rem; color: var(--muted); font-size: .8rem; }
 .anchor-grid { display: grid; gap: .8rem; }
-.source-layer, .translation-layer, .learning-layer {
+.translation-layer, .learning-layer {
   min-width: 0;
   padding: 1rem 1.1rem;
   border: 1px solid var(--line);
   border-radius: .65rem;
   overflow-wrap: anywhere;
 }
-.source-layer { background: var(--source); }
+.source-layer { min-width: 0; overflow-wrap: anywhere; }
 .translation-layer { background: var(--translation); border-color: #d5e3f5; }
 .learning-layer { background: var(--learning); border-color: #e9ddbd; }
 .learning-empty { display: none; }
-.source-layer > h3, .translation-layer > h3, .learning-layer > h3 {
-  margin: 0 0 .55rem; color: #52616e; font-size: .78rem; letter-spacing: .06em; text-transform: uppercase;
-}
 .learning-unit + .learning-unit { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e2d4b4; }
 .learning-unit h4 { margin: 0 0 .25rem; }
 pre { overflow-x: auto; padding: .7rem; background: #eef1f4; border-radius: .35rem; }
@@ -1472,6 +1533,7 @@ th, td { padding: .4rem .5rem; border: 1px solid #ccd4dc; text-align: left; vert
 figure { margin: .7rem 0; text-align: center; }
 figure img { max-width: 100%; max-height: 38rem; object-fit: contain; }
 figcaption, .citations, .source-links { color: var(--muted); font-size: .84rem; }
+.citation-marker { margin-left: .12em; white-space: nowrap; }
 .glossary { margin: 5rem 0; padding-top: 1.5rem; border-top: 1px solid var(--line); }
 .glossary dl { margin: 0; background: white; border: 1px solid var(--line); border-radius: .6rem; overflow: hidden; }
 .glossary-row { display: grid; grid-template-columns: minmax(8rem,.6fr) minmax(8rem,.6fr) minmax(14rem,1.4fr); }

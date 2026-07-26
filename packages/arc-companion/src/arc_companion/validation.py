@@ -8,7 +8,9 @@ import re
 from urllib.parse import urlparse
 
 from .contracts import AcceptedBook, SourceAnchor
-from .prompts import VALUE_DIMENSIONS
+from .reading_order import first_visible_citation_ids
+from .reader_labels import ReaderLabelError, resolve_reader_labels
+from .rich_text import RichTextError, validate_rich_markdown
 
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -47,6 +49,18 @@ def validate_accepted_book(
     ordinals: list[int] = []
     bibliography_ids: set[str] = set()
     cited_ids: set[str] = set()
+    try:
+        resolve_reader_labels(
+            book.target_language,
+            book.reader_labels,
+        )
+    except ReaderLabelError as exc:
+        _issue(
+            issues,
+            "reader_labels_invalid",
+            "reader_labels",
+            str(exc),
+        )
     for evidence_index, evidence in enumerate(book.bibliography):
         path = f"bibliography[{evidence_index}]"
         if evidence.evidence_id in bibliography_ids:
@@ -143,35 +157,33 @@ def validate_accepted_book(
                     f"{path}.placement",
                     "learning-unit placement must be inline or chapter",
                 )
-            if (
-                not unit.reader_question.strip()
-                or not unit.added_value.strip()
-                or not unit.value_dimensions
-            ):
+            if not unit.title.strip() or not unit.content_markdown.strip():
                 _issue(
                     issues,
-                    "learning_value_contract_invalid",
+                    "learning_content_invalid",
                     path,
-                    "learning units require a reader question, added value, and value dimensions",
+                    "learning units require a title and Markdown content",
                 )
-            unsupported_dimensions = sorted(
-                set(unit.value_dimensions) - set(VALUE_DIMENSIONS)
-            )
-            if unsupported_dimensions:
+            try:
+                markdown_citations = validate_rich_markdown(
+                    unit.content_markdown,
+                    allowed_evidence_ids=tuple(bibliography_ids),
+                )
+            except RichTextError as exc:
                 _issue(
                     issues,
-                    "learning_value_dimension_invalid",
-                    f"{path}.value_dimensions",
-                    "learning-unit value dimensions are unsupported: "
-                    f"{unsupported_dimensions}",
+                    "learning_markdown_invalid",
+                    f"{path}.content_markdown",
+                    str(exc),
                 )
-            if unit.kind == "further_reading" and not unit.citations:
-                _issue(
-                    issues,
-                    "missing_evidence_citation",
-                    f"{path}.citations",
-                    "further-reading units require frozen evidence citations",
-                )
+            else:
+                if tuple(unit.citations) != markdown_citations:
+                    _issue(
+                        issues,
+                        "learning_citation_identity_invalid",
+                        f"{path}.citations",
+                        "citations must be derived from Markdown marker order",
+                    )
             _validate_citations(
                 unit.citations,
                 allowed=bibliography_ids,
@@ -245,6 +257,20 @@ def validate_accepted_book(
             "uncited_bibliography_entry",
             "bibliography",
             f"bibliography evidence is not cited: {evidence_id}",
+        )
+    expected_bibliography_order = first_visible_citation_ids(
+        book.chapters,
+        book.glossary,
+    )
+    actual_bibliography_order = tuple(
+        item.evidence_id for item in book.bibliography
+    )
+    if actual_bibliography_order != expected_bibliography_order:
+        _issue(
+            issues,
+            "bibliography_order_invalid",
+            "bibliography",
+            "bibliography must follow first visible citation order",
         )
     return tuple(issues)
 

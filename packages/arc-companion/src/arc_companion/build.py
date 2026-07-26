@@ -49,7 +49,6 @@ from ._build_support import (
     planned_source_documents,
     read_json,
     ref_document,
-    review_supervision,
     task_id,
 )
 from .contracts import (
@@ -64,6 +63,7 @@ from .contracts import (
 from .generation_validation import (
     CompanionContentError,
     apply_safe_guide_review,
+    validate_author_identity,
     validate_chapter_guide,
     validate_chapter_plan,
     validate_literature_request_plan,
@@ -78,6 +78,8 @@ from .llm_runtime import (
     run_error_from_failure,
 )
 from .prompts import (
+    AUTHOR_IDENTITY_PROMPT_VERSION,
+    AUTHOR_IDENTITY_SCHEMA,
     CHAPTER_GUIDE_REVIEW_SCHEMA,
     CHAPTER_GUIDE_SCHEMA,
     CHAPTER_PLAN_SCHEMA,
@@ -85,12 +87,16 @@ from .prompts import (
     LITERATURE_REQUEST_PROMPT_VERSION,
     LITERATURE_SURVEY_PROMPT_VERSION,
     LITERATURE_SURVEY_SCHEMA,
+    author_identity_prompt,
     chapter_guide_prompt,
     chapter_guide_review_prompt,
     chapter_plan_prompt,
     literature_request_prompt,
     literature_survey_prompt,
 )
+from .reader_labels import ReaderLabelError, resolve_reader_labels
+from .reading_order import first_visible_citation_ids
+from .rich_text import RichTextError
 from .request_contracts import (
     CompanionBuildRequest,
     CompanionExecutionOptions,
@@ -103,6 +109,7 @@ from .source_planning import (
     equation_label_provenance,
     plan_source_chapters,
 )
+from .source_identity import resolve_document_identity
 from .translation_adapter import (
     ArcTranslateAdapter,
     CompanionTranslationAdapter,
@@ -115,6 +122,8 @@ COMPANION_BUILD_DIAGNOSTICS_SCHEMA = "arc.companion.build_diagnostics.v1"
 _BOOK_ARTIFACT = "book/accepted"
 _DIAGNOSTICS_ARTIFACT = "diagnostics/build"
 _EFFECTIVE_SOURCE_ARTIFACT = "source/effective"
+_AUTHOR_IDENTITY_ARTIFACT = "identity/authors"
+_PRIOR_COMPANION_ARTIFACT = "translation-reuse/prior-companion"
 _RESULT_ARTIFACT = "result"
 
 
@@ -149,7 +158,7 @@ class CompanionBuildHandler:
             return Failed(
                 RunError(
                     "companion_build_binding_mismatch",
-                    "Handler bindings do not match the durable v3 build request.",
+                    "Handler bindings do not match the durable build request.",
                 )
             )
         existing = context.artifacts.find(_RESULT_ARTIFACT)
@@ -161,6 +170,28 @@ class CompanionBuildHandler:
             if isinstance(prepared_source, Paused):
                 return prepared_source
             source = prepared_source
+            try:
+                reader_labels = resolve_reader_labels(
+                    self.request.target_language,
+                    self.request.reader_labels,
+                )
+            except ReaderLabelError as exc:
+                raise CompanionContentError(
+                    "reader_labels_invalid", str(exc)
+                ) from exc
+            identity = resolve_document_identity(source)
+            title = identity.title or reader_labels["untitled_document"]
+            authors_outcome = self._authors(
+                context,
+                resume_input,
+                source,
+                title=title,
+                auto_candidates=identity.candidate_authors,
+                author_basis=identity.author_basis,
+            )
+            if isinstance(authors_outcome, (Paused, Failed)):
+                return authors_outcome
+            authors = authors_outcome
             chapters = plan_source_chapters(source)
             blocks = {
                 item.block_id: item for item in source.blocks
@@ -185,9 +216,10 @@ class CompanionBuildHandler:
                     "language_result_invalid",
                     "arc-translate language mode is invalid",
                 )
+            prior_companion = _prior_companion_reference(context)
 
             literature_requests = self._literature_requests(
-                context, resume_input, source
+                context, resume_input, source, prior_companion
             )
             if isinstance(literature_requests, (Paused, Failed)):
                 return literature_requests
@@ -198,7 +230,11 @@ class CompanionBuildHandler:
                 return evidence_collection
             evidence = evidence_collection["selected_evidence"]
             literature_survey = self._literature_survey(
-                context, resume_input, source, evidence
+                context,
+                resume_input,
+                source,
+                evidence,
+                prior_companion,
             )
             if isinstance(literature_survey, (Paused, Failed)):
                 return literature_survey
@@ -210,6 +246,7 @@ class CompanionBuildHandler:
                 blocks,
                 literature_survey,
                 evidence,
+                prior_companion,
             )
             if isinstance(plans, (Paused, Failed)):
                 return plans
@@ -248,6 +285,7 @@ class CompanionBuildHandler:
                 source=source,
                 language=language,
                 translation_required=translation_required,
+                prior_companion=prior_companion,
             )
             if isinstance(chapters_outcome, (Paused, Failed)):
                 return chapters_outcome
@@ -259,25 +297,17 @@ class CompanionBuildHandler:
                     if translation_required
                     else ()
                 )
-                cited_ids = tuple(
-                    dict.fromkeys(
-                        citation
-                        for chapter in chapters_outcome
-                        for unit in chapter.learning_units
-                        for citation in unit.citations
-                    )
-                ) + tuple(
-                    dict.fromkeys(
-                        citation
-                        for entry in glossary_contracts
-                        for citation in entry.citations
-                    )
+                cited_ids = first_visible_citation_ids(
+                    chapters_outcome,
+                    glossary_contracts,
                 )
                 book = AcceptedBook(
                     document_digest=source.document_digest,
-                    title=_document_title(source),
+                    title=title,
+                    authors=authors,
                     source_language=str(language["language_tag"]),
                     target_language=self.request.target_language,
+                    reader_labels=reader_labels,
                     translation_mode=(
                         "enabled" if translation_required else "skipped"
                     ),
@@ -309,10 +339,118 @@ class CompanionBuildHandler:
             return Succeeded(result_ref)
         except CompanionContentError as exc:
             return Failed(RunError(exc.code, str(exc)))
+        except RichTextError as exc:
+            return Failed(RunError("learning_markdown_invalid", str(exc)))
         except CompanionLLMError as exc:
             return Failed(RunError(exc.code, str(exc)))
         except (KeyError, TypeError, ValueError) as exc:
             return Failed(RunError("companion_content_invalid", str(exc)))
+
+    def _authors(
+        self,
+        context: RunContext,
+        resume_input: Any,
+        source: RichDocument,
+        *,
+        title: str,
+        auto_candidates: Sequence[str],
+        author_basis: str,
+    ) -> tuple[str, ...] | Paused | Failed:
+        """Resolve visible publication authors without asking the guide model."""
+
+        if self.request.authors:
+            return tuple(self.request.authors)
+        existing = context.artifacts.find(_AUTHOR_IDENTITY_ARTIFACT)
+        if existing is not None:
+            value = validate_author_identity(
+                read_json(context, existing, "author identity"),
+                block_ids=[item.block_id for item in source.blocks],
+            )
+            return (
+                tuple(value["authors"])
+                if value["confidence"] == "high"
+                else ()
+            )
+
+        candidate_id = "identity/author.json"
+        candidate_path = context.working.find_candidate(candidate_id)
+        if candidate_path is None:
+            semantic = {
+                "document_digest": source.document_digest,
+                "title": title,
+                "auto_candidates": list(auto_candidates),
+                "author_basis": author_basis,
+                "prompt_contract": getattr(
+                    self.recipe,
+                    "author_identity_prompt",
+                    AUTHOR_IDENTITY_PROMPT_VERSION,
+                ),
+            }
+            request = LLMRequest(
+                task_id("author-identity", semantic),
+                author_identity_prompt(
+                    title=title,
+                    blocks=[
+                        _source_block_document(source, item)
+                        for item in source.blocks
+                    ],
+                    auto_candidates=[
+                        {
+                            "author": author,
+                            "basis": author_basis,
+                        }
+                        for author in auto_candidates
+                    ],
+                ),
+                JsonOutput(AUTHOR_IDENTITY_SCHEMA, repair="format"),
+                self.recipe.model,
+            )
+            outcome = execute_task(
+                self.task_service,
+                context,
+                request,
+                resume_input=resume_input,
+                options=self.execution.llm,
+            )
+            if isinstance(outcome, LLMPaused):
+                return Paused(awaiting_from_pause(outcome))
+            if isinstance(outcome, LLMFailed):
+                return Failed(run_error_from_failure(outcome))
+            ensure_not_stopped(outcome, "author identity")
+            assert isinstance(outcome, LLMCompleted)
+            raw = mapping(outcome.value, "author identity")
+            candidate_path = context.working.write_candidate_json(
+                candidate_id, raw
+            )
+        else:
+            raw = context.working.read_candidate_json(candidate_id)
+        try:
+            value = validate_author_identity(
+                raw,
+                block_ids=[item.block_id for item in source.blocks],
+            )
+        except CompanionContentError as exc:
+            return Failed(_candidate_error(exc, candidate_path))
+        context.artifacts.publish_json(_AUTHOR_IDENTITY_ARTIFACT, value)
+        context.artifacts.publish_json(
+            "diagnostics/author",
+            {
+                "schema_version": "arc.companion.author_diagnostics.v1",
+                "status": (
+                    "confirmed"
+                    if value["confidence"] == "high"
+                    else "unconfirmed"
+                ),
+                "confidence": value["confidence"],
+                "basis": value["basis"],
+                "candidate_path": str(candidate_path),
+            },
+        )
+        return (
+            tuple(value["authors"])
+            if value["confidence"] == "high"
+            else ()
+        )
 
     def _prepare_source(
         self,
@@ -479,6 +617,7 @@ class CompanionBuildHandler:
         context: RunContext,
         resume_input: Any,
         source: RichDocument,
+        prior_companion: Mapping[str, Any] | None,
     ) -> Mapping[str, Any] | Paused | Failed:
         artifact_id = "planning/literature-requests"
         existing = context.artifacts.find(artifact_id)
@@ -495,6 +634,9 @@ class CompanionBuildHandler:
             "document_digest": source.document_digest,
             "intent": self.request.effective_intent,
             "prompt_contract": prompt_contract,
+            "prior_companion_digest": _optional_document_digest(
+                prior_companion
+            ),
         }
         request = LLMRequest(
             task_id("literature-requests", semantic),
@@ -504,6 +646,7 @@ class CompanionBuildHandler:
                     for item in source.blocks
                 ],
                 intent=self.request.effective_intent,
+                prior_companion=prior_companion,
             ),
             JsonOutput(
                 LITERATURE_REQUEST_PLAN_SCHEMA, repair="format"
@@ -536,6 +679,7 @@ class CompanionBuildHandler:
         resume_input: Any,
         source: RichDocument,
         evidence: Sequence[Mapping[str, Any]],
+        prior_companion: Mapping[str, Any] | None,
     ) -> Mapping[str, Any] | Paused | Failed:
         artifact_id = "planning/literature-survey"
         existing = context.artifacts.find(artifact_id)
@@ -560,6 +704,9 @@ class CompanionBuildHandler:
             "intent": self.request.effective_intent,
             "evidence_digest": evidence_digest(evidence),
             "prompt_contract": prompt_contract,
+            "prior_companion_digest": _optional_document_digest(
+                prior_companion
+            ),
         }
         request = LLMRequest(
             task_id("literature-survey", semantic),
@@ -570,6 +717,7 @@ class CompanionBuildHandler:
                 ],
                 intent=self.request.effective_intent,
                 selected_evidence=evidence,
+                prior_companion=prior_companion,
             ),
             JsonOutput(LITERATURE_SURVEY_SCHEMA, repair="format"),
             self.recipe.model,
@@ -606,6 +754,7 @@ class CompanionBuildHandler:
         blocks: Mapping[str, Any],
         literature_survey: Mapping[str, Any],
         evidence: Sequence[Mapping[str, Any]],
+        prior_companion: Mapping[str, Any] | None,
     ) -> tuple[dict[str, Any], ...] | Paused | Failed:
         units = tuple(
             WorkUnit(
@@ -621,6 +770,9 @@ class CompanionBuildHandler:
                         canonical_json_bytes(dict(literature_survey))
                     ).hexdigest(),
                     "evidence_digest": evidence_digest(evidence),
+                    "prior_companion_digest": _optional_document_digest(
+                        prior_companion
+                    ),
                 },
             )
             for chapter in chapters
@@ -633,51 +785,69 @@ class CompanionBuildHandler:
             existing = context.artifacts.find(artifact_id)
             if existing is not None:
                 return read_json(context, existing, "chapter plan")
-            request = LLMRequest(
-                task_id("plan", unit.semantic_input),
-                chapter_plan_prompt(
-                    chapter_id=chapter.chapter_id,
-                    title=chapter.title,
-                    blocks=[
-                        _source_block_document(source, blocks[item])
-                        for item in chapter.block_ids
-                    ],
-                    target_language=self.request.target_language,
-                    intent=self.request.effective_intent,
-                    literature_survey=literature_survey,
-                    selected_evidence=evidence,
-                ),
-                JsonOutput(CHAPTER_PLAN_SCHEMA, repair="format"),
-                self.recipe.model,
-            )
-            outcome = execute_task(
-                self.task_service,
-                context,
-                request,
-                resume_input=resume_input,
-                options=self.execution.llm,
-            )
-            if isinstance(outcome, LLMCompleted):
+            candidate_id = f"chapters/{chapter.chapter_id}/plan.json"
+            candidate_path = context.working.find_candidate(candidate_id)
+            if candidate_path is None:
+                request = LLMRequest(
+                    task_id("plan", unit.semantic_input),
+                    chapter_plan_prompt(
+                        chapter_id=chapter.chapter_id,
+                        title=chapter.title,
+                        blocks=[
+                            _source_block_document(source, blocks[item])
+                            for item in chapter.block_ids
+                        ],
+                        target_language=self.request.target_language,
+                        intent=self.request.effective_intent,
+                        literature_survey=literature_survey,
+                        selected_evidence=evidence,
+                        prior_companion=prior_companion,
+                    ),
+                    JsonOutput(CHAPTER_PLAN_SCHEMA, repair="format"),
+                    self.recipe.model,
+                )
+                outcome = execute_task(
+                    self.task_service,
+                    context,
+                    request,
+                    resume_input=resume_input,
+                    options=self.execution.llm,
+                )
+                if isinstance(outcome, LLMPaused):
+                    return Paused(awaiting_from_pause(outcome))
+                if isinstance(outcome, LLMFailed):
+                    return UnitResult(
+                        unit.unit_id,
+                        "failed",
+                        error=run_error_from_failure(outcome),
+                    )
+                ensure_not_stopped(
+                    outcome, f"chapter plan {chapter.chapter_id}"
+                )
+                assert isinstance(outcome, LLMCompleted)
+                raw = mapping(outcome.value, "chapter plan")
+                candidate_path = context.working.write_candidate_json(
+                    candidate_id, raw
+                )
+            else:
+                raw = context.working.read_candidate_json(candidate_id)
+            try:
                 value = validate_chapter_plan(
-                    outcome.value,
+                    raw,
                     chapter_id=chapter.chapter_id,
                     block_ids=chapter.block_ids,
                     evidence_ids=[
                         str(item["evidence_id"]) for item in evidence
                     ],
                 )
-                context.artifacts.publish_json(artifact_id, value)
-                return value
-            if isinstance(outcome, LLMPaused):
-                return Paused(awaiting_from_pause(outcome))
-            if isinstance(outcome, LLMFailed):
+            except CompanionContentError as exc:
                 return UnitResult(
                     unit.unit_id,
                     "failed",
-                    error=run_error_from_failure(outcome),
+                    error=_candidate_error(exc, candidate_path),
                 )
-            ensure_not_stopped(outcome, f"chapter plan {chapter.chapter_id}")
-            raise RuntimeError("unknown chapter-plan outcome")
+            context.artifacts.publish_json(artifact_id, value)
+            return value
 
         result = context.run_group(
             "chapter-plans",
@@ -717,6 +887,7 @@ class CompanionBuildHandler:
         source: RichDocument,
         language: Mapping[str, Any],
         translation_required: bool,
+        prior_companion: Mapping[str, Any] | None,
     ) -> tuple[AcceptedChapter, ...] | Paused | Failed:
         by_chapter = {item.chapter_id: item for item in chapters}
         by_plan = {str(item["chapter_id"]): item for item in plans}
@@ -776,6 +947,9 @@ class CompanionBuildHandler:
                 "language": language_identity,
                 "glossary_digest": glossary_digest,
                 "content_contract": self.request.content_contract,
+                "prior_companion_digest": _optional_document_digest(
+                    prior_companion
+                ),
             }
             if translation_required:
                 units.append(
@@ -849,6 +1023,7 @@ class CompanionBuildHandler:
                 blocks,
                 language,
                 source,
+                prior_companion,
             )
 
         result = context.run_group(
@@ -915,17 +1090,11 @@ class CompanionBuildHandler:
                 learning_units=tuple(
                     LearningUnit(
                         unit_id=str(item["unit_id"]),
-                        kind=str(item["kind"]),
                         title=str(item["title"]),
                         anchor_ids=tuple(item["anchor_block_ids"]),
                         placement=str(item["placement"]),
-                        reader_question=str(item["reader_question"]),
-                        added_value=str(item["added_value"]),
-                        value_dimensions=tuple(
-                            item["value_dimensions"]
-                        ),
-                        content=str(item["content"]),
-                        citations=tuple(item["evidence_ids"]),
+                        content_markdown=str(item["content_markdown"]),
+                        citations=tuple(item["citations"]),
                     )
                     for item in mapping_list(
                         guide["learning_units"], "learning units"
@@ -964,6 +1133,7 @@ class CompanionBuildHandler:
         blocks: Mapping[str, Any],
         language: Mapping[str, Any],
         source: RichDocument,
+        prior_companion: Mapping[str, Any] | None,
     ) -> Mapping[str, Any] | Paused | UnitResult:
         artifact_id = f"chapters/{chapter.chapter_id}/guide-accepted"
         existing = context.artifacts.find(artifact_id)
@@ -985,84 +1155,138 @@ class CompanionBuildHandler:
         planned_documents = planned_source_documents(
             plan, source_documents
         )
-        draft_request = LLMRequest(
-            task_id("guide", unit.semantic_input),
-            chapter_guide_prompt(
+        draft_candidate_id = (
+            f"chapters/{chapter.chapter_id}/guide-draft.json"
+        )
+        draft_candidate_path = context.working.find_candidate(
+            draft_candidate_id
+        )
+        if draft_candidate_path is None:
+            draft_request = LLMRequest(
+                task_id("guide", unit.semantic_input),
+                chapter_guide_prompt(
+                    plan=plan,
+                    blocks=planned_documents,
+                    glossary=glossary,
+                    target_language=self.request.target_language,
+                    language_result=language,
+                    evidence=evidence,
+                    prior_companion=prior_companion,
+                ),
+                JsonOutput(CHAPTER_GUIDE_SCHEMA, repair="format"),
+                self.recipe.model,
+            )
+            outcome = execute_task(
+                self.task_service,
+                context,
+                draft_request,
+                resume_input=resume_input,
+                options=self.execution.llm,
+            )
+            if isinstance(outcome, LLMPaused):
+                return Paused(awaiting_from_pause(outcome))
+            if isinstance(outcome, LLMFailed):
+                return UnitResult(
+                    unit.unit_id,
+                    "failed",
+                    error=run_error_from_failure(outcome),
+                )
+            ensure_not_stopped(
+                outcome, f"chapter guide {chapter.chapter_id}"
+            )
+            assert isinstance(outcome, LLMCompleted)
+            raw_draft = mapping(
+                outcome.value, "chapter guide draft"
+            )
+            draft_candidate_path = (
+                context.working.write_candidate_json(
+                    draft_candidate_id, raw_draft
+                )
+            )
+        else:
+            raw_draft = context.working.read_candidate_json(
+                draft_candidate_id
+            )
+        try:
+            draft = validate_chapter_guide(
+                raw_draft,
                 plan=plan,
-                blocks=planned_documents,
-                glossary=glossary,
-                target_language=self.request.target_language,
-                language_result=language,
-                evidence=evidence,
-            ),
-            JsonOutput(CHAPTER_GUIDE_SCHEMA, repair="format"),
-            self.recipe.model,
-        )
-        outcome = execute_task(
-            self.task_service,
-            context,
-            draft_request,
-            resume_input=resume_input,
-            options=self.execution.llm,
-        )
-        if isinstance(outcome, LLMPaused):
-            return Paused(awaiting_from_pause(outcome))
-        if isinstance(outcome, LLMFailed):
+                evidence_ids=[
+                    str(item["evidence_id"]) for item in evidence
+                ],
+            )
+        except CompanionContentError as exc:
             return UnitResult(
                 unit.unit_id,
                 "failed",
-                error=run_error_from_failure(outcome),
+                error=_candidate_error(exc, draft_candidate_path),
             )
-        ensure_not_stopped(outcome, f"chapter guide {chapter.chapter_id}")
-        assert isinstance(outcome, LLMCompleted)
-        draft = validate_chapter_guide(
-            outcome.value,
-            plan=plan,
-            evidence_ids=[str(item["evidence_id"]) for item in evidence],
+
+        review_candidate_id = (
+            f"chapters/{chapter.chapter_id}/guide-review.json"
         )
-        review_request = LLMRequest(
-            task_id(
-                "guide-review",
-                {
-                    **dict(unit.semantic_input),
-                    "guide_digest": hashlib.sha256(
-                        canonical_json_bytes(draft)
-                    ).hexdigest(),
-                },
-            ),
-            chapter_guide_review_prompt(
-                plan=plan,
-                draft=draft,
-                blocks=planned_documents,
-                glossary=glossary,
-                evidence=evidence,
-            ),
-            JsonOutput(CHAPTER_GUIDE_REVIEW_SCHEMA, repair="format"),
-            self.recipe.model,
+        review_candidate_path = context.working.find_candidate(
+            review_candidate_id
         )
-        reviewed_outcome = execute_task(
-            self.task_service,
-            context,
-            review_request,
-            resume_input=resume_input,
-            options=self.execution.llm,
-        )
-        if isinstance(reviewed_outcome, LLMPaused):
-            return Paused(awaiting_from_pause(reviewed_outcome))
-        if isinstance(reviewed_outcome, LLMFailed):
-            return UnitResult(
-                unit.unit_id,
-                "failed",
-                error=run_error_from_failure(reviewed_outcome),
+        if review_candidate_path is None:
+            review_request = LLMRequest(
+                task_id(
+                    "guide-review",
+                    {
+                        **dict(unit.semantic_input),
+                        "guide_digest": hashlib.sha256(
+                            canonical_json_bytes(draft)
+                        ).hexdigest(),
+                    },
+                ),
+                chapter_guide_review_prompt(
+                    plan=plan,
+                    draft=draft,
+                    blocks=planned_documents,
+                    glossary=glossary,
+                    evidence=evidence,
+                    prior_companion=prior_companion,
+                ),
+                JsonOutput(
+                    CHAPTER_GUIDE_REVIEW_SCHEMA, repair="format"
+                ),
+                self.recipe.model,
             )
-        ensure_not_stopped(
-            reviewed_outcome,
-            f"chapter guide review {chapter.chapter_id}",
-        )
-        assert isinstance(reviewed_outcome, LLMCompleted)
+            reviewed_outcome = execute_task(
+                self.task_service,
+                context,
+                review_request,
+                resume_input=resume_input,
+                options=self.execution.llm,
+            )
+            if isinstance(reviewed_outcome, LLMPaused):
+                return Paused(awaiting_from_pause(reviewed_outcome))
+            if isinstance(reviewed_outcome, LLMFailed):
+                return UnitResult(
+                    unit.unit_id,
+                    "failed",
+                    error=run_error_from_failure(reviewed_outcome),
+                )
+            ensure_not_stopped(
+                reviewed_outcome,
+                f"chapter guide review {chapter.chapter_id}",
+            )
+            assert isinstance(reviewed_outcome, LLMCompleted)
+            raw_review = mapping(
+                reviewed_outcome.value, "chapter guide review"
+            )
+            review_candidate_path = (
+                context.working.write_candidate_json(
+                    review_candidate_id, raw_review
+                )
+            )
+        else:
+            raw_review = context.working.read_candidate_json(
+                review_candidate_id
+            )
         try:
             reviewed, _decisions = apply_safe_guide_review(
-                draft, reviewed_outcome.value
+                draft, raw_review
             )
             reviewed = validate_chapter_guide(
                 reviewed,
@@ -1073,16 +1297,11 @@ class CompanionBuildHandler:
                 allow_removed=True,
             )
         except CompanionContentError as exc:
-            supervision = review_supervision(
-                context,
-                chapter.chapter_id,
-                draft,
-                reviewed_outcome.value,
-                exc,
+            return UnitResult(
+                unit.unit_id,
+                "failed",
+                error=_candidate_error(exc, review_candidate_path),
             )
-            if isinstance(supervision, Paused):
-                return supervision
-            reviewed = supervision
         context.artifacts.publish_json(artifact_id, reviewed)
         return reviewed
 
@@ -1202,11 +1421,74 @@ def _source_block_document(source: Any, block: Any) -> dict[str, Any]:
     )
 
 
-def _document_title(source: RichDocument) -> str:
-    value = source.metadata.get("title")
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return "Companion"
+def _prior_companion_reference(
+    context: RunContext,
+) -> dict[str, Any] | None:
+    """Expose a reused Companion as optional model context, never as state."""
+
+    ref = context.artifacts.find(_PRIOR_COMPANION_ARTIFACT)
+    if ref is None:
+        return None
+    try:
+        book = CompanionContentCodec.loads(context.artifacts.read_bytes(ref))
+    except (OSError, TypeError, ValueError) as exc:
+        raise CompanionContentError(
+            "prior_companion_invalid",
+            "The staged prior Companion reference is invalid.",
+        ) from exc
+    return {
+        "schema_version": "arc.companion.prior_reference.v1",
+        "title": book.title,
+        "authors": list(book.authors),
+        "chapters": [
+            {
+                "chapter_id": chapter.chapter_id,
+                "title": chapter.title,
+                "guide": chapter.guide,
+                "learning_units": [
+                    {
+                        "unit_id": unit.unit_id,
+                        "title": unit.title,
+                        "anchor_block_ids": list(unit.anchor_ids),
+                        "placement": unit.placement,
+                        "content_markdown": unit.content_markdown,
+                        "citations": list(unit.citations),
+                    }
+                    for unit in chapter.learning_units
+                ],
+            }
+            for chapter in book.chapters
+        ],
+        "bibliography": [
+            {
+                "evidence_id": item.evidence_id,
+                "title": item.title,
+                "source": item.source,
+            }
+            for item in book.bibliography
+        ],
+    }
+
+
+def _optional_document_digest(
+    value: Mapping[str, Any] | None,
+) -> str | None:
+    return (
+        hashlib.sha256(canonical_json_bytes(dict(value))).hexdigest()
+        if value is not None
+        else None
+    )
+
+
+def _candidate_error(
+    exc: CompanionContentError, path: Any
+) -> RunError:
+    candidate_path = str(path)
+    return RunError(
+        exc.code,
+        f"{exc} Candidate file: {candidate_path}",
+        {"candidate_path": candidate_path},
+    )
 
 
 def validate_build_diagnostics(value: Mapping[str, Any]) -> None:

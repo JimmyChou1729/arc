@@ -8,25 +8,17 @@ from typing import Any
 
 
 LITERATURE_REQUEST_PROMPT_VERSION = (
-    "arc.companion.literature-request-prompt.v1"
+    "arc.companion.literature-request-prompt.v2"
 )
 LITERATURE_SURVEY_PROMPT_VERSION = (
-    "arc.companion.literature-survey-prompt.v1"
+    "arc.companion.literature-survey-prompt.v2"
 )
-CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v3"
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v2"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v4"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v2"
+    "arc.companion.chapter-learning-review-prompt.v4"
 )
-VALUE_DIMENSIONS = (
-    "motivation_or_argument_role",
-    "genuinely_different_presentation",
-    "deeper_or_nonconventional_implication",
-    "omitted_intermediate_reasoning",
-    "substantive_connection",
-    "reliable_history_or_fact",
-    "materially_useful_later_development",
-)
+CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v5"
+AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v1"
 
 
 def _closed(
@@ -108,45 +100,19 @@ LITERATURE_SURVEY_SCHEMA = _closed(
 _PLANNED_UNIT = _closed(
     {
         "unit_id": _NONEMPTY,
-        "kind": {
-            "type": "string",
-            "enum": [
-                "prerequisite",
-                "intuition",
-                "derivation",
-                "example",
-                "misconception",
-                "further_reading",
-            ],
-        },
-        "title": _NONEMPTY,
         "anchor_block_ids": _BLOCK_IDS,
         "placement": {
             "type": "string",
             "enum": ["inline", "chapter"],
         },
-        "reader_question": _NONEMPTY,
-        "added_value": _NONEMPTY,
-        "value_dimensions": {
-            "type": "array",
-            "items": {
-                "type": "string",
-                "enum": list(VALUE_DIMENSIONS),
-            },
-            "uniqueItems": True,
-            "minItems": 1,
-        },
+        "purpose": _NONEMPTY,
         "evidence_ids": _STRING_IDS,
     },
     (
         "unit_id",
-        "kind",
-        "title",
         "anchor_block_ids",
         "placement",
-        "reader_question",
-        "added_value",
-        "value_dimensions",
+        "purpose",
         "evidence_ids",
     ),
 )
@@ -159,10 +125,11 @@ CHAPTER_PLAN_SCHEMA = _closed(
 )
 _LEARNING_UNIT = _closed(
     {
-        **_PLANNED_UNIT["properties"],
-        "content": _NONEMPTY,
+        "unit_id": _NONEMPTY,
+        "title": _NONEMPTY,
+        "content_markdown": _NONEMPTY,
     },
-    (*_PLANNED_UNIT["required"], "content"),
+    ("unit_id", "title", "content_markdown"),
 )
 CHAPTER_GUIDE_SCHEMA = _closed(
     {
@@ -178,10 +145,29 @@ _REVIEW_DECISION = _closed(
             "type": "string",
             "enum": ["keep", "replace", "remove"],
         },
-        "replacement": {"type": ["string", "null"]},
+        "replacement_title": {"type": ["string", "null"]},
+        "replacement_markdown": {"type": ["string", "null"]},
         "reason": _NONEMPTY,
     },
-    ("unit_id", "decision", "replacement", "reason"),
+    (
+        "unit_id",
+        "decision",
+        "replacement_title",
+        "replacement_markdown",
+        "reason",
+    ),
+)
+AUTHOR_IDENTITY_SCHEMA = _closed(
+    {
+        "authors": _STRING_IDS,
+        "confidence": {
+            "type": "string",
+            "enum": ["high", "medium", "low"],
+        },
+        "basis": _NONEMPTY,
+        "anchor_block_ids": _STRING_IDS,
+    },
+    ("authors", "confidence", "basis", "anchor_block_ids"),
 )
 CHAPTER_GUIDE_REVIEW_SCHEMA = _closed(
     {
@@ -198,6 +184,7 @@ def literature_request_prompt(
     *,
     blocks: Sequence[Mapping[str, Any]],
     intent: str,
+    prior_companion: Mapping[str, Any] | None = None,
 ) -> str:
     return _prompt(
         LITERATURE_REQUEST_PROMPT_VERSION,
@@ -213,9 +200,20 @@ def literature_request_prompt(
         relevant evidence, and never force a source into a learning unit or
         bibliography merely to meet the candidate count. Avoid requests whose
         only purpose is to summarize or restate the source. Never invent or
-        modify source block IDs.
+        modify source block IDs. A prior Companion may be supplied as optional
+        working context. Use it to notice promising gaps, connections, and
+        evidence leads, but do not treat its content, structure, or bibliography
+        as current requirements.
         """,
-        {"intent": intent, "blocks": list(blocks)},
+        {
+            "intent": intent,
+            "blocks": list(blocks),
+            "prior_companion": (
+                dict(prior_companion)
+                if prior_companion is not None
+                else None
+            ),
+        },
     )
 
 
@@ -224,6 +222,7 @@ def literature_survey_prompt(
     blocks: Sequence[Mapping[str, Any]],
     intent: str,
     selected_evidence: Sequence[Mapping[str, Any]],
+    prior_companion: Mapping[str, Any] | None = None,
 ) -> str:
     return _prompt(
         LITERATURE_SURVEY_PROMPT_VERSION,
@@ -232,12 +231,20 @@ def literature_survey_prompt(
         chapter planning. Synthesize only claims supported by the selected
         evidence and source blocks. Every theme must cite supplied evidence IDs
         and existing block IDs. Record limitations explicitly; do not invent
-        sources, identifiers, or unsupported consensus.
+        sources, identifiers, or unsupported consensus. A prior Companion is
+        optional reference material: improve on useful insights when current
+        evidence supports them, but do not inherit its claims or bibliography
+        without present support.
         """,
         {
             "intent": intent,
             "blocks": list(blocks),
             "selected_evidence": list(selected_evidence),
+            "prior_companion": (
+                dict(prior_companion)
+                if prior_companion is not None
+                else None
+            ),
         },
     )
 
@@ -251,26 +258,30 @@ def chapter_plan_prompt(
     intent: str,
     literature_survey: Mapping[str, Any] | None = None,
     selected_evidence: Sequence[Mapping[str, Any]] = (),
+    prior_companion: Mapping[str, Any] | None = None,
 ) -> str:
     return _prompt(
         CHAPTER_PLAN_PROMPT_VERSION,
         """
-        Plan selective textbook additions for this source chapter after reading
-        the document-level literature survey. Do not write a chapter summary or
-        guide. Propose a learning unit only when it answers a concrete reader
-        question and adds value not already supplied by the source. The allowed
-        value dimensions are motivation_or_argument_role,
-        genuinely_different_presentation, deeper_or_nonconventional_implication,
-        omitted_intermediate_reasoning, substantive_connection,
-        reliable_history_or_fact, and materially_useful_later_development.
-        added_value must name the concrete increment absent from the source.
-        Paraphrase, same-meaning rewrite, repeated reasoning, and generic
-        summary are not added value. State inline or chapter placement, exact
-        source anchors, and selected evidence IDs. Treat inline and chapter
-        placement as equally valid choices; there is no placement quota.
-        Evidence IDs may be empty for a purely source-grounded clarification.
-        Terminology and translation are owned by a separate workflow. Never
-        invent source or evidence IDs.
+        Plan selective additions for this source chapter after reading the
+        document-level literature survey. ARC supplies source context,
+        evidence, anchors, and recoverable work state; it does not prescribe
+        a creative or pedagogical form. Propose a learning unit only for a
+        concrete increment absent from the source. `purpose` must say what
+        that increment is, not impose a presentation format. Questions,
+        close reading, distinctions, argument maps, history, counterexamples,
+        objections, connections, and reading paths are non-exhaustive
+        inspirations, not a required taxonomy or quota. Inline and chapter
+        placement are equally valid; paragraph-local and cross-paragraph work
+        are equally valid; there is no default or quota for either. Do not add
+        paraphrase, same-meaning rewrite, repeated reasoning, or generic
+        summary. Give exact source anchors and selected evidence IDs. Evidence
+        IDs may be empty for a purely source-grounded addition. Terminology and
+        translation are owned by a separate workflow. Never invent source or
+        evidence IDs. A prior Companion may be supplied as optional reference.
+        Preserve, deepen, recombine, or discard its ideas according to the
+        current source, intent, and evidence; never copy its repeated format or
+        treat it as a required template.
         """,
         {
             "chapter_id": chapter_id,
@@ -283,6 +294,11 @@ def chapter_plan_prompt(
                 or {"themes": [], "limitations": []}
             ),
             "selected_evidence": list(selected_evidence),
+            "prior_companion": (
+                dict(prior_companion)
+                if prior_companion is not None
+                else None
+            ),
         },
     )
 
@@ -295,19 +311,29 @@ def chapter_guide_prompt(
     target_language: str,
     language_result: Mapping[str, Any],
     evidence: Sequence[Mapping[str, Any]],
+    prior_companion: Mapping[str, Any] | None = None,
 ) -> str:
     return _prompt(
         CHAPTER_GUIDE_PROMPT_VERSION,
         """
-        Write only the planned learning units; do not write a chapter summary or
-        guide. Unit IDs, kinds, titles, anchors, placement, reader questions,
-        added-value statements, value dimensions, and evidence IDs must exactly
-        match the plan. Do not turn a planned increment into paraphrase,
-        same-meaning rewrite, repeated reasoning, or generic summary. Inline
-        and chapter units are equally important and have no quota. A translation
-        lane runs independently. Use the supplied chapter glossary consistently.
-        Ground literature claims only in the selected evidence assigned to each
-        unit.
+        Write only the planned learning units. ARC supplies source context,
+        evidence, anchors, and recoverable work state; it does not constrain
+        your creative form. Preserve planned unit IDs and ground every unit in
+        its planned anchors and evidence. Choose the form that makes its
+        particular increment clearest: questions, close reading, distinctions,
+        argument maps, history, counterexamples, objections, connections, and
+        reading paths are non-exhaustive inspirations, not a taxonomy or quota.
+        Do not turn a planned increment into paraphrase, same-meaning rewrite,
+        repeated reasoning, or generic summary. Inline and chapter units, and
+        paragraph-local and cross-paragraph units, are equally important with no
+        quota. Write title and Markdown in the target language. Cite every
+        evidence-grounded claim near the claim as `[@evidence-id]`; use only
+        selected evidence IDs assigned to that unit. A translation lane runs
+        independently; use the supplied chapter glossary consistently.
+        A prior Companion may be supplied as optional reference material.
+        Improve, extend, recombine, or discard it freely. It is neither a
+        template nor an accepted source of current citations; use only the
+        current selected evidence IDs in new output.
         """,
         {
             "target_language": target_language,
@@ -316,6 +342,11 @@ def chapter_guide_prompt(
             "blocks": list(blocks),
             "glossary": list(glossary),
             "selected_evidence": list(evidence),
+            "prior_companion": (
+                dict(prior_companion)
+                if prior_companion is not None
+                else None
+            ),
         },
     )
 
@@ -327,20 +358,27 @@ def chapter_guide_review_prompt(
     blocks: Sequence[Mapping[str, Any]],
     glossary: Sequence[Mapping[str, Any]],
     evidence: Sequence[Mapping[str, Any]],
+    prior_companion: Mapping[str, Any] | None = None,
 ) -> str:
     return _prompt(
         CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
         """
-        Review every proposed learning unit against its reader question,
-        added-value claim, source anchors, and selected evidence. Return exactly
-        one keep, replace, or remove decision for every draft unit in draft
-        order. A replacement changes content only and must remain grounded in
-        the immutable source/evidence identities. Remove any unit that is only
-        paraphrase, same-meaning rewrite, repeated reasoning, or generic summary,
-        or whose added_value does not identify an increment absent from the
-        source. Judge inline and chapter placements by the same value standard;
-        keep no quota for either. Use null replacement for keep and remove. Do
-        not add units or write a summary.
+        Review every proposed learning unit against its planned purpose, source
+        anchors, and selected evidence. ARC provides context and recovery, not
+        a prescribed creative form. Return exactly one keep, replace, or remove
+        decision for every draft unit in draft order. A replacement may change
+        both title and Markdown, but may not change the unit identity, source
+        anchors, placement, purpose, or evidence IDs. Remove units that are
+        paraphrase, same-meaning rewrite, repeated reasoning, or generic
+        summary. Questions, close reading, distinctions, argument maps,
+        history, counterexamples, objections, connections, and reading paths
+        are non-exhaustive inspirations, never a quota. Judge inline/chapter
+        and paragraph-local/cross-paragraph work by the same value standard.
+        Require nearby `[@evidence-id]` citations for evidence-grounded claims.
+        Use null replacement fields for keep and remove. Do not add units or
+        write a summary. A prior Companion, when supplied, is optional reference
+        material rather than a template or an authority; judge the current
+        draft against the current source, intent, and evidence.
         """,
         {
             "plan": dict(plan),
@@ -348,6 +386,39 @@ def chapter_guide_review_prompt(
             "source_blocks": list(blocks),
             "glossary": list(glossary),
             "selected_evidence": list(evidence),
+            "prior_companion": (
+                dict(prior_companion)
+                if prior_companion is not None
+                else None
+            ),
+        },
+    )
+
+
+def author_identity_prompt(
+    *,
+    title: str,
+    blocks: Sequence[Mapping[str, Any]],
+    auto_candidates: Sequence[Mapping[str, Any]],
+) -> str:
+    return _prompt(
+        AUTHOR_IDENTITY_PROMPT_VERSION,
+        """
+        Verify publication authorship from the supplied title, source blocks,
+        and automatically parsed candidates with their bases. Author names are
+        publication identity, not a constraint on Companion interpretation or
+        creative form. Confirm or correct an automatic candidate when the
+        supplied material supports it, or infer an author when there is no
+        candidate only when the material makes the attribution very certain.
+        Do not guess. Use high confidence only for a very certain attribution;
+        at medium or low confidence, authors must be empty. Give the exact
+        source anchors that support a high-confidence attribution. Explain the
+        basis even when authors is empty. Never invent source block IDs.
+        """,
+        {
+            "title": title,
+            "blocks": list(blocks),
+            "auto_candidates": list(auto_candidates),
         },
     )
 
@@ -369,6 +440,8 @@ def _prompt(
 
 
 __all__ = [
+    "AUTHOR_IDENTITY_PROMPT_VERSION",
+    "AUTHOR_IDENTITY_SCHEMA",
     "CHAPTER_GUIDE_PROMPT_VERSION",
     "CHAPTER_GUIDE_REVIEW_PROMPT_VERSION",
     "CHAPTER_GUIDE_REVIEW_SCHEMA",
@@ -379,7 +452,7 @@ __all__ = [
     "LITERATURE_REQUEST_PROMPT_VERSION",
     "LITERATURE_SURVEY_PROMPT_VERSION",
     "LITERATURE_SURVEY_SCHEMA",
-    "VALUE_DIMENSIONS",
+    "author_identity_prompt",
     "chapter_guide_prompt",
     "chapter_guide_review_prompt",
     "chapter_plan_prompt",

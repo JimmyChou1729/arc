@@ -1,12 +1,10 @@
 # ARC Companion Quick Start
 
 `arc-companion` builds a source-anchored reading companion with translation,
-chapter guides, a searchable PDF, and a static Web reader. Use the Companion
-workflow for a complete managed run; use this manual for its package commands.
+guides, searchable PDF, and Web reader. Use this manual for package commands.
 
-Build and resume require the public `arc-translate` facade and the declared
-paper, LLM, and jobs dependencies. An incomplete runtime returns
-`runtime_dependency_missing` before creating or changing a project.
+Build and resume require public `arc-translate`, paper, LLM, and jobs
+dependencies; an incomplete runtime returns `runtime_dependency_missing`.
 
 ## Build from a Local Rich Source
 
@@ -23,9 +21,10 @@ arc-companion build <source.md> \
 ```
 
 Add `--reuse-translation-from <existing-project-dir>` to preserve a successful
-project's exact source-compatible language, glossary, and chapter translations.
-Companion verifies them against the accepted book and copies them into
-target-owned state without invoking a translation provider.
+project's exact source-compatible language, glossary, and translations without
+invoking a translation provider. Companion also copies the prior accepted guide
+as optional model context: the model may improve, recombine, or discard old
+ideas; its structure and bibliography are not current constraints.
 
 Use the directory explicitly chosen by the user as `<project-dir>` itself;
 do not append `companion`, `build-v2`, `fresh`, or an attempt-specific suffix.
@@ -64,10 +63,12 @@ Before chapter planning, Companion requests one document-wide log of at least
 central later debates. This is an inspection floor, not a citation target;
 only directly relevant selected evidence reaches planning and bibliography.
 
-Paragraph-local and chapter-level/cross-paragraph units have equal status and
-no placement quota. Retain only distinct motivation, presentation,
-implication, omitted reasoning, connection, reliable context, or useful later
-development. Remove generic summary, paraphrase, and repeated source reasoning.
+Paragraph-local and chapter-level/cross-paragraph units have equal status and no
+placement quota. Retain only distinct motivation, presentation, implication,
+omitted reasoning, connection, reliable context, or useful later development;
+remove generic summary, paraphrase, and repetition. Learning-unit prose is free
+CommonMark: ARC constrains anchors, evidence, coverage, and renderability, not
+the model's explanatory form.
 
 `--paper-cache-root` is optional. Without it, Companion uses ARC's shared,
 reusable paper cache. Companion's durable runs, diagnostics, and frozen source

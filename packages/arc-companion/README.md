@@ -7,7 +7,7 @@ and reusable language, glossary, and translation results from `arc-translate`.
 Its public build API is the split translation/guide workflow:
 `CompanionBuildRequest`, `CompanionGenerationRecipe`, and
 `CompanionBuildHandler` are the sole durable build lineage. Published content
-uses the `arc.companion.accepted_book.v3` delivery contract and embeds the
+uses the `arc.companion.accepted_book.v4` delivery contract and embeds the
 current RichDocument v2 inline-span payloads directly.
 
 A build or resume requires the complete installed runtime, including the
@@ -34,6 +34,16 @@ verified language, glossary, and chapter-translation artifacts from a
 successful project while producing a new guide. Reused bytes are copied into
 target-owned state and checked against the source's final accepted book, so the
 new project remains usable after the source project is unavailable.
+The prior accepted Companion is copied with them and supplied to planning,
+drafting, and review as optional reference context. It may improve, extend,
+recombine, or discard prior ideas; old structure and bibliography are not
+templates or current evidence.
+
+Use repeatable `--author <name>` only for a user-confirmed author. Otherwise
+Companion extracts possible author names from source metadata and bylines, then
+asks the model to publish them only at high confidence; uncertain names are
+omitted. Use `--reader-labels <json>` to supply the complete reader-interface
+vocabulary for a target language that ARC does not ship.
 
 Use the explicitly selected `--project-dir` as the project root itself. Keep a
 stable name; do not append `build-v2`, `fresh`, or attempt-specific suffixes.
@@ -73,6 +83,31 @@ shared reusable paper cache unless `--paper-cache-root` selects another shared
 cache. Figure assets needed by a completed release are frozen into the project
 before publication completes, so later rendering does not depend on cache
 retention.
+
+The project layout is stable:
+
+```text
+<project-dir>/
+  companion.pdf
+  companion.html
+  releases/<release-id>/...
+  .arc/companion/
+    jobs/<run-id>/working/
+      semantic-input.json
+      index.json
+      artifacts/...
+      candidates/...
+      last-error.json
+    diagnostics/visual/<run-id>/...
+    operator-inputs/<run-id>/...
+    frozen-assets/...
+```
+
+Only `working/` is agent-editable recovery state. Candidate model outputs are
+written there before semantic validation, so an agent may repair a malformed
+candidate and resume without another provider call, or delete it to request
+regeneration. Immutable releases, snapshots, locks, and frozen content objects
+remain ARC-managed.
 
 Failed Companion attempts may be explicitly resumed after inspecting or
 repairing the selected run's `working/` state. Each failed resume uses a new

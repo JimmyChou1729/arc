@@ -38,6 +38,13 @@ identifier that `arc-paper` can resolve to rich source. A PDF is optional and
 is used only for validation and page mapping. Preserve the user's exact
 `user_intent`; when absent, Companion uses its neutral textbook intent.
 
+If the user explicitly supplies an author, pass one `--author <name>` per
+author. Otherwise leave author resolution to Companion: source metadata and
+bylines are only candidates, and a model identity check publishes them only at
+high confidence. Do not guess or force an uncertain author. Reader-facing
+framework labels must use the target language; for an unsupported target
+language, supply one complete label map with `--reader-labels <json>`.
+
 ## Phase 2: Build
 
 ### Step 1: Start the durable build
@@ -64,6 +71,10 @@ Reuse is exact and target-owned: Companion verifies the successful source
 book, language result, glossary, chapter coverage, and translated bytes, then
 copies those bytes into the new project. The new run may regenerate guide
 content without calling a translation provider.
+It also copies the prior accepted Companion and supplies its guide content to
+the new literature, planning, drafting, and review calls as optional context.
+The model may preserve, deepen, recombine, or discard prior ideas. Do not treat
+the old form as a template or its bibliography as current selected evidence.
 
 Choose `<host-authority>` once: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
@@ -98,6 +109,13 @@ useful later developments. Paraphrase, same-meaning rewriting, repeated source
 reasoning, and generic summary are not Companion value; remove such units
 instead of forcing one expansion per paragraph or chapter.
 
+The guide lane writes free-form CommonMark learning units rather than selecting
+from a fixed menu of note types. Headings, short questions, worked reasoning,
+comparisons, historical context, counterpoints, lists, equations, and other
+forms are available when useful; none is a required repeated template. ARC
+checks source anchoring, citation identity, coverage, and renderability while
+leaving explanatory form and chapter composition to the model.
+
 When translation is enabled, `arc-translate` builds the bilingual glossary
 after chapter planning and evidence. The glossary is a barrier; translation
 and guide generation then run in parallel for each chapter using only locally
@@ -119,6 +137,15 @@ arc-companion resume --project-dir <project-dir> \
 For an unsafe reviewer patch, the supervision request permits discarding that
 review while retaining the locally validated draft. There is no review
 arbitration or conflict graph.
+
+For a failed build, inspect
+`<project-dir>/.arc/companion/jobs/<run-id>/working/`. Candidate files are
+written before semantic validation and errors report their exact paths. Edit a
+candidate to adopt the repaired content on resume, or delete it to regenerate
+that step. Keep visual QA under
+`.arc/companion/diagnostics/visual/<run-id>/` and explicit manual pause inputs
+under `.arc/companion/operator-inputs/<run-id>/`; do not create attempt-named
+project roots or loose project-level QA directories.
 
 ## Phase 3: Deliver
 

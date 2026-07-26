@@ -23,6 +23,7 @@ from arc_companion.build import (
     CompanionBuildHandler,
 )
 from arc_companion.prompts import (
+    AUTHOR_IDENTITY_PROMPT_VERSION,
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
@@ -65,7 +66,14 @@ class FakeGuideTasks:
         contract, payload = _request_payload(request.prompt)
         with self._lock:
             self.counts[contract] += 1
-        if contract == LITERATURE_REQUEST_PROMPT_VERSION:
+        if contract == AUTHOR_IDENTITY_PROMPT_VERSION:
+            value = {
+                "authors": [],
+                "confidence": "low",
+                "basis": "The fixture contains no confirmed author.",
+                "anchor_block_ids": [],
+            }
+        elif contract == LITERATURE_REQUEST_PROMPT_VERSION:
             value = {
                 "requests": [
                     {
@@ -84,13 +92,9 @@ class FakeGuideTasks:
             units = [
                 {
                     "unit_id": "intuition",
-                    "kind": "intuition",
-                    "title": f"Question for {payload['title']}",
                     "anchor_block_ids": [block_id],
                     "placement": "inline",
-                    "reader_question": "What does this source claim mean?",
-                    "added_value": "Makes one implicit connection explicit.",
-                    "value_dimensions": ["substantive_connection"],
+                    "purpose": "Makes one implicit connection explicit.",
                     "evidence_ids": [],
                 }
             ]
@@ -98,15 +102,9 @@ class FakeGuideTasks:
                 units.append(
                     {
                         "unit_id": "redundant",
-                        "kind": "intuition",
-                        "title": "Restatement",
                         "anchor_block_ids": [block_id],
                         "placement": "chapter",
-                        "reader_question": "Can the source be repeated?",
-                        "added_value": "Claims to repeat the source.",
-                        "value_dimensions": [
-                            "genuinely_different_presentation"
-                        ],
+                        "purpose": "Claims to repeat the source.",
                         "evidence_ids": [],
                     }
                 )
@@ -126,8 +124,13 @@ class FakeGuideTasks:
                 "chapter_id": payload["plan"]["chapter_id"],
                 "learning_units": [
                     {
-                        **item,
-                        "content": (
+                        "unit_id": item["unit_id"],
+                        "title": (
+                            f"Question for {payload['plan']['chapter_id']}"
+                            if item["unit_id"] == "intuition"
+                            else "Restatement"
+                        ),
+                        "content_markdown": (
                             "A focused source-anchored explanation."
                             if item["unit_id"] == "intuition"
                             else "The source says the same thing again."
@@ -147,7 +150,8 @@ class FakeGuideTasks:
                             if item["unit_id"] == "redundant"
                             else "keep"
                         ),
-                        "replacement": None,
+                        "replacement_title": None,
+                        "replacement_markdown": None,
                         "reason": (
                             "It merely restates the source."
                             if item["unit_id"] == "redundant"

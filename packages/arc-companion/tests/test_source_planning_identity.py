@@ -21,14 +21,17 @@ from arc_companion.build import CompanionBuildHandler
 from arc_companion.contracts import AcceptedBook, AcceptedChapter, SourceAnchor
 from arc_companion.generation_validation import (
     CompanionContentError,
+    apply_safe_guide_review,
+    validate_author_identity,
     validate_chapter_guide,
     validate_chapter_plan,
     validate_literature_request_plan,
 )
 from arc_companion.prompts import (
+    AUTHOR_IDENTITY_SCHEMA,
     CHAPTER_PLAN_SCHEMA,
     LITERATURE_REQUEST_PLAN_SCHEMA,
-    VALUE_DIMENSIONS,
+    author_identity_prompt,
     chapter_plan_prompt,
     literature_request_prompt,
 )
@@ -82,7 +85,14 @@ def _prompt_payload(prompt: str) -> dict:
 
 def test_companion_provider_enum_nodes_declare_string_types() -> None:
     planned_unit = CHAPTER_PLAN_SCHEMA["properties"]["learning_units"]["items"]
-    assert planned_unit["properties"]["kind"]["type"] == "string"
+    assert set(planned_unit["properties"]) == {
+        "unit_id",
+        "anchor_block_ids",
+        "placement",
+        "purpose",
+        "evidence_ids",
+    }
+    assert planned_unit["properties"]["placement"]["type"] == "string"
     evidence = LITERATURE_REQUEST_PLAN_SCHEMA["properties"]["requests"]["items"]
     assert evidence["properties"]["kind"]["type"] == "string"
     assert LITERATURE_REQUEST_PLAN_SCHEMA["properties"]["requests"][
@@ -111,25 +121,56 @@ def test_evidence_first_prompts_encode_selective_value_contract() -> None:
     ):
         assert category in request
     assert "not an inclusion quota" in request
-    assert "Do not write a chapter summary or guide" in plan
+    assert "Do not add" in plan
     for prohibited in (
-        "Paraphrase",
+        "paraphrase",
         "same-meaning rewrite",
         "repeated reasoning",
         "generic summary",
     ):
         assert prohibited in plan
-    assert "no placement quota" in plan
-    assert tuple(
-        CHAPTER_PLAN_SCHEMA["properties"]["learning_units"]["items"][
-            "properties"
-        ]["value_dimensions"]["items"]["enum"]
-    ) == VALUE_DIMENSIONS
+    for phrase in (
+        "does not prescribe a creative or pedagogical form",
+        "non-exhaustive inspirations",
+        "no default or quota",
+        "paragraph-local and cross-paragraph work",
+    ):
+        assert phrase in plan
+    assert "reader question" not in plan.casefold()
 
 
-def test_chapter_plan_rejects_unknown_value_dimension() -> None:
+def test_prior_companion_is_reference_context_not_a_template() -> None:
+    prior = {
+        "schema_version": "arc.companion.prior_reference.v1",
+        "chapters": [
+            {
+                "chapter_id": "chapter",
+                "learning_units": [
+                    {
+                        "title": "旧伴读",
+                        "content_markdown": "一个值得继续深化的旧洞见。",
+                    }
+                ],
+            }
+        ],
+    }
+    prompt = chapter_plan_prompt(
+        chapter_id="chapter",
+        title="Chapter",
+        blocks=[{"block_id": "b1", "text": "source"}],
+        target_language="zh-CN",
+        intent="Improve the reading companion.",
+        prior_companion=prior,
+    )
+
+    assert _prompt_payload(prompt)["prior_companion"] == prior
+    assert "optional reference" in prompt
+    assert "never copy its repeated format" in prompt
+
+
+def test_chapter_plan_rejects_legacy_presentation_fields() -> None:
     with pytest.raises(
-        CompanionContentError, match="value dimension is unsupported"
+        CompanionContentError, match="invalid fields"
     ):
         validate_chapter_plan(
             {
@@ -137,14 +178,11 @@ def test_chapter_plan_rejects_unknown_value_dimension() -> None:
                 "learning_units": [
                     {
                         "unit_id": "unit",
-                        "kind": "intuition",
-                        "title": "A useful addition",
                         "anchor_block_ids": ["b1"],
                         "placement": "inline",
-                        "reader_question": "What is missing?",
-                        "added_value": "Adds a distinct physical interpretation.",
-                        "value_dimensions": ["generic_summary"],
+                        "purpose": "Adds a distinct physical interpretation.",
                         "evidence_ids": [],
+                        "kind": "intuition",
                     }
                 ],
             },
@@ -170,13 +208,9 @@ def test_guide_validation_decodes_model_escaped_paragraphs() -> None:
         "learning_units": [
             {
                 "unit_id": "unit",
-                "kind": "intuition",
-                "title": "Distinct explanation",
                 "anchor_block_ids": ["b1"],
                 "placement": "inline",
-                "reader_question": "What changes?",
-                "added_value": "Adds an omitted conceptual connection.",
-                "value_dimensions": ["substantive_connection"],
+                "purpose": "Adds an omitted conceptual connection.",
                 "evidence_ids": [],
             }
         ],
@@ -185,8 +219,9 @@ def test_guide_validation_decodes_model_escaped_paragraphs() -> None:
         "chapter_id": "chapter",
         "learning_units": [
             {
-                **plan["learning_units"][0],
-                "content": r"First paragraph.\n\nSecond paragraph.",
+                "unit_id": "unit",
+                "title": "A distinction rather than a question",
+                "content_markdown": r"First paragraph.\n\nSecond paragraph.",
             }
         ],
     }
@@ -194,9 +229,113 @@ def test_guide_validation_decodes_model_escaped_paragraphs() -> None:
     validated = validate_chapter_guide(guide, plan=plan)
 
     assert (
-        validated["learning_units"][0]["content"]
+        validated["learning_units"][0]["content_markdown"]
         == "First paragraph.\n\nSecond paragraph."
     )
+    assert validated["learning_units"][0]["purpose"] == (
+        "Adds an omitted conceptual connection."
+    )
+
+
+def test_guide_review_can_replace_title_and_markdown_only() -> None:
+    draft = {
+        "chapter_id": "chapter",
+        "learning_units": [
+            {
+                "unit_id": "unit",
+                "anchor_block_ids": ["b1"],
+                "placement": "chapter",
+                "purpose": "Distinguishes two source positions.",
+                "evidence_ids": ["e1"],
+                "title": "Initial title",
+                "content_markdown": "Initial prose [@e1].",
+            }
+        ],
+    }
+
+    reviewed, audit = apply_safe_guide_review(
+        draft,
+        {
+            "decisions": [
+                {
+                    "unit_id": "unit",
+                    "decision": "replace",
+                    "replacement_title": "A sharper distinction",
+                    "replacement_markdown": "Replacement prose [@e1].",
+                    "reason": "The revision improves the distinction.",
+                }
+            ]
+        },
+    )
+
+    assert reviewed["learning_units"][0] == {
+        **draft["learning_units"][0],
+        "title": "A sharper distinction",
+        "content_markdown": "Replacement prose [@e1].",
+    }
+    assert audit[0]["decision"] == "replace"
+    with pytest.raises(CompanionContentError, match="null replacement"):
+        apply_safe_guide_review(
+            draft,
+            {
+                "decisions": [
+                    {
+                        "unit_id": "unit",
+                        "decision": "keep",
+                        "replacement_title": "Not allowed",
+                        "replacement_markdown": None,
+                        "reason": "Unsafe mutation.",
+                    }
+                ]
+            },
+        )
+
+
+def test_author_identity_requires_high_confidence_for_authors() -> None:
+    prompt = author_identity_prompt(
+        title="A source title",
+        blocks=[{"block_id": "b1", "text": "By Example Author."}],
+        auto_candidates=[
+            {"author": "Example Author", "basis": "source byline"}
+        ],
+    )
+    assert "publication identity" in prompt
+    assert "Do not guess" in prompt
+    assert set(AUTHOR_IDENTITY_SCHEMA["properties"]) == {
+        "authors",
+        "confidence",
+        "basis",
+        "anchor_block_ids",
+    }
+    assert validate_author_identity(
+        {
+            "authors": ["Example Author"],
+            "confidence": "high",
+            "basis": "The byline identifies the author.",
+            "anchor_block_ids": ["b1"],
+        },
+        block_ids=("b1",),
+    )["authors"] == ["Example Author"]
+    with pytest.raises(CompanionContentError, match="must be empty"):
+        validate_author_identity(
+            {
+                "authors": ["Possibly Someone"],
+                "confidence": "medium",
+                "basis": "The source is ambiguous.",
+                "anchor_block_ids": ["b1"],
+            },
+            block_ids=("b1",),
+        )
+    with pytest.raises(CompanionContentError, match="existing block IDs"):
+        validate_author_identity(
+            {
+                "authors": ["Example Author"],
+                "confidence": "high",
+                "basis": "Unsupported anchor.",
+                "anchor_block_ids": ["missing"],
+            },
+            block_ids=("b1",),
+        )
 
 
 def test_source_chapters_cover_front_matter_and_mixed_headings_exactly(
@@ -237,7 +376,7 @@ def test_source_chapter_without_heading_uses_document_title(
     chapters = plan_source_chapters(document)
 
     assert len(chapters) == 1
-    assert chapters[0].title == "Document"
+    assert chapters[0].title == "source"
     assert chapters[0].block_ids == tuple(
         block.block_id for block in document.blocks
     )
@@ -287,7 +426,7 @@ def test_equation_label_provenance_projects_to_prompts_anchors_and_reader(
     reader = CompanionRenderer().render_web(book, tmp_path / "reader")
     html = reader.read_text(encoding="utf-8")
     assert 'class="equation-label">19' in html
-    assert "Rich-source label: 22" in html
+    assert "原文公式编号：22" in html
 
 
 def test_empty_intent_contract_enters_prompt_and_identity(
@@ -354,7 +493,11 @@ def test_provider_model_and_prompt_contract_change_run_identity(
     recipe_input = semantic_input["generation_recipe"]
     assert (
         recipe_input["schema_version"]
-        == "arc.companion.generation_recipe.v5"
+        == "arc.companion.generation_recipe.v6"
+    )
+    assert (
+        recipe_input["author_identity_prompt"]
+        == auto.author_identity_prompt
     )
     assert (
         recipe_input["literature_request_prompt"]
