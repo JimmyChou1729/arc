@@ -197,7 +197,6 @@ def _context(tmp_path: Path, run_id: str = "parent-run") -> RunContext:
         repository,
         snapshot,
         resume_input=None,
-        execution_slice=None,
     )
 
 
@@ -456,7 +455,6 @@ def test_failed_review_can_accept_validated_pre_review_translation(tmp_path):
             "resume_key": first.awaiting.resume_key,
             "action": "accept_pre_review",
         },
-        execution_slice=None,
     )
     resumed = workflow.translate_blocks(
         resumed_context,

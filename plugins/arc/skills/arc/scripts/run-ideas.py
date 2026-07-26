@@ -144,7 +144,10 @@ def run_ideas(
     )
 
     def package_progress(event: dict[str, Any]) -> None:
-        if event.get("event") in _FOREGROUND_PROGRESS_EVENTS:
+        event_name = event.get("event")
+        if event_name in _FOREGROUND_PROGRESS_EVENTS or (
+            isinstance(event_name, str) and event_name.startswith("llm_")
+        ):
             progress.emit(event)
 
     handler = ProposerReviewerHandler(
@@ -153,7 +156,6 @@ def run_ideas(
             max_concurrent_loops=max_concurrent,
             max_concurrent_workers=1,
             llm=llm_options,
-            progress_callback=package_progress,
         ),
     )
     progress.emit({"event": "ideas_batch_started"})
@@ -177,11 +179,14 @@ def run_ideas(
             )
         ):
             try:
-                snapshot = (executor or _execute_batch)(
-                    repository,
-                    spec,
-                    handler,
-                )
+                if executor is None:
+                    snapshot = RunEngine(repository).execute(
+                        spec,
+                        handler,
+                        event_sink=package_progress,
+                    )
+                else:
+                    snapshot = executor(repository, spec, handler)
             except Exception as exc:
                 execution_error = exc
     except Exception as exc:
@@ -301,14 +306,6 @@ def _maybe_publish_partial(
 def _append_unique_warning(warnings: list[str], warning: str) -> None:
     if warning not in warnings:
         warnings.append(warning)
-
-
-def _execute_batch(
-    repository: RunRepository,
-    spec: RunSpec,
-    handler: ProposerReviewerHandler,
-) -> RunSnapshot:
-    return RunEngine(repository).execute(spec, handler)
 
 
 def _recover_execution_failure(
