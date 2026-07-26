@@ -26,6 +26,7 @@ from .project import CompanionProjectPaths
 from .request_contracts import (
     CompanionBuildRequest,
     CompanionGenerationRecipe,
+    decode_build_request,
     decode_handler_semantic_input,
 )
 from .source_planning import plan_source_chapters
@@ -134,9 +135,9 @@ def plan_translation_reuse(
             "translation_reuse_source_not_successful",
             "translation reuse source run must be successful",
         )
-    spec = repository.read_spec(run_id)
+    spec = repository.read_working_spec(run_id)
     # Imported lazily to keep render-only package imports lightweight.
-    from .build import COMPANION_BUILD_HANDLER
+    from .build import COMPANION_BUILD_HANDLER, _glossary_contracts
 
     if spec.handler != COMPANION_BUILD_HANDLER:
         raise TranslationReuseError(
@@ -144,8 +145,8 @@ def plan_translation_reuse(
             "translation reuse source uses an incompatible Companion handler",
         )
     try:
-        source_request, source_recipe = decode_handler_semantic_input(
-            spec.semantic_input
+        source_request, source_approx_term_count = (
+            _decode_reuse_source_semantics(spec.semantic_input)
         )
     except (TypeError, ValueError) as exc:
         raise TranslationReuseError(
@@ -167,7 +168,7 @@ def plan_translation_reuse(
             "translation_reuse_target_language_mismatch",
             "translation reuse target language differs from the requested language",
         )
-    if source_recipe.approx_term_count != recipe.approx_term_count:
+    if source_approx_term_count != recipe.approx_term_count:
         raise TranslationReuseError(
             "translation_reuse_glossary_size_mismatch",
             "translation reuse glossary size differs from the requested size",
@@ -252,6 +253,11 @@ def plan_translation_reuse(
             raise TranslationReuseError(
                 "translation_reuse_glossary_mismatch",
                 "source glossary result is incompatible with the target build",
+            )
+        if _glossary_contracts(glossary.to_document(), effective) != book.glossary:
+            raise TranslationReuseError(
+                "translation_reuse_accepted_book_mismatch",
+                "accepted book glossary differs from the source glossary result",
             )
         glossary_digest = glossary_artifact.digest
         artifacts.append(glossary_artifact)
@@ -385,7 +391,7 @@ def stage_translation_reuse_plan(
 ) -> None:
     """Atomically commit a verified bundle descriptor after target-owned copies."""
 
-    spec = repository.read_spec(run_id)
+    spec = repository.read_working_spec(run_id)
     request, _recipe = decode_handler_semantic_input(spec.semantic_input)
     if request.translation_reuse_digest != plan.reuse_digest:
         raise TranslationReuseError(
@@ -707,8 +713,11 @@ def _read_artifact(
     chapter_id: str | None = None,
     block_ids: Sequence[str] = (),
 ) -> _SourceArtifact:
-    artifact_id = _physical_artifact_id(recovery_epoch, logical_id)
-    ref = store.find(artifact_id)
+    ref = None
+    for epoch in range(recovery_epoch, -1, -1):
+        ref = store.find(_physical_artifact_id(epoch, logical_id))
+        if ref is not None:
+            break
     if ref is None:
         raise TranslationReuseError(
             "translation_reuse_artifact_missing",
@@ -731,6 +740,68 @@ def _physical_artifact_id(recovery_epoch: int, logical_id: str) -> str:
         if recovery_epoch == 0
         else f"recovery-{recovery_epoch}/{logical_id}"
     )
+
+
+def _decode_reuse_source_semantics(
+    document: Mapping[str, Any],
+) -> tuple[CompanionBuildRequest, int]:
+    """Decode only source and glossary-size identities needed for reuse.
+
+    Successful legacy projects used generation recipe v4 before literature
+    planning became a semantic stage. Their old prompt identities remain
+    immutable and are irrelevant to exact translation compatibility.
+    """
+
+    try:
+        request, recipe = decode_handler_semantic_input(document)
+        return request, recipe.approx_term_count
+    except ValueError:
+        pass
+    if set(document) != {"request", "generation_recipe"}:
+        raise ValueError("semantic input has invalid fields")
+    raw_request = document["request"]
+    raw_recipe = document["generation_recipe"]
+    if not isinstance(raw_request, Mapping) or not isinstance(
+        raw_recipe, Mapping
+    ):
+        raise ValueError("semantic input members must be objects")
+    legacy_fields = {
+        "schema_version",
+        "model",
+        "approx_term_count",
+        "chapter_plan_prompt",
+        "chapter_guide_prompt",
+        "chapter_guide_review_prompt",
+        "equation_label_visual_prompt",
+    }
+    if (
+        set(raw_recipe) != legacy_fields
+        or raw_recipe.get("schema_version")
+        != "arc.companion.generation_recipe.v4"
+    ):
+        raise ValueError(
+            "unsupported translation reuse source generation recipe"
+        )
+    prompt_fields = legacy_fields - {
+        "schema_version",
+        "model",
+        "approx_term_count",
+    }
+    if any(
+        not isinstance(raw_recipe.get(field), str)
+        or not str(raw_recipe[field]).strip()
+        for field in prompt_fields
+    ):
+        raise ValueError("legacy generation recipe prompt identity is invalid")
+    approx_term_count = raw_recipe.get("approx_term_count")
+    if (
+        isinstance(approx_term_count, bool)
+        or not isinstance(approx_term_count, int)
+        or not 1 <= approx_term_count <= 200
+    ):
+        raise ValueError("legacy generation recipe glossary size is invalid")
+    request = decode_build_request(raw_request)
+    return request, approx_term_count
 
 
 def _require_result_binding(

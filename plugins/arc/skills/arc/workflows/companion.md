@@ -53,6 +53,18 @@ arc-companion build <source-path-or-paper-id> \
   --workers <workers>
 ```
 
+To preserve an already accepted translation and glossary while rebuilding the
+guide under a new intent or prompt contract, add:
+
+```bash
+  --reuse-translation-from <existing-project-dir>
+```
+
+Reuse is exact and target-owned: Companion verifies the successful source
+book, language result, glossary, chapter coverage, and translated bytes, then
+copies those bytes into the new project. The new run may regenerate guide
+content without calling a translation provider.
+
 Choose `<host-authority>` once: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
 identical value when resuming this run. Under `restricted` or `unknown`, follow
@@ -67,12 +79,29 @@ redirect to a managed Companion path.
 
 Companion detects source language once. It skips translation only for a known
 matching primary language; mixed or unknown source is translated. Chapters are
-derived from headings and cover every source block exactly once. Textbook
-notes are selective rather than one expansion per paragraph. When translation
-is enabled, `arc-translate` builds the bilingual glossary after chapter
-planning and evidence. The glossary is a barrier; translation and guide
-generation then run in parallel for each chapter using only locally occurring
-glossary entries.
+derived from headings and cover every source block exactly once.
+
+Guide planning is evidence-first. Before chapter planning, inspect at least 20
+distinct candidate works or substantive discussions across sources named by
+the document, important prior history, and later work central to its debates.
+This is an inspection requirement, not an inclusion quota. Freeze the research
+log, select only evidence that directly adds reader value, and allow only
+selected evidence into chapter planning and the bibliography. Do not retain a
+source merely to make the survey look broad.
+
+Treat paragraph-local notes and chapter-level or cross-paragraph notes as
+equally legitimate. Choose placement from the explanatory need, with no quota
+or default preference. Keep, replace, or remove proposed units based on whether
+they add motivation, a genuinely different presentation, deeper implications,
+omitted reasoning, substantive connections, reliable context, or materially
+useful later developments. Paraphrase, same-meaning rewriting, repeated source
+reasoning, and generic summary are not Companion value; remove such units
+instead of forcing one expansion per paragraph or chapter.
+
+When translation is enabled, `arc-translate` builds the bilingual glossary
+after chapter planning and evidence. The glossary is a barrier; translation
+and guide generation then run in parallel for each chapter using only locally
+occurring glossary entries.
 
 ### Step 2: Resolve a pause
 

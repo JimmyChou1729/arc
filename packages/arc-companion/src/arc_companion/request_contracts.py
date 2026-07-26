@@ -19,14 +19,14 @@ from .prompts import (
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
+    LITERATURE_REQUEST_PROMPT_VERSION,
+    LITERATURE_SURVEY_PROMPT_VERSION,
 )
 
 
 COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v3"
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v2"
-COMPANION_GENERATION_RECIPE_SCHEMA = (
-    "arc.companion.generation_recipe.v4"
-)
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v5"
 COMPANION_CONTENT_CONTRACT = "arc.companion.source_anchored_textbook.v1"
 NEUTRAL_TEXTBOOK_INTENT = (
     "Explain the source faithfully as a neutral textbook companion for an "
@@ -89,6 +89,8 @@ class CompanionGenerationRecipe:
 
     model: ModelSelection = field(default_factory=ModelSelection)
     approx_term_count: int = 50
+    literature_request_prompt: str = LITERATURE_REQUEST_PROMPT_VERSION
+    literature_survey_prompt: str = LITERATURE_SURVEY_PROMPT_VERSION
     chapter_plan_prompt: str = CHAPTER_PLAN_PROMPT_VERSION
     chapter_guide_prompt: str = CHAPTER_GUIDE_PROMPT_VERSION
     chapter_guide_review_prompt: str = (
@@ -110,6 +112,8 @@ class CompanionGenerationRecipe:
                 "approx_term_count must be between 1 and 200"
             )
         expected = {
+            "literature_request_prompt": LITERATURE_REQUEST_PROMPT_VERSION,
+            "literature_survey_prompt": LITERATURE_SURVEY_PROMPT_VERSION,
             "chapter_plan_prompt": CHAPTER_PLAN_PROMPT_VERSION,
             "chapter_guide_prompt": CHAPTER_GUIDE_PROMPT_VERSION,
             "chapter_guide_review_prompt": (
@@ -178,6 +182,8 @@ def encode_generation_recipe(
             "tier": recipe.model.tier,
         },
         "approx_term_count": recipe.approx_term_count,
+        "literature_request_prompt": recipe.literature_request_prompt,
+        "literature_survey_prompt": recipe.literature_survey_prompt,
         "chapter_plan_prompt": recipe.chapter_plan_prompt,
         "chapter_guide_prompt": recipe.chapter_guide_prompt,
         "chapter_guide_review_prompt": (
@@ -245,6 +251,8 @@ def decode_generation_recipe(
             "schema_version",
             "model",
             "approx_term_count",
+            "literature_request_prompt",
+            "literature_survey_prompt",
             "chapter_plan_prompt",
             "chapter_guide_prompt",
             "chapter_guide_review_prompt",
@@ -274,6 +282,12 @@ def decode_generation_recipe(
             tier=_string(model, "tier"),  # type: ignore[arg-type]
         ),
         approx_term_count=_integer(raw_recipe, "approx_term_count"),
+        literature_request_prompt=_string(
+            raw_recipe, "literature_request_prompt"
+        ),
+        literature_survey_prompt=_string(
+            raw_recipe, "literature_survey_prompt"
+        ),
         chapter_plan_prompt=_string(
             raw_recipe, "chapter_plan_prompt"
         ),

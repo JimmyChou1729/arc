@@ -7,7 +7,7 @@ and reusable language, glossary, and translation results from `arc-translate`.
 Its public build API is the split translation/guide workflow:
 `CompanionBuildRequest`, `CompanionGenerationRecipe`, and
 `CompanionBuildHandler` are the sole durable build lineage. Published content
-uses the `arc.companion.accepted_book.v2` delivery contract and embeds the
+uses the `arc.companion.accepted_book.v3` delivery contract and embeds the
 current RichDocument v2 inline-span payloads directly.
 
 A build or resume requires the complete installed runtime, including the
@@ -28,6 +28,12 @@ arc-companion build note.md \
   --user-intent "Explain the main argument and its assumptions." \
   --host-authority <host-authority>
 ```
+
+Use `--reuse-translation-from <existing-project-dir>` to preserve the exact
+verified language, glossary, and chapter-translation artifacts from a
+successful project while producing a new guide. Reused bytes are copied into
+target-owned state and checked against the source's final accepted book, so the
+new project remains usable after the source project is unavailable.
 
 Use the explicitly selected `--project-dir` as the project root itself. Keep a
 stable name; do not append `build-v2`, `fresh`, or attempt-specific suffixes.
@@ -73,6 +79,17 @@ repairing the selected run's `working/` state. Each failed resume uses a new
 recovery epoch while preserving readable successful work. The active PDF,
 HTML, and current release pointer are not replaced until the recovered build
 fully succeeds and the replacement release validates.
+
+Guide generation is evidence-first and selective. One document-wide research
+log must inspect at least 20 distinct candidate works or substantive
+discussions spanning source-named works, important prior history, and central
+later debates. This is not an inclusion quota: only directly relevant selected
+evidence can influence chapter planning or appear in the bibliography.
+Paragraph-local notes and chapter-level or cross-paragraph notes have equal
+status, with placement chosen case by case. Units that merely summarize,
+paraphrase, or repeat the source are removed; retained units must add a
+distinct motivation, presentation, implication, reasoning step, connection,
+reliable context, or useful later development.
 
 ## Tests
 

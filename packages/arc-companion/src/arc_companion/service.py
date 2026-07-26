@@ -194,7 +194,7 @@ class CompanionService:
     ) -> TranslationReuseReceipt | None:
         """Copy a verified source bundle into target-owned durable working state."""
 
-        spec = self.repository.read_spec(run_id)
+        spec = self.repository.read_working_spec(run_id)
         request, recipe = decode_handler_semantic_input(spec.semantic_input)
         if request.translation_reuse_digest is None:
             raise CompanionServiceError(

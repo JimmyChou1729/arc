@@ -314,6 +314,50 @@ def test_provider_model_and_prompt_contract_change_run_identity(
             companion_run_id(request, pinned_model),
         }
     ) == 3
+    semantic_input = encode_handler_semantic_input(request, auto)
+    recipe_input = semantic_input["generation_recipe"]
+    assert (
+        recipe_input["schema_version"]
+        == "arc.companion.generation_recipe.v5"
+    )
+    assert (
+        recipe_input["literature_request_prompt"]
+        == auto.literature_request_prompt
+    )
+    assert (
+        recipe_input["literature_survey_prompt"]
+        == auto.literature_survey_prompt
+    )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            request_contracts,
+            "LITERATURE_REQUEST_PROMPT_VERSION",
+            "arc.companion.literature-request-prompt.test-next",
+        )
+        next_literature_request = CompanionGenerationRecipe(
+            literature_request_prompt=(
+                "arc.companion.literature-request-prompt.test-next"
+            )
+        )
+        assert companion_run_id(
+            request, next_literature_request
+        ) != companion_run_id(request, auto)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            request_contracts,
+            "LITERATURE_SURVEY_PROMPT_VERSION",
+            "arc.companion.literature-survey-prompt.test-next",
+        )
+        next_literature_survey = CompanionGenerationRecipe(
+            literature_survey_prompt=(
+                "arc.companion.literature-survey-prompt.test-next"
+            )
+        )
+        assert companion_run_id(
+            request, next_literature_survey
+        ) != companion_run_id(request, auto)
 
     with monkeypatch.context() as patch:
         patch.setattr(
