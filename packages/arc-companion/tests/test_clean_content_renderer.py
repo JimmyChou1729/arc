@@ -413,6 +413,7 @@ def test_accepted_book_v2_decodes_to_v4_markdown_contract(
     del document["authors"]
     del document["reader_labels"]
     for chapter in document["chapters"]:
+        chapter["guide"] = None
         for unit in chapter["learning_units"]:
             del unit["placement"]
             unit["kind"] = "intuition"

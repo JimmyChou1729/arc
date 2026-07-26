@@ -706,14 +706,8 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
             AcceptedChapter(
                 chapter_id=_string(item["chapter_id"], "accepted chapter chapter_id"),
                 title=_string(item["title"], "accepted chapter title"),
-                guide=(
-                    _string(
-                        item["guide"], "accepted chapter guide"
-                    )
-                    if legacy
-                    else _optional_string(
-                        item["guide"], "accepted chapter guide"
-                    )
+                guide=_optional_string(
+                    item["guide"], "accepted chapter guide"
                 ),
                 source_anchors=tuple(anchors),
                 translations=tuple(translations),
