@@ -456,6 +456,7 @@ def test_source_runtime_verifier_records_current_checkout(tmp_path):
         "arc_proposer_reviewer",
         "arc_paper",
         "arc_domain",
+        "arc_translate",
         "arc_companion",
     }
     for details in record["modules"].values():
