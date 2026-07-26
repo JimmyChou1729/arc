@@ -21,7 +21,6 @@ from arc_jobs import (
 from arc_llm import (
     DeliveryState,
     FailureCategory,
-    InputDeliveryMode,
     IsolationMode,
     LLMCompleted,
     LLMFailed,
@@ -124,11 +123,6 @@ class ManifestAwareAdapter:
             tool_isolation=IsolationMode.ISOLATED,
             cooperative_stop=True,
             provider_persistence=True,
-            input_delivery={
-                "image/png": InputDeliveryMode.NATIVE_ATTACHMENT,
-                "text/markdown": InputDeliveryMode.READ_TOOL,
-                "application/json": InputDeliveryMode.READ_TOOL,
-            },
         )
 
     def doctor(self) -> ProviderDiagnostic:
@@ -139,13 +133,16 @@ class ManifestAwareAdapter:
         self.start_calls += 1
         self.requests.append(request)
         observer.before_delivery()
-        page_number = int(re.search(r"page (\d+)", request.prompt).group(1))
-        manifest_input = next(
-            item for item in request.inputs if item.input_id == "math-manifest"
-        )
         import json
 
-        manifest = json.loads(manifest_input.path.read_text(encoding="utf-8"))
+        control = json.loads(
+            (request.workspace / "host" / "control.json").read_text(encoding="utf-8")
+        )
+        page_number = int(re.search(r"page (\d+)", control["prompt"]).group(1))
+        input_paths = {item["input_id"]: item["path"] for item in control["inputs"]}
+        manifest = json.loads(
+            (request.workspace / input_paths["math-manifest"]).read_text(encoding="utf-8")
+        )
         span_ids = [item["span_id"] for item in manifest["spans"]]
         reviews = (
             [
@@ -247,16 +244,20 @@ def test_markdown_pdf_default_reviews_every_full_page_and_replays_without_calls(
     assert first.status is second.status is RunStatus.SUCCEEDED
     assert adapter.start_calls == 2
     assert len(adapter.requests) == 2
-    assert all(
-        [item.input_id for item in request.inputs]
-        == ["page", "markdown", "math-manifest"]
+    controls = [
+        json.loads((request.workspace / "host" / "control.json").read_text())
         for request in adapter.requests
+    ]
+    assert all(
+        [item["input_id"] for item in control["inputs"]]
+        == ["page", "markdown", "math-manifest"]
+        for control in controls
     )
     assert all(
-        next(item for item in request.inputs if item.input_id == "page")
-        .path.read_bytes()
-        .startswith(b"\x89PNG\r\n\x1a\n")
-        for request in adapter.requests
+        (request.workspace / control["inputs"][0]["path"]).read_bytes().startswith(
+            b"\x89PNG\r\n\x1a\n"
+        )
+        for request, control in zip(adapter.requests, controls, strict=True)
     )
     assert first.result_ref is not None
     result = json.loads(

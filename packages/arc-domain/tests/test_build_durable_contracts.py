@@ -29,7 +29,6 @@ from arc_jobs import (
 from arc_llm import (
     DeliveryState,
     FailureCategory,
-    InputDeliveryMode,
     IsolationMode,
     JsonOutput,
     LLMStopped,
@@ -296,9 +295,6 @@ class ScriptedDomainProvider:
             tool_isolation=IsolationMode.ISOLATED,
             cooperative_stop=True,
             provider_persistence=False,
-            input_delivery={
-                "application/json": InputDeliveryMode.READ_TOOL,
-            },
         )
 
     def doctor(self) -> ProviderDiagnostic:
