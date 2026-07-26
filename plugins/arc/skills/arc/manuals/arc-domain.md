@@ -42,11 +42,16 @@ arc-domain validate <run-id> --project-dir <project-dir>
 arc-domain stop <run-id> --project-dir <project-dir> --reason "<reason>"
 ```
 
-Resume the same run after a pause. Pass `--input` only when its typed resume
-descriptor requires it. A stop is resumable; it is not a failed replacement
-run. Read the returned status, warnings, and published artifact references
-instead of inspecting project-internal directories. The project directory is
+Resume the same run after a pause or a failed attempt. Pass `--input` only when
+a paused run's typed resume descriptor requires it. For a failed run, inspect
+`last-error.json` and the working paths returned by status. Correct a candidate
+or artifact to adopt it, or delete it to regenerate it, then resume explicitly.
+If an upstream input changes, delete downstream working files that should be
+rebuilt. ARC does not automatically retry or classify recovery causes. A stop
+is resumable; it is not a failed replacement run. The project directory is
 required: ARC stores durable domain state below `<project-dir>/.arc/domain`.
+Read the returned status, warnings, and published artifact references after
+every attempt.
 The reusable `arc-paper` cache remains shared and can be overridden only with
 `--paper-cache-root` on build and resume.
 

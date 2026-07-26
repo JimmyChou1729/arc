@@ -8,8 +8,8 @@ from typing import Any
 
 
 LANGUAGE_PROMPT_VERSION = "arc.translate.language_prompt.v1"
-GLOSSARY_PROMPT_VERSION = "arc.translate.glossary_prompt.v1"
-TRANSLATION_PROMPT_VERSION = "arc.translate.blocks_prompt.v1"
+GLOSSARY_PROMPT_VERSION = "arc.translate.glossary_prompt.v2"
+TRANSLATION_PROMPT_VERSION = "arc.translate.blocks_prompt.v2"
 REVIEW_PROMPT_VERSION = "arc.translate.review_prompt.v1"
 
 
@@ -25,33 +25,6 @@ def _closed(
 
 
 _NONEMPTY = {"type": "string", "minLength": 1}
-_MATCHED_SENTENCE = _closed(
-    {
-        "text": {"type": "string"},
-        "section_id": _NONEMPTY,
-        "page_number": {"type": ["integer", "null"]},
-        "matched_surface": _NONEMPTY,
-        "clipped": {"type": "boolean"},
-    },
-    ("text", "section_id", "page_number", "matched_surface", "clipped"),
-)
-_SOURCE_IDENTITY = _closed(
-    {
-        "equations": {"type": "array", "items": {"type": "string"}},
-        "code_text": {"type": ["string", "null"]},
-        "link_targets": {"type": "array", "items": {"type": "string"}},
-        "asset_digest": {"type": ["string", "null"]},
-        "asset_target": {"type": ["string", "null"]},
-    },
-    (
-        "equations",
-        "code_text",
-        "link_targets",
-        "asset_digest",
-        "asset_target",
-    ),
-)
-
 LANGUAGE_SCHEMA = _closed(
     {
         "language_tag": _NONEMPTY,
@@ -71,30 +44,11 @@ GLOSSARY_SCHEMA = _closed(
             "items": _closed(
                 {
                     "term_id": _NONEMPTY,
-                    "term": _NONEMPTY,
-                    "aliases": {"type": "array", "items": {"type": "string"}},
-                    "occurrence_count": {
-                        "type": "integer",
-                        "minimum": 0,
-                    },
-                    "source_refs": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "matched_sentences": {
-                        "type": "array",
-                        "items": _MATCHED_SENTENCE,
-                    },
                     "preferred_translation": _NONEMPTY,
                     "target_definition": _NONEMPTY,
                 },
                 (
                     "term_id",
-                    "term",
-                    "aliases",
-                    "occurrence_count",
-                    "source_refs",
-                    "matched_sentences",
                     "preferred_translation",
                     "target_definition",
                 ),
@@ -112,9 +66,8 @@ TRANSLATION_SCHEMA = _closed(
                 {
                     "block_id": _NONEMPTY,
                     "text": _NONEMPTY,
-                    "source_identity": _SOURCE_IDENTITY,
                 },
-                ("block_id", "text", "source_identity"),
+                ("block_id", "text"),
             ),
         }
     },
@@ -159,9 +112,9 @@ def glossary_prompt(
         GLOSSARY_PROMPT_VERSION,
         """
 Create a target-language glossary entry for every supplied scientific term.
-Return every term exactly once and in the supplied order. Copy term_id, term,
-aliases, occurrence_count, source_refs, and matched_sentences exactly. Add only
-preferred_translation and target_definition. matched_sentences are search
+Return every term_id exactly once and in the supplied order. Add only
+preferred_translation and target_definition; the caller attaches the supplied
+term text and source evidence locally. matched_sentences are search
 grounding, never definitions; do not label, quote, or treat them as a source
 definition. Preserve distinctions between nearby terms and do not merge,
 deduplicate, select, drop, pad, or reorder terms. This is one byte-bounded
@@ -190,7 +143,7 @@ Translate every supplied source block into the target language. Return each
 block ID exactly once and in source order. Keep each block indivisible. Preserve
 formula occurrences, code text, link targets, and asset identity exactly, and
 use the supplied preferred glossary translations consistently. Copy each
-source_identity object exactly as supplied. Return only the translation layer:
+block_id exactly; the caller attaches source identity locally. Return only the translation layer:
 do not add explanations, guides, summaries, or learning material.
 """,
         {

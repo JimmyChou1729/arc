@@ -127,7 +127,7 @@ class CompanionService:
     ) -> RunSnapshot:
         if translation_adapter is None:
             require_translation_runtime()
-        spec = self.repository.read_spec(run_id)
+        spec = self.repository.read_working_spec(run_id)
         handler = self._handler(
             spec,
             execution=execution,

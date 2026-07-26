@@ -69,7 +69,7 @@ class _EvidenceResumeTasks:
             value = {
                 "entries": [
                     {
-                        **term,
+                        "term_id": term["term_id"],
                         "preferred_translation": "场",
                         "target_definition": "A test glossary term.",
                     }
@@ -82,7 +82,6 @@ class _EvidenceResumeTasks:
                     {
                         "block_id": block["block_id"],
                         "text": "已翻译的源文本。",
-                        "source_identity": block["source_identity"],
                     }
                     for block in payload["blocks"]
                 ]

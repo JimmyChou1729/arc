@@ -243,6 +243,7 @@ def intent_ranking_prompt(
             "Return only IDs from the supplied list. Prefer scientifically specific matches over generic review papers.",
             f"User intent:\n{intent}",
             f"Candidate papers:\n{compact}",
+            "Before submitting, check coverage and order, and verify that every returned ID occurs in the supplied candidate list.",
             "Return JSON only.",
         ]
     )

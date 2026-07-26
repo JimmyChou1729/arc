@@ -32,6 +32,13 @@ explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
 identical value when resuming. The setting is execution-only and is not
 recorded in a translation request or result.
 
+A failed step is the latest failed attempt, not a permanent project terminal
+state. Status exposes `can_resume`, `recovery_epoch`, and stable `working/`
+paths. Glossary candidates contain only term IDs plus translated content, and
+translation candidates contain only block IDs plus translated text; source
+identity is attached locally. An agent may correct a candidate and resume
+without another provider call, or delete it to regenerate it.
+
 ## Tests
 
 The default suite uses deterministic sources and fake model services:

@@ -138,7 +138,7 @@ class TranslationService:
         task_service: Any | None = None,
         keyword_provider: KeywordProvider | None = None,
     ) -> RunSnapshot:
-        spec = self.repository.read_spec(run_id)
+        spec = self.repository.read_working_spec(run_id)
         handler = self._handler(
             spec,
             execution=execution,

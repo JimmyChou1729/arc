@@ -693,12 +693,91 @@ def test_invalid_summary_provenance_is_a_typed_terminal_failure(
     assert snapshot.error is not None
     assert snapshot.error.code == "domain_summary_invalid"
     assert "$.methodology[0].papers[0]" in snapshot.error.message
-    assert snapshot.error.details == {"stage": "summary"}
+    assert snapshot.error.details["stage"] == "summary"
+    candidate_path = Path(str(snapshot.error.details["candidate_path"]))
+    assert candidate_path.is_file()
     store = ImmutableArtifactStore(
         repository.run_directory(snapshot.run_id), repository_root=repository.root
     )
     assert store.find("summary/json") is None
     assert store.find("summary/markdown") is None
+
+
+def test_edited_summary_candidate_recovers_without_another_provider_call(
+    tmp_path: Path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs")
+    invalid = _summary_payload(user_intent=_request().intent)
+    invalid["methodology"] = [
+        {
+            "claim": "Unsupported method attribution.",
+            "papers": ["doi:10.9999/not-in-domain"],
+        }
+    ]
+    tasks = DomainTaskService(summary_value=invalid)
+    runner = DomainBuildRunner(repository)
+    failed = runner.execute(
+        _request(),
+        paper_access=FakePaperAccess(),
+        task_service=tasks,
+        reference_service=ForbiddenReferenceService(),
+    )
+    assert failed.status is RunStatus.FAILED
+    assert failed.error is not None
+    candidate_path = Path(str(failed.error.details["candidate_path"]))
+    request_count = len(tasks.requests)
+    candidate_path.write_text(
+        json.dumps(_summary_payload(user_intent=_request().intent)),
+        encoding="utf-8",
+    )
+
+    recovered = runner.resume(
+        failed.run_id,
+        paper_access=FakePaperAccess(),
+        task_service=tasks,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert recovered.status is RunStatus.SUCCEEDED
+    assert recovered.recovery_epoch == 1
+    assert len(tasks.requests) == request_count
+
+
+def test_deleted_summary_candidate_is_regenerated_only_on_explicit_resume(
+    tmp_path: Path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs")
+    invalid = _summary_payload(user_intent=_request().intent)
+    invalid["methodology"] = [
+        {
+            "claim": "Unsupported method attribution.",
+            "papers": ["doi:10.9999/not-in-domain"],
+        }
+    ]
+    tasks = DomainTaskService(summary_value=invalid)
+    runner = DomainBuildRunner(repository)
+    failed = runner.execute(
+        _request(),
+        paper_access=FakePaperAccess(),
+        task_service=tasks,
+        reference_service=ForbiddenReferenceService(),
+    )
+    assert failed.error is not None
+    candidate_path = Path(str(failed.error.details["candidate_path"]))
+    request_count = len(tasks.requests)
+    candidate_path.unlink()
+    assert len(tasks.requests) == request_count
+
+    retried = runner.resume(
+        failed.run_id,
+        paper_access=FakePaperAccess(),
+        task_service=tasks,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert retried.status is RunStatus.FAILED
+    assert retried.recovery_epoch == 1
+    assert len(tasks.requests) == request_count + 1
 
 
 def test_build_validates_the_package_view_before_publishing_summary(
@@ -730,7 +809,8 @@ def test_build_validates_the_package_view_before_publishing_summary(
     assert snapshot.error is not None
     assert snapshot.error.code == "domain_package_invalid"
     assert snapshot.error.message == "simulated package coverage failure"
-    assert snapshot.error.details == {"stage": "summary"}
+    assert snapshot.error.details["stage"] == "summary"
+    assert Path(str(snapshot.error.details["candidate_path"])).is_file()
     store = ImmutableArtifactStore(
         repository.run_directory(snapshot.run_id),
         repository_root=repository.root,

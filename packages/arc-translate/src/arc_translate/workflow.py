@@ -7,6 +7,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, TypeAlias
 
 from arc_jobs import (
@@ -63,7 +64,6 @@ from .source import (
     prompt_block,
     same_primary_language,
     source_blocks,
-    source_identity,
     validate_translation_text,
 )
 
@@ -465,8 +465,12 @@ class TranslationWorkflowService:
         entries: list[dict[str, JsonValue]] = []
         for ordinal, window in enumerate(windows):
             window_id = f"{artifact_prefix}/windows/{ordinal:04d}"
+            candidate_id = f"glossary/{window_id}.json"
+            candidate_path = context.working.find_candidate(candidate_id)
             window_ref = context.artifacts.find(window_id)
-            if window_ref is not None:
+            if candidate_path is not None:
+                window_output = context.working.read_candidate_json(candidate_id)
+            elif window_ref is not None:
                 window_output = _read_json_artifact(
                     context, window_ref, "glossary window"
                 )
@@ -508,17 +512,23 @@ class TranslationWorkflowService:
                 window_output = _object(
                     outcome.value, "glossary window"
                 )
+                candidate_path = context.working.write_candidate_json(
+                    candidate_id, window_output
+                )
                 try:
                     _validate_glossary_window(window_output, window)
                 except TranslationWorkflowError as exc:
-                    return RunError(exc.code, str(exc))
+                    return _candidate_run_error(exc, candidate_path)
                 context.artifacts.publish_json(window_id, window_output)
             try:
                 entries.extend(
                     _validate_glossary_window(window_output, window)
                 )
             except TranslationWorkflowError as exc:
-                return RunError(exc.code, str(exc))
+                error_path = candidate_path or (
+                    context.run_directory / window_ref.relative_path
+                )
+                return _candidate_run_error(exc, error_path)
         result = GlossaryResult(
             document_digest=source.document_digest,
             source_digest=source.source_digest,
@@ -598,8 +608,12 @@ class TranslationWorkflowService:
                     return RunError(exc.code, str(exc))
                 translations.extend(accepted)
                 continue
+            candidate_id = f"translation/{draft_id}.json"
+            candidate_path = context.working.find_candidate(candidate_id)
             draft_ref = context.artifacts.find(draft_id)
-            if draft_ref is not None:
+            if candidate_path is not None:
+                draft_doc = context.working.read_candidate_json(candidate_id)
+            elif draft_ref is not None:
                 draft_doc = _read_json_artifact(
                     context, draft_ref, "translation draft"
                 )
@@ -644,15 +658,21 @@ class TranslationWorkflowService:
                     raise StoppedError("block translation stopped")
                 assert isinstance(outcome, LLMCompleted)
                 draft_doc = _object(outcome.value, "translation draft")
+                candidate_path = context.working.write_candidate_json(
+                    candidate_id, draft_doc
+                )
                 try:
                     _validate_draft_window(draft_doc, window)
                 except TranslationWorkflowError as exc:
-                    return RunError(exc.code, str(exc))
+                    return _candidate_run_error(exc, candidate_path)
                 context.artifacts.publish_json(draft_id, draft_doc)
             try:
                 draft = _validate_draft_window(draft_doc, window)
             except TranslationWorkflowError as exc:
-                return RunError(exc.code, str(exc))
+                error_path = candidate_path or (
+                    context.run_directory / draft_ref.relative_path
+                )
+                return _candidate_run_error(exc, error_path)
             review_text = review_prompt(
                 blocks=[prompt_block(item) for item in window],
                 translations=draft,
@@ -741,6 +761,16 @@ class TranslationWorkflowError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _candidate_run_error(
+    error: TranslationWorkflowError, path: Path
+) -> RunError:
+    return RunError(
+        error.code,
+        f"{error}; editable candidate: {path}",
+        {"candidate_path": str(path)},
+    )
 
 
 def outer_resume_input(context: RunContext) -> ResumeInput | None:
@@ -1005,8 +1035,12 @@ def _validate_glossary_window(
         )
     output: list[dict[str, JsonValue]] = []
     for entry, term in zip(entries, terms, strict=True):
-        _require_fields(entry, _GLOSSARY_ENTRY_FIELDS, "glossary entry")
-        if any(entry[field] != term[field] for field in _TERM_IDENTITY_FIELDS):
+        _require_fields(
+            entry,
+            {"term_id", "preferred_translation", "target_definition"},
+            "glossary entry",
+        )
+        if entry["term_id"] != term["term_id"]:
             raise TranslationWorkflowError(
                 "glossary_term_identity_invalid",
                 "glossary changed term coverage, order, or identity",
@@ -1021,7 +1055,13 @@ def _validate_glossary_window(
                 "glossary_content_invalid",
                 "glossary translations and target definitions must be non-empty",
             )
-        output.append(dict(entry))  # type: ignore[arg-type]
+        output.append(
+            {
+                **dict(term),
+                "preferred_translation": entry["preferred_translation"],
+                "target_definition": entry["target_definition"],
+            }
+        )  # type: ignore[arg-type]
     return output
 
 
@@ -1179,14 +1219,9 @@ def _validate_draft_window(
     for translated, block in zip(translations, blocks, strict=True):
         _require_fields(
             translated,
-            {"block_id", "text", "source_identity"},
+            {"block_id", "text"},
             "translated block",
         )
-        if translated["source_identity"] != source_identity(block):
-            raise TranslationWorkflowError(
-                "translation_source_identity_invalid",
-                f"translation changed source identity for {block['block_id']}",
-            )
         text = translated["text"]
         if not isinstance(text, str):
             raise TranslationWorkflowError(

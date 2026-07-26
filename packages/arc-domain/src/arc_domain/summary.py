@@ -570,6 +570,7 @@ def summary_prompt(*, intent: str) -> str:
             ),
             "Keep warnings in the warnings JSON field only; do not ask downstream Markdown renderers to include a warnings section.",
             "Keep the result concise enough to fit comfortably in a research-agent context.",
+            "Before submitting, check required section coverage and array order, and verify that every cited paper ID is present in the supplied verified inputs.",
             "Return JSON only.",
         ]
     )

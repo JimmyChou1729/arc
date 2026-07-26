@@ -129,8 +129,8 @@ def _parser() -> _Parser:
 
     resume = commands.add_parser(
         "resume",
-        help="resume a paused or interrupted domain build",
-        description="Resume a paused or interrupted domain build.",
+        help="resume a paused, interrupted, or failed domain build",
+        description="Resume a paused, interrupted, or failed domain build.",
     )
     resume.add_argument("run_id", help="durable run identifier")
     resume.add_argument("--input", help="ResumeInput JSON object")

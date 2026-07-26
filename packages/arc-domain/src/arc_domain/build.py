@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import date
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from arc_jobs import (
@@ -145,6 +146,20 @@ class DomainBuildStageError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.details = dict(details or {})
+
+
+def _domain_candidate_error(
+    code: str,
+    error: Exception,
+    path: Path,
+    *,
+    stage: str,
+) -> RunError:
+    return RunError(
+        code,
+        str(error),
+        {"stage": stage, "candidate_path": str(path)},
+    )
 
 
 def validate_domain_build_workers(value: object) -> int:
@@ -410,6 +425,15 @@ class DomainBuildHandler:
             intent=self.request.intent,
         )
 
+        audit_candidate_id = "domain/foundation-audit.json"
+        audit_candidate_path = context.working.find_candidate(
+            audit_candidate_id
+        )
+        audit_candidate: dict[str, JsonValue] | None = None
+        if audit_candidate_path is not None:
+            audit_candidate = context.working.read_candidate_json(
+                audit_candidate_id
+            )
         audit_request = LLMRequest(
             _task_id("foundation-audit", seed_id, self.request.intent),
             candidate_audit_prompt(
@@ -420,20 +444,42 @@ class DomainBuildHandler:
             JsonOutput(FOUNDATION_CANDIDATE_AUDIT_SCHEMA, repair="format"),
             self.request.model,
         )
-        self._operation_started(
-            context,
-            stage="foundation",
-            operation="foundation_candidate_audit_llm",
-        )
-        audit_outcome = execute_routed(
-            self.task_service,
-            context,
-            audit_request,
-            resume_input=resume_input,
-            options=self.llm,
-        )
-        if isinstance(audit_outcome, LLMCompleted):
-            audit = normalize_candidate_audit(_mapping(audit_outcome.value, "candidate audit"))
+        audit_outcome: Any | None = None
+        if audit_candidate is None:
+            self._operation_started(
+                context,
+                stage="foundation",
+                operation="foundation_candidate_audit_llm",
+            )
+            audit_outcome = execute_routed(
+                self.task_service,
+                context,
+                audit_request,
+                resume_input=resume_input,
+                options=self.llm,
+            )
+            if isinstance(audit_outcome, LLMCompleted):
+                audit_candidate = _mapping(
+                    audit_outcome.value, "candidate audit"
+                )
+                audit_candidate_path = (
+                    context.working.write_candidate_json(
+                        audit_candidate_id, audit_candidate
+                    )
+                )
+        if audit_candidate is not None:
+            assert audit_candidate_path is not None
+            try:
+                audit = normalize_candidate_audit(audit_candidate)
+            except ValueError as exc:
+                return Failed(
+                    _domain_candidate_error(
+                        "foundation_audit_invalid",
+                        exc,
+                        audit_candidate_path,
+                        stage="foundation",
+                    )
+                )
         elif isinstance(audit_outcome, LLMPaused):
             return Paused(awaiting_from_pause(audit_outcome))
         elif isinstance(audit_outcome, LLMFailed):
@@ -530,6 +576,15 @@ class DomainBuildHandler:
                 "expansion": expansion_report,
             },
         )
+        selection_candidate_id = "domain/foundation-selection.json"
+        selection_candidate_path = context.working.find_candidate(
+            selection_candidate_id
+        )
+        selection_candidate: dict[str, JsonValue] | None = None
+        if selection_candidate_path is not None:
+            selection_candidate = context.working.read_candidate_json(
+                selection_candidate_id
+            )
         selection_request = LLMRequest(
             _task_id("foundation-select", seed_id, self.request.intent),
             foundation_selection_prompt(
@@ -541,38 +596,58 @@ class DomainBuildHandler:
             JsonOutput(FOUNDATION_SELECTION_SCHEMA, repair="format"),
             self.request.model,
         )
-        self._operation_started(
-            context,
-            stage="foundation",
-            operation="foundation_selection_llm",
-        )
-        selection_outcome = execute_routed(
-            self.task_service,
-            context,
-            selection_request,
-            resume_input=resume_input,
-            options=self.llm,
-        )
-        if isinstance(selection_outcome, LLMCompleted):
-            selection_document = _mapping(
-                selection_outcome.value, "foundation selection"
+        selection_outcome: Any | None = None
+        if selection_candidate is None:
+            self._operation_started(
+                context,
+                stage="foundation",
+                operation="foundation_selection_llm",
             )
+            selection_outcome = execute_routed(
+                self.task_service,
+                context,
+                selection_request,
+                resume_input=resume_input,
+                options=self.llm,
+            )
+            if isinstance(selection_outcome, LLMCompleted):
+                selection_candidate = _mapping(
+                    selection_outcome.value, "foundation selection"
+                )
+                selection_candidate_path = (
+                    context.working.write_candidate_json(
+                        selection_candidate_id, selection_candidate
+                    )
+                )
+        if selection_candidate is not None:
+            assert selection_candidate_path is not None
+            selection_document = selection_candidate
             normalization_candidates = candidates
-            if self.request.policy.foundation_mode == "fixed_seed":
-                (
+            try:
+                if self.request.policy.foundation_mode == "fixed_seed":
+                    (
+                        selection_document,
+                        normalization_candidates,
+                    ) = _fixed_seed_normalization_input(
+                        selection_document,
+                        candidates,
+                        seed_paper_id=seed_id,
+                        seed_metadata=seed_metadata,
+                    )
+                selection = normalize_foundation_selection(
                     selection_document,
                     normalization_candidates,
-                ) = _fixed_seed_normalization_input(
-                    selection_document,
-                    candidates,
-                    seed_paper_id=seed_id,
-                    seed_metadata=seed_metadata,
+                    intent=self.request.intent,
                 )
-            selection = normalize_foundation_selection(
-                selection_document,
-                normalization_candidates,
-                intent=self.request.intent,
-            )
+            except ValueError as exc:
+                return Failed(
+                    _domain_candidate_error(
+                        "foundation_selection_invalid",
+                        exc,
+                        selection_candidate_path,
+                        stage="foundation",
+                    )
+                )
         elif isinstance(selection_outcome, LLMPaused):
             return Paused(awaiting_from_pause(selection_outcome))
         elif isinstance(selection_outcome, LLMFailed):
@@ -763,29 +838,60 @@ class DomainBuildHandler:
                 reason="No citers were eligible for strict-window ranking.",
             )
         else:
+            ranking_candidate_id = "domain/intent-ranking.json"
+            ranking_candidate_path = context.working.find_candidate(
+                ranking_candidate_id
+            )
+            ranking_candidate: dict[str, JsonValue] | None = None
+            if ranking_candidate_path is not None:
+                ranking_candidate = context.working.read_candidate_json(
+                    ranking_candidate_id
+                )
             ranking_request = LLMRequest(
                 _task_id("network-rank", foundation_id, self.request.intent),
                 intent_ranking_prompt(citer_pool, intent=self.request.intent),
                 JsonOutput(INTENT_RANKING_SCHEMA, repair="format"),
                 self.request.model,
             )
-            self._operation_started(
-                context,
-                stage="network",
-                operation="intent_ranking_llm",
-            )
-            ranking_outcome = execute_routed(
-                self.task_service,
-                context,
-                ranking_request,
-                resume_input=resume_input,
-                options=self.llm,
-            )
-            if isinstance(ranking_outcome, LLMCompleted):
-                ranking = normalize_intent_ranking(
-                    _mapping(ranking_outcome.value, "intent ranking"),
-                    citer_pool=citer_pool,
+            ranking_outcome: Any | None = None
+            if ranking_candidate is None:
+                self._operation_started(
+                    context,
+                    stage="network",
+                    operation="intent_ranking_llm",
                 )
+                ranking_outcome = execute_routed(
+                    self.task_service,
+                    context,
+                    ranking_request,
+                    resume_input=resume_input,
+                    options=self.llm,
+                )
+                if isinstance(ranking_outcome, LLMCompleted):
+                    ranking_candidate = _mapping(
+                        ranking_outcome.value, "intent ranking"
+                    )
+                    ranking_candidate_path = (
+                        context.working.write_candidate_json(
+                            ranking_candidate_id, ranking_candidate
+                        )
+                    )
+            if ranking_candidate is not None:
+                assert ranking_candidate_path is not None
+                try:
+                    ranking = normalize_intent_ranking(
+                        ranking_candidate,
+                        citer_pool=citer_pool,
+                    )
+                except ValueError as exc:
+                    return Failed(
+                        _domain_candidate_error(
+                            "intent_ranking_invalid",
+                            exc,
+                            ranking_candidate_path,
+                            stage="network",
+                        )
+                    )
             elif isinstance(ranking_outcome, LLMPaused):
                 return Paused(awaiting_from_pause(ranking_outcome))
             elif isinstance(ranking_outcome, LLMFailed):
@@ -1113,6 +1219,11 @@ class DomainBuildHandler:
                 ),
             )
             return summary_ref, markdown_ref
+        candidate_id = "domain/summary.json"
+        candidate_path = context.working.find_candidate(candidate_id)
+        candidate_value: Any | None = None
+        if candidate_path is not None:
+            candidate_value = context.working.read_candidate_json(candidate_id)
         request = LLMRequest(
             _task_id(
                 "domain-summary-v3",
@@ -1129,22 +1240,32 @@ class DomainBuildHandler:
                 _llm_input(context, "paper-pack", paper_pack_ref),
             ),
         )
-        self._operation_started(
-            context,
-            stage="summary",
-            operation="domain_summary_llm",
-        )
-        outcome = execute_routed(
-            self.task_service,
-            context,
-            request,
-            resume_input=resume_input,
-            options=self.llm,
-        )
-        if isinstance(outcome, LLMCompleted):
+        outcome: Any | None = None
+        if candidate_value is None:
+            self._operation_started(
+                context,
+                stage="summary",
+                operation="domain_summary_llm",
+            )
+            outcome = execute_routed(
+                self.task_service,
+                context,
+                request,
+                resume_input=resume_input,
+                options=self.llm,
+            )
+            if isinstance(outcome, LLMCompleted):
+                candidate_value = _mapping(
+                    outcome.value, "domain summary candidate"
+                )
+                candidate_path = context.working.write_candidate_json(
+                    candidate_id, candidate_value
+                )
+        if candidate_value is not None:
+            assert candidate_path is not None
             try:
                 summary = normalize_summary_output(
-                    outcome.value,
+                    candidate_value,
                     graph=graph,
                     evidence=evidence,
                     selection=selection,
@@ -1155,17 +1276,32 @@ class DomainBuildHandler:
                     RunError(
                         "domain_summary_invalid",
                         str(exc),
-                        {"stage": "summary"},
+                        {
+                            "stage": "summary",
+                            "candidate_path": str(candidate_path),
+                        },
                     )
                 )
-            _validate_domain_package_artifacts(
-                summary,
-                paper_pack,
-                expected_domain_id=domain_id_for(
-                    self.request.seed_paper,
-                    self.request.intent,
-                ),
-            )
+            try:
+                _validate_domain_package_artifacts(
+                    summary,
+                    paper_pack,
+                    expected_domain_id=domain_id_for(
+                        self.request.seed_paper,
+                        self.request.intent,
+                    ),
+                )
+            except DomainBuildStageError as exc:
+                return Failed(
+                    RunError(
+                        exc.code,
+                        str(exc),
+                        {
+                            **exc.details,
+                            "candidate_path": str(candidate_path),
+                        },
+                    )
+                )
             summary_ref = context.artifacts.publish_json(_SUMMARY_ARTIFACT, summary)
             markdown_ref = context.artifacts.publish_bytes(
                 _SUMMARY_MARKDOWN_ARTIFACT,
@@ -1173,6 +1309,7 @@ class DomainBuildHandler:
                 media_type="text/markdown; charset=utf-8",
             )
             return summary_ref, markdown_ref
+        assert outcome is not None
         if isinstance(outcome, LLMPaused):
             return Paused(awaiting_from_pause(outcome))
         if isinstance(outcome, LLMFailed):
@@ -1333,7 +1470,7 @@ class DomainBuildRunner:
     ) -> RunSnapshot:
         max_workers = validate_domain_build_workers(max_workers)
         request = _decode_domain_build_semantic_input(
-            self.repository.read_spec(run_id).semantic_input
+            self.repository.read_working_spec(run_id).semantic_input
         )
         handler = DomainBuildHandler(
             request,

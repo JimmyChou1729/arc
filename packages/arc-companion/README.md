@@ -61,6 +61,12 @@ cache. Figure assets needed by a completed release are frozen into the project
 before publication completes, so later rendering does not depend on cache
 retention.
 
+Failed Companion attempts may be explicitly resumed after inspecting or
+repairing the selected run's `working/` state. Each failed resume uses a new
+recovery epoch while preserving readable successful work. The active PDF,
+HTML, and current release pointer are not replaced until the recovered build
+fully succeeds and the replacement release validates.
+
 ## Tests
 
 The default suite is offline and uses fake model services:

@@ -29,6 +29,15 @@ because a model call is slow or temporarily quiet. Outside an explicit user
 stop, compare successive public snapshots and request a cooperative stop only
 for a recorded recurring error or repeated lack of goal-directed progress.
 
+`failed` means the latest attempt failed and may still report
+`can_resume: true`. Use the owning package's status to locate the run-relative
+`working/` tree and `last-error.json`. A trusted agent may edit current
+semantic input, artifacts, or candidates, or delete a file to request
+regeneration, then explicitly resume. Preserve ARC-managed immutable objects,
+recovery snapshots, indexes, and locks. When changing an upstream file, delete
+downstream files that must be recomputed; ARC warns about possible stale state
+but does not maintain a dependency invalidation graph or automatically retry.
+
 ## Markdown Report Export
 
 For user-facing Markdown, run the project-aware PDF renderer from

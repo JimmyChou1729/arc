@@ -167,8 +167,13 @@ descriptor requires input, pass the matching document with
 Step 3: Inspect every `arc.command_result.v2` body. Do not treat an exit code
 alone as success. Continue only when every build has succeeded and published an
 active export generation. A stop pauses its current attempt and must be
-resumed with the same run ID. If any build is paused or failed, print
-`WARNING:` with the run ID and stop before exporting project-local artifacts.
+resumed with the same run ID. For a failed attempt, inspect the returned
+working paths and `last-error.json`; diagnose the failure, edit a candidate or
+working artifact to adopt it, or delete it to regenerate it. Delete downstream
+working files when an upstream edit makes them stale, then invoke
+`arc-domain resume` explicitly. Do not create an automatic resume loop. If a
+build remains paused or failed, print `WARNING:` with the run ID and stop
+before exporting project-local artifacts.
 
 For domain package boundaries and `paper_json_pack.json`, see
 `manuals/arc-domain.md`.

@@ -14,9 +14,11 @@ import arc_companion.release as release_module
 import pytest
 from arc_jobs import (
     Awaiting,
+    Failed,
     Paused,
     ResumeReason,
     RunEngine,
+    RunError,
     RunRepository,
     RunSpec,
     RunStatus,
@@ -624,6 +626,38 @@ def test_release_is_immutable_reused_and_current_updates_last(
     assert events.index(release_parent_syncs[-1]) < events.index(
         current_parent_syncs[0]
     )
+
+
+def test_failed_recovery_keeps_active_release_and_delivery_bytes(tmp_path):
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    publisher.publish(_book(), run_id="published-run")
+    before_current = project.current_release()
+    before_pdf = project.delivery_pdf.read_bytes()
+    before_html = project.delivery_html.read_bytes()
+
+    class AlwaysFail:
+        name = "companion-recovery-test.v1"
+
+        def execute(self, _context):
+            return Failed(RunError("expected", "repair before publishing"))
+
+    repository = RunRepository(project.jobs_root)
+    engine = RunEngine(repository)
+    handler = AlwaysFail()
+    failed = engine.execute(
+        RunSpec("failed-build", handler.name, {}), handler
+    )
+    first_result = cli_module._snapshot_result(project, failed)
+    retried = engine.resume("failed-build", handler)
+    second_result = cli_module._snapshot_result(project, retried)
+
+    assert first_result.status.value == "failed"
+    assert second_result.status.value == "failed"
+    assert retried.recovery_epoch == 1
+    assert project.current_release() == before_current
+    assert project.delivery_pdf.read_bytes() == before_pdf
+    assert project.delivery_html.read_bytes() == before_html
 
 
 def test_reused_release_repairs_missing_and_corrupt_delivery_copies(

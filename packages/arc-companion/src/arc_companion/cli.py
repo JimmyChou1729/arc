@@ -122,7 +122,7 @@ def _parser() -> _Parser:
     resume = commands.add_parser(
         "resume",
         help="resume the selected Companion build",
-        description="Resume the selected paused or interrupted Companion build.",
+        description="Resume the selected paused, interrupted, or failed Companion build.",
     )
     resume.add_argument("--project-dir", required=True, help="Companion project directory")
     resume.add_argument(

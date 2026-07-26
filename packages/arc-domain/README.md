@@ -40,6 +40,15 @@ defaults to `unknown`; use `unrestricted` only when the invoking host has
 explicitly granted those permissions. It is not part of the domain request or
 published artifacts, so provide the same value again when resuming such a run.
 
+A failed build can be diagnosed and explicitly resumed with the same run ID.
+`status` reports `can_resume`, `recovery_epoch`, and the stable `working/`
+paths. Model candidates are written before domain validation, so an agent may
+correct a candidate and resume without another provider call, or delete it to
+regenerate it. Editing an upstream semantic input or artifact is accepted with
+a warning; the agent is responsible for deleting downstream working files
+that should be rebuilt. The previously active domain generation stays
+published until the recovered build fully validates.
+
 ## Tests
 
 The package suite uses fake paper and model services by default:

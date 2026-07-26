@@ -39,6 +39,7 @@ from arc_translate.prompts import (
     GLOSSARY_PROMPT_VERSION,
     LANGUAGE_PROMPT_VERSION,
     REVIEW_PROMPT_VERSION,
+    TRANSLATION_SCHEMA,
     TRANSLATION_PROMPT_VERSION,
 )
 from arc_translate.source import block_text
@@ -75,7 +76,7 @@ class FakeTasks:
             value = {
                 "entries": [
                     {
-                        **term,
+                        "term_id": term["term_id"],
                         "preferred_translation": f"target:{term['term']}",
                         "target_definition": f"definition:{term['term']}",
                     }
@@ -106,7 +107,6 @@ class FakeTasks:
                     {
                         "block_id": block["block_id"],
                         "text": text,
-                        "source_identity": identity,
                     }
                 )
             value = {"translations": translations}
@@ -123,6 +123,31 @@ class FakeTasks:
         else:  # pragma: no cover - guards contract drift
             raise AssertionError(contract)
         return LLMCompleted(value, "fake", "fake", None, None)
+
+
+class InvalidGlossaryTasks:
+    def __init__(self):
+        self.calls = 0
+
+    def execute_or_resume(self, _context, request, *, input=None, options=None):
+        contract, _payload = _prompt(request.prompt)
+        assert contract == GLOSSARY_PROMPT_VERSION
+        self.calls += 1
+        return LLMCompleted(
+            {
+                "entries": [
+                    {
+                        "term_id": "wrong-id",
+                        "preferred_translation": "wrong",
+                        "target_definition": "wrong",
+                    }
+                ]
+            },
+            "fake",
+            "fake",
+            None,
+            None,
+        )
 
 
 @dataclass
@@ -207,21 +232,22 @@ def _prompt(prompt: str) -> tuple[str, dict[str, Any]]:
     return contract, payload
 
 
-def test_glossary_schema_fully_types_copied_keyword_evidence():
+def test_glossary_schema_only_requests_reasoned_content_and_join_id():
     entry = GLOSSARY_SCHEMA["properties"]["entries"]["items"]
-    properties = entry["properties"]
-
-    assert properties["source_refs"]["items"] == {"type": "string"}
-    matched = properties["matched_sentences"]["items"]
-    assert matched["type"] == "object"
-    assert matched["additionalProperties"] is False
-    assert matched["required"] == [
-        "text",
-        "section_id",
-        "page_number",
-        "matched_surface",
-        "clipped",
+    assert entry["additionalProperties"] is False
+    assert entry["required"] == [
+        "term_id",
+        "preferred_translation",
+        "target_definition",
     ]
+    assert set(entry["properties"]) == set(entry["required"])
+
+
+def test_translation_schema_only_requests_block_id_and_text():
+    entry = TRANSLATION_SCHEMA["properties"]["translations"]["items"]
+    assert entry["additionalProperties"] is False
+    assert entry["required"] == ["block_id", "text"]
+    assert set(entry["properties"]) == {"block_id", "text"}
 
 
 def test_language_same_primary_skips_but_mixed_stays_enabled(tmp_path):
@@ -360,6 +386,63 @@ def test_glossary_windows_preserve_every_term_identity_and_order(tmp_path):
         "term-2",
     ]
     assert tasks.calls.count(GLOSSARY_PROMPT_VERSION) >= 2
+
+
+def test_invalid_glossary_candidate_is_editable_and_reused_without_provider(
+    tmp_path,
+):
+    source = _source(tmp_path)
+    term = _term("term-1", "Entropy")
+    context = _context(tmp_path, "editable-glossary")
+    tasks = InvalidGlossaryTasks()
+    workflow = TranslationWorkflowService(tasks, FakeKeywords([term]))
+    language = LanguageResult(
+        source.document_digest,
+        source.source_digest,
+        "en",
+        "known",
+        1.0,
+        "fr",
+        "enabled",
+    )
+
+    failed = workflow.build_glossary(
+        context,
+        source,
+        language=language,
+        target_language="fr",
+        approx_count=1,
+    )
+
+    assert isinstance(failed, RunError)
+    candidate_path = Path(str(failed.details["candidate_path"]))
+    assert candidate_path.is_file()
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "term_id": "term-1",
+                        "preferred_translation": "entropie",
+                        "target_definition": "Une grandeur thermodynamique.",
+                    }
+                ]
+            }
+        )
+    )
+
+    recovered = workflow.build_glossary(
+        context,
+        source,
+        language=language,
+        target_language="fr",
+        approx_count=1,
+    )
+
+    assert isinstance(recovered, GlossaryResult)
+    assert tasks.calls == 1
+    assert recovered.entries[0]["term"] == term["term"]
+    assert recovered.entries[0]["matched_sentences"] == term["matched_sentences"]
 
 
 def test_block_selector_normalizes_order_and_filters_window_glossary(tmp_path):

@@ -246,6 +246,7 @@ def candidate_audit_prompt(
             f"User intent:\n{intent or '(none)'}",
             f"Seed paper:\n{dict(seed_metadata)}",
             f"Candidate papers:\n{[dict(candidate) for candidate in candidates]}",
+            "Before submitting, check required coverage and verify that every paper ID and citation direction comes only from the supplied records.",
             "Return JSON only.",
     ]
     lines.insert(
@@ -499,6 +500,7 @@ def foundation_selection_prompt(
             f"User intent:\n{intent or '(none)'}",
             f"Seed paper:\n{dict(seed_metadata)}",
             f"Candidate papers:\n{[dict(candidate) for candidate in candidates]}",
+            "Before submitting, check all required choices, preserve contract order, and verify that every selected or rejected paper ID comes only from the supplied candidates.",
             "Return JSON only.",
     ]
     lines.insert(

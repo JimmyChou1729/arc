@@ -113,7 +113,7 @@ def _parser() -> _Parser:
     resume = commands.add_parser(
         "resume",
         help="resume the selected translation step",
-        description="Resume the currently selected paused or interrupted translation step.",
+        description="Resume the currently selected paused, interrupted, or failed translation step.",
     )
     _project_argument(resume)
     resume.add_argument("--input", help="JSON object or a path to one")
