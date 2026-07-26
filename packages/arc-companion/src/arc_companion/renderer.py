@@ -21,8 +21,8 @@ from .contracts import AcceptedBook, LearningUnit, SourceAnchor
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v4"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v5"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v5"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v6"
 _SOURCE_DATE_EPOCH = "946684800"
 _AssetLoader = Callable[[str], bytes | None]
 
@@ -500,7 +500,7 @@ def _render_html_chapter(
             f"<h3>Source</h3>{source}</section>{translated}{learning}</div></article>"
         )
     guide = (
-        f'<p class="chapter-guide">{_html_text(chapter.guide)}</p>'
+        f'<p class="chapter-guide">{_html_model_prose(chapter.guide)}</p>'
         if chapter.guide
         else ""
     )
@@ -617,7 +617,7 @@ def _render_html_learning(
         f'data-learning-unit="{escape_html(unit.unit_id)}">'
         f"<h4>{escape_html(unit.title)}</h4>"
         f'<p class="reader-question">{escape_html(unit.reader_question)}</p>'
-        f"<p>{_html_text(unit.content)}</p>{citations}</section>"
+        f"<p>{_html_model_prose(unit.content)}</p>{citations}</section>"
     )
 
 
@@ -714,6 +714,10 @@ def _html_text(value: str) -> str:
     return escape_html(value).replace("\n", "<br>")
 
 
+def _html_model_prose(value: str) -> str:
+    return _html_text(_normalize_model_prose_breaks(value))
+
+
 def _render_tex(
     book: AcceptedBook,
     *,
@@ -785,7 +789,8 @@ def _render_tex_chapter(
     values = [rf"\section{{{_tex_escape(chapter.title)}}}"]
     if chapter.guide:
         values.append(
-            rf"\textbf{{Chapter guide.}} {_render_tex_prose(chapter.guide)}"
+            rf"\textbf{{Chapter guide.}} "
+            rf"{_render_tex_prose(chapter.guide, model_generated=True)}"
         )
     for unit in chapter.learning_units:
         if unit.placement == "chapter":
@@ -960,7 +965,8 @@ def _render_tex_learning(
         rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
         rf"\textbf{{{_tex_escape(unit.title)}}}\par "
         rf"\textit{{Reader question: {_tex_escape(unit.reader_question)}}}\par "
-        rf"{_render_tex_prose(unit.content)}{citations}\end{{tcolorbox}}"
+        rf"{_render_tex_prose(unit.content, model_generated=True)}"
+        rf"{citations}\end{{tcolorbox}}"
     )
 
 
@@ -1027,10 +1033,17 @@ def _render_tex_code(value: str) -> str:
     )
 
 
-def _render_tex_prose(value: Any) -> str:
+def _render_tex_prose(
+    value: Any, *, model_generated: bool = False
+) -> str:
     """Render plain prose while preserving authored line and paragraph breaks."""
 
-    normalized = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    normalized = (
+        _normalize_model_prose_breaks(value)
+        if model_generated
+        else str(value)
+    )
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
     paragraphs = [
         paragraph
         for paragraph in re.split(r"\n[ \t]*\n+", normalized)
@@ -1040,6 +1053,11 @@ def _render_tex_prose(value: Any) -> str:
         r"\newline{} ".join(_tex_escape(line) for line in paragraph.split("\n"))
         for paragraph in paragraphs
     )
+
+
+def _normalize_model_prose_breaks(value: Any) -> str:
+    text = str(value).replace(r"\r\n", "\n")
+    return re.sub(r"(?<!\\)\\n", "\n", text)
 
 
 def _normalize_pdf_search_text(value: Any) -> str:

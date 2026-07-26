@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 
+from arc_paper import ArcPaperService
 from arc_paper.providers import (
     Ar5ivProvider,
     ArxivHtmlProvider,
@@ -937,3 +938,62 @@ def test_inspire_citers_use_recid_query_and_request_specific_cache(
     replay = provider.get_citers("0911.3380", limit=limit, sort=sort)
     assert replay == values
     assert len(calls) == calls_before_replay
+
+
+def test_search_citers_reuses_existing_inspire_record_and_citer_cache(tmp_path):
+    calls: list[str] = []
+    record = {
+        "id": "123",
+        "metadata": {
+            "control_number": 123,
+            "titles": [{"title": "Origin"}],
+            "arxiv_eprints": [{"value": "0911.3380"}],
+            "citation_count": 2,
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.path.endswith("/arxiv/0911.3380"):
+            payload = record
+        else:
+            assert request.url.params["q"] == "refersto:recid:123"
+            assert request.url.params["size"] == "1000"
+            assert request.url.params["sort"] == "mostrecent"
+            payload = {
+                "hits": {
+                    "hits": [
+                        {
+                            "id": str(index),
+                            "metadata": {
+                                "control_number": index,
+                                "titles": [
+                                    {"title": f"Specific mechanism {index}"}
+                                ],
+                            },
+                        }
+                        for index in range(2)
+                    ]
+                }
+            }
+        return _response(
+            request,
+            content=json.dumps(payload).encode(),
+            media_type="application/json",
+        )
+
+    provider = InspireProvider(
+        cache_root=tmp_path,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    service = ArcPaperService(cache_root=tmp_path, inspire=provider)
+
+    first = service.search_citers("0911.3380", ["specific mechanism"])
+    calls_after_first = len(calls)
+    second = service.search_citers("0911.3380", ["specific mechanism"])
+
+    assert first == second
+    assert first["scan_complete"] is True
+    assert first["matched_count"] == 2
+    assert calls_after_first == 2
+    assert len(calls) == calls_after_first

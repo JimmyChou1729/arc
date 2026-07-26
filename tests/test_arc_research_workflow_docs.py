@@ -381,6 +381,19 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         ),
         (
             "arc-paper.md",
+            "arc-paper search-citers",
+            "paper",
+            [
+                "search-citers",
+                "arXiv:1234.5678",
+                "--term",
+                "specific phrase",
+                "--term",
+                "alternate phrase",
+            ],
+        ),
+        (
+            "arc-paper.md",
             "arc-paper search-cached-full-text",
             "paper",
             [
@@ -514,7 +527,10 @@ def test_arc_paper_manual_documents_cache_first_arxiv_queries() -> None:
 
 def test_arc_paper_docs_define_bounded_cached_full_text_search() -> None:
     manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
-    compact = " ".join(manual.split())
+    section = manual.split("## Search Materialized Full Text", 1)[1].split(
+        "\n## ", 1
+    )[0]
+    compact = " ".join(section.split())
 
     assert "search-cached-full-text" in compact
     assert compact.count("--term") == 2
@@ -523,6 +539,23 @@ def test_arc_paper_docs_define_bounded_cached_full_text_search() -> None:
     assert "up to 50 paper titles, not abstracts" in compact
     assert "rg_unavailable" in compact
     assert "refinement_required" in compact
+
+
+def test_arc_paper_docs_define_bounded_citation_neighborhood_search() -> None:
+    manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    section = manual.split("## Search a Citation Neighborhood", 1)[1].split(
+        "\n## ", 1
+    )[0]
+    compact = " ".join(section.split())
+
+    assert "search-citers" in compact
+    assert compact.count("--term") == 2
+    assert "--scan-limit 1000" in compact
+    assert "--limit 50" in compact
+    assert "case, punctuation, and hyphens" in compact
+    assert "most recent and most cited" in compact
+    assert "scan_complete: false" in compact
+    assert "not proof of novelty" in compact
 
 
 def test_translate_docs_define_standalone_approximate_workflows() -> None:

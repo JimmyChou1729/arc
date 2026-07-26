@@ -25,6 +25,26 @@ arc-paper get-citers <paper-id> --limit 100 --sort mostrecent
 The arXiv document commands acquire and parse cache-first HTML when needed.
 Use `--refresh` only when a fresh remote response is part of the request.
 
+## Search a Citation Neighborhood
+
+Shortlist direct INSPIRE citers with specific multiword phrases and synonyms:
+
+```bash
+arc-paper search-citers <paper-id> \
+  --term "<specific phrase>" \
+  --term "<synonym>" \
+  --scan-limit 1000 \
+  --limit 50
+```
+
+The command normalizes case, punctuation, and hyphens before literal-OR
+matching against titles and abstracts. It scans all citers when the citation
+count is at most `scan-limit`; larger neighborhoods split the budget between
+the most recent and most cited records and report `scan_complete: false`.
+Matches include their terms and fields, while newest and most-cited controls
+help expose keyword blind spots. Missing or partial matches are evidence about
+this citation neighborhood, not proof of novelty.
+
 ## Parse a Local Source
 
 Use one HTML, Markdown, flattened single-file TeX, or PDF as the authoritative

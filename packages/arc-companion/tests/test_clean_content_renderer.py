@@ -443,8 +443,8 @@ def test_accepted_book_v2_decodes_to_v3_value_contract(
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
-    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v5"
-    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v4"
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v6"
+    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v5"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
         == r"first line\newline{} second line\par third paragraph"
@@ -849,6 +849,41 @@ def test_reader_citations_hide_internal_evidence_ids(
     assert "[2] Entropy reference" in visible
     assert 'href="#reference-ev-private-paper"' in html
     assert r"Evidence: [1] A reference paper" in tex
+
+
+def test_model_escaped_paragraphs_render_as_paragraphs(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    unit = replace(
+        chapter.learning_units[0],
+        content=r"First paragraph.\n\nSecond paragraph.",
+    )
+    book = replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                learning_units=(unit, *chapter.learning_units[1:]),
+            ),
+        ),
+    )
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+
+    html = renderer.render_web(
+        book, tmp_path / "escaped-paragraph-reader"
+    ).read_text(encoding="utf-8")
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
+
+    visible = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+    assert r"\n" not in visible
+    assert "First paragraph. Second paragraph." in visible
+    assert r"First paragraph.\par Second paragraph." in tex
 
 
 def test_pdf_search_normalization_matches_unicode_and_line_wrapping() -> None:

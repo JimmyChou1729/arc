@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -236,7 +237,7 @@ def validate_chapter_guide(
         normalized.append(
             {
                 **dict(planned_item),
-                "content": _nonempty(
+                "content": _model_prose(
                     item.get("content"), "learning-unit content"
                 ),
             }
@@ -303,7 +304,7 @@ def apply_safe_guide_review(
                 "review_patch_unsafe", "review decision is invalid"
             )
         if decision == "replace":
-            replacement = _nonempty(
+            replacement = _model_prose(
                 replacement, "review replacement"
             )
             output.append({**unit, "content": replacement})
@@ -443,6 +444,13 @@ def _nonempty(value: Any, description: str) -> str:
             "model_output_invalid", f"{description} must be non-empty"
         )
     return value.strip()
+
+
+def _model_prose(value: Any, description: str) -> str:
+    """Decode model-escaped line breaks in fields contracted as plain prose."""
+
+    text = _nonempty(value, description).replace(r"\r\n", "\n")
+    return re.sub(r"(?<!\\)\\n", "\n", text).strip()
 
 
 def _unique(

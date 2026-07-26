@@ -8,6 +8,7 @@ remains owned by :mod:`arc_llm`.
 from __future__ import annotations
 
 import json
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -325,6 +326,82 @@ class ArcPaperService:
         return self.inspire.get_citer_count(
             _require_paper_id(paper_id), refresh=refresh
         )
+
+    def search_citers(
+        self,
+        paper_id: str,
+        terms: Sequence[str],
+        *,
+        refresh: bool = False,
+        scan_limit: int = 1000,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Shortlist direct citers by normalized literal title/abstract terms."""
+
+        required = _require_paper_id(paper_id)
+        normalized_terms = _require_citer_search_terms(terms)
+        scan_limit = _require_limit(
+            scan_limit, name="scan_limit", maximum=1000
+        )
+        limit = _require_limit(limit, name="limit", maximum=50)
+        total_citer_count = self.get_citer_count(required, refresh=refresh)
+
+        if total_citer_count == 0:
+            scanned: list[dict[str, Any]] = []
+            scan_strategy = "all-mostrecent"
+        elif total_citer_count <= scan_limit:
+            scanned = [
+                dict(record)
+                for record in self.get_citers(
+                    required,
+                    refresh=refresh,
+                    limit=scan_limit,
+                    sort="mostrecent",
+                )
+            ]
+            scan_strategy = "all-mostrecent"
+        else:
+            recent_limit = (scan_limit + 1) // 2
+            cited_limit = scan_limit // 2
+            recent = self.get_citers(
+                required,
+                refresh=refresh,
+                limit=recent_limit,
+                sort="mostrecent",
+            )
+            cited = (
+                self.get_citers(
+                    required,
+                    refresh=refresh,
+                    limit=cited_limit,
+                    sort="mostcited",
+                )
+                if cited_limit
+                else []
+            )
+            scanned = _dedupe_citer_records((*recent, *cited))
+            scan_strategy = "split-mostrecent-mostcited"
+
+        matches = _match_citer_records(scanned, normalized_terms)
+        returned_matches = matches[:limit]
+        scanned_count = len(scanned)
+        scan_complete = (
+            total_citer_count <= scan_limit
+            and scanned_count >= total_citer_count
+        )
+        return {
+            "paper_id": normalize_paper_id(required),
+            "total_citer_count": total_citer_count,
+            "scanned_count": scanned_count,
+            "scan_complete": scan_complete,
+            "scan_strategy": scan_strategy,
+            "terms": [term for term, _ in normalized_terms],
+            "matched_count": len(matches),
+            "returned_count": len(returned_matches),
+            "matches_truncated": len(matches) > len(returned_matches),
+            "matches": returned_matches,
+            "control_sample": _citer_control_sample(scanned),
+        }
 
     def search_metadata(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
         return self.inspire.search_metadata(query, limit=limit)
@@ -851,6 +928,151 @@ def _require_paper_id(value: str) -> str:
     return normalized
 
 
+def _require_limit(value: int, *, name: str, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PaperInputError(f"{name} must be an integer between 1 and {maximum}")
+    if not 1 <= value <= maximum:
+        raise PaperInputError(f"{name} must be an integer between 1 and {maximum}")
+    return value
+
+
+def _require_citer_search_terms(
+    terms: Sequence[str],
+) -> list[tuple[str, str]]:
+    if isinstance(terms, (str, bytes)):
+        raise PaperInputError("terms must be a non-empty sequence of search phrases")
+    resolved: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for term in terms:
+        if not isinstance(term, str):
+            raise PaperInputError("citer search terms must be strings")
+        surface = term.strip()
+        normalized = _normalize_citer_search_text(surface)
+        if not normalized:
+            raise PaperInputError("citer search terms must not be empty")
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        resolved.append((surface, normalized))
+    if not resolved:
+        raise PaperInputError("at least one citer search term is required")
+    return resolved
+
+
+def _normalize_citer_search_text(value: str) -> str:
+    folded = unicodedata.normalize("NFKC", value).casefold()
+    separated = "".join(
+        " " if unicodedata.category(character).startswith(("P", "Z")) else character
+        for character in folded
+    )
+    return " ".join(separated.split())
+
+
+def _citer_identity(record: Mapping[str, Any]) -> str:
+    for key in ("paper_id", "inspire_recid", "arxiv_id", "doi"):
+        if value := str(record.get(key) or "").strip():
+            return f"{key}:{value.casefold()}"
+    return "record:" + json.dumps(
+        dict(record),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+def _dedupe_citer_records(
+    records: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        identity = _citer_identity(record)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(dict(record))
+    return deduplicated
+
+
+def _match_citer_records(
+    records: Sequence[Mapping[str, Any]],
+    terms: Sequence[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for record in records:
+        fields = {
+            "title": _normalize_citer_search_text(str(record.get("title") or "")),
+            "abstract": _normalize_citer_search_text(
+                str(record.get("abstract") or "")
+            ),
+        }
+        matched_terms: list[str] = []
+        matched_fields: list[str] = []
+        for surface, normalized in terms:
+            term_fields = [
+                field
+                for field in ("title", "abstract")
+                if normalized in fields[field]
+            ]
+            if not term_fields:
+                continue
+            matched_terms.append(surface)
+            for field in term_fields:
+                if field not in matched_fields:
+                    matched_fields.append(field)
+        if matched_terms:
+            match = dict(record)
+            match["matched_terms"] = matched_terms
+            match["matched_fields"] = matched_fields
+            matches.append(match)
+
+    matches.sort(key=lambda item: str(item.get("paper_id") or ""))
+    matches.sort(key=lambda item: str(item.get("published") or ""), reverse=True)
+    matches.sort(key=_citer_citation_count, reverse=True)
+    matches.sort(key=lambda item: len(item["matched_terms"]), reverse=True)
+    matches.sort(key=lambda item: "title" in item["matched_fields"], reverse=True)
+    return matches
+
+
+def _citer_citation_count(record: Mapping[str, Any]) -> int:
+    try:
+        return int(record.get("citation_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _citer_control_sample(
+    records: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    newest = sorted(records, key=lambda item: str(item.get("paper_id") or ""))
+    newest.sort(key=_citer_citation_count, reverse=True)
+    newest.sort(key=lambda item: str(item.get("published") or ""), reverse=True)
+
+    most_cited = sorted(records, key=lambda item: str(item.get("paper_id") or ""))
+    most_cited.sort(
+        key=lambda item: str(item.get("published") or ""), reverse=True
+    )
+    most_cited.sort(key=_citer_citation_count, reverse=True)
+
+    controls: list[dict[str, Any]] = []
+    positions: dict[str, int] = {}
+    for reason, selected in (
+        ("newest", newest[:5]),
+        ("most-cited", most_cited[:5]),
+    ):
+        for record in selected:
+            identity = _citer_identity(record)
+            if identity in positions:
+                controls[positions[identity]]["control_reasons"].append(reason)
+                continue
+            control = dict(record)
+            control["control_reasons"] = [reason]
+            positions[identity] = len(controls)
+            controls.append(control)
+    return controls
+
+
 def _auto_html_component(source: SourceArtifact) -> str:
     provider = source.origin.provider
     if provider in {"arxiv-html", "ar5iv"}:
@@ -945,6 +1167,23 @@ def get_citers(
 
 def get_citer_count(paper_id: str, *, refresh: bool = False) -> int:
     return ArcPaperService().get_citer_count(paper_id, refresh=refresh)
+
+
+def search_citers(
+    paper_id: str,
+    terms: Sequence[str],
+    *,
+    refresh: bool = False,
+    scan_limit: int = 1000,
+    limit: int = 50,
+) -> dict[str, Any]:
+    return ArcPaperService().search_citers(
+        paper_id,
+        terms,
+        refresh=refresh,
+        scan_limit=scan_limit,
+        limit=limit,
+    )
 
 
 def search_metadata(query: str, *, limit: int = 20) -> list[dict[str, Any]]:
@@ -1186,6 +1425,7 @@ __all__ = [
     "search_arxiv_equations",
     "search_arxiv_full_text",
     "search_cached_full_text",
+    "search_citers",
     "search_full_text",
     "search_metadata",
     "table_of_contents",

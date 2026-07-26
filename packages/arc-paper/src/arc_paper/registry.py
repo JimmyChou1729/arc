@@ -258,6 +258,84 @@ _METADATA_SCHEMA = _object(
         "citation_count",
     ),
 )
+_CITER_MATCH_SCHEMA = _object(
+    {
+        **_METADATA_SCHEMA["properties"],
+        "matched_terms": {
+            "type": "array",
+            "items": _NONEMPTY_STRING,
+            "minItems": 1,
+        },
+        "matched_fields": {
+            "type": "array",
+            "items": {"enum": ["title", "abstract"]},
+            "minItems": 1,
+            "uniqueItems": True,
+        },
+    },
+    required=(
+        *tuple(_METADATA_SCHEMA["required"]),
+        "matched_terms",
+        "matched_fields",
+    ),
+)
+_CITER_CONTROL_SCHEMA = _object(
+    {
+        **_METADATA_SCHEMA["properties"],
+        "control_reasons": {
+            "type": "array",
+            "items": {"enum": ["newest", "most-cited"]},
+            "minItems": 1,
+            "uniqueItems": True,
+        },
+    },
+    required=(
+        *tuple(_METADATA_SCHEMA["required"]),
+        "control_reasons",
+    ),
+)
+_CITER_SEARCH_RESULT_SCHEMA = _object(
+    {
+        "paper_id": _NONEMPTY_STRING,
+        "total_citer_count": {"type": "integer", "minimum": 0},
+        "scanned_count": {"type": "integer", "minimum": 0},
+        "scan_complete": {"type": "boolean"},
+        "scan_strategy": {
+            "enum": ["all-mostrecent", "split-mostrecent-mostcited"]
+        },
+        "terms": {
+            "type": "array",
+            "items": _NONEMPTY_STRING,
+            "minItems": 1,
+        },
+        "matched_count": {"type": "integer", "minimum": 0},
+        "returned_count": {"type": "integer", "minimum": 0, "maximum": 50},
+        "matches_truncated": {"type": "boolean"},
+        "matches": {
+            "type": "array",
+            "items": _CITER_MATCH_SCHEMA,
+            "maxItems": 50,
+        },
+        "control_sample": {
+            "type": "array",
+            "items": _CITER_CONTROL_SCHEMA,
+            "maxItems": 10,
+        },
+    },
+    required=(
+        "paper_id",
+        "total_citer_count",
+        "scanned_count",
+        "scan_complete",
+        "scan_strategy",
+        "terms",
+        "matched_count",
+        "returned_count",
+        "matches_truncated",
+        "matches",
+        "control_sample",
+    ),
+)
 _REFERENCE_SCHEMA = _object(
     {
         "paper_id": _STRING,
@@ -730,6 +808,38 @@ _OPERATIONS = (
         ),
         service.get_citers,
         output_schema={"type": "array", "items": _METADATA_SCHEMA},
+        effects=_NETWORK_CACHE,
+    ),
+    _spec(
+        "search-citers",
+        _object(
+            {
+                **_PAPER,
+                **_REFRESH,
+                "terms": {
+                    "type": "array",
+                    "items": _NONEMPTY_STRING,
+                    "minItems": 1,
+                    "description": (
+                        "Literal OR phrases matched against normalized citer "
+                        "titles and abstracts."
+                    ),
+                },
+                "scan_limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                },
+            },
+            required=("paper_id", "terms"),
+        ),
+        service.search_citers,
+        output_schema=_CITER_SEARCH_RESULT_SCHEMA,
         effects=_NETWORK_CACHE,
     ),
     _spec(

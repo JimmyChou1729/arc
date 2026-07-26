@@ -49,6 +49,7 @@ def test_registry_has_one_typed_spec_per_operation_and_safe_default_projection()
         "arc-paper.search-arxiv-equations.v3",
         "arc-paper.fetch-arxiv-auto.v2",
         "arc-paper.search-cached-full-text.v1",
+        "arc-paper.search-citers.v1",
     } <= set(OPERATION_REGISTRY)
     for name in (
         "get-arxiv-table-of-contents",
@@ -74,6 +75,34 @@ def test_registry_has_one_typed_spec_per_operation_and_safe_default_projection()
         )
     )
     assert registry_document()["schema_version"] == "arc.paper.operation_registry.v1"
+
+
+def test_search_citers_registry_contract_has_bounded_network_cache_effects() -> None:
+    spec = OPERATION_REGISTRY["search-citers"]
+    properties = spec.input_codec.schema["properties"]
+
+    assert spec.operation_id == "arc-paper.search-citers.v1"
+    assert spec.input_codec.schema["required"] == ["paper_id", "terms"]
+    assert properties["terms"]["minItems"] == 1
+    assert properties["scan_limit"]["maximum"] == 1000
+    assert properties["limit"]["maximum"] == 50
+    assert spec.effect_flags == {
+        OperationEffect.NETWORK,
+        OperationEffect.CACHE_WRITE,
+    }
+    assert set(spec.output_codec.schema["required"]) == {
+        "paper_id",
+        "total_citer_count",
+        "scanned_count",
+        "scan_complete",
+        "scan_strategy",
+        "terms",
+        "matched_count",
+        "returned_count",
+        "matches_truncated",
+        "matches",
+        "control_sample",
+    }
 
 
 def test_registry_dispatch_is_strict_and_python_values_are_typed() -> None:
@@ -155,6 +184,29 @@ def test_cli_stdout_is_exactly_one_command_result(
                 "refresh": False,
                 "limit": 3,
                 "sort": "mostcited",
+            },
+        ),
+        (
+            [
+                "search-citers",
+                "1503.08043",
+                "--term",
+                "ultra slow roll",
+                "--term",
+                "non-attractor",
+                "--scan-limit",
+                "800",
+                "--limit",
+                "40",
+                "--refresh",
+            ],
+            "search-citers",
+            {
+                "paper_id": "1503.08043",
+                "terms": ["ultra slow roll", "non-attractor"],
+                "refresh": True,
+                "scan_limit": 800,
+                "limit": 40,
             },
         ),
         (
@@ -431,6 +483,7 @@ def test_cli_preserves_nonfatal_domain_warnings_in_shared_envelope(
         ["get-citer-count", "--help"],
         ["get-references", "--help"],
         ["get-citers", "--help"],
+        ["search-citers", "--help"],
         ["search-metadata", "--help"],
         ["search-cached-full-text", "--help"],
         ["get-arxiv-table-of-contents", "--help"],

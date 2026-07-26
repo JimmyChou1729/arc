@@ -21,6 +21,7 @@ from arc_companion.build import CompanionBuildHandler
 from arc_companion.contracts import AcceptedBook, AcceptedChapter, SourceAnchor
 from arc_companion.generation_validation import (
     CompanionContentError,
+    validate_chapter_guide,
     validate_chapter_plan,
     validate_literature_request_plan,
 )
@@ -161,6 +162,41 @@ def test_literature_plan_rejects_empty_research_log() -> None:
             {"requests": []},
             block_ids=("b1",),
         )
+
+
+def test_guide_validation_decodes_model_escaped_paragraphs() -> None:
+    plan = {
+        "chapter_id": "chapter",
+        "learning_units": [
+            {
+                "unit_id": "unit",
+                "kind": "intuition",
+                "title": "Distinct explanation",
+                "anchor_block_ids": ["b1"],
+                "placement": "inline",
+                "reader_question": "What changes?",
+                "added_value": "Adds an omitted conceptual connection.",
+                "value_dimensions": ["substantive_connection"],
+                "evidence_ids": [],
+            }
+        ],
+    }
+    guide = {
+        "chapter_id": "chapter",
+        "learning_units": [
+            {
+                **plan["learning_units"][0],
+                "content": r"First paragraph.\n\nSecond paragraph.",
+            }
+        ],
+    }
+
+    validated = validate_chapter_guide(guide, plan=plan)
+
+    assert (
+        validated["learning_units"][0]["content"]
+        == "First paragraph.\n\nSecond paragraph."
+    )
 
 
 def test_source_chapters_cover_front_matter_and_mixed_headings_exactly(

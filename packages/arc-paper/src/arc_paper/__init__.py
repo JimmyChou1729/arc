@@ -108,6 +108,7 @@ from .service import (  # noqa: E402
     search_arxiv_equations,
     search_arxiv_full_text,
     search_cached_full_text,
+    search_citers,
     update_cache,
 )
 from .rich_document import (  # noqa: E402
@@ -350,6 +351,7 @@ __all__ = [
     "search_arxiv_equations",
     "search_arxiv_full_text",
     "search_cached_full_text",
+    "search_citers",
     "update_cache",
     "search_full_text",
     "table_of_contents",

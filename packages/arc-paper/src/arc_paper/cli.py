@@ -104,6 +104,34 @@ def _parser() -> _Parser:
         help="result ordering (default: mostrecent)",
     )
 
+    citer_search = commands.add_parser(
+        "search-citers",
+        help="shortlist direct citers by title and abstract phrases",
+        description=(
+            "Scan direct citers and match normalized literal OR phrases in "
+            "their titles and abstracts."
+        ),
+    )
+    _paper_arguments(citer_search)
+    citer_search.add_argument(
+        "--term",
+        action="append",
+        required=True,
+        help="specific search phrase; repeat for synonyms",
+    )
+    citer_search.add_argument(
+        "--scan-limit",
+        type=int,
+        default=1000,
+        help="maximum citers to scan (default: 1000)",
+    )
+    citer_search.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="maximum matching records to return (default: 50)",
+    )
+
     search = commands.add_parser(
         "search-metadata",
         help="search the paper metadata index",
@@ -377,6 +405,14 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "refresh": args.refresh,
             "limit": args.limit,
             "sort": args.sort,
+        }
+    if command == "search-citers":
+        return {
+            "paper_id": args.paper_id,
+            "terms": args.term,
+            "refresh": args.refresh,
+            "scan_limit": args.scan_limit,
+            "limit": args.limit,
         }
     if command == "search-metadata":
         return {"query": " ".join(args.query), "limit": args.limit}
