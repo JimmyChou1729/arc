@@ -50,7 +50,7 @@ def test_reference_inference_uses_parent_context_and_verifies_candidates(
         RunSpec("reference-parent", "test.parent.v1", {"case": "reference"})
     )
     context = RunContext(
-        repository, snapshot, resume_input=None, execution_slice=None
+        repository, snapshot, resume_input=None
     )
     fake = FakeReferenceLLM()
     service = ReferenceInferenceService(fake)
@@ -98,7 +98,7 @@ def test_explicit_reference_identifier_bypasses_llm(tmp_path: Path) -> None:
         RunSpec("explicit-parent", "test.parent.v1", {"case": "explicit"})
     )
     context = RunContext(
-        repository, snapshot, resume_input=None, execution_slice=None
+        repository, snapshot, resume_input=None
     )
     fake = FakeReferenceLLM()
 
@@ -126,7 +126,7 @@ def test_all_explicit_reference_identifiers_are_verified_in_input_order(
         RunSpec("explicit-many", "test.parent.v1", {"case": "explicit-many"})
     )
     context = RunContext(
-        repository, snapshot, resume_input=None, execution_slice=None
+        repository, snapshot, resume_input=None
     )
     looked_up: list[str] = []
 
@@ -196,7 +196,7 @@ def test_inferred_reference_verifies_one_candidate_per_distinct_domain(
         RunSpec("reference-many", "test.parent.v1", {"case": "reference-many"})
     )
     context = RunContext(
-        repository, snapshot, resume_input=None, execution_slice=None
+        repository, snapshot, resume_input=None
     )
     outcome = ReferenceInferenceService(ManyDomainLLM()).infer(
         context,
@@ -236,7 +236,6 @@ def test_reference_resume_decode_uses_reference_error_code(tmp_path: Path) -> No
         repository,
         snapshot,
         resume_input={"not": "an arc.llm resume input"},
-        execution_slice=None,
     )
 
     outcome = handler.execute(context)

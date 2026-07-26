@@ -110,7 +110,7 @@ def _context(tmp_path: Path) -> RunContext:
     snapshot = repository.create(
         RunSpec("equation-label-visual", "test.visual", {"case": "labels"})
     )
-    return RunContext(repository, snapshot, resume_input=None, execution_slice=None)
+    return RunContext(repository, snapshot, resume_input=None)
 
 
 def _document(

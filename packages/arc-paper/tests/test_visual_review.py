@@ -209,7 +209,7 @@ def _context(tmp_path: Path) -> RunContext:
         RunSpec("visual-parent", "test.visual", {"case": "pages"})
     )
     return RunContext(
-        repository, snapshot, resume_input=None, execution_slice=None
+        repository, snapshot, resume_input=None
     )
 
 
@@ -479,7 +479,7 @@ def test_unreviewed_page_terminal_survives_crash_before_parse_commit_without_cal
     jobs = RunRepository(tmp_path / "jobs")
     snapshot = jobs.create(RunSpec("visual-restart", "test.visual", {"case": "restart"}))
     first_context = RunContext(
-        jobs, snapshot, resume_input=None, execution_slice=None
+        jobs, snapshot, resume_input=None
     )
     first_llm = ScriptedLLM(
         [LLMPaused(ResumeReason.EXTERNAL_CONDITION, "provider-pause")]
@@ -497,7 +497,6 @@ def test_unreviewed_page_terminal_survives_crash_before_parse_commit_without_cal
         jobs,
         jobs.inspect("visual-restart").snapshot,
         resume_input=None,
-        execution_slice=None,
     )
     never = NeverLLM()
     replayed = VisualReviewService(FakeRenderer(1), llm=never).review(
@@ -538,7 +537,7 @@ def test_provider_failure_and_invalid_output_page_terminals_replay(
         snapshot = jobs.create(
             RunSpec(f"visual-case-{index}", "test.visual", {"case": index})
         )
-        context = RunContext(jobs, snapshot, resume_input=None, execution_slice=None)
+        context = RunContext(jobs, snapshot, resume_input=None)
         VisualReviewService(
             FakeRenderer(1), llm=ScriptedLLM([terminal])
         ).review(
@@ -554,7 +553,6 @@ def test_provider_failure_and_invalid_output_page_terminals_replay(
                 jobs,
                 jobs.inspect(f"visual-case-{index}").snapshot,
                 resume_input=None,
-                execution_slice=None,
             ),
             primary,
             parsed_pdf,
@@ -599,7 +597,7 @@ def test_corrupt_existing_page_terminal_is_unreviewed_without_rerun(
     VisualReviewService(
         FakeRenderer(1), llm=ScriptedLLM([completed])
     ).review(
-        RunContext(jobs, snapshot, resume_input=None, execution_slice=None),
+        RunContext(jobs, snapshot, resume_input=None),
         primary,
         parsed_pdf,
         markdown_bytes=sources.read_bytes(markdown),
@@ -610,7 +608,6 @@ def test_corrupt_existing_page_terminal_is_unreviewed_without_rerun(
         jobs,
         jobs.inspect("visual-corrupt-terminal").snapshot,
         resume_input=None,
-        execution_slice=None,
     )
     original_read = restarted.artifacts.read_bytes
 

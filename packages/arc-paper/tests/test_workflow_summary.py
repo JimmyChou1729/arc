@@ -165,7 +165,7 @@ def _publish(
 def _context(repository: RunRepository, run_id: str = "parent") -> RunContext:
     snapshot = repository.create(RunSpec(run_id, "test.parent.v1", {"case": run_id}))
     return RunContext(
-        repository, snapshot, resume_input=None, execution_slice=None
+        repository, snapshot, resume_input=None
     )
 
 
