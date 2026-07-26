@@ -631,6 +631,48 @@ def test_review_prompt_obeys_the_same_complete_input_budget(tmp_path):
     assert result.code == "translation_review_exceeds_input_budget"
 
 
+def test_translation_windows_reserve_space_for_review(tmp_path):
+    markdown = tmp_path / "review-windows.md"
+    markdown.write_text(
+        "# Long\n\n" + "\n\n".join(["source prose " * 40] * 6),
+        encoding="utf-8",
+    )
+    paper = ArcPaperService(cache_root=tmp_path / "review-windows-cache")
+    artifact = paper.import_source(markdown)
+    source = TranslationSource(
+        parsed=paper.parser.parse_source(artifact),
+        rich=RichDocumentParserService(paper.repository).parse_source(artifact),
+    )
+    tasks = FakeTasks()
+    result = TranslationWorkflowService(tasks).translate_blocks(
+        _context(tmp_path, "review-windows"),
+        source,
+        language=LanguageResult(
+            source.document_digest,
+            source.source_digest,
+            "en",
+            "known",
+            1,
+            "fr",
+            "enabled",
+        ),
+        glossary=GlossaryResult(
+            source.document_digest,
+            source.source_digest,
+            "fr",
+            1,
+            "d" * 64,
+            (),
+        ),
+        target_language="fr",
+        input_budget_bytes=4_800,
+    )
+
+    assert isinstance(result, BlocksResult)
+    assert tasks.calls.count(TRANSLATION_PROMPT_VERSION) == 4
+    assert tasks.calls.count(REVIEW_PROMPT_VERSION) == 4
+
+
 def test_pdf_without_text_layer_is_a_typed_source_failure(tmp_path):
     path = tmp_path / "scan.pdf"
     path.write_bytes(b"%PDF-fake")

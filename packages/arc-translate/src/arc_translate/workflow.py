@@ -1113,6 +1113,16 @@ def _translation_windows(
                 ordinal=len(windows),
             )
             <= budget_bytes
+            and (
+                len(candidate) == 1
+                or _translation_review_estimate_size(
+                    candidate,
+                    glossary=glossary,
+                    target_language=target_language,
+                    ordinal=len(windows),
+                )
+                <= budget_bytes
+            )
         ):
             current = candidate
             continue
@@ -1202,6 +1212,30 @@ def _translation_prompt_size(
             glossary=_window_glossary(blocks, glossary),
             target_language=target_language,
             language_result=language.to_document(),
+            window_ordinal=ordinal,
+        ).encode("utf-8")
+    )
+
+
+def _translation_review_estimate_size(
+    blocks: Sequence[Mapping[str, Any]],
+    *,
+    glossary: Sequence[Mapping[str, Any]],
+    target_language: str,
+    ordinal: int,
+) -> int:
+    return len(
+        review_prompt(
+            blocks=[prompt_block(item) for item in blocks],
+            translations=[
+                {
+                    "block_id": str(item["block_id"]),
+                    "text": block_text(item) or "translated block",
+                }
+                for item in blocks
+            ],
+            glossary=_window_glossary(blocks, glossary),
+            target_language=target_language,
             window_ordinal=ordinal,
         ).encode("utf-8")
     )
