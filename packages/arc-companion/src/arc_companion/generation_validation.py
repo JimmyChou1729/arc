@@ -137,7 +137,12 @@ def validate_chapter_plan(
 ) -> dict[str, Any]:
     result = _exact(
         value,
-        {"chapter_id", "learning_units"},
+        {
+            "chapter_id",
+            "reader_profile",
+            "reader_needs",
+            "learning_units",
+        },
         "chapter plan",
     )
     if result["chapter_id"] != chapter_id:
@@ -156,7 +161,18 @@ def validate_chapter_plan(
         )
         for item in units
     ]
-    return {"chapter_id": chapter_id, "learning_units": normalized}
+    reader_profile = _validate_reader_profile(result["reader_profile"])
+    reader_needs = _validate_reader_needs(
+        result["reader_needs"],
+        block_ids=block_ids,
+        units=normalized,
+    )
+    return {
+        "chapter_id": chapter_id,
+        "reader_profile": reader_profile,
+        "reader_needs": reader_needs,
+        "learning_units": normalized,
+    }
 
 
 def validate_author_identity(
@@ -252,6 +268,12 @@ def validate_chapter_guide(
                 else "learning-unit IDs must exactly match the selective plan"
             ),
         )
+    _validate_retained_reader_need_coverage(
+        plan,
+        retained_unit_ids={
+            str(unit_id) for unit_id in unit_ids if isinstance(unit_id, str)
+        },
+    )
     normalized: list[dict[str, Any]] = []
     for item in units:
         planned_item = planned[str(item["unit_id"])]
@@ -438,6 +460,128 @@ def _validate_planned_unit(
         "purpose": _nonempty(item["purpose"], "learning-unit purpose"),
         "evidence_ids": evidence,
     }
+
+
+def _validate_reader_profile(value: Any) -> dict[str, str]:
+    profile = _exact(
+        value,
+        {"source_type", "assumed_background", "basis"},
+        "reader profile",
+    )
+    source_type = profile["source_type"]
+    if source_type not in {
+        "user_specified",
+        "popular_or_directional",
+        "research_paper",
+        "textbook",
+        "other",
+    }:
+        raise CompanionContentError(
+            "chapter_plan_invalid", "reader profile source_type is invalid"
+        )
+    return {
+        "source_type": str(source_type),
+        "assumed_background": _nonempty(
+            profile["assumed_background"],
+            "reader assumed background",
+        ),
+        "basis": _nonempty(profile["basis"], "reader profile basis"),
+    }
+
+
+def _validate_reader_needs(
+    value: Any,
+    *,
+    block_ids: Sequence[str],
+    units: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    needs = _mapping_list(value, "reader needs")
+    actual_ids = [item.get("block_id") for item in needs]
+    if actual_ids != list(block_ids):
+        raise CompanionContentError(
+            "reader_needs_invalid",
+            "reader needs must cover every chapter block exactly once in source order",
+        )
+    units_by_id = {str(item["unit_id"]): item for item in units}
+    normalized: list[dict[str, Any]] = []
+    for need in needs:
+        if set(need) != {
+            "block_id",
+            "needs_companion",
+            "reason",
+            "learning_unit_ids",
+        }:
+            raise CompanionContentError(
+                "reader_needs_invalid", "reader need has invalid fields"
+            )
+        required = need["needs_companion"]
+        if not isinstance(required, bool):
+            raise CompanionContentError(
+                "reader_needs_invalid",
+                "reader need needs_companion must be a boolean",
+            )
+        unit_ids = _string_ids(
+            need["learning_unit_ids"], "reader need learning units"
+        )
+        if required and not unit_ids:
+            raise CompanionContentError(
+                "reader_needs_invalid",
+                "a block that needs Companion help must map to a learning unit",
+            )
+        if not required and unit_ids:
+            raise CompanionContentError(
+                "reader_needs_invalid",
+                "a self-contained block cannot map to a learning unit",
+            )
+        block_id = str(need["block_id"])
+        for unit_id in unit_ids:
+            unit = units_by_id.get(unit_id)
+            if unit is None:
+                raise CompanionContentError(
+                    "reader_needs_invalid",
+                    "reader need cites an unknown learning unit",
+                )
+            if block_id not in unit["anchor_block_ids"]:
+                raise CompanionContentError(
+                    "reader_needs_invalid",
+                    "reader need learning units must anchor the covered block",
+                )
+        normalized.append(
+            {
+                "block_id": block_id,
+                "needs_companion": required,
+                "reason": _nonempty(
+                    need["reason"], "reader need reason"
+                ),
+                "learning_unit_ids": unit_ids,
+            }
+        )
+    return normalized
+
+
+def _validate_retained_reader_need_coverage(
+    plan: Mapping[str, Any],
+    *,
+    retained_unit_ids: set[str],
+) -> None:
+    raw_needs = plan.get("reader_needs")
+    if raw_needs is None:
+        # Legacy frozen plans predate reader-needs auditing.
+        return
+    needs = _mapping_list(raw_needs, "reader needs")
+    for need in needs:
+        if need.get("needs_companion") is not True:
+            continue
+        planned_ids = need.get("learning_unit_ids")
+        if not isinstance(planned_ids, list) or not any(
+            isinstance(unit_id, str)
+            and unit_id in retained_unit_ids
+            for unit_id in planned_ids
+        ):
+            raise CompanionContentError(
+                "reader_need_coverage_invalid",
+                "review removed the final learning unit for a required reader need",
+            )
 
 
 def _exact(

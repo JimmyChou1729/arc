@@ -81,6 +81,28 @@ class _EvidenceResumeTasks:
             block_id = payload["blocks"][0]["block_id"]
             value = {
                 "chapter_id": payload["chapter_id"],
+                "reader_profile": {
+                    "source_type": "research_paper",
+                    "assumed_background": (
+                        "A student with relevant foundational coursework."
+                    ),
+                    "basis": "The fixture requests supporting research.",
+                },
+                "reader_needs": [
+                    {
+                        "block_id": block["block_id"],
+                        "needs_companion": index == 0,
+                        "reason": (
+                            "The first block needs the supporting result."
+                            if index == 0
+                            else "This block is simple and self-contained."
+                        ),
+                        "learning_unit_ids": (
+                            ["reading"] if index == 0 else []
+                        ),
+                    }
+                    for index, block in enumerate(payload["blocks"])
+                ],
                 "learning_units": [
                     {
                         "unit_id": "reading",

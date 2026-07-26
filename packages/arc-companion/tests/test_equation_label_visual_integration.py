@@ -131,6 +131,22 @@ class _GuideTasks:
             )
             value = {
                 "chapter_id": payload["chapter_id"],
+                "reader_profile": {
+                    "source_type": "research_paper",
+                    "assumed_background": (
+                        "A student who completed relevant foundational courses."
+                    ),
+                    "basis": "The fixture has numbered research equations.",
+                },
+                "reader_needs": [
+                    {
+                        "block_id": block["block_id"],
+                        "needs_companion": False,
+                        "reason": "The visual-label fixture is self-contained.",
+                        "learning_unit_ids": [],
+                    }
+                    for block in payload["blocks"]
+                ],
                 "learning_units": [],
             }
         else:  # pragma: no cover - the visual service is replaced in these tests

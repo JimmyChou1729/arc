@@ -136,6 +136,28 @@ class FakeGuideTasks:
                 )
             value = {
                 "chapter_id": payload["chapter_id"],
+                "reader_profile": {
+                    "source_type": "popular_or_directional",
+                    "assumed_background": (
+                        "An adult reader without specialist training."
+                    ),
+                    "basis": "The short fixture is explanatory prose.",
+                },
+                "reader_needs": [
+                    {
+                        "block_id": block["block_id"],
+                        "needs_companion": index == 0,
+                        "reason": (
+                            "The first block benefits from one connection."
+                            if index == 0
+                            else "This block is simple and self-contained."
+                        ),
+                        "learning_unit_ids": (
+                            ["intuition"] if index == 0 else []
+                        ),
+                    }
+                    for index, block in enumerate(payload["blocks"])
+                ],
                 "learning_units": units,
             }
         elif contract == CHAPTER_GUIDE_PROMPT_VERSION:

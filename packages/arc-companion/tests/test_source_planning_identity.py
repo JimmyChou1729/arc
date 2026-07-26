@@ -38,6 +38,8 @@ from arc_companion.prompts import (
     EVIDENCE_RESEARCH_SCHEMA,
     LITERATURE_REQUEST_PLAN_SCHEMA,
     author_identity_prompt,
+    chapter_guide_prompt,
+    chapter_guide_review_prompt,
     chapter_plan_prompt,
     evidence_research_prompt,
     literature_request_prompt,
@@ -100,6 +102,10 @@ def test_companion_provider_enum_nodes_declare_string_types() -> None:
         "evidence_ids",
     }
     assert planned_unit["properties"]["placement"]["type"] == "string"
+    reader_profile = CHAPTER_PLAN_SCHEMA["properties"]["reader_profile"]
+    assert reader_profile["properties"]["source_type"]["type"] == "string"
+    reader_need = CHAPTER_PLAN_SCHEMA["properties"]["reader_needs"]["items"]
+    assert reader_need["properties"]["needs_companion"]["type"] == "boolean"
     evidence = LITERATURE_REQUEST_PLAN_SCHEMA["properties"]["requests"]["items"]
     assert evidence["properties"]["kind"]["type"] == "string"
     assert LITERATURE_REQUEST_PLAN_SCHEMA["properties"]["requests"][
@@ -141,6 +147,19 @@ def test_evidence_first_prompts_encode_selective_value_contract() -> None:
         "non-exhaustive inspirations",
         "no default or quota",
         "paragraph-local and cross-paragraph work",
+    ):
+        assert phrase in plan
+    for phrase in (
+        "adult with average general literacy and no specialist training",
+        "research paper",
+        "relevant discipline's foundational courses",
+        "textbook",
+        "standard prerequisite courses",
+        "do not assume difficult prerequisite concepts",
+        "Audit every supplied source block exactly once",
+        "Zero units are valid only when every block",
+        "plot, narrative levels, or mistaken-identity context",
+        "Never invent a belief for the reader",
     ):
         assert phrase in plan
     assert "reader question" not in plan.casefold()
@@ -272,6 +291,19 @@ def test_prior_companion_is_reference_context_not_a_template() -> None:
         "chapters": [
             {
                 "chapter_id": "chapter",
+                "reader_profile": {
+                    "source_type": "research_paper",
+                    "assumed_background": "A prepared student.",
+                    "basis": "The source is a research paper.",
+                },
+                "reader_needs": [
+                    {
+                        "block_id": "b1",
+                        "needs_companion": True,
+                        "reason": "The interpretation is implicit.",
+                        "learning_unit_ids": ["unit"],
+                    }
+                ],
                 "learning_units": [
                     {
                         "title": "旧伴读",
@@ -316,6 +348,243 @@ def test_chapter_plan_rejects_legacy_presentation_fields() -> None:
             chapter_id="chapter",
             block_ids=("b1",),
         )
+
+
+def _reader_profile(source_type: str = "research_paper") -> dict:
+    return {
+        "source_type": source_type,
+        "assumed_background": "A student with the applicable preparation.",
+        "basis": "The fixture states its source type.",
+    }
+
+
+def _planned_unit(
+    unit_id: str,
+    anchors: list[str],
+) -> dict:
+    return {
+        "unit_id": unit_id,
+        "anchor_block_ids": anchors,
+        "placement": "inline",
+        "purpose": "Supplies missing context.",
+        "evidence_ids": [],
+    }
+
+
+def test_reader_needs_cover_blocks_in_order_and_allow_cross_block_units() -> None:
+    value = validate_chapter_plan(
+        {
+            "chapter_id": "chapter",
+            "reader_profile": _reader_profile(),
+            "reader_needs": [
+                {
+                    "block_id": block_id,
+                    "needs_companion": True,
+                    "reason": "The shared context is not in the source.",
+                    "learning_unit_ids": ["shared"],
+                }
+                for block_id in ("b1", "b2")
+            ],
+            "learning_units": [
+                _planned_unit("shared", ["b1", "b2"])
+            ],
+        },
+        chapter_id="chapter",
+        block_ids=("b1", "b2"),
+    )
+
+    assert [
+        need["block_id"] for need in value["reader_needs"]
+    ] == ["b1", "b2"]
+    assert len(value["learning_units"]) == 1
+
+
+@pytest.mark.parametrize(
+    "reader_needs",
+    [
+        [],
+        [
+            {
+                "block_id": "b2",
+                "needs_companion": False,
+                "reason": "Simple.",
+                "learning_unit_ids": [],
+            },
+            {
+                "block_id": "b1",
+                "needs_companion": False,
+                "reason": "Simple.",
+                "learning_unit_ids": [],
+            },
+        ],
+        [
+            {
+                "block_id": "b1",
+                "needs_companion": False,
+                "reason": "Simple.",
+                "learning_unit_ids": [],
+            },
+            {
+                "block_id": "b1",
+                "needs_companion": False,
+                "reason": "Simple.",
+                "learning_unit_ids": [],
+            },
+        ],
+    ],
+)
+def test_reader_needs_require_exact_source_order(reader_needs: list[dict]) -> None:
+    with pytest.raises(
+        CompanionContentError, match="exactly once in source order"
+    ):
+        validate_chapter_plan(
+            {
+                "chapter_id": "chapter",
+                "reader_profile": _reader_profile(),
+                "reader_needs": reader_needs,
+                "learning_units": [],
+            },
+            chapter_id="chapter",
+            block_ids=("b1", "b2"),
+        )
+
+
+def test_simple_source_allows_zero_learning_units() -> None:
+    value = validate_chapter_plan(
+        {
+            "chapter_id": "chapter",
+            "reader_profile": _reader_profile(
+                "popular_or_directional"
+            ),
+            "reader_needs": [
+                {
+                    "block_id": "b1",
+                    "needs_companion": False,
+                    "reason": "The sentence is simple and self-contained.",
+                    "learning_unit_ids": [],
+                }
+            ],
+            "learning_units": [],
+        },
+        chapter_id="chapter",
+        block_ids=("b1",),
+    )
+
+    assert value["learning_units"] == []
+
+
+def test_reader_need_requires_unit_anchored_to_covered_block() -> None:
+    with pytest.raises(
+        CompanionContentError, match="anchor the covered block"
+    ):
+        validate_chapter_plan(
+            {
+                "chapter_id": "chapter",
+                "reader_profile": _reader_profile(),
+                "reader_needs": [
+                    {
+                        "block_id": "b1",
+                        "needs_companion": True,
+                        "reason": "Context is missing.",
+                        "learning_unit_ids": ["unit"],
+                    },
+                    {
+                        "block_id": "b2",
+                        "needs_companion": False,
+                        "reason": "Simple.",
+                        "learning_unit_ids": [],
+                    },
+                ],
+                "learning_units": [
+                    _planned_unit("unit", ["b2"])
+                ],
+            },
+            chapter_id="chapter",
+            block_ids=("b1", "b2"),
+        )
+
+
+def test_review_cannot_remove_final_required_reader_need_cover() -> None:
+    plan = validate_chapter_plan(
+        {
+            "chapter_id": "chapter",
+            "reader_profile": _reader_profile(),
+            "reader_needs": [
+                {
+                    "block_id": "b1",
+                    "needs_companion": True,
+                    "reason": "Context is missing.",
+                    "learning_unit_ids": ["unit"],
+                }
+            ],
+            "learning_units": [_planned_unit("unit", ["b1"])],
+        },
+        chapter_id="chapter",
+        block_ids=("b1",),
+    )
+    draft = validate_chapter_guide(
+        {
+            "chapter_id": "chapter",
+            "learning_units": [
+                {
+                    "unit_id": "unit",
+                    "title": "Context",
+                    "content_markdown": "The missing context.",
+                }
+            ],
+        },
+        plan=plan,
+    )
+    removed, _audit = apply_safe_guide_review(
+        draft,
+        {
+            "decisions": [
+                {
+                    "unit_id": "unit",
+                    "decision": "remove",
+                    "replacement_title": None,
+                    "replacement_markdown": None,
+                    "reason": "Attempt to remove coverage.",
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(
+        CompanionContentError, match="final learning unit"
+    ):
+        validate_chapter_guide(
+            removed, plan=plan, allow_removed=True
+        )
+
+
+def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
+    plan = {
+        "chapter_id": "chapter",
+        "reader_profile": _reader_profile("textbook"),
+        "reader_needs": [],
+        "learning_units": [],
+    }
+    guide = chapter_guide_prompt(
+        plan=plan,
+        blocks=[],
+        glossary=[],
+        target_language="zh-CN",
+        language_result={"language_tag": "en"},
+        evidence=[],
+    )
+    review = chapter_guide_review_prompt(
+        plan=plan,
+        draft={"chapter_id": "chapter", "learning_units": []},
+        blocks=[],
+        glossary=[],
+        evidence=[],
+    )
+
+    assert "do not manufacture a prior reader belief" in guide
+    assert "Translate English excerpts" in guide
+    assert "Never remove the final unit" in review
+    assert "Replace unsupported corrective framing" in review
 
 
 def test_literature_plan_rejects_empty_research_log() -> None:

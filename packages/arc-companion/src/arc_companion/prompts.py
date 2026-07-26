@@ -16,11 +16,11 @@ EVIDENCE_RESEARCH_PROMPT_VERSION = (
 LITERATURE_SURVEY_PROMPT_VERSION = (
     "arc.companion.literature-survey-prompt.v2"
 )
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v4"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v5"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v4"
+    "arc.companion.chapter-learning-review-prompt.v5"
 )
-CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v5"
+CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v6"
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v1"
 
 
@@ -155,12 +155,50 @@ _PLANNED_UNIT = _closed(
         "evidence_ids",
     ),
 )
+_READER_PROFILE = _closed(
+    {
+        "source_type": {
+            "type": "string",
+            "enum": [
+                "user_specified",
+                "popular_or_directional",
+                "research_paper",
+                "textbook",
+                "other",
+            ],
+        },
+        "assumed_background": _NONEMPTY,
+        "basis": _NONEMPTY,
+    },
+    ("source_type", "assumed_background", "basis"),
+)
+_READER_NEED = _closed(
+    {
+        "block_id": _NONEMPTY,
+        "needs_companion": {"type": "boolean"},
+        "reason": _NONEMPTY,
+        "learning_unit_ids": _STRING_IDS,
+    },
+    (
+        "block_id",
+        "needs_companion",
+        "reason",
+        "learning_unit_ids",
+    ),
+)
 CHAPTER_PLAN_SCHEMA = _closed(
     {
         "chapter_id": _NONEMPTY,
+        "reader_profile": _READER_PROFILE,
+        "reader_needs": {"type": "array", "items": _READER_NEED},
         "learning_units": {"type": "array", "items": _PLANNED_UNIT},
     },
-    ("chapter_id", "learning_units"),
+    (
+        "chapter_id",
+        "reader_profile",
+        "reader_needs",
+        "learning_units",
+    ),
 )
 _LEARNING_UNIT = _closed(
     {
@@ -334,6 +372,8 @@ def chapter_plan_prompt(
     *,
     chapter_id: str,
     title: str,
+    document_title: str | None = None,
+    document_outline: Sequence[str] = (),
     blocks: Sequence[Mapping[str, Any]],
     target_language: str,
     intent: str,
@@ -363,10 +403,46 @@ def chapter_plan_prompt(
         Preserve, deepen, recombine, or discard its ideas according to the
         current source, intent, and evidence; never copy its repeated format or
         treat it as a required template.
+
+        First resolve the reader profile. An explicit reader background in the
+        user intent overrides every default. Otherwise, for popular,
+        directional, or weakly specialized writing, assume an adult with
+        average general literacy and no specialist training. For a research
+        paper, assume a professional student who has completed the relevant
+        discipline's foundational courses. For a textbook, assume a student
+        who has completed its standard prerequisite courses, but do not assume
+        difficult prerequisite concepts are already mastered confidently. Use
+        the document title, outline, source, and intent to choose and explain
+        the profile; do not infer expertise merely from an interested reader.
+
+        Audit every supplied source block exactly once and in source order in
+        `reader_needs`. Decide whether the resolved reader needs Companion help,
+        give a concrete reason, and list the learning units that cover that
+        need. A block marked as needing help must map to at least one unit whose
+        anchors include that block. One unit may cover several related blocks;
+        there is no per-block unit quota and no minimum unit count. Mark a block
+        as not needing help only when its actual content is simple,
+        self-contained, and understandable for the resolved reader, and explain
+        why. Zero units are valid only when every block passes that audit.
+
+        Look actively for unexplained works, people, events, schools,
+        institutions, compressed historical claims, allusions, technical
+        concepts, and skipped reasoning. Examples that rely on another text may
+        require its plot, narrative levels, or mistaken-identity context. These
+        are non-exhaustive signals of reader need, not required categories or
+        content quotas.
+
+        Prefer direct affirmative explanation. Use corrective contrasts such
+        as “not X but Y” only when the source, user intent, or selected evidence
+        establishes that the misconception actually exists. Never invent a
+        belief for the reader merely to create an explanatory effect. Write the
+        reader profile, audit reasons, and purposes in the target language.
         """,
         {
             "chapter_id": chapter_id,
             "title": title,
+            "document_title": document_title or title,
+            "document_outline": list(document_outline),
             "target_language": target_language,
             "intent": intent,
             "blocks": list(blocks),
@@ -415,6 +491,14 @@ def chapter_guide_prompt(
         Improve, extend, recombine, or discard it freely. It is neither a
         template nor an accepted source of current citations; use only the
         current selected evidence IDs in new output.
+
+        Write for the plan's resolved reader profile and satisfy every mapped
+        reader need. Prefer direct affirmative explanation. Use “not X but Y”
+        or another corrective contrast only when the source, user intent, or
+        selected evidence establishes that the misconception actually exists;
+        do not manufacture a prior reader belief to make prose sound
+        explanatory. Translate English excerpts or quotations into the target
+        language while citing their assigned English source identity nearby.
         """,
         {
             "target_language": target_language,
@@ -460,6 +544,14 @@ def chapter_guide_review_prompt(
         write a summary. A prior Companion, when supplied, is optional reference
         material rather than a template or an authority; judge the current
         draft against the current source, intent, and evidence.
+
+        Check the draft against the plan's reader profile and reader-needs
+        audit. Never remove the final unit covering a block that needs help;
+        keep it or replace it with a useful explanation under the same anchors.
+        Replace unsupported corrective framing such as an invented “not X but
+        Y” misconception with a direct affirmative explanation. A corrective
+        contrast is justified only when the source, user intent, or selected
+        evidence shows that the misconception actually exists.
         """,
         {
             "plan": dict(plan),

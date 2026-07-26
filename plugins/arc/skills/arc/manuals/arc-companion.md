@@ -3,8 +3,7 @@
 `arc-companion` builds a source-anchored reading companion with translation,
 guides, searchable PDF, and Web reader. Use this manual for package commands.
 
-Build and resume require public `arc-translate`, paper, LLM, and jobs dependencies;
-an incomplete runtime returns `runtime_dependency_missing`.
+Build and resume require public `arc-translate`, paper, LLM, and jobs dependencies; an incomplete runtime returns `runtime_dependency_missing`.
 
 ## Build from a Local Rich Source
 
@@ -50,32 +49,30 @@ arc-companion build <arxiv-id> \
   --target-language <language-tag>
 ```
 
-The build reuses compatible verified source, glossary, translation, and
-chapter artifacts. Language detection and translation belong to
-`arc-translate`; after the glossary barrier, translation and guide generation
-may proceed in parallel. The glossary size is approximate.
+The build reuses compatible verified source, glossary, translation, and chapter
+artifacts. After the `arc-translate` glossary barrier, translation and guide
+generation may run in parallel. The glossary size is approximate.
 
-Before chapter planning, Companion requests one document-wide log of at least
-20 candidate works or discussions across named sources, prior history, and
-central later debates. This is an inspection floor, not a citation target;
-only directly relevant selected evidence reaches planning and bibliography.
-This is a standard `arc-llm` research task: an unrestricted model uses its
-search, Web, and paper tools directly, while restricted or unknown execution
-uses the native host-turn/broker contract when necessary. Companion has no
-separate evidence resume input. English Wikipedia may be used as an ordinary
-candidate, but non-English Wikipedia editions are rejected; target-language
-notes keep English page titles and URLs as source identity.
+Before planning, Companion researches at least 20 candidates across named
+sources, prior history, and central later debates. This is an inspection floor,
+not a citation target. It is a standard `arc-llm` task: unrestricted models use
+research tools directly; other modes use native host turns. Companion has no
+evidence resume input. Only English Wikipedia is accepted, and target-language
+notes retain English page titles and URLs.
 
-Paragraph-local and chapter-level/cross-paragraph units have equal status and no
-placement quota. Retain only distinct motivation, presentation, implication,
-omitted reasoning, connection, reliable context, or useful later development;
-remove generic summary, paraphrase, and repetition. Learning-unit prose is free
-CommonMark: ARC constrains anchors, evidence, coverage, and renderability, not
-the model's explanatory form.
+Paragraph-local and cross-paragraph units have equal status and no quota.
+Retain distinct explanatory value; remove generic summary, paraphrase, and
+repetition. Prose is free CommonMark: ARC constrains anchors, evidence,
+coverage, and renderability, not explanatory form.
 
-`--paper-cache-root` is optional. Without it, Companion uses ARC's shared,
-reusable paper cache. Companion's durable runs, diagnostics, and frozen source
-assets are project-local under `<project-dir>/.arc/companion/`.
+Planning audits every source block. Absent a user audience, general writing
+targets a non-specialist adult, research targets students with foundations, and
+textbooks target students with prerequisites without presuming hard topics are
+mastered. Required needs remain covered; no count quota applies. Corrective
+contrast requires a misconception established by source or evidence.
+
+Without `--paper-cache-root`, Companion uses ARC's shared paper cache. Durable
+project state remains under `<project-dir>/.arc/companion/`.
 
 ## Inspect and Recover
 

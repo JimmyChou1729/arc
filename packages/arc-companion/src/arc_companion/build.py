@@ -251,6 +251,7 @@ class CompanionBuildHandler:
                 source,
                 chapters,
                 blocks,
+                title,
                 literature_survey,
                 evidence,
                 prior_companion,
@@ -827,6 +828,7 @@ class CompanionBuildHandler:
         source: RichDocument,
         chapters: tuple[SourceChapter, ...],
         blocks: Mapping[str, Any],
+        document_title: str,
         literature_survey: Mapping[str, Any],
         evidence: Sequence[Mapping[str, Any]],
         prior_companion: Mapping[str, Any] | None,
@@ -868,6 +870,10 @@ class CompanionBuildHandler:
                     chapter_plan_prompt(
                         chapter_id=chapter.chapter_id,
                         title=chapter.title,
+                        document_title=document_title,
+                        document_outline=[
+                            item.title for item in chapters
+                        ],
                         blocks=[
                             _source_block_document(source, blocks[item])
                             for item in chapter.block_ids
@@ -1056,6 +1062,11 @@ class CompanionBuildHandler:
                         "review_prompt_contract": (
                             self.recipe.chapter_guide_review_prompt
                         ),
+                        "plan_digest": hashlib.sha256(
+                            canonical_json_bytes(
+                                dict(by_plan[chapter.chapter_id])
+                            )
+                        ).hexdigest(),
                     },
                 )
             )

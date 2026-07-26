@@ -115,6 +115,23 @@ useful later developments. Paraphrase, same-meaning rewriting, repeated source
 reasoning, and generic summary are not Companion value; remove such units
 instead of forcing one expansion per paragraph or chapter.
 
+Every chapter plan audits every source block in order for reader understanding
+needs. An explicit user audience wins. Otherwise, popular, directional, or
+weakly specialized writing assumes an adult with average general literacy and
+no specialist background; a research paper assumes a professional student who
+has completed the relevant foundational courses; a textbook assumes a student
+who completed its standard prerequisites without presuming that difficult
+prerequisite concepts are already firmly mastered. A required need must retain
+at least one anchored learning unit after review. There is no minimum number of
+units, and zero is valid only when every block is genuinely simple and
+self-contained for the resolved reader.
+
+Prefer direct affirmative explanation. Use corrective contrasts only when the
+source, user intent, or selected evidence establishes the misconception; never
+invent a prior reader belief to create an explanatory effect. Review replaces
+unsupported corrective framing and cannot remove the last unit serving a
+required reader need.
+
 The guide lane writes free-form CommonMark learning units rather than selecting
 from a fixed menu of note types. Headings, short questions, worked reasoning,
 comparisons, historical context, counterpoints, lists, equations, and other
