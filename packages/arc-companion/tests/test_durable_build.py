@@ -36,6 +36,7 @@ from arc_companion.request_contracts import (
     CompanionGenerationRecipe,
 )
 from arc_companion.service import CompanionService
+from arc_companion.source_planning import plan_source_chapters
 from arc_companion.translation_adapter import (
     ArcTranslateAdapter,
     CompanionTranslationRuntimeError,
@@ -135,7 +136,7 @@ class FakeGuideTasks:
                     }
                 )
             value = {
-                "chapter_id": payload["chapter_id"],
+                "chapter_id": "model-supplied-title-not-routing-identity",
                 "reader_profile": {
                     "source_type": "popular_or_directional",
                     "assumed_background": (
@@ -388,6 +389,16 @@ def test_translation_and_guide_share_post_glossary_group(
     assert tasks.counts[CHAPTER_PLAN_PROMPT_VERSION] == 2
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
     assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 2
+    for chapter in plan_source_chapters(document):
+        candidate = json.loads(
+            (
+                service.repository.run_directory(completed.run_id)
+                / "working/candidates/chapters"
+                / chapter.chapter_id
+                / "plan.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert candidate["chapter_id"] == chapter.chapter_id
     assert [
         item["term"]
         for item in next(iter(tasks.guide_glossaries.values()))

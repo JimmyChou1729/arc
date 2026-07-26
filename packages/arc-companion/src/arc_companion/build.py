@@ -913,11 +913,16 @@ class CompanionBuildHandler:
                 )
                 assert isinstance(outcome, LLMCompleted)
                 raw = mapping(outcome.value, "chapter plan")
-                candidate_path = context.working.write_candidate_json(
-                    candidate_id, raw
-                )
             else:
                 raw = context.working.read_candidate_json(candidate_id)
+            # The chapter ID is caller-owned routing identity, not model
+            # semantics. Bind it before persisting or validating so a model
+            # echo cannot rename the chapter, and legacy editable candidates
+            # receive the same deterministic repair on replay.
+            raw = {**raw, "chapter_id": chapter.chapter_id}
+            candidate_path = context.working.write_candidate_json(
+                candidate_id, raw
+            )
             try:
                 value = validate_chapter_plan(
                     raw,
