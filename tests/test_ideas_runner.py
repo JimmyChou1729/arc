@@ -383,25 +383,36 @@ def test_custom_executor_receives_persisted_materialized_input(
     fake = _FakeLLM()
     captured: dict[str, object] = {}
 
-    def execute(repository, spec, handler):
+    def execute(repository, spec, handler, *, event_sink):
         request = decode_batch_request(spec.semantic_input)
         captured["request"] = request
         captured["content"] = ImmutableArtifactStore(
             repository.run_directory(spec.run_id),
             repository_root=repository.root,
         ).read_source(request.inputs[0].source).content
-        return RunEngine(repository).execute(spec, handler)
+        captured["event_sink"] = event_sink
+        return RunEngine(repository).execute(
+            spec,
+            handler,
+            event_sink=event_sink,
+        )
 
+    progress_events: list[dict[str, Any]] = []
     result = runner.run_ideas(
         _config(tmp_path),
         llm_service=fake,
         executor=execute,
+        progress_callback=progress_events.append,
     )
 
     request = captured["request"]
     assert result["status"] == "succeeded"
     assert getattr(request, "inputs")[0].source.source_run_id == "ideas-test"
     assert captured["content"] == b"# Brief\n"
+    assert captured["event_sink"] is not None
+    assert "proposer_reviewer_worker_started" in {
+        event["event"] for event in progress_events
+    }
 
 
 def test_idea_cli_requires_explicit_authority_value() -> None:

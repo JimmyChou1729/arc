@@ -11,7 +11,7 @@ from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 
 bootstrap_arc_pythonpath()
 
-from arc_jobs import RunEngine, RunRepository, RunSnapshot, RunSpec
+from arc_jobs import EventSink, RunEngine, RunRepository, RunSnapshot, RunSpec
 from arc_llm import HostAuthority, LLMExecutionOptions, LLMTaskService
 from arc_proposer_reviewer import (
     BatchInputPayload,
@@ -63,6 +63,8 @@ class BatchExecutor(Protocol):
         repository: RunRepository,
         spec: RunSpec,
         handler: ProposerReviewerHandler,
+        *,
+        event_sink: EventSink,
     ) -> RunSnapshot: ...
 
 
@@ -186,7 +188,12 @@ def run_ideas(
                         event_sink=package_progress,
                     )
                 else:
-                    snapshot = executor(repository, spec, handler)
+                    snapshot = executor(
+                        repository,
+                        spec,
+                        handler,
+                        event_sink=package_progress,
+                    )
             except Exception as exc:
                 execution_error = exc
     except Exception as exc:
