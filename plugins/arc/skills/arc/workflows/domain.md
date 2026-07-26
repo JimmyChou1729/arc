@@ -164,7 +164,7 @@ resumed with the same run ID. If any build is paused or failed, print
 For domain package boundaries and `paper_json_pack.json`, see
 `manuals/arc-domain.md`.
 
-### Phase 3: Copy Domain Artifacts
+### Phase 3: Publish Domain Deliverables
 
 Step 1: Derive a safe file prefix:
 
@@ -180,18 +180,23 @@ arc-domain get-summary --project-dir <project-dir> --domain-id <domain-id>
 arc-domain get-graph --project-dir <project-dir> --domain-id <domain-id>
 ```
 
-Step 3: Copy or write project-local files:
+Step 3: Keep machine inputs hidden and publish only human deliverables:
 
 ```text
 <project-dir>/domain/<seed-safe>_domain.html
-<project-dir>/domain/<seed-safe>_domain_summary.json
 <project-dir>/domain/<seed-safe>_domain_summary.pdf
-<project-dir>/domain/<seed-safe>_paper_json_pack.json
+
+<project-dir>/.arc/domain/packages/<seed-safe>_domain_summary.json
+<project-dir>/.arc/domain/packages/<seed-safe>_domain_summary.md
+<project-dir>/.arc/domain/packages/<seed-safe>_paper_json_pack.json
 ```
 
 Use the generation's `network.html`, `summary.json`, `summary.md`, and
-`paper-pack.json` files. Render `summary.md` to the visible PDF deliverable;
-do not publish Markdown as the only user-facing document. The generation is
+`paper-pack.json` files. Copy JSON and Markdown only to the hidden machine
+package directory, where the downstream manifest and ideas workflows can read
+them. Publish `network.html` to the visible HTML deliverable and render the
+hidden summary Markdown to the visible PDF deliverable. Markdown is never the
+only user-facing delivery. The generation is
 `<project-dir>/.arc/domain/domains/<domain-id>/exports/<run-id>/`; its
 `export-manifest.json` is written last and must exist before copying files.
 
@@ -267,24 +272,19 @@ Questions`, `## Reading Guide`, `## Research Guidance`,
 
 Do not render `warnings` in the domain summary Markdown. If the domain summary
 JSON has warnings, print `WARNING:` immediately, append them to
-`<project-dir>/context/domain/warnings.md`, and append them to
-`<project-dir>/self-reflect.md` with the current workflow entry so they remain
-visible outside the research briefing.
+`<project-dir>/.arc/domain/warnings.md`, and append them to
+`<project-dir>/.arc/self-reflect.md` with the current workflow entry for later
+workflow review.
 
-After these deliverables are generated, export the domain HTML file and the
-domain summary Markdown file to `<project-dir>/` with the same file names so
-human readers can inspect the main project reports together.
-For the domain summary Markdown, follow `rules/math_typeset.md` for math and
-TeX snippets.
+For the hidden domain summary Markdown, follow `rules/math_typeset.md` for
+math and TeX snippets. Do not publish it as a visible Markdown report.
 
-After writing each domain summary Markdown report to `<project-dir>/`, follow
+After writing each hidden domain summary Markdown report, follow
 `manuals/arc-jobs.md` Markdown Report Export for
-`<project-dir>/<seed-safe>_domain_summary.md`: run the canonical
-Pandoc/XeLaTeX command from `rules/math_typeset.md` as an ordinary blocking
-command. If it fails, record a `WARNING:` with the exact blocker and continue
-this workflow.
-If PDF generation appears bugged, report it and continue this workflow; do not
-debug or fix PDF generation unless the user explicitly asks.
+`<project-dir>/.arc/domain/packages/<seed-safe>_domain_summary.md` and publish
+`<project-dir>/domain/<seed-safe>_domain_summary.pdf`. If it fails, record a
+`WARNING:` with the exact blocker, preserve the hidden machine package, and do
+not claim domain delivery or proceed to ideas until the visible PDF exists.
 
 Do not generate, attach, or copy separate single-paper LLM summaries for the
 foundation paper or best-reference paper as part of the domain build. The
@@ -315,11 +315,11 @@ Every normalized `seed_paper_list` entry must resolve exactly once through an
 explicit/origin-selected build or a deduplication record. Do not create a
 second manifest package for a displaced candidate.
 
-The copied paper JSON pack's `domain_id` is the authoritative
+The hidden paper JSON pack's `domain_id` is the authoritative
 `domain_package_id`; a domain summary is research content and v5 does not carry
 that identity field. The helper requires `domain_records` to be a non-empty
-array, requires its domain IDs and the copied paper-pack domain IDs to match in
-both directions, scans every copied `*_paper_json_pack.json`, rejects any pack
+array, requires its domain IDs and the hidden paper-pack domain IDs to match in
+both directions, scans every hidden `*_paper_json_pack.json`, rejects any pack
 with no matching domain summary, and uses each record's actual build seed. It
 decodes each complete summary/Markdown/paper-pack set through the package-owned
 typed domain view and accepts only the current closed v5 summary contract.
@@ -346,10 +346,10 @@ be written or any referenced artifact is missing.
 For one domain package, the helper writes the single field without an LLM call.
 For two or more packages, it makes one typed `LLMClient.generate` request with
 a deterministic field-grouping task ID, the complete pair-classification schema,
-and an isolated `<project-dir>/domain/field-grouping-llm` run root. It does not
+and an isolated `<project-dir>/.arc/domain/field-grouping-llm` run root. It does not
 accept an agent-provided runner, cache root, or artifact path. The generated
 manifest records a content-addressed immutable grouping under
-`domain/field-groupings/` as its grouping artifact.
+`.arc/domain/field-groupings/` as its grouping artifact.
 
 An invalid grouping payload or inconsistent pair classification is a
 conservative single-field fallback with a warning. A typed LLM pause, failure,
@@ -358,11 +358,11 @@ the caller can resolve the provider state or rerun the manifest helper. Do not
 invent a grouping result or inspect private LLM artifacts. The helper holds one
 project lease while it validates inputs, runs grouping, and prepares
 publication. It verifies or writes the immutable grouping first and publishes
-`domain-manifest.json` last. The manifest output must remain inside the project
-and cannot replace the grouping artifact, `context.json`, or a referenced
-summary, Markdown report, or paper pack. Input/package validation errors and
-incomplete typed LLM outcomes publish no new grouping or manifest and leave
-existing published artifacts unchanged.
+`.arc/domain/domain-manifest.json` last. The manifest output must remain inside
+the project and cannot replace the grouping artifact, `context.json`, or a
+referenced hidden summary, Markdown report, or paper pack. Input/package
+validation errors and incomplete typed LLM outcomes publish no new grouping or
+manifest and leave existing published artifacts unchanged.
 
 ### Phase 4: Scope Boundary and Interactive Review
 

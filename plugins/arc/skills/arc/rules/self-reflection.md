@@ -7,7 +7,8 @@ and likely reason, such as missing inputs, failed checks, incomplete artifacts,
 tool/runtime limits, or an instruction conflict.
 
 Append the outcome check and self-reflection entry to
-`<project-dir>/self-reflect.md`.
+`<project-dir>/.arc/self-reflect.md`. It is workflow state, not a separate
+human delivery.
 
 Start each suggestion with available provenance:
 

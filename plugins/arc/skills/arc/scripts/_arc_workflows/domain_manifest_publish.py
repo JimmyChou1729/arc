@@ -73,10 +73,10 @@ def write_domain_manifest(
     destination = (
         output.expanduser().resolve()
         if output
-        else project_dir / "domain" / "domain-manifest.json"
+        else project_dir / ".arc" / "domain" / "domain-manifest.json"
     )
     lease = FileLease(
-        project_dir / "domain" / ".domain-manifest.lock"
+        project_dir / ".arc" / "domain" / ".domain-manifest.lock"
     ).acquire(blocking=True)
     try:
         inputs = collect_domain_manifest_inputs(project_dir)
@@ -92,7 +92,7 @@ def write_domain_manifest(
                         inputs.context.get("user_intent", "")
                     ).strip(),
                     run_root=(
-                        inputs.domain_dir
+                        inputs.state_dir
                         / GROUPING_LLM_RUN_DIRNAME
                     ),
                     runner=(
@@ -171,7 +171,7 @@ def _prepare_domain_manifest(
         canonical_json_bytes(grouping_payload)
     ).hexdigest()[:24]
     grouping_path = (
-        inputs.domain_dir
+        inputs.state_dir
         / GROUPING_DIRECTORY
         / f"field-grouping-{grouping_digest}.json"
     )
@@ -179,7 +179,7 @@ def _prepare_domain_manifest(
         canonical_json_bytes(inputs.seed_provenance)
     ).hexdigest()
     seed_provenance_path = (
-        inputs.domain_dir
+        inputs.state_dir
         / SEED_PROVENANCE_DIRECTORY
         / f"seed-provenance-{seed_provenance_digest[:24]}.json"
     )

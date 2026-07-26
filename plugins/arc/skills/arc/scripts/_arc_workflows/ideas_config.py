@@ -96,8 +96,14 @@ def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
         raise ConfigError(f"schema_version must be {IDEAS_CONFIG_SCHEMA}")
 
     run_id = _safe_id(_required_text(data, "run_id"), "run_id")
-    run_dir = Path(_required_text(data, "run_dir")).expanduser()
-    project_dir = Path(_required_text(data, "project_dir")).expanduser()
+    project_dir = Path(_required_text(data, "project_dir")).expanduser().resolve()
+    run_dir = Path(_required_text(data, "run_dir")).expanduser().resolve()
+    expected_run_dir = project_dir / ".arc" / "ideas"
+    if run_dir != expected_run_dir:
+        raise ConfigError(
+            "run_dir must be the project-local ARC ideas directory: "
+            f"{expected_run_dir}"
+        )
     user_intent = _required_text(data, "user_intent")
     variant_config_dir = Path(_required_text(data, "variant_config_dir")).expanduser()
     _validate_strict_variant_config_dir(variant_config_dir)
@@ -239,7 +245,7 @@ def _configured_manifest_path(
 ) -> Path:
     raw = str(data.get("domain_manifest_path", "") or "").strip()
     if not raw:
-        return project_dir / "domain" / "domain-manifest.json"
+        return project_dir / ".arc" / "domain" / "domain-manifest.json"
     path = Path(raw).expanduser()
     return path if path.is_absolute() else project_dir / path
 

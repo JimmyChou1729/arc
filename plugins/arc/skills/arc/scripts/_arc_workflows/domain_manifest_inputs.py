@@ -27,6 +27,8 @@ from _arc_workflows.workflow_io import (
 
 SUMMARY_SUFFIX = "_domain_summary.json"
 PAPER_PACK_SUFFIX = "_paper_json_pack.json"
+DOMAIN_STATE_RELATIVE = Path(".arc") / "domain"
+DOMAIN_PACKAGE_DIRECTORY = "packages"
 
 
 class ManifestError(ValueError):
@@ -36,6 +38,7 @@ class ManifestError(ValueError):
 @dataclass(frozen=True)
 class DomainManifestInputs:
     project_dir: Path
+    state_dir: Path
     domain_dir: Path
     context: dict[str, Any]
     domains: list[dict[str, Any]]
@@ -49,7 +52,8 @@ def collect_domain_manifest_inputs(
 ) -> DomainManifestInputs:
     project_dir = project_dir.expanduser().resolve()
     context_path = project_dir / "context.json"
-    domain_dir = project_dir / "domain"
+    state_dir = project_dir / DOMAIN_STATE_RELATIVE
+    domain_dir = state_dir / DOMAIN_PACKAGE_DIRECTORY
     context = _read_object(context_path)
     seed_by_domain = _seed_by_domain(context)
     if not domain_dir.is_dir():
@@ -242,6 +246,7 @@ def collect_domain_manifest_inputs(
     )
     return DomainManifestInputs(
         project_dir=project_dir,
+        state_dir=state_dir,
         domain_dir=domain_dir,
         context=context,
         domains=domains,
@@ -310,6 +315,8 @@ def _relative(root: Path, path: Path) -> str:
 
 __all__ = [
     "DomainManifestInputs",
+    "DOMAIN_PACKAGE_DIRECTORY",
+    "DOMAIN_STATE_RELATIVE",
     "ManifestError",
     "PAPER_PACK_SUFFIX",
     "SUMMARY_SUFFIX",

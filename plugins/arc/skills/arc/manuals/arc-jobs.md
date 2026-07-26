@@ -29,11 +29,13 @@ because a model call is slow.
 
 ## Markdown Report Export
 
-For user-facing Markdown, run the canonical Pandoc/XeLaTeX command from
+For user-facing Markdown, run the project-aware PDF renderer from
 `rules/math_typeset.md` as an ordinary blocking command instead of routing it
-through `arc-jobs`. On failure, print `WARNING:` with the exact error and
-continue according to the owning workflow; do not debug Pandoc or TeX unless
-the user requested that work.
+through `arc-jobs`. The Markdown remains editable workflow source; the visible
+PDF is the human delivery. On failure, print `WARNING:` with the exact error
+and preserve workflow state, but do not claim delivery until the PDF exists.
+Do not debug Pandoc or TeX as part of the research workflow unless the user
+explicitly asks for typesetting diagnosis.
 
 ## Help
 

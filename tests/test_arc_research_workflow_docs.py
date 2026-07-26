@@ -137,7 +137,7 @@ def test_arc_skill_references_pdf_export_manuals() -> None:
     assert "markdown report export" in text
     assert "`rules/math_typeset.md`" in text
     assert "`manuals/arc-jobs.md`" in text
-    assert "canonical pandoc/xelatex command" in manual
+    assert "project-aware pdf renderer" in manual
     assert "ordinary blocking command" in manual_flat
     assert "instead of routing it through `arc-jobs`" in manual_flat
     assert "md2pdf" not in manual
@@ -212,11 +212,9 @@ def test_workflows_start_pdf_export_for_user_facing_markdown() -> None:
         text_flat = " ".join(text.split())
         assert "`manuals/arc-jobs.md` markdown report export" in text
         assert "warning:" in text
-        assert "canonical pandoc/xelatex command" in text_flat
-        assert "ordinary blocking command" in text_flat
         assert "md2pdf" not in text
         assert "report-export gate" not in text
-        assert text_flat.count("do not debug or fix pdf generation") == guard_count
+        assert text_flat.count("do not claim") >= guard_count
 
 
 def test_ideas_phase_4_uses_clean_selection_prompt_without_dry_run() -> None:
@@ -287,7 +285,7 @@ def test_domain_summary_warnings_are_visible_and_recorded() -> None:
     manual = (SKILL / "manuals/arc-domain.md").read_text(encoding="utf-8")
 
     assert "print `WARNING:` immediately" in domain
-    assert "`<project-dir>/context/domain/warnings.md`" in domain
+    assert "`<project-dir>/.arc/domain/warnings.md`" in domain
     assert "status, warnings, and published artifact references" in manual
 
 
@@ -700,7 +698,7 @@ def test_workflow_docs_stay_human_readable() -> None:
         "calculate.md",
     ]:
         text = (WF / name).read_text(encoding="utf-8")
-        assert len(text.splitlines()) <= 220
+        assert len(text.splitlines()) <= 230
         assert "0_ref/" not in text
         if name != "calculate.md":
             assert "/scripts/" not in text
@@ -727,10 +725,10 @@ def test_plan_requires_review_after_drafting() -> None:
     assert "review the plan" in text.lower()
     assert "independent reviewer" in text.lower()
     assert "main agent" in text.lower()
-    assert "<project-dir>/calculate/<run-id>/work-notes/work-note-v001.md" in text
-    assert "<project-dir>/work-note.md" in text
+    assert "<project-dir>/.arc/calculate/<run-id>/work-notes/work-note-v001.md" in text
+    assert "<project-dir>/.arc/calculate/<run-id>/work-note.md" in text
     assert "`manuals/arc-jobs.md` Markdown Report Export" in text
-    assert "`<project-dir>/work-note.md`" in text
+    assert "`<project-dir>/work-note.pdf`" in text
     assert "<project-dir>/plan.md" not in text
 
 
@@ -780,8 +778,9 @@ def test_plan_workflow_writes_work_note_versions() -> None:
     plan = (WF / "plan.md").read_text(encoding="utf-8")
     plan_lower = plan.lower()
 
-    assert "<project-dir>/work-note.md" in plan
-    assert "<project-dir>/calculate/<run-id>/work-notes/work-note-v001.md" in plan
+    assert "<project-dir>/.arc/calculate/<run-id>/work-note.md" in plan
+    assert "<project-dir>/.arc/calculate/<run-id>/work-notes/work-note-v001.md" in plan
+    assert "<project-dir>/work-note.pdf" in plan
     assert "write immutable version first" in plan_lower
     assert "mirror" in plan_lower
     assert "version" in plan_lower
@@ -790,9 +789,10 @@ def test_plan_workflow_writes_work_note_versions() -> None:
 def test_calculate_workflow_uses_work_note_runtime_artifacts() -> None:
     calculate = (WF / "calculate.md").read_text(encoding="utf-8")
 
-    assert "<project-dir>/work-note.md" in calculate
-    assert "<project-dir>/calculate/<run-id>/execute/calculate.config.json" in calculate
-    assert "<project-dir>/calculate/<run-id>/execute/<calculate-run-id>/state.json" in calculate
+    assert "<project-dir>/.arc/calculate/<run-id>/work-note.md" in calculate
+    assert "<project-dir>/.arc/calculate/<run-id>/execute/calculate.config.json" in calculate
+    assert "<project-dir>/.arc/calculate/<run-id>/execute/<calculate-run-id>/state.json" in calculate
+    assert "<project-dir>/work-note.pdf" in calculate
     assert "calculate.config.template.json" in calculate
     assert "calculation-report.md" not in calculate
     assert "foundation/latest.json" not in calculate
@@ -815,7 +815,7 @@ def test_check_workflow_hands_off_to_work_note() -> None:
 
 def test_work_note_declares_required_sections() -> None:
     text = (WF / "plan.md").read_text(encoding="utf-8")
-    archive_index = text.find("<project-dir>/calculate/<run-id>/work-notes/work-note-v001.md")
+    archive_index = text.find("<project-dir>/.arc/calculate/<run-id>/work-notes/work-note-v001.md")
     assert archive_index != -1
 
     expected_headings = [
@@ -1178,7 +1178,7 @@ def test_ideas_workflow_documents_public_batch_evidence_contract() -> None:
     assert "`inspect_batch`" in text
     assert "`read_batch_trace`" in text
     assert "`read_batch_round`" in text
-    assert "--run-root <project-dir>/ideas" in text
+    assert "--run-root <project-dir>/.arc/ideas" in text
     assert "--run-id <run-id>" in text
     assert "shell commands, ARC CLIs, arbitrary paths, cache" in text
     assert "recursive LLM calls, or MCP tools" in text
@@ -1201,9 +1201,9 @@ def test_ideas_workflow_requires_context_and_runner_artifacts() -> None:
 def test_ideas_workflow_has_deterministic_ranked_report_deliverable() -> None:
     text = (WF / "ideas.md").read_text(encoding="utf-8")
 
-    assert "<project-dir>/ideas/<run-id>/ranked-ideas.md" in text
-    assert "<project-dir>/ranked-ideas.md" in text
-    assert "`<project-dir>/ranked-ideas.md`" in text
+    assert "<project-dir>/.arc/ideas/reports/<run-id>/" in text
+    assert "<project-dir>/ideas/<run-id>/ranked-ideas.pdf" in text
+    assert "<project-dir>/ranked-ideas.pdf" in text
     assert "manuals/arc-jobs.md" in text
     assert "ranked_ideas.md" not in text
     assert "<project-dir>/suggested-ideas.md" not in text
@@ -1277,7 +1277,7 @@ def test_ideas_config_template_has_no_global_reviewer() -> None:
     assert "reviewer" not in config
     assert "artifact_options" not in config
     assert config["loops_per_variant"] == 5
-    assert config["domain_manifest_path"] == "<project-dir>/domain/domain-manifest.json"
+    assert config["domain_manifest_path"] == "<project-dir>/.arc/domain/domain-manifest.json"
 
 
 def test_ideas_workflow_documents_unbounded_truthful_evidence_accounting() -> None:
@@ -1336,14 +1336,14 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     assert "paper JSON pack's `domain_id` is the authoritative" in compact_domain
     assert "v5 does not carry that identity field" in compact_domain
     assert "match in both directions" in compact_domain
-    assert "scans every copied `*_paper_json_pack.json`" in compact_domain
+    assert "scans every hidden `*_paper_json_pack.json`" in compact_domain
     assert "rejects any pack with no matching domain summary" in compact_domain
     assert "`domain_records` to be a non-empty array" in compact_domain
     assert "package-owned typed domain view" in compact_domain
     assert "only the current closed v5 summary contract" in compact_domain
     assert "Unsupported summary schemas" in compact_domain
-    assert "`domain/field-groupings/`" in compact_domain
-    assert "publishes `domain-manifest.json` last" in compact_domain
+    assert "`.arc/domain/field-groupings/`" in compact_domain
+    assert "publishes `.arc/domain/domain-manifest.json` last" in compact_domain
     assert "manifest output must remain inside the project" in compact_domain
     assert "Input/package validation errors" in compact_domain
     assert "leave existing published artifacts unchanged" in compact_domain

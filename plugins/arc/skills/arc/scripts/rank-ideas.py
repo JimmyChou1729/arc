@@ -13,6 +13,10 @@ bootstrap_arc_pythonpath()
 
 from _arc_workflows.ideas_ranking import rank_run
 from _arc_workflows.ideas_report import markdown_table
+from _arc_workflows.report_delivery import (
+    publish_visible_copy,
+    render_markdown_pdf,
+)
 
 
 def main() -> None:
@@ -24,9 +28,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--run-root",
-        required=True,
         type=Path,
-        help="durable ARC run repository root",
+        help="explicit durable ARC run repository root",
+    )
+    parser.add_argument(
+        "--project-dir",
+        type=Path,
+        help="ARC project directory; uses <project>/.arc/ideas",
     )
     parser.add_argument(
         "--run-id",
@@ -35,16 +43,51 @@ def main() -> None:
     )
     parser.add_argument(
         "--format",
-        choices=["json", "markdown"],
+        choices=["json", "markdown", "pdf"],
         default="markdown",
     )
     args = parser.parse_args()
 
-    payload = rank_run(args.run_root, args.run_id)
+    if (args.run_root is None) == (args.project_dir is None):
+        parser.error("exactly one of --run-root or --project-dir is required")
+    project = args.project_dir.expanduser().resolve() if args.project_dir else None
+    run_root = (
+        project / ".arc" / "ideas"
+        if project is not None
+        else args.run_root.expanduser().resolve()
+    )
+    payload = rank_run(run_root, args.run_id)
     if args.format == "json":
         print(json.dumps(payload, indent=2, ensure_ascii=False))
-    else:
+    elif args.format == "markdown":
         print(markdown_table(payload))
+    else:
+        if project is None:
+            parser.error("--format pdf requires --project-dir")
+        source = project / ".arc" / "ideas" / "reports" / args.run_id / "ranked-ideas.md"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(markdown_table(payload), encoding="utf-8")
+        archived = render_markdown_pdf(
+            project_dir=project,
+            source=source,
+            output=project / "ideas" / args.run_id / "ranked-ideas.pdf",
+        )
+        latest = publish_visible_copy(
+            project_dir=project,
+            source=archived,
+            output=project / "ranked-ideas.pdf",
+        )
+        print(
+            json.dumps(
+                {
+                    "schema_version": "arc.ideas.delivery.v1",
+                    "format": "pdf",
+                    "artifacts": [str(archived), str(latest)],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
 
 
 if __name__ == "__main__":

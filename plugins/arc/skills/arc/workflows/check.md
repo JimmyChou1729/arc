@@ -68,9 +68,8 @@ continue after recording findings.
 Write:
 
 ```text
-<project-dir>/calculate/<run-id>/planning-request.md
-<project-dir>/calculate/<run-id>/initial-note-check.md
-<project-dir>/initial-note-check.md
+<project-dir>/.arc/calculate/<run-id>/planning-request.md
+<project-dir>/.arc/calculate/<run-id>/initial-note-check.md
 ```
 
 Build `planning-request.md` as a compact planning handoff, not a plan and not a
@@ -106,21 +105,21 @@ not enough: the ready-step packet should include `source_excerpt`, exact
 displayed formulas, or accepted prior derivations sufficient for proposers to
 perform the check without reading the original source.
 
-After writing `<project-dir>/initial-note-check.md`, follow
+After writing `<project-dir>/.arc/calculate/<run-id>/initial-note-check.md`, follow
 `manuals/arc-jobs.md` Markdown Report Export for
-`<project-dir>/initial-note-check.md`: run the canonical Pandoc/XeLaTeX
-command from `rules/math_typeset.md` as an ordinary blocking command. If it
-fails, record a `WARNING:` with the exact blocker and continue this workflow.
-If PDF generation appears bugged, report it and continue this workflow; do not
-debug or fix PDF generation unless the user explicitly asks.
+`<project-dir>/.arc/calculate/<run-id>/initial-note-check.md` and publish
+`<project-dir>/initial-note-check.pdf`. If rendering fails, record a `WARNING:`
+with the exact blocker and preserve the check state, but do not claim delivery
+or enter the owning planning workflow until the visible PDF exists.
 This PDF export applies only to ARC-generated Markdown reports, not to the
 original TeX/PDF note being checked.
 
 ## Phase 4: Execute Owning Workflows
 
 Step 1: Run `plan.md`. It reads
-`<project-dir>/calculate/<run-id>/planning-request.md` and writes
-`<project-dir>/work-note.md` plus the first immutable work-note version.
+`<project-dir>/.arc/calculate/<run-id>/planning-request.md` and writes the
+hidden current work note plus the first immutable work-note version, then
+publishes `<project-dir>/work-note.pdf`.
 `plan.md` owns work-note structure, foundation boundary, ready-step planning,
 blind reference check placement, and proposer-visible secrecy rules.
 

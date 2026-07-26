@@ -259,7 +259,7 @@ Do not skip directly to parsing results; the preflight, planning handoff, and
 owned-workflow execution steps are mandatory.
 
 Before leaving Case 3 or sending a final response, read
-`<project-dir>/work-note.md`. If any ready detailed step exists, execute
+`<project-dir>/.arc/calculate/<run-id>/work-note.md`. If any ready detailed step exists, execute
 `workflows/calculate.md`. If no ready detailed step exists but rough or pending
 coverage remains from the original note-check request, return to
 `workflows/plan.md`. Adjudicate every item in `Rough Steps For Later Planning`:
@@ -272,14 +272,14 @@ If the idea is not explicit enough, first complete Case 1 and Case 2, then ask
 the user to select one concrete idea only in `interactive` mode. In `auto`
 mode, use ranked idea #1 without asking.
 If the idea is explicit enough:
-Step 1: Read and execute `workflows/plan.md`. It writes or updates
-`<project-dir>/work-note.md` and an immutable version under
-`<project-dir>/calculate/<run-id>/work-notes/`.
+Step 1: Read and execute `workflows/plan.md`. It writes or updates the hidden
+current work note under `<project-dir>/.arc/calculate/<run-id>/` and publishes
+the visible `<project-dir>/work-note.pdf`.
 Step 2: Read and execute `workflows/calculate.md`. If `calculate.md` requests
 macro expansion or blocked-step refinement, return to Step 1 for that region.
 
 Before leaving Case 4 or sending a final response, read
-`<project-dir>/work-note.md`. If any ready detailed step exists, execute
+`<project-dir>/.arc/calculate/<run-id>/work-note.md`. If any ready detailed step exists, execute
 `workflows/calculate.md`. If no ready detailed step exists but rough or pending
 coverage remains from the original calculation request, return to
 `workflows/plan.md` to promote the next coherent chunk. Adjudicate every item

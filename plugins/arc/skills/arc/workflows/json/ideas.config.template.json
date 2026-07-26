@@ -1,10 +1,10 @@
 {
   "schema_version": "arc.workflow.ideas.config.v2",
   "run_id": "<run-id>",
-  "run_dir": "<project-dir>/ideas",
+  "run_dir": "<project-dir>/.arc/ideas",
   "project_dir": "<project-dir>",
   "user_intent": "<user_intent>",
-  "domain_manifest_path": "<project-dir>/domain/domain-manifest.json",
+  "domain_manifest_path": "<project-dir>/.arc/domain/domain-manifest.json",
   "variant_config_dir": "<skill-workflow-json-dir>",
   "variant_glob": "ideas-*.variant.json",
   "loops_per_variant": 5

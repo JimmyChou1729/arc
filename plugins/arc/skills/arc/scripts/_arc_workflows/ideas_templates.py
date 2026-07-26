@@ -224,14 +224,17 @@ def caller_context(
             idea_index=idea_index,
         )
     if variant.context_policy.attach_domain_markdown:
-        markdown_files = domain_markdown_files(config.project_dir / "domain")
+        domain_package_dir = (
+            config.project_dir / ".arc" / "domain" / "packages"
+        )
+        markdown_files = domain_markdown_files(domain_package_dir)
         if markdown_files:
             result["domain_markdown_files"] = markdown_files
         else:
             if variant.context_policy.require_domain_markdown:
                 raise ConfigError(
                     f"{variant.variant_id} requires domain markdown under "
-                    f"{config.project_dir / 'domain'}"
+                    f"{domain_package_dir}"
                 )
             result.pop("domain_markdown_files", None)
             result.setdefault("warnings", []).append(

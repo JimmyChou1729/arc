@@ -1,8 +1,9 @@
 # Calculate Workflow
 
-Use this workflow after `plan.md` writes `<project-dir>/work-note.md`.
+Use this workflow after `plan.md` writes
+`<project-dir>/.arc/calculate/<run-id>/work-note.md`.
 Execute only steps marked ready in `Detailed Steps Ready To Calculate`.
-Do not write a separate calculation report; the updated work note is the
+Do not write a separate calculation report; the rendered work-note PDF is the
 human-readable result.
 
 `calculate.md owns consensus execution` and the `current-step result-status`.
@@ -20,9 +21,9 @@ Continue until requested coverage is complete, a concrete workflow stop conditio
 Runtime artifacts:
 
 ```text
-<project-dir>/calculate/<run-id>/execute/calculate.config.json
-<project-dir>/calculate/<run-id>/execute/<calculate-run-id>/config.json
-<project-dir>/calculate/<run-id>/execute/<calculate-run-id>/state.json
+<project-dir>/.arc/calculate/<run-id>/execute/calculate.config.json
+<project-dir>/.arc/calculate/<run-id>/execute/<calculate-run-id>/config.json
+<project-dir>/.arc/calculate/<run-id>/execute/<calculate-run-id>/state.json
 ```
 
 The first file is the workflow input. Under one project-local lease, the runner
@@ -33,7 +34,7 @@ proposal, review, transcript, session, task, or group files by walking the direc
 Copy `workflows/json/calculate.config.template.json` to:
 
 ```text
-<project-dir>/calculate/<run-id>/execute/calculate.config.json
+<project-dir>/.arc/calculate/<run-id>/execute/calculate.config.json
 ```
 
 Replace `<calculate-run-id>`, `<project-dir>`, `<run-id>`, and
@@ -87,7 +88,7 @@ Run:
 
 ```bash
 python3 <skill-dir>/scripts/run-calculate.py \
-  --config <project-dir>/calculate/<run-id>/execute/calculate.config.json
+  --config <project-dir>/.arc/calculate/<run-id>/execute/calculate.config.json
 ```
 
 The command exits `0` for `completed`, `dry_run`, `blocked_for_user`, and
@@ -198,20 +199,20 @@ When a result may help later steps, record it only as a candidate reusable
 result. Promotion to an accepted premise belongs to `plan.md`.
 
 Write an immutable next work-note version at
-`<project-dir>/calculate/<run-id>/work-notes/work-note-vNNN.md`, then mirror it
-to `<project-dir>/work-note.md`. After writing the root work note, follow
+`<project-dir>/.arc/calculate/<run-id>/work-notes/work-note-vNNN.md`, then
+mirror it to `<project-dir>/.arc/calculate/<run-id>/work-note.md`. After
+writing the hidden current work note, follow
 `manuals/arc-jobs.md` Markdown Report Export for
-`<project-dir>/work-note.md`: run the canonical Pandoc/XeLaTeX command from
-`rules/math_typeset.md` as an ordinary blocking command. If it fails, record a
-`WARNING:` with the exact blocker and continue this workflow; do not require a
-separate report. If PDF generation appears bugged, report it and continue this
-workflow; do not debug or fix PDF generation unless the user explicitly asks.
+`<project-dir>/.arc/calculate/<run-id>/work-note.md` and atomically replace
+`<project-dir>/work-note.pdf`. If rendering fails, record a `WARNING:` with the
+exact blocker and preserve calculation state, but do not claim delivery or
+advance to another workflow until the visible PDF exists.
 
 ## Phase 6: Planning Handoff
 
 If proposers, reviewer, or the main agent agree that plan content should change, that a candidate reusable result should become a future premise, or that an equation/rule should become an agent-added foundation, do not edit ready-step boundaries, rough steps, or future plan structure from `calculate.md`.
 
-Write `<project-dir>/calculate/<run-id>/planning-request.md` with:
+Write `<project-dir>/.arc/calculate/<run-id>/planning-request.md` with:
 
 - current step ID/status, batch run ID, loop ID, committed round, verified public refs, evidence, proposer positions, reviewer judgment, and requested `plan.md` action
 - for agent-added foundation requests: exact equation or rule, validity scope, why it should live in `## Axioms And Starting Points`, and confirmation that proposers, reviewer, and main agent agree

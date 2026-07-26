@@ -32,15 +32,21 @@ note-check reports.
 
 ## PDF Export
 
-Export a user-facing Markdown report to PDF with Pandoc and XeLaTeX:
+Every human-facing Markdown report must be rendered to PDF before delivery.
+Use the project-aware renderer so scratch files remain under `.arc/` and the
+final PDF is atomically published to a visible project path. Keep ARC-generated
+Markdown sources under `<project-dir>/.arc/`; do not publish a Markdown source
+alongside the delivery:
 
 ```bash
-pandoc <report>.md -o <report>.pdf --pdf-engine=xelatex \
-  --resource-path=<report-dir>:. \
-  -V geometry:margin=1.5cm \
-  -V mainfont="Noto Sans CJK SC" \
-  -V CJKmainfont="Noto Sans CJK SC"
+python3 <skill-dir>/scripts/render-report.py \
+  --project-dir <project-dir> \
+  --input <project-report>.md \
+  --output <visible-project-report>.pdf
 ```
 
-Requires `pandoc`, `xelatex`, and a CJK-capable font; allow up to 600 seconds.
-The resource path must include the report's directory so images resolve.
+The renderer uses Pandoc, XeLaTeX, the report directory as a resource path,
+1.5 cm margins, and `Noto Sans CJK SC`; allow up to 600 seconds. A missing
+renderer, invalid PDF, or conversion failure means the report has not been
+delivered. Preserve the Markdown as editable project source, report the exact
+failure, and do not claim workflow delivery until the visible PDF exists.

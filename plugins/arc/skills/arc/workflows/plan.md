@@ -11,7 +11,7 @@ No JSON file is the source of truth for planning. Runtime JSON, consensus config
 Read optional planning requests from:
 
 ```text
-<project-dir>/calculate/<run-id>/planning-request.md
+<project-dir>/.arc/calculate/<run-id>/planning-request.md
 ```
 
 when present. Do not create or overwrite `planning-request.md` from this
@@ -20,12 +20,14 @@ workflow.
 Write artifacts under:
 
 ```text
-<project-dir>/work-note.md
-<project-dir>/calculate/<run-id>/work-notes/work-note-v001.md
+<project-dir>/.arc/calculate/<run-id>/work-note.md
+<project-dir>/.arc/calculate/<run-id>/work-notes/work-note-v001.md
 ```
 
-Write immutable version first, then mirror newest version to root
-`<project-dir>/work-note.md`. Never edit old `work-note-vNNN.md` files.
+Write immutable version first, then mirror newest version to the hidden current
+source `<project-dir>/.arc/calculate/<run-id>/work-note.md`. Never edit old
+`work-note-vNNN.md` files. Publish only `<project-dir>/work-note.pdf` for
+human delivery.
 
 Use this Work Note template:
 
@@ -59,7 +61,7 @@ Read `<project-dir>/context.json` only as routing metadata: project directory,
 run id, automation mode, source locations, and host hints. Do not infer the
 scientific task from `context.json` alone.
 
-If `<project-dir>/calculate/<run-id>/planning-request.md` exists, use it as the
+If `<project-dir>/.arc/calculate/<run-id>/planning-request.md` exists, use it as the
 planning request. Otherwise use the user's intent. If the task came from
 `check.md`, preserve note-check secrecy rules. If the task came from
 `calculate.md`, treat proposed reusable results or blocked-step notes as a
@@ -197,12 +199,18 @@ define new marker semantics in `plan.md`.
 
 ## Phase 4: Version And Export
 Step 1: Find the highest existing immutable version under
-`<project-dir>/calculate/<run-id>/work-notes/work-note-vNNN.md`.
+`<project-dir>/.arc/calculate/<run-id>/work-notes/work-note-vNNN.md`.
 Step 2: Build final content before writing files and note planned PDF export in `## Journal`.
 Step 3: Write the next immutable version, starting with `work-note-v001.md`;
 never overwrite an old version.
-Step 4: Mirror it to `<project-dir>/work-note.md`.
-Step 5: Follow `manuals/arc-jobs.md` Markdown Report Export for `<project-dir>/work-note.md`: run the canonical Pandoc/XeLaTeX command from `rules/math_typeset.md` as an ordinary blocking command. If it fails, record a `WARNING:` with the exact blocker and continue this workflow. If PDF generation appears bugged, report it and continue this workflow; do not debug or fix PDF generation unless the user explicitly asks.
+Step 4: Mirror it to `<project-dir>/.arc/calculate/<run-id>/work-note.md`.
+Step 5: Follow `manuals/arc-jobs.md` Markdown Report Export for
+`<project-dir>/.arc/calculate/<run-id>/work-note.md` and publish
+`<project-dir>/work-note.pdf`. The
+Markdown remains editable source, but the PDF is the human delivery. If
+rendering fails, record a `WARNING:` with the exact blocker, preserve the
+planning state, and do not claim plan delivery or enter calculation until the
+visible PDF exists.
 
 ## Phase 5: Review
 Step 1: Review the plan before execution. If the host and workflow permissions
@@ -211,10 +219,9 @@ perform the same review.
 
 Step 2: Check that foundations are separated from derived results, accepted derived results were actually accepted, agent-added foundations have proposer/reviewer/main-agent agreement plus validity scope and the `[foundation added by agent]` marker, validation-only references are not premises, ready steps have complete contracts including physical endpoint fields, new derivations have no implicit terminal variables, formal setup steps have a downstream reduction task or explicit stop condition, rough steps are not executable, target secrecy is preserved, no `status: accepted` entry remains in `## Detailed Steps Ready To Calculate`, no accepted/ready/blocked step is duplicated in `## Rough Steps For Later Planning`, all rough-step triggers are adjudicated, every parsed equation id is represented in the Equation Coverage Ledger, ready steps with disabled source tools have enough proposer-visible source excerpt or exact formula context, special PDF color markers are not inside code spans, math and TeX snippets follow `rules/math_typeset.md`, and source coverage is enough for the task.
 Step 3: If review finds gaps, build final content with the planned PDF export noted in
-the Journal, write a new immutable work-note version, mirror it to root, and follow
-`manuals/arc-jobs.md` Markdown Report Export: run the canonical Pandoc/XeLaTeX
-command from `rules/math_typeset.md` as an ordinary blocking command. If it fails,
-record a `WARNING:` with the exact blocker and continue this workflow. If PDF
-generation appears bugged, report it and continue this workflow; do not debug or fix
-PDF generation unless the user explicitly asks.
+the Journal, write a new immutable work-note version, mirror it to the hidden current source, and follow
+`manuals/arc-jobs.md` Markdown Report Export and replace
+`<project-dir>/work-note.pdf`. If rendering fails, record a `WARNING:` with the
+exact blocker, preserve the reviewed Markdown and durable state, and do not
+claim delivery or enter calculation until the visible PDF exists.
 After the work note passes review, enter calculation only when it is in the caller's requested scope: pause first in `interactive` mode, or hand off ready steps directly in `auto` mode.

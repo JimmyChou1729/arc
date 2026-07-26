@@ -17,20 +17,22 @@ Do not synthesize ideas manually.
 
 ### Phase 1: Prepare Config
 
-Step 1: Create `<project-dir>/ideas/`.
+Step 1: Create `<project-dir>/.arc/ideas/` for operational state. The ranking
+publisher creates the visible `<project-dir>/ideas/` PDF archive only after a
+successful run.
 
 Step 2: Copy
 `workflows/json/ideas.config.template.json` to:
 
 ```text
-<project-dir>/ideas/<run-id>.config.json
+<project-dir>/.arc/ideas/<run-id>.config.json
 ```
 
 Step 3: Replace `<run-id>`, `<project-dir>`, `<user_intent>`, and
 `<skill-workflow-json-dir>`.
 
 Set `domain_manifest_path` to
-`<project-dir>/domain/domain-manifest.json`. Current manifest v3, including
+`<project-dir>/.arc/domain/domain-manifest.json`. Current manifest v3, including
 its validated `arc.workflow.domain_seed_provenance.v1` artifact, routes by
 `field_count`: one field, including multiple seed-specific packages, uses the
 single-domain prompts; two or more fields use cross-domain prompts, directed
@@ -62,7 +64,7 @@ Step 1: Run:
 
 ```bash
 python3 <skill-dir>/scripts/run-ideas.py \
-  --config <project-dir>/ideas/<run-id>.config.json \
+  --config <project-dir>/.arc/ideas/<run-id>.config.json \
   --json
 ```
 
@@ -78,7 +80,7 @@ snapshot:
 
 ```bash
 <skill-dir>/scripts/arc-runtime arc-proposer-reviewer inspect \
-  --run-root <project-dir>/ideas \
+  --run-root <project-dir>/.arc/ideas \
   --run-id <run-id>
 ```
 
@@ -91,7 +93,7 @@ longer making useful progress:
 
 ```bash
 <skill-dir>/scripts/arc-runtime arc-proposer-reviewer stop \
-  --run-root <project-dir>/ideas \
+  --run-root <project-dir>/.arc/ideas \
   --run-id <run-id> \
   --reason "<specific observed reason>"
 ```
@@ -102,7 +104,7 @@ for same-run resume.
 
 Step 2: Treat the runner result as the public batch handoff. It materializes
 one `BatchRequest` and executes it through `ProposerReviewerHandler` in the
-`RunRepository` rooted at `<project-dir>/ideas`, with the stable run ID
+`RunRepository` rooted at `<project-dir>/.arc/ideas`, with the stable run ID
 `<run-id>`. The request is published under the logical artifact ID
 `proposer-reviewer/request`. Do not inspect or derive behavior from a run's
 private directories, loop state, transcripts, sessions, task IDs, group IDs,
@@ -214,7 +216,7 @@ first calculation.
 Report the durable repository root and run ID, not internal run-layout paths:
 
 ```text
-run root: <project-dir>/ideas
+run root: <project-dir>/.arc/ideas
 run ID: <run-id>
 request artifact: proposer-reviewer/request
 ```
@@ -231,21 +233,23 @@ scientific `status` separately from `durable_lifecycle`: a durable batch may
 finish successfully while the scientific status is `degraded` because one or
 more loops failed. The current contract has no `run_lifecycle` alias.
 
-Write the deterministic ranked report directly to both readable destinations:
+Publish the deterministic ranked report as PDF to both the per-run archive and
+the easy-to-find project root:
 
 ```bash
 python3 <skill-dir>/scripts/rank-ideas.py \
-  --run-root <project-dir>/ideas \
+  --project-dir <project-dir> \
   --run-id <run-id> \
-  --format markdown \
-  > <project-dir>/ideas/<run-id>/ranked-ideas.md
-
-python3 <skill-dir>/scripts/rank-ideas.py \
-  --run-root <project-dir>/ideas \
-  --run-id <run-id> \
-  --format markdown \
-  > <project-dir>/ranked-ideas.md
+  --format pdf
 ```
+
+This writes editable Markdown only under
+`<project-dir>/.arc/ideas/reports/<run-id>/` and atomically publishes
+`<project-dir>/ideas/<run-id>/ranked-ideas.pdf` plus
+`<project-dir>/ranked-ideas.pdf`. The PDF paths are the human delivery.
+Follow the `manuals/arc-jobs.md` Markdown report export procedure: if PDF
+rendering fails, print a `WARNING:` and do not claim that a ranked-ideas
+delivery was published.
 
 The report must start with `# Ideas`, then `Abbreviations:`, then a
 blank-line-separated abbreviation line in the form `IR=intent relevance,
@@ -276,12 +280,10 @@ appendix and print any insufficient-qualified-candidate `WARNING:` messages.
 No-assessment single-domain variants remain visibly marked as using the
 `no_assessment` policy; do not infer an alternate artifact layout.
 
-Step 2: After writing the project-level Markdown report, follow
-`manuals/arc-jobs.md` Markdown Report Export for
-`<project-dir>/ranked-ideas.md`: run the canonical Pandoc/XeLaTeX command as
-an ordinary blocking command. On failure, print `WARNING:` with the exact error
-and continue this workflow; do not debug or fix PDF generation unless the user
-explicitly asks. Do not turn this into a background job.
+Step 2: Require both visible PDFs from Step 1 before claiming ideas delivery.
+On rendering failure, print `WARNING:` with the exact error and preserve the
+hidden Markdown source and durable run for retry. Do not proceed to a
+downstream workflow or claim delivery until the PDFs exist.
 
 Do not invent rankings or novelty claims. Use only public committed proposals,
 review envelopes, and reviewer `payload` values returned through the

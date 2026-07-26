@@ -21,6 +21,8 @@ GROUPING_SCHEMA = (
     / "plugins/arc/skills/arc/workflows/json"
     / "domain-field-grouping.schema.json"
 )
+DOMAIN_STATE = Path(".arc") / "domain"
+DOMAIN_PACKAGES = DOMAIN_STATE / "packages"
 
 sys.path.insert(0, str(SCRIPTS))
 try:
@@ -52,7 +54,7 @@ def _write_domain(
     *,
     schema_version: str = "arc.domain_summary.v5",
 ) -> None:
-    domain = project / "domain"
+    domain = project / DOMAIN_PACKAGES
     domain.mkdir(parents=True, exist_ok=True)
     context_path = project / "context.json"
     context = json.loads(context_path.read_text(encoding="utf-8"))
@@ -161,7 +163,7 @@ def _write_orphan_pack(
     domain_id: str,
     seed: str,
 ) -> None:
-    (project / "domain" / f"{prefix}_paper_json_pack.json").write_text(
+    (project / DOMAIN_PACKAGES / f"{prefix}_paper_json_pack.json").write_text(
         json.dumps(
             {
                 "schema_version": "arc.domain_paper_json_pack.v1",
@@ -297,13 +299,13 @@ def test_manifest_uses_distinct_domain_ids_and_relative_paths(tmp_path: Path) ->
     assert payload["field_count"] == 1
     assert payload["research_scope"] == "single_domain"
     assert [item["domain_package_id"] for item in payload["domain_packages"]] == ["domain-a", "domain-b"]
-    assert payload["domain_packages"][0]["summary_json_path"] == "domain/a_domain_summary.json"
+    assert payload["domain_packages"][0]["summary_json_path"] == ".arc/domain/packages/a_domain_summary.json"
     assert payload["domain_packages"][0]["seed_paper"] == "seed:a"
     assert payload["duplicates"] == [
         {
             "domain_id": "domain-a",
-            "kept_summary_json_path": "domain/a_domain_summary.json",
-            "duplicate_summary_json_path": "domain/duplicate_domain_summary.json",
+            "kept_summary_json_path": ".arc/domain/packages/a_domain_summary.json",
+            "duplicate_summary_json_path": ".arc/domain/packages/duplicate_domain_summary.json",
         }
     ]
 
@@ -395,7 +397,33 @@ def test_manifest_publishes_normalized_closed_seed_provenance(
     ]
     context_path.write_text(json.dumps(context), encoding="utf-8")
 
-    destination = publish.write_domain_manifest(project)
+    from arc_llm import LLMCompleted
+
+    def grouping_runner(_request, _run_root):
+        return SimpleNamespace(
+            outcome=LLMCompleted(
+                value={
+                    "pairs": [
+                        {
+                            "package_a": "domain-a",
+                            "package_b": "domain-b",
+                            "classification": "same_field",
+                            "confidence": 0.9,
+                            "reason": "fixture grouping",
+                            "evidence": {},
+                        }
+                    ]
+                },
+                provider="test",
+                model="test-model",
+                session=None,
+                usage=None,
+            )
+        )
+
+    destination = publish.write_domain_manifest(
+        project, grouping_runner=grouping_runner
+    )
     manifest = json.loads(destination.read_text(encoding="utf-8"))
     reference = manifest["seed_provenance_artifact"]
     provenance_path = project / reference["path"]
@@ -530,7 +558,7 @@ def test_manifest_rejects_domain_id_in_closed_v5_summary(tmp_path: Path) -> None
         "seed:a",
         schema_version="arc.domain_summary.v5",
     )
-    summary_path = project / "domain/a_domain_summary.json"
+    summary_path = project / DOMAIN_PACKAGES / "a_domain_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     summary["domain_id"] = "domain-a"
     summary_path.write_text(json.dumps(summary), encoding="utf-8")
@@ -561,7 +589,7 @@ def test_manifest_rejects_missing_or_unknown_summary_schema(
     project.mkdir()
     (project / "context.json").write_text("{}\n", encoding="utf-8")
     _write_domain(project, "a", "domain-a", "seed:a")
-    summary_path = project / "domain/a_domain_summary.json"
+    summary_path = project / DOMAIN_PACKAGES / "a_domain_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     if schema_version is None:
         summary.pop("schema_version")
@@ -589,7 +617,7 @@ def test_manifest_rejects_invalid_paper_pack_identity_contract(
     project.mkdir()
     (project / "context.json").write_text("{}\n", encoding="utf-8")
     _write_domain(project, "a", "domain-a", "seed:a")
-    pack_path = project / "domain/a_paper_json_pack.json"
+    pack_path = project / DOMAIN_PACKAGES / "a_paper_json_pack.json"
     pack = json.loads(pack_path.read_text(encoding="utf-8"))
     pack.update(mutation)
     pack_path.write_text(json.dumps(pack), encoding="utf-8")
@@ -660,7 +688,7 @@ def test_manifest_rejects_orphan_pack_even_when_domain_records_cover_its_id(
         inputs.ManifestError,
         match=(
             "copied paper pack has no matching domain summary: "
-            "domain/orphan_paper_json_pack.json"
+            ".arc/domain/packages/orphan_paper_json_pack.json"
         ),
     ):
         publish.build_domain_manifest(project)
@@ -754,9 +782,9 @@ def test_field_grouping_ignores_non_object_mathematical_opportunities() -> None:
         "open_axes_for_new_work": [],
         "mathematical_opportunities": None,
         "summary_schema_version": "arc.domain_summary.v5",
-        "summary_json_path": "domain/a_domain_summary.json",
-        "summary_markdown_path": "domain/a_domain_summary.md",
-        "paper_json_pack_path": "domain/a_paper_json_pack.json",
+        "summary_json_path": ".arc/domain/packages/a_domain_summary.json",
+        "summary_markdown_path": ".arc/domain/packages/a_domain_summary.md",
+        "paper_json_pack_path": ".arc/domain/packages/a_paper_json_pack.json",
         "paper_ids": ["seed:a"],
         "citation_edges": [],
     }
@@ -815,12 +843,12 @@ def test_manifest_falls_back_on_nontransitive_grouping_across_hard_distinct_pair
     assert payload["grouping_method"] == "conservative_fallback"
     assert "non-transitive" in payload["grouping_warnings"][0]
     assert not (project / payload["grouping_artifact"]).exists()
-    assert not (project / "domain/domain-manifest.json").exists()
+    assert not (project / DOMAIN_STATE / "domain-manifest.json").exists()
 
 
 def test_manifest_requires_companion_artifacts(tmp_path: Path) -> None:
     project = tmp_path / "project"
-    (project / "domain").mkdir(parents=True)
+    (project / DOMAIN_PACKAGES).mkdir(parents=True)
     (project / "context.json").write_text(
         json.dumps(
             {
@@ -831,7 +859,7 @@ def test_manifest_requires_companion_artifacts(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    (project / "domain/x_domain_summary.json").write_text(
+    (project / DOMAIN_PACKAGES / "x_domain_summary.json").write_text(
         json.dumps(
             {
                 "schema_version": "arc.domain_summary.v4",
@@ -888,13 +916,13 @@ def test_write_manifest_uses_injected_typed_llm_runner(tmp_path: Path) -> None:
 
     destination = publish.write_domain_manifest(project, grouping_runner=runner)
 
-    assert destination == project / "domain" / "domain-manifest.json"
+    assert destination == project / DOMAIN_STATE / "domain-manifest.json"
     assert len(calls) == 1
     request, run_root = calls[0]
     assert request.task_id.startswith("domain-field-grouping-")
     assert request.model.provider == "auto"
     assert request.model.tier == "medium"
-    assert run_root == project / "domain" / "field-grouping-llm"
+    assert run_root == project / DOMAIN_STATE / "field-grouping-llm"
     payload = json.loads(destination.read_text(encoding="utf-8"))
     assert payload["field_count"] == 2
     assert payload["research_scope"] == "cross_domain"
@@ -963,7 +991,7 @@ def test_write_manifest_holds_lease_and_publishes_manifest_last(
     assert events == [
         (
             "lease-created",
-            project / "domain" / ".domain-manifest.lock",
+            project / DOMAIN_STATE / ".domain-manifest.lock",
         ),
         ("lease-acquired", True),
         ("write", provenance_path),
@@ -981,7 +1009,7 @@ def test_write_manifest_holds_lease_and_publishes_manifest_last(
     assert events == [
         (
             "lease-created",
-            project / "domain" / ".domain-manifest.lock",
+            project / DOMAIN_STATE / ".domain-manifest.lock",
         ),
         ("lease-acquired", True),
         ("write", destination),
@@ -993,9 +1021,9 @@ def test_write_manifest_holds_lease_and_publishes_manifest_last(
     "relative_path",
     [
         "context.json",
-        "domain/a_domain_summary.json",
-        "domain/a_domain_summary.md",
-        "domain/a_paper_json_pack.json",
+        ".arc/domain/packages/a_domain_summary.json",
+        ".arc/domain/packages/a_domain_summary.md",
+        ".arc/domain/packages/a_paper_json_pack.json",
     ],
 )
 def test_write_manifest_refuses_to_overwrite_referenced_inputs(
@@ -1097,7 +1125,7 @@ def test_custom_manifest_output_keeps_project_relative_provenance(
 
     assert destination == output
     assert reference["path"].startswith(
-        "domain/seed-provenance/"
+        ".arc/domain/seed-provenance/"
     )
     assert (project / reference["path"]).is_file()
 
@@ -1121,8 +1149,9 @@ def test_write_manifest_stops_for_incomplete_typed_llm_outcomes(
     )
     _write_domain(project, "a", "domain-a", "seed:a")
     _write_domain(project, "b", "domain-b", "seed:b")
-    old_manifest = project / "domain/domain-manifest.json"
-    old_grouping = project / "domain/field-grouping.json"
+    old_manifest = project / DOMAIN_STATE / "domain-manifest.json"
+    old_grouping = project / DOMAIN_STATE / "field-grouping.json"
+    old_manifest.parent.mkdir(parents=True, exist_ok=True)
     old_manifest.write_bytes(b'{"old":"manifest"}\n')
     old_grouping.write_bytes(b'{"old":"grouping"}\n')
 
@@ -1155,7 +1184,7 @@ def test_write_manifest_stops_for_incomplete_typed_llm_outcomes(
 
     assert old_manifest.read_bytes() == b'{"old":"manifest"}\n'
     assert old_grouping.read_bytes() == b'{"old":"grouping"}\n'
-    assert not (project / "domain/field-groupings").exists()
+    assert not (project / DOMAIN_STATE / "field-groupings").exists()
 
 
 def test_write_manifest_runner_exception_publishes_nothing(
@@ -1169,8 +1198,9 @@ def test_write_manifest_runner_exception_publishes_nothing(
     )
     _write_domain(project, "a", "domain-a", "seed:a")
     _write_domain(project, "b", "domain-b", "seed:b")
-    old_manifest = project / "domain/domain-manifest.json"
-    old_grouping = project / "domain/field-grouping.json"
+    old_manifest = project / DOMAIN_STATE / "domain-manifest.json"
+    old_grouping = project / DOMAIN_STATE / "field-grouping.json"
+    old_manifest.parent.mkdir(parents=True, exist_ok=True)
     old_manifest.write_bytes(b'{"old":"manifest"}\n')
     old_grouping.write_bytes(b'{"old":"grouping"}\n')
 
@@ -1185,7 +1215,7 @@ def test_write_manifest_runner_exception_publishes_nothing(
 
     assert old_manifest.read_bytes() == b'{"old":"manifest"}\n'
     assert old_grouping.read_bytes() == b'{"old":"grouping"}\n'
-    assert not (project / "domain/field-groupings").exists()
+    assert not (project / DOMAIN_STATE / "field-groupings").exists()
 
 
 def test_immutable_grouping_conflict_preserves_existing_manifest(
@@ -1206,7 +1236,8 @@ def test_immutable_grouping_conflict_preserves_existing_manifest(
     )
     grouping_path.parent.mkdir(parents=True)
     grouping_path.write_text('{"conflict":true}\n', encoding="utf-8")
-    manifest_path = project / "domain/domain-manifest.json"
+    manifest_path = project / DOMAIN_STATE / "domain-manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_bytes(b'{"old":"manifest"}\n')
     writes: list[Path] = []
     real_writer = publish.write_json_object
@@ -1246,7 +1277,8 @@ def test_manifest_publication_failure_preserves_existing_manifest(
     _write_domain(project, "a", "domain-a", "seed:a")
     preview = publish.build_domain_manifest(project)
     grouping_path = project / preview["grouping_artifact"]
-    manifest_path = project / "domain/domain-manifest.json"
+    manifest_path = project / DOMAIN_STATE / "domain-manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_bytes(b'{"old":"manifest"}\n')
     real_writer = publish.write_json_object
 
