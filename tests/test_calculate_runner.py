@@ -38,7 +38,14 @@ def load_calculate_modules():
         entry=module,
         config=importlib.import_module("_arc_workflows.calculate_config"),
         consensus=importlib.import_module("_arc_workflows.calculate_consensus"),
+        context=importlib.import_module("_arc_workflows.calculate_context"),
         prompts=importlib.import_module("_arc_workflows.calculate_prompts"),
+        prompt_builders=importlib.import_module(
+            "_arc_workflows.calculate_prompt_builders"
+        ),
+        reviewer_schema=importlib.import_module(
+            "_arc_workflows.calculate_reviewer_schema"
+        ),
         runner=importlib.import_module("_arc_workflows.calculate_runner"),
         proposer_protocol=importlib.import_module("arc_proposer_reviewer.protocol"),
     )
@@ -46,11 +53,17 @@ def load_calculate_modules():
 
 def minimal_config(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "schema_version": "arc.workflow.calculate.config.v2",
+        "schema_version": "arc.workflow.calculate.config.v3",
         "run_id": "calc_001",
         "run_dir": str(tmp_path / "execute"),
         "workflow_json_dir": str(WORKFLOW_JSON),
-        "steps": [{"step_id": "step_001", "prompt": "derive x"}],
+        "steps": [
+            {
+                "step_id": "step_001",
+                "prompt": "derive x",
+                "kind": "new_derivation",
+            }
+        ],
     }
     payload.update(overrides)
     return payload
@@ -201,6 +214,7 @@ def test_calculate_builds_public_batch_and_hides_blind_reference(tmp_path: Path)
                 {
                     "step_id": "blind_ref_eq_001",
                     "prompt": "derive x",
+                    "kind": "check_known_result",
                     "reviewer_reference_claim": reference_claim,
                 }
             ],
@@ -281,6 +295,7 @@ def test_reference_disagreement_blocks_after_recalculation_budget(tmp_path: Path
                 {
                     "step_id": "blind_ref_eq_001",
                     "prompt": "derive x",
+                    "kind": "check_known_result",
                     "reviewer_reference_claim": {"id": "target", "latex": "x"},
                 }
             ],
@@ -319,6 +334,7 @@ def test_blind_reference_retry_never_passes_reviewer_material_to_proposers(tmp_p
                 {
                     "step_id": "blind_retry_001",
                     "prompt": "derive x",
+                    "kind": "check_known_result",
                     "reviewer_reference_claim": claim,
                 }
             ],
@@ -473,6 +489,7 @@ def test_blind_reference_requires_two_proposers_and_lists_every_active_id(
     blind_step = {
         "step_id": "blind_001",
         "prompt": "derive x",
+        "kind": "check_known_result",
         "reviewer_reference_claim": {"claim_id": "claim_001", "statement": "x"},
     }
 
@@ -938,6 +955,7 @@ def test_blind_reviewer_schema_binds_reference_claim_status(
                 {
                     "step_id": "blind_001",
                     "prompt": "derive x",
+                    "kind": "check_known_result",
                     "reviewer_reference_claim": {
                         "claim_id": "claim_001",
                         "statement": "x",
@@ -1125,6 +1143,103 @@ def test_calculate_config_canonicalizes_owned_paths(tmp_path: Path) -> None:
     assert config.workflow_json_dir == WORKFLOW_JSON.resolve()
 
 
+@pytest.mark.parametrize(
+    ("kind", "expected_instruction"),
+    [
+        ("new_derivation", "without assuming the target expression"),
+        ("check_known_result", "Classify agreement"),
+        ("formal_setup", "downstream reduction remains"),
+    ],
+)
+def test_calculate_step_kinds_have_distinct_acceptance_semantics(
+    tmp_path: Path,
+    kind: str,
+    expected_instruction: str,
+) -> None:
+    modules = load_calculate_modules()
+    config = modules.config.load_calculation_config(
+        minimal_config(
+            tmp_path,
+            steps=[
+                {
+                    "step_id": f"step_{kind}",
+                    "prompt": "perform the requested work",
+                    "kind": kind,
+                }
+            ],
+        )
+    )
+    context = modules.context.caller_context(
+        config,
+        config.steps[0],
+        attempt_number=1,
+        active_proposer_ids=["proposer_001"],
+        locked_outputs={},
+        retry_feedback=[],
+        accepted_step_outputs={},
+    )
+
+    assert context["step_kind"] == kind
+    assert expected_instruction in context["step_acceptance_instruction"]
+
+
+def test_calculate_rejects_retired_step_kind(tmp_path: Path) -> None:
+    modules = load_calculate_modules()
+
+    with pytest.raises(modules.config.ConfigError, match="step.kind must be one of"):
+        modules.config.load_calculation_config(
+            minimal_config(
+                tmp_path,
+                steps=[
+                    {
+                        "step_id": "old_step",
+                        "prompt": "derive x",
+                        "kind": "new_calculation",
+                    }
+                ],
+            )
+        )
+
+
+def test_allowed_context_preserves_nested_scientific_path_fields(
+    tmp_path: Path,
+) -> None:
+    modules = load_calculate_modules()
+    allowed_context = {
+        "integration": {
+            "path": ["saddle", "contour", "endpoint"],
+            "source_path": "physical branch through the lower half-plane",
+            "cache_path": {"meaning": "trajectory in state space"},
+        },
+        "source_commands": ["differentiate the action"],
+    }
+    config = modules.config.load_calculation_config(
+        minimal_config(
+            tmp_path,
+            steps=[
+                {
+                    "step_id": "path_sensitive",
+                    "prompt": "evaluate the contour",
+                    "kind": "new_derivation",
+                    "allowed_context": allowed_context,
+                }
+            ],
+        )
+    )
+    context = modules.context.caller_context(
+        config,
+        config.steps[0],
+        attempt_number=1,
+        active_proposer_ids=["proposer_001"],
+        locked_outputs={},
+        retry_feedback=[],
+        accepted_step_outputs={},
+    )
+
+    assert context["allowed_context"] == allowed_context
+    assert context["allowed_context"] is not allowed_context
+
+
 def test_calculate_template_and_docs_do_not_offer_retired_options() -> None:
     template = json.loads(
         (WORKFLOW_JSON / "calculate.config.template.json").read_text(
@@ -1134,6 +1249,7 @@ def test_calculate_template_and_docs_do_not_offer_retired_options() -> None:
     workflow = (SKILL / "workflows/calculate.md").read_text(encoding="utf-8")
 
     assert "artifact_options" not in template
+    assert template["schema_version"] == "arc.workflow.calculate.config.v3"
     assert "runtime" not in template["defaults"]
     assert "save_prompts" not in workflow
     assert "--json" not in workflow
@@ -1198,7 +1314,13 @@ def test_outer_run_binds_config_and_state_under_project_lease(
     state_before = (run_root / "state.json").read_bytes()
     changed = minimal_config(
         tmp_path,
-        steps=[{"step_id": "step_001", "prompt": "different calculation"}],
+        steps=[
+            {
+                "step_id": "step_001",
+                "prompt": "different calculation",
+                "kind": "new_derivation",
+            }
+        ],
     )
     with pytest.raises(
         modules.config.ConfigError,
@@ -1242,9 +1364,18 @@ def test_calculate_modules_have_one_way_dependencies() -> None:
     consensus = (CALCULATE_MODULES / "calculate_consensus.py").read_text(
         encoding="utf-8"
     )
+    context = (CALCULATE_MODULES / "calculate_context.py").read_text(
+        encoding="utf-8"
+    )
     prompts = (CALCULATE_MODULES / "calculate_prompts.py").read_text(
         encoding="utf-8"
     )
+    prompt_builders = (
+        CALCULATE_MODULES / "calculate_prompt_builders.py"
+    ).read_text(encoding="utf-8")
+    reviewer_schema = (
+        CALCULATE_MODULES / "calculate_reviewer_schema.py"
+    ).read_text(encoding="utf-8")
     runner = (CALCULATE_MODULES / "calculate_runner.py").read_text(
         encoding="utf-8"
     )
@@ -1256,9 +1387,19 @@ def test_calculate_modules_have_one_way_dependencies() -> None:
     assert "_arc_workflows.calculate_config import" in consensus
     assert "_arc_workflows.calculate_prompts" not in consensus
     assert "_arc_workflows.calculate_runner" not in consensus
+    assert "_arc_workflows.calculate_config import" in context
+    assert "_arc_workflows.calculate_prompts" not in context
+    assert "_arc_workflows.calculate_runner" not in context
     assert "_arc_workflows.calculate_config import" in prompts
-    assert "_arc_workflows.calculate_consensus import" in prompts
+    assert "_arc_workflows.calculate_context import" in prompts
+    assert "_arc_workflows.calculate_prompt_builders import" in prompts
     assert "_arc_workflows.calculate_runner" not in prompts
+    assert "_arc_workflows.calculate_config import" in prompt_builders
+    assert "_arc_workflows.calculate_consensus import" in prompt_builders
+    assert "_arc_workflows.calculate_reviewer_schema import" in prompt_builders
+    assert "_arc_workflows.calculate_runner" not in prompt_builders
+    assert "_arc_workflows.calculate_config import" in reviewer_schema
+    assert "_arc_workflows.calculate_runner" not in reviewer_schema
     assert "_arc_workflows.calculate_config import" in runner
     assert "_arc_workflows.calculate_consensus import" in runner
     assert "_arc_workflows.calculate_prompts import" in runner

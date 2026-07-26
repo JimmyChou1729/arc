@@ -16,8 +16,11 @@ from _arc_workflows.workflow_io import (
 )
 
 
-CALCULATE_CONFIG_SCHEMA = "arc.workflow.calculate.config.v2"
-CALCULATE_RESULT_SCHEMA = "arc.workflow.calculate.result.v1"
+CALCULATE_CONFIG_SCHEMA = "arc.workflow.calculate.config.v3"
+CALCULATE_RESULT_SCHEMA = "arc.workflow.calculate.result.v2"
+CALCULATION_STEP_KINDS = frozenset(
+    {"new_derivation", "check_known_result", "formal_setup"}
+)
 DEFAULT_HUMAN_GATE_PAUSE_STATUSES = (
     "reference_disagrees",
     "two_agree",
@@ -113,9 +116,10 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
         if step_id in seen_step_ids:
             raise ConfigError(f"duplicate step_id: {step_id}")
         seen_step_ids.add(step_id)
-        kind = str(step_data.get("kind", "new_calculation") or "new_calculation")
-        if kind != "new_calculation":
-            raise ConfigError("step.kind must be new_calculation")
+        kind = _required_text(step_data, "kind")
+        if kind not in CALCULATION_STEP_KINDS:
+            allowed = ", ".join(sorted(CALCULATION_STEP_KINDS))
+            raise ConfigError(f"step.kind must be one of: {allowed}")
         allowed_context = _dict(step_data.get("allowed_context", {}), f"{step_id}.allowed_context")
         steps.append(
             CalculateStep(
@@ -320,6 +324,7 @@ def _jsonable(value: Any) -> Any:
 __all__ = [
     "CALCULATE_CONFIG_SCHEMA",
     "CALCULATE_RESULT_SCHEMA",
+    "CALCULATION_STEP_KINDS",
     "DEFAULT_HUMAN_GATE_PAUSE_STATUSES",
     "CalculateConfig",
     "CalculateStep",

@@ -63,9 +63,15 @@ For each current ready step, add one config step with the current step prompt,
 quantity contract, relevant work-note notation/axioms/accepted results/current
 ready step, and clean proposer-facing source context in `allowed_context`.
 Do not expose reviewer-only targets, target equations, or later note text to proposers.
+Set `kind` explicitly:
+
+- `new_derivation` for deriving a target without assuming its result;
+- `check_known_result` for independently checking a stated result;
+- `formal_setup` for constructing a formal object or controlled setup whose
+  downstream reduction remains.
 
 For a blind reference check, include `reviewer_reference_claim` only in the
-step object:
+`check_known_result` step object:
 
 ```json
 "reviewer_reference_claim": {"claim_id": "...", "statement": "..."}
@@ -79,8 +85,8 @@ agree with each other but not with the reviewer reference, record
 `reference_disagrees`; use remaining recalculation budget with a generic
 independent-recomputation instruction before pausing for a human decision.
 
-For a post-check new calculation, place the permitted source evidence and its
-provenance in `allowed_context` before starting the batch:
+For a new derivation after a check, place the permitted source evidence and
+its provenance in `allowed_context` before starting the batch:
 
 ```json
 "allowed_context": {
