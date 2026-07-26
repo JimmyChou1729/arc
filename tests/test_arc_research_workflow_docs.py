@@ -1217,9 +1217,11 @@ def test_ideas_marking_scheme_has_discriminating_score_anchors() -> None:
     assert "10: marginally publishable in a top journal" in guidance["novelty"]
     assert "5: marginally publishable in a second-tier or specialized journal" in guidance["novelty"]
     assert "0: not publishable" in guidance["novelty"]
-    assert "10: concrete, agent-executable steps" in guidance["planning"]
-    assert "4: some steps are too broad or difficult for an AI agent" in guidance["planning"]
+    assert "shortest minimally sufficient route" in guidance["planning"]
+    assert "10: the shortest minimally sufficient set" in guidance["planning"]
+    assert "4: some steps are too broad, avoidably elaborate" in guidance["planning"]
     assert "0: most steps cannot be done by an AI agent" in guidance["planning"]
+    assert "shortest minimally sufficient setup" in guidance["problem_well_definedness"]
     assert "one nontrivial idea nucleus" in guidance["simplicity"]
     assert "Necessary technical controls" in guidance["simplicity"]
     assert "breadth of applicability" in guidance["generality"]
@@ -1234,7 +1236,11 @@ def test_ideas_reviewer_comments_turn_marks_into_scientific_guidance() -> None:
     assert "technical, proposal-specific feedback" in template
     assert "score-optimization advice" in template
     assert "one coherent idea nucleus" in template
-    assert "This comparison is advice, not a qualification gate" in template
+    assert "removal counterfactual" in template
+    assert "shortest minimally sufficient direct setup" in template
+    assert "actionable feedback" in template
+    assert "top-level targeted feedback" in template
+    assert "do not leave it only in reviewer_benchmark" in template
 
 
 def test_all_ideas_workers_share_soft_scientific_taste_guidance() -> None:
@@ -1253,10 +1259,16 @@ def test_all_ideas_workers_share_soft_scientific_taste_guidance() -> None:
         template = json.loads((WJ / name).read_text(encoding="utf-8"))["prompt"][
             "template"
         ]
-        assert "simplest" in template
-        assert "remains genuinely novel and consequential" in template
+        assert "minimal direct" in template
+        assert "genuinely novel and consequential result" in template
         assert "more physically meaningful" in template
         assert "simpler formulation is valuable only if it remains new" in template
+        assert "optional, non-exhaustive lens" in template
+        assert "minimal direct" in template
+        assert "removal counterfactual" in template
+        assert "shortest minimally sufficient setup" in template
+        assert "optional follow-on" in template
+        assert "repairable formulation error" in template
 
     for name in reviewer_names:
         template = json.loads((WJ / name).read_text(encoding="utf-8"))["prompt"][
@@ -1264,7 +1276,11 @@ def test_all_ideas_workers_share_soft_scientific_taste_guidance() -> None:
         ]
         assert "scientific taste" in template
         assert "how broadly its core result applies" in template
-        assert "not a qualification gate" in template
+        assert "optional, non-exhaustive lens" in template
+        assert "removal counterfactual" in template
+        assert "shortest minimally sufficient direct" in template
+        assert "top-level targeted feedback" in template
+        assert "actionable feedback" in template
 
 
 def test_all_ideas_reviewers_require_bounded_citation_neighborhood_audits() -> None:
@@ -1303,8 +1319,9 @@ def test_all_ideas_reviewers_require_bounded_citation_neighborhood_audits() -> N
         assert "exceeds 1000 citers" in template
         assert "abstracts are missing" in template
         assert "lower novelty confidence" in template
-        assert "never automatically disqualify" in template
-        assert "not a qualification gate" in template
+        assert "never let this audit remove or hide the idea" in template
+        assert "supplementary evidence signal" in template
+        assert "does not change scores, ranks, or visibility" in template
 
 
 def test_all_ideas_reviewers_keep_broader_novelty_checks_primary() -> None:
@@ -1342,7 +1359,7 @@ def test_all_ideas_reviewers_keep_broader_novelty_checks_primary() -> None:
     )
 
 
-def test_cross_domain_scoring_and_qualification_marks_remain_specialized() -> None:
+def test_cross_domain_scoring_marks_remain_specialized_without_hard_selection() -> None:
     scheme = json.loads(
         (WJ / "ideas-cross-domain-marking-scheme.json").read_text(encoding="utf-8")
     )
@@ -1360,6 +1377,11 @@ def test_cross_domain_scoring_and_qualification_marks_remain_specialized() -> No
     }
     assert "simplicity" not in maxima
     assert "generality" not in maxima
+    guidance = {item["field"]: item["guidance"] for item in scheme["marks"]}
+    assert "shortest minimally sufficient route" in guidance["calculation_feasibility"]
+    assert "shortest minimally sufficient" in guidance["problem_well_definedness"]
+    assert "hard gate" not in scheme["total_score"]["guidance"]
+    assert "eligibility" not in scheme["total_score"]["guidance"].lower()
 
     reviewer_schema = json.loads(
         (WJ / "ideas-cross-domain-reviewer-output.schema.json").read_text(
@@ -1367,9 +1389,37 @@ def test_cross_domain_scoring_and_qualification_marks_remain_specialized() -> No
         )
     )
     assert "reviewer_benchmark" in reviewer_schema["required"]
+    cross_assessment = reviewer_schema["properties"]["cross_domain_assessment"]
+    assert "critical_concerns" in cross_assessment["required"]
+    assert "disqualifying_reasons" not in cross_assessment["properties"]
+
+    variant = json.loads(
+        (WJ / "ideas-cross-domain.variant.json").read_text(encoding="utf-8")
+    )
+    assert "optional exploration lenses" in variant["description"]
+    assert "hard" not in variant["description"].lower()
 
 
-def test_ideas_workflow_points_to_active_runner_without_global_review() -> None:
+def test_ideas_marks_score_minimal_core_not_bundled_outputs() -> None:
+    for name in (
+        "ideas-marking-scheme.json",
+        "ideas-domain-marking-scheme.json",
+        "ideas-cross-domain-marking-scheme.json",
+    ):
+        scheme = json.loads((WJ / name).read_text(encoding="utf-8"))
+        guidance = {
+            item["field"]: item["guidance"]
+            for item in scheme["marks"]
+        }
+        assert "minimal" in guidance["novelty"]
+        assert "bundling" in guidance["novelty"]
+        assert "minimal core result" in guidance["scientific_value"]
+        assert "sum of optional outputs or extensions" in guidance[
+            "scientific_value"
+        ]
+
+
+def test_ideas_workflow_uses_post_batch_advisory_not_global_reviewer_worker() -> None:
     text = (WF / "ideas.md").read_text(encoding="utf-8")
 
     assert "run-ideas.py" in text
@@ -1422,10 +1472,12 @@ def test_ideas_workflow_documents_citation_neighborhood_default_policy() -> None
     assert "`tool_queries_used`" in compact
     assert "no direct precedent found in this citation neighborhood" in compact
     assert "lower novelty confidence" in compact
-    assert "automatically disqualifies an idea" in compact
-    assert "existing scientific qualification gates remain unchanged" in compact
+    assert "citation-neighborhood audit itself" in compact
+    assert "changes its score or rank" in compact
+    assert "hides it from the report" in compact
     assert "existing focused novelty audit" in compact
-    assert "do not create a separate evidence ledger or qualification gate" in compact
+    assert "do not create a separate evidence ledger" in compact
+    assert "use the citation audit to alter scores, ranks, or visibility" in compact
 
 
 def test_ideas_workflow_forbids_citation_only_novelty_reviews() -> None:
@@ -1458,6 +1510,7 @@ def test_ideas_workflow_requires_context_and_runner_artifacts() -> None:
 
 def test_ideas_workflow_has_deterministic_ranked_report_deliverable() -> None:
     text = (WF / "ideas.md").read_text(encoding="utf-8")
+    compact = " ".join(text.split())
 
     assert "<project-dir>/.arc/ideas/reports/<run-id>/" in text
     assert "<project-dir>/ideas/<run-id>/ranked-ideas.pdf" in text
@@ -1465,20 +1518,79 @@ def test_ideas_workflow_has_deterministic_ranked_report_deliverable() -> None:
     assert "--mode partial" in text
     assert "<project-dir>/ideas/<run-id>/partial-ideas.pdf" in text
     assert "<project-dir>/partial-ideas.pdf" in text
-    assert "non-formal and provisional" in text
+    assert "non-formal and provisional" in compact
     assert "manuals/arc-jobs.md" in text
     assert "ranked_ideas.md" not in text
     assert "<project-dir>/suggested-ideas.md" not in text
 
 
+def test_ideas_workflow_documents_default_portfolio_advisory() -> None:
+    text = (WF / "ideas.md").read_text(encoding="utf-8")
+    compact = " ".join(text.split())
+
+    assert "one post-batch portfolio-level scientific assessment by default" in compact
+    assert "single advisory over the portfolio, not another scoring pass" in compact
+    assert "holistic and free-topic" in compact
+    assert "common core shared by several ideas is only one possible finding" in compact
+    assert "unranked and novelty-unassessed" in compact
+    assert "never changes proposer or reviewer marks, selected rounds, scores, rank order, or candidate visibility" in compact
+    assert "unavailability, failure, or malformed output adds a `WARNING:`" in compact
+    assert "does not block the deterministic ranked report" in compact
+    assert "ranking helper remains read-only" in compact
+    assert "does not invoke this assessment, mutate the batch, or reinterpret its results" in compact
+
+
+def test_ideas_selection_keeps_fixable_candidates_visible() -> None:
+    ideas = (WF / "ideas.md").read_text(encoding="utf-8")
+    compact = " ".join(ideas.split())
+    owned_json = (
+        "ideas-marking-scheme.json",
+        "ideas-domain-marking-scheme.json",
+        "ideas-cross-domain-marking-scheme.json",
+        "ideas-cross-domain.variant.json",
+    )
+
+    assert "fixable translation, setup, or execution error remains actionable feedback" in compact
+    assert "Keep every trace-verified candidate visible" in compact
+    assert "List all trace-verified candidates in formal ranking order" in compact
+    assert "formal ranking likewise keeps every trace-verified candidate visible" in compact
+    assert "hard gate" not in ideas.lower()
+    assert "qualification gate" not in ideas.lower()
+    for name in owned_json:
+        value = (WJ / name).read_text(encoding="utf-8").lower()
+        assert "hard gate" not in value
+        assert "qualification gate" not in value
+
+
+def test_agents_treats_profiles_as_lenses_and_fixable_errors_as_feedback() -> None:
+    text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    compact = " ".join(text.split())
+
+    assert "exploration profiles as optional lenses, not assignments or coverage quotas" in compact
+    assert "separate an idea's nucleus from fixable formulation errors" in compact
+    assert "preserve the direction and return actionable feedback" in compact
+    assert "shortest minimally sufficient setup" in compact
+    assert (
+        "Do not turn model-correctable scientific weaknesses into hard "
+        "disqualification"
+    ) in compact
+    assert "Reserve hard stops for conditions under which reasoning cannot" in compact
+
+
 def test_single_domain_ideas_profiles_follow_verified_summary_routes() -> None:
     text = (WF / "ideas.md").read_text(encoding="utf-8")
+    compact = " ".join(text.split())
 
     assert "`open_axes_for_new_work`" in text
     assert "`mathematical_opportunities.well_defined_problems`" in text
     assert "general theoretical-physics exploration lenses" in text
-    assert "exactly one profile object per loop" in text
-    assert "never create duplicate loops that differ only by ID" in text
+    assert "exactly one profile object per loop" in compact
+    assert "never create duplicate loops that differ only by ID" in compact
+    assert "optional, non-exhaustive lens" in compact
+    assert "rather than an assignment, required taxonomy, or coverage quota" in compact
+    assert "may leave its lens when a stronger minimal direct route lies elsewhere" in compact
+    assert "apply a removal counterfactual" in compact
+    assert "shortest minimally sufficient setup and core calculation" in compact
 
 
 def test_ideas_reviewer_template_uses_direct_research_policy() -> None:
@@ -1567,8 +1679,9 @@ def test_ideas_workflow_has_no_typed_evidence_accounting() -> None:
     assert "paper-operation allowlist" in compact
     assert "does not assume a production universal broker" in compact
     assert "generic host broker" not in compact
-    assert "`arc.ideas.selected_rounds.v6`" in ideas
-    assert "`arc.ideas.partial_selected_rounds.v2`" in ideas
+    assert "`arc.workflow.ideas.result.v4`" in ideas
+    assert "`arc.ideas.selected_rounds.v7`" in ideas
+    assert "`arc.ideas.partial_selected_rounds.v3`" in ideas
     assert "scientific `status` separately from `durable_lifecycle`" in compact
     assert "no `run_lifecycle` alias" in compact
     assert "focused novelty audit" in compact

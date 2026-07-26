@@ -1,4 +1,4 @@
-"""Operational and qualification policy for the ARC ideas workflow."""
+"""Operational policy and scientific-readiness diagnostics for ARC ideas."""
 
 from __future__ import annotations
 
@@ -160,17 +160,19 @@ def loop_requires_idea_assessment(loop: LoopSpec) -> bool:
     return isinstance(required, list) and "idea_assessment" in required
 
 
-def single_domain_qualification(
+def single_domain_scientific_readiness(
     assessment: Any,
-) -> tuple[bool, list[str], dict[str, Any]]:
-    reasons: list[str] = []
+) -> tuple[str, list[str], dict[str, Any]]:
+    """Classify reviewer caveats without excluding a scored idea."""
     if not isinstance(assessment, Mapping):
         return (
-            False,
-            [*reasons, "missing_idea_assessment"],
+            "unassessed",
+            ["missing_idea_assessment"],
             _empty_single_feasibility_classification(),
         )
 
+    warnings: list[str] = []
+    core_not_ready = False
     feasibility_status = str(assessment.get("feasibility_status", ""))
     well_definedness = str(assessment.get("mathematical_well_definedness", ""))
     external_method_status = str(assessment.get("external_method_status", ""))
@@ -182,24 +184,44 @@ def single_domain_qualification(
     )
 
     if feasibility_status not in {"feasible", "feasible_with_named_risk"}:
-        reasons.append("first_calculation_is_not_feasible")
+        warnings.append("first_calculation_is_not_feasible")
+        core_not_ready = True
     if assessment.get("bounded_first_calculation_ready") is not True:
-        reasons.append("bounded_first_calculation_is_not_ready")
+        warnings.append("bounded_first_calculation_is_not_ready")
+        core_not_ready = True
     if blocking_failures:
-        reasons.append("blocking_feasibility_failures")
+        warnings.append("blocking_feasibility_failures")
+        warnings.extend(
+            f"blocking_feasibility_failure: {failure}"
+            for failure in blocking_failures
+        )
+        core_not_ready = True
+    if manageable_risks:
+        warnings.extend(
+            f"manageable_feasibility_risk: {risk}"
+            for risk in manageable_risks
+        )
     if feasibility_status == "feasible_with_named_risk" and not manageable_risks:
-        reasons.append("feasible_with_named_risk_requires_named_manageable_risk")
-    if well_definedness == "not_well_defined" or well_definedness not in {
-        "well_defined",
-        "partially_defined",
-    }:
-        reasons.append("mathematical_problem_is_not_well_defined")
+        warnings.append(
+            "feasible_with_named_risk_requires_named_manageable_risk"
+        )
+    if well_definedness == "partially_defined":
+        warnings.append("mathematical_problem_is_partially_defined")
+    elif well_definedness != "well_defined":
+        warnings.append("mathematical_problem_is_not_well_defined")
+        core_not_ready = True
     if external_method_status not in {"not_used", "valid"}:
-        reasons.append("external_method_must_be_not_used_or_valid")
+        warnings.append(
+            "external_method_status_is_"
+            + (external_method_status or "missing")
+        )
+        rationale = str(assessment.get("external_method_rationale", "")).strip()
+        if rationale:
+            warnings.append(f"external_method_rationale: {rationale}")
 
     return (
-        not reasons,
-        reasons,
+        _readiness_state(warnings, core_not_ready=core_not_ready),
+        list(dict.fromkeys(warnings)),
         {
             "policy": "single_domain_explicit_blocking_and_manageable",
             "feasibility_status": feasibility_status,
@@ -214,22 +236,23 @@ def single_domain_qualification(
     )
 
 
-def cross_qualification(
+def cross_scientific_readiness(
     proposer: Mapping[str, Any],
     assessment: Any,
-    marks: Mapping[str, Any],
     *,
     cross_context: Mapping[str, Any],
-) -> tuple[bool, list[str], str, dict[str, Any]]:
-    reasons: list[str] = []
+) -> tuple[str, list[str], str, dict[str, Any]]:
+    """Classify cross-domain caveats without using them as ranking gates."""
     if not isinstance(assessment, Mapping):
         return (
-            False,
-            [*reasons, "missing_cross_domain_assessment"],
+            "unassessed",
+            ["missing_cross_domain_assessment"],
             "",
             _empty_compatibility_classification(),
         )
 
+    warnings: list[str] = []
+    core_not_ready = False
     cards = cross_context.get("domain_cards", [])
     known_domain_ids = {
         str(card.get("field_id", "")).strip()
@@ -239,17 +262,17 @@ def cross_qualification(
     source = str(assessment.get("source_field_id", "")).strip()
     target = str(assessment.get("target_field_id", "")).strip()
     if not source or not target or source == target:
-        reasons.append("source_and_target_must_be_distinct")
+        warnings.append("source_and_target_must_be_distinct")
     if source not in known_domain_ids or target not in known_domain_ids:
-        reasons.append("source_or_target_is_not_a_manifest_field")
+        warnings.append("source_or_target_is_not_a_manifest_field")
 
     roles = proposer.get("domain_roles")
     if not isinstance(roles, Mapping):
-        reasons.append("missing_proposer_domain_roles")
+        warnings.append("missing_proposer_domain_roles")
     elif str(roles.get("source_field_id", "")).strip() != source or str(
         roles.get("target_field_id", "")
     ).strip() != target:
-        reasons.append("proposer_and_reviewer_domain_roles_disagree")
+        warnings.append("proposer_and_reviewer_domain_roles_disagree")
 
     required_values = {
         "transfer_status": "genuine",
@@ -258,53 +281,76 @@ def cross_qualification(
     }
     for field, required in required_values.items():
         if assessment.get(field) != required:
-            reasons.append(f"{field}_must_be_{required}")
+            warnings.append(f"{field}_must_be_{required}")
     if assessment.get("target_contribution_status") not in {
         "substantial",
         "transformative",
     }:
-        reasons.append("target_contribution_must_be_substantial_or_transformative")
+        warnings.append(
+            "target_contribution_must_be_substantial_or_transformative"
+        )
     if assessment.get("feasibility_status") not in {
         "feasible",
         "feasible_with_named_risk",
     }:
-        reasons.append("first_calculation_is_not_feasible")
-    compatibility = compatibility_classification(assessment)
+        warnings.append("first_calculation_is_not_feasible")
+        core_not_ready = True
+    try:
+        compatibility = compatibility_classification(assessment)
+    except ValueError:
+        compatibility = _empty_compatibility_classification()
+        warnings.append("missing_compatibility_classification_fields")
     if compatibility["blocking_failures"]:
-        reasons.append("blocking_compatibility_failures")
+        warnings.append("blocking_compatibility_failures")
+        warnings.extend(
+            f"blocking_compatibility_failure: {failure}"
+            for failure in compatibility["blocking_failures"]
+        )
+        core_not_ready = True
+    if compatibility["manageable_risks"]:
+        warnings.extend(
+            f"manageable_compatibility_risk: {risk}"
+            for risk in compatibility["manageable_risks"]
+        )
     if (
         assessment.get("feasibility_status") == "feasible_with_named_risk"
         and not compatibility["manageable_risks"]
     ):
-        reasons.append("feasible_with_named_risk_requires_named_manageable_risk")
-    if assessment.get("disqualifying_reasons"):
-        reasons.append("reviewer_reported_disqualifying_reasons")
+        warnings.append(
+            "feasible_with_named_risk_requires_named_manageable_risk"
+        )
+    raw_critical_concerns = assessment.get("critical_concerns")
+    if raw_critical_concerns is None:
+        raw_critical_concerns = assessment.get("disqualifying_reasons")
+    critical_concerns = _string_list(raw_critical_concerns)
+    if critical_concerns:
+        warnings.append("reviewer_reported_critical_concerns")
+        warnings.extend(
+            f"reviewer_critical_concern: {concern}"
+            for concern in critical_concerns
+        )
     novelty = assessment.get("novelty_coverage")
-    if not isinstance(novelty, Mapping) or not all(
-        novelty.get(scope) is True
-        for scope in ("source_domain", "target_domain", "intersection")
-    ):
-        reasons.append("source_target_and_intersection_novelty_checks_are_required")
-
-    thresholds = {
-        "cross_domain_transfer_quality": 10,
-        "substantive_target_contribution": 14,
-        "scientific_value": 6,
-        "calculation_feasibility": 6,
-        "problem_well_definedness": 6,
-    }
-    for field, minimum in thresholds.items():
-        try:
-            value = float(marks.get(field, 0))
-        except (TypeError, ValueError):
-            value = 0
-        if value < minimum:
-            reasons.append(f"{field}_below_{minimum}")
+    novelty_scopes = ("source_domain", "target_domain", "intersection")
+    missing_novelty_scopes = [
+        scope
+        for scope in novelty_scopes
+        if not isinstance(novelty, Mapping) or novelty.get(scope) is not True
+    ]
+    if missing_novelty_scopes:
+        warnings.append(
+            "novelty_coverage_incomplete: "
+            + ", ".join(missing_novelty_scopes)
+        )
 
     signature = normalized_transfer_signature(assessment.get("transfer_signature"))
     if not signature:
-        reasons.append("complete_transfer_signature_is_required")
-    return not reasons, reasons, signature, compatibility
+        warnings.append("transfer_signature_is_incomplete")
+    return (
+        _readiness_state(warnings, core_not_ready=core_not_ready),
+        list(dict.fromkeys(warnings)),
+        signature,
+        compatibility,
+    )
 
 
 def compatibility_classification(
@@ -378,6 +424,18 @@ def _empty_compatibility_classification() -> dict[str, Any]:
         "blocking_failures": [],
         "manageable_risks": [],
     }
+
+
+def _readiness_state(
+    warnings: list[str],
+    *,
+    core_not_ready: bool,
+) -> str:
+    if core_not_ready:
+        return "not_ready"
+    if warnings:
+        return "ready_with_risk"
+    return "ready"
 
 
 def _string_list(value: Any) -> list[str]:

@@ -1,6 +1,6 @@
 {
   "schema_version": "arc.workflow.ideas.marking_scheme.v1",
-  "calibration_guidance": "Use the full numeric range. Do not assign mid-high scores by default just because an idea is plausible. A total score above 85 should mean the idea is clearly strong across importance, novelty, definition, execution, conceptual simplicity, and breadth of applicability. A total score above 90 should be rare. Prefer one coherent idea nucleus whose technical machinery serves a single consequential claim over a bundle of independently publishable aims. Do not confuse simplicity with brevity or under-specification, and do not penalize complexity essential to define or validate the core result. A simple idea that is already known remains low-novelty; simplicity and generality never substitute for novelty evidence. A merely reasonable idea with unclear novelty or weak execution plan should usually fall around 55-75, not 80+.",
+  "calibration_guidance": "Use the full numeric range. Do not assign mid-high scores by default just because an idea is plausible. A total score above 85 should mean the idea is clearly strong across importance, novelty, definition, execution, conceptual simplicity, and breadth of applicability. A total score above 90 should be rare. Prefer one coherent idea nucleus whose technical machinery serves a single consequential claim over a bundle of independently publishable aims. Apply a removal counterfactual and prefer the minimal direct formulation: remove each assumption, method, observable, or validation layer that can be deferred without making the same core result undefined, infeasible, non-novel, or scientifically inconsequential. Do not confuse simplicity with brevity or under-specification, and do not penalize complexity essential to define or validate the core result. Treat formulation errors that can be repaired without replacing the nucleus as actionable feedback, not as a reason to erase the direction from scientific comparison. A simple idea that is already known remains low-novelty; simplicity and generality never substitute for novelty evidence. A merely reasonable idea with unclear novelty or weak execution plan should usually fall around 55-75, not 80+.",
   "marks": [
     {
       "field": "user_intent_relevance",
@@ -14,7 +14,7 @@
       "label": "Novelty",
       "minimum": 0,
       "maximum": 15,
-      "guidance": "Score how publishable the idea would be if worked out successfully, not the evidence that it is new. 15: confidently publishable in a top journal of the field. 10: marginally publishable in a top journal, or clearly publishable in a strong field journal. 5: marginally publishable in a second-tier or specialized journal if executed well. 0: not publishable as research even if completed. Do not give extra marks for ideas beyond top-journal novelty; overly creative ideas are not more useful for the current agent workflow."
+      "guidance": "Score how publishable the minimal core result would be if worked out successfully, not the evidence that it is new. Do not add novelty marks by bundling known ingredients, optional observables, or avoidable restrictions. 15: confidently publishable in a top journal of the field. 10: marginally publishable in a top journal, or clearly publishable in a strong field journal. 5: marginally publishable in a second-tier or specialized journal if executed well. 0: not publishable as research even if completed. Do not give extra marks for ideas beyond top-journal novelty; overly creative ideas are not more useful for the current agent workflow."
     },
     {
       "field": "confidence_of_novelty",
@@ -28,21 +28,21 @@
       "label": "Value",
       "minimum": 0,
       "maximum": 15,
-      "guidance": "Score whether a leading researcher in this research domain should read the resulting paper if the idea is worked out. 15: must-read for leading researchers in the domain. 10: good-to-know; useful contribution but not field-shaping. 5: modest niche value or mostly incremental clarification. 0: even if correct, the result would not be worth reading."
+      "guidance": "Score whether a leading researcher in this research domain should read the minimal core result, not the sum of optional outputs or extensions. 15: must-read for leading researchers in the domain. 10: good-to-know; useful contribution but not field-shaping. 5: modest niche value or mostly incremental clarification. 0: even if correct, the result would not be worth reading."
     },
     {
       "field": "planning",
       "label": "Planning",
       "minimum": 0,
       "maximum": 10,
-      "guidance": "Score whether the question is broken into good-enough pieces for agent execution. Do not award extra marks for adding separable observables, formalisms, or future extensions. 10: concrete, agent-executable steps with clear inputs, outputs, and validation checks. 7: clear route, though some details remain. 4: some steps are too broad or difficult for an AI agent. 0: most steps cannot be done by an AI agent or the plan is essentially absent."
+      "guidance": "Score whether the question is broken into the shortest minimally sufficient route for agent execution. Do not award extra marks for adding separable observables, formalisms, validations, or future extensions. 10: the shortest minimally sufficient set of concrete, agent-executable steps with clear inputs, outputs, and proportionate validation checks. 7: clear route with limited removable machinery or a few details remaining. 4: some steps are too broad, avoidably elaborate, or difficult for an AI agent. 0: most steps cannot be done by an AI agent or the plan is essentially absent."
     },
     {
       "field": "problem_well_definedness",
       "label": "Well-definedness",
       "minimum": 0,
       "maximum": 15,
-      "guidance": "Score whether the question is set up sharply enough. 15: problem is sharply specified; the calculation can be set up directly from the proposal. 10: mostly well-defined, but requires a few reasonable choices or assumptions. 5: interesting direction, but key objects, setup, limits, or observables are under-specified. 0: no clear calculable question."
+      "guidance": "Score whether the shortest minimally sufficient setup sharply defines the question without rewarding extra model choices or formal layers. 15: the minimal mathematical object, assumptions, regime, target, and success criterion are specified so the calculation can be set up directly. 10: mostly well-defined, but requires a few reasonable choices or assumptions. 5: interesting direction, but key objects, setup, limits, or observables are under-specified. 0: no clear calculable question."
     },
     {
       "field": "simplicity",

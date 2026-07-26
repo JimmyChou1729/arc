@@ -2,7 +2,7 @@
   "schema_version": "arc.workflow.ideas.variant.v1",
   "variant_id": "cross_domain",
   "research_scope": "cross_domain",
-  "description": "Directed cross-domain transfer with structured domain cards, distinct exploration profiles, and hard transfer-quality review.",
+  "description": "Directed cross-domain transfer with structured domain cards, optional exploration lenses, and evidence-based transfer-quality review.",
   "loop_template": "ideas-cross-domain-loop.template.json",
   "proposer_template": "ideas-cross-domain-proposer.template.json",
   "reviewer_template": "ideas-cross-domain-reviewer.template.json",

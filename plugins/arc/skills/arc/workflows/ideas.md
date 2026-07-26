@@ -36,9 +36,9 @@ Set `domain_manifest_path` to
 its validated `arc.workflow.domain_seed_provenance.v1` artifact, routes by
 `field_count`: one field, including multiple seed-specific packages, uses the
 single-domain prompts; two or more fields use cross-domain prompts, directed
-transfer profiles, reviewer assessment, and qualification gates. Cross-domain
-cards and source/target roles use `field_id`. A missing, unsupported, or invalid
-manifest must be regenerated before any ideas work.
+transfer profiles as optional lenses, and reviewer scientific assessment.
+Cross-domain cards and source/target roles use `field_id`. A missing,
+unsupported, or invalid manifest must be regenerated before any ideas work.
 
 Proceed only when the domain-build handoff status is `completed` or `degraded`.
 For a degraded handoff, print its warnings and use only the verified domain
@@ -59,11 +59,20 @@ in stable manifest, package, and list order: first from validated
 `open_axes_for_new_work`, then from deduplicated
 `mathematical_opportunities.well_defined_problems`, then from a finite set of
 general theoretical-physics exploration lenses. Each route is passed to the
-proposer as `exploration_profile`; the reviewer continues to use the common
-marking scheme. If an explicit set is used, top-level `exploration_profiles`
-must contain exactly one profile object per loop for either research scope.
-If the automatic single-domain sources cannot supply enough distinct routes,
-provide an explicit set; never create duplicate loops that differ only by ID.
+proposer as `exploration_profile`, but every profile is an optional,
+non-exhaustive lens rather than an assignment, required taxonomy, or coverage
+quota. The exact user intent remains primary; a proposer may leave its lens
+when a stronger minimal direct route lies elsewhere, and it need not absorb
+every example, method, or observable mentioned by the profile. Before
+finalizing, proposer and reviewer apply a removal counterfactual and prefer the
+shortest minimally sufficient setup and core calculation that remain
+well-defined, feasible, testable, genuinely novel, and consequential. Separable
+methods, validations, observables, and applications become optional follow-ons.
+The reviewer continues to use the common marking scheme. If an explicit set is
+used, top-level `exploration_profiles` must contain exactly one profile object
+per loop for either research scope. If the automatic single-domain sources
+cannot supply enough distinct routes, provide an explicit set; never create
+duplicate loops that differ only by ID.
 
 ### Phase 2: Run Ideas
 
@@ -137,8 +146,9 @@ contains at least one complete committed proposer-reviewer round,
 `run-ideas.py` automatically attempts to publish a non-formal provisional
 `partial-ideas.pdf`. Rendering failure adds a warning and never changes the
 real batch lifecycle. The partial report does not resume work, adopt
-uncommitted provider files, or relax qualification gates. For loop concurrency
-and durable pause/resume behavior, see `manuals/arc-proposer-reviewer.md`.
+uncommitted provider files, or alter scientific scores, ranks, or candidate
+visibility. For loop concurrency and durable pause/resume behavior, see
+`manuals/arc-proposer-reviewer.md`.
 
 ### Research Tools
 
@@ -184,8 +194,8 @@ neighborhood,” never a proof of novelty. INSPIRE unavailability, a neighborhoo
 larger than 1000 citers, incomplete coverage, or missing abstracts must remain
 visible as a warning and lower novelty confidence while the reviewer continues
 with the other available novelty checks. None of these conditions, nor the
-citation-neighborhood audit itself, automatically disqualifies an idea; the
-existing scientific qualification gates remain unchanged.
+citation-neighborhood audit itself, removes an idea, changes its score or rank,
+or hides it from the report.
 
 Set `<host-authority>` to `unrestricted` only when the host explicitly reports
 unrestricted permissions; otherwise set it to `unknown` and reuse that value
@@ -198,11 +208,15 @@ host-specific fallback. The runtime holder supplies the authority attestation
 and any explicit broker; the LLM service selects the corresponding safe mode.
 
 Final ranked ideas must come from `run-ideas.py`'s public committed batch data
-and the read-only ranking helper, not ad-hoc agent judgment. In cross-domain mode,
-only candidates marked as genuine transfers with a substantial target-domain
-contribution and a feasible first calculation are eligible for the formal
-ranking. The source domain may contribute a mature method or mechanism without
-itself receiving a new result.
+and the read-only ranking helper, not ad-hoc agent judgment. Keep every
+trace-verified candidate visible with its marks, assessment, limitations, and
+revision feedback. In cross-domain mode, the reviewer distinguishes genuine,
+substantive transfers from decorative or currently under-specified ones, but a
+fixable translation, setup, or execution error remains actionable feedback
+rather than erasing the direction. Recommend replacement only when no
+minimally sufficient repair preserves a genuine and consequential transfer.
+The source domain may contribute a mature method or mechanism without itself
+receiving a new result.
 
 In single-domain mode, prioritize an important target-domain problem that is
 mathematically well-defined and has an executable systematic route.
@@ -216,10 +230,11 @@ adaptation, applicability conditions, validation checks, and kill criterion
 concrete; only then should the reviewer validate the source area, target
 domain, intersection, and shortlisted source papers. Otherwise record the
 external method as not used and do not request cross-disciplinary evidence.
-Feasibility is a qualification gate, while problem importance is scored
-strongly rather than used as a binary gate. Do not promote a convenient but
-low-value exercise, or an important problem without ready inputs and a bounded
-first calculation.
+Judge feasibility and problem importance explicitly in marks, assessment, and
+revision feedback. A repairable error in an otherwise substantive nucleus
+should produce a concrete next-round fix, while a convenient but low-value
+exercise or an important problem without any feasible minimally sufficient
+formulation should score accordingly.
 
 ### Phase 3: Inspect Artifacts
 
@@ -233,13 +248,31 @@ request artifact: proposer-reviewer/request
 
 Step 1: Use the public observation APIs after the run completes. `inspect_batch`
 may show a lifecycle for any batch state; the strict trace exposes only complete
-committed rounds. The ranking helper selects the best qualified committed round
-for each succeeded loop, rather than assuming the final round is best. It emits
-logical artifact IDs and content digests, never physical proposal or review
-paths.
+committed rounds. The ranking helper selects the highest-ranked committed round
+for each succeeded loop, rather than assuming the final round is best, while
+preserving the scientific assessment and revision feedback for every complete
+candidate. It emits logical artifact IDs and content digests, never physical
+proposal or review paths.
 
-The formal JSON ranking contract is `arc.ideas.selected_rounds.v6`; partial
-rankings use `arc.ideas.partial_selected_rounds.v2`. Read scientific `status`
+After the batch completes, run one post-batch portfolio-level scientific
+assessment by default. This is a single advisory over the portfolio, not
+another scoring pass. It is holistic and free-topic: a common core shared by
+several ideas is only one possible finding, not a required section, taxonomy, or
+template. The advisory may identify a minimal direct direction omitted by the
+loops or another omission outside the ranking, but it must label every such
+item as unranked and novelty-unassessed until a normal novelty review is
+performed. It never changes proposer or reviewer marks, selected rounds,
+scores, rank order, or candidate visibility.
+
+Portfolio-assessment unavailability, failure, or malformed output adds a
+`WARNING:` and does not block the deterministic ranked report. The ranking
+helper remains read-only: it does not invoke this assessment, mutate the batch,
+or reinterpret its results. It may only preserve or render advisory content
+that the completed run supplies through its public handoff.
+
+The run result contract is `arc.workflow.ideas.result.v4`. The formal JSON
+ranking contract is `arc.ideas.selected_rounds.v7`; partial rankings use
+`arc.ideas.partial_selected_rounds.v3`. Read scientific `status`
 separately from `durable_lifecycle`: a durable batch may finish successfully
 while the scientific status is `degraded` because one or more loops failed.
 The current contracts have no `run_lifecycle` alias.
@@ -275,16 +308,19 @@ python3 <skill-dir>/scripts/rank-ideas.py \
 
 `--mode formal` remains the default and continues to rank only succeeded
 loops. Partial mode uses every complete committed proposer-reviewer round
-visible in the verified trace, preserves the same qualification gates, and
-marks its title, metadata, and ordering as non-formal and provisional. Each
-candidate displays its loop lifecycle, complete-round count, safe public pause
-reason, best committed round, and qualification failures. It publishes
+visible in the verified trace, preserves the same scoring and candidate
+visibility policy, and marks its title, metadata, and ordering as non-formal
+and provisional. Each candidate displays its loop lifecycle, complete-round
+count, safe public pause reason, best committed round, and scientific
+assessment or revision warnings. It publishes
 `<project-dir>/ideas/<run-id>/partial-ideas.pdf` and
 `<project-dir>/partial-ideas.pdf`; it never substitutes for
 `ranked-ideas.pdf`.
 
-The report must start with `# Ideas`, then `Abbreviations:`, then a
-blank-line-separated abbreviation line in the form `IR=intent relevance,
+The formal report must start with `# Ideas`, then render the persisted
+`Global Scientific Assessment (Advisory)` when available, then
+`Abbreviations:` and a blank-line-separated abbreviation line in the form
+`IR=intent relevance,
 N=novelty, CN=confidence of novelty, SV=scientific value, PL=planning,
 WD=well-definedness, SI=simplicity, GE=generality, T=total.` List each ranked idea in the same form used by
 `round_marks_by_idea.md`: a loop-id heading, the selected title, and the
@@ -296,26 +332,26 @@ scientific-taste comparison and simpler same-direction alternative when
 available, a focused novelty audit with evidence checked, tool queries, and
 unresolved reviewer limitations, and only the selected proposer handoff text:
 title, idea summary, and calculation plan. Scientific taste is a soft ranking
-preference, not a qualification gate. The audit is explicitly non-exhaustive.
+and revision preference; it does not independently remove or hide a candidate.
+The audit is explicitly non-exhaustive.
 Preserve citation-neighborhood evidence and exact ARC command records verbatim
 inside that existing focused novelty audit; do not create a separate evidence
-ledger or qualification gate.
+ledger or use the citation audit to alter scores, ranks, or visibility.
 Render the handoff text as normal Markdown paragraphs, not a fenced code block.
 Follow `rules/math_typeset.md` for math and TeX snippets. Use PDF-friendly
 wrapping for long titles and proposer text; avoid wide tables with long prose.
 
 For cross-domain runs, use the abbreviations and score columns declared by the
-selected cross-domain marking scheme. List qualified candidates first in
-formal ranking order, never fill the top three with an unqualified candidate,
-and add an unqualified appendix with explicit reasons. Print any
-insufficient-qualified-candidate `WARNING:` messages.
+selected cross-domain marking scheme. List all trace-verified candidates in
+formal ranking order and preserve transfer-quality concerns and concrete repair
+advice without changing score, rank, or visibility.
 
-For new single-domain runs, formal ranking likewise contains only candidates
-that pass the mathematical-definition and feasibility gate. Do not pad the top
-three with infeasible candidates. Add explicit failures to the unqualified
-appendix and print any insufficient-qualified-candidate `WARNING:` messages.
-No-assessment single-domain variants remain visibly marked as using the
-`no_assessment` policy; do not infer an alternate artifact layout.
+For new single-domain runs, formal ranking likewise keeps every trace-verified
+candidate visible. Preserve mathematical-definition and feasibility problems
+as assessment and revision feedback; distinguish nucleus-breaking failures
+from errors repairable in another round. No-assessment single-domain variants
+remain visibly marked as using the `no_assessment` policy; do not infer an
+alternate artifact layout.
 
 Step 2: Require both visible PDFs from Step 1 before claiming ideas delivery.
 On rendering failure, print `WARNING:` with the exact error and preserve the

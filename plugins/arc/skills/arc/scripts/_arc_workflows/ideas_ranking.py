@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,20 +22,31 @@ from _arc_workflows.ideas_marking import (
     score_fields,
 )
 from _arc_workflows.ideas_policy import (
-    cross_qualification,
+    cross_scientific_readiness,
     is_cross_domain_context,
     loop_requires_idea_assessment,
     normalized_central_mechanism,
     scientific_run_status,
-    single_domain_qualification,
+    single_domain_scientific_readiness,
+)
+from _arc_workflows.ideas_portfolio_assessment import (
+    load_portfolio_assessment,
 )
 from _arc_workflows.ideas_report import (
     cross_diagnostics,
     single_domain_diagnostics,
 )
 
-SELECTED_ROUNDS_SCHEMA = "arc.ideas.selected_rounds.v6"
-PARTIAL_SELECTED_ROUNDS_SCHEMA = "arc.ideas.partial_selected_rounds.v2"
+SELECTED_ROUNDS_SCHEMA = "arc.ideas.selected_rounds.v7"
+PARTIAL_SELECTED_ROUNDS_SCHEMA = "arc.ideas.partial_selected_rounds.v3"
+
+
+class _RoundExclusion(ValueError):
+    """A committed round that cannot participate in score ranking."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def rank_run(
@@ -80,16 +92,16 @@ def rank_run(
             for loop in request.loops
         }
     )
-    single_domain_qualification_enabled = any(
+    single_domain_assessment_enabled = any(
         context.get("requires_idea_assessment") is True
         for context in single_contexts.values()
     )
     single_domain_without_assessment = (
-        bool(single_contexts) and not single_domain_qualification_enabled
+        bool(single_contexts) and not single_domain_assessment_enabled
     )
     selected: list[dict[str, Any]] = []
-    unqualified: list[dict[str, Any]] = []
     excluded_loops: list[dict[str, str]] = []
+    excluded_rounds: list[dict[str, Any]] = []
     trace_by_loop = {loop.loop_id: loop for loop in trace.loops}
     inspection_by_loop = {loop.loop_id: loop for loop in inspection.loops}
     for loop in request.loops:
@@ -117,11 +129,16 @@ def rank_run(
                     round_ref.round_number,
                 )
             except Exception:
-                raise SystemExit(
-                    "cannot rank ideas because a committed round is unavailable"
-                ) from None
-            loop_rounds.append(
-                _round_entry(
+                excluded_rounds.append(
+                    {
+                        "loop_id": loop.loop_id,
+                        "round": round_ref.round_number,
+                        "reason": "committed_round_artifact_unavailable",
+                    }
+                )
+                continue
+            try:
+                entry = _round_entry(
                     loop,
                     committed,
                     scheme=scheme,
@@ -132,13 +149,26 @@ def rank_run(
                         else None
                     ),
                 )
-            )
+            except _RoundExclusion as exc:
+                excluded_rounds.append(
+                    {
+                        "loop_id": loop.loop_id,
+                        "round": round_ref.round_number,
+                        "reason": exc.reason,
+                    }
+                )
+                continue
+            loop_rounds.append(entry)
         if not loop_rounds:
             excluded_loops.append(
                 {
                     "loop_id": loop.loop_id,
                     "status": lifecycle,
-                    "reason": "no_committed_rounds",
+                    "reason": (
+                        "no_valid_committed_rounds"
+                        if loop_trace.rounds
+                        else "no_committed_rounds"
+                    ),
                 }
             )
             continue
@@ -147,28 +177,16 @@ def rank_run(
             if mode == "partial"
             else {}
         )
-        if cross_domain or single_domain_qualification_enabled:
-            qualified_rounds = [
-                entry for entry in loop_rounds if entry.get("qualified")
-            ]
-            if not qualified_rounds:
-                best_failed = dict(max(loop_rounds, key=rank_key))
-                best_failed["rounds"] = loop_rounds
-                best_failed.update(partial_metadata)
-                unqualified.append(best_failed)
-                continue
-            best = dict(max(qualified_rounds, key=rank_key))
-        else:
-            best = dict(max(loop_rounds, key=rank_key))
+        best = dict(max(loop_rounds, key=rank_key))
         best["rounds"] = loop_rounds
         best["loop_lifecycle"] = lifecycle
         best.update(partial_metadata)
         selected.append(best)
 
-    if mode == "partial" and not selected and not unqualified:
+    if mode == "partial" and not selected:
         raise SystemExit(
             "cannot create a partial ideas report because no complete "
-            "committed proposer-reviewer round is available"
+            "valid committed proposer-reviewer round is available"
         )
     ranking = sorted(selected, key=rank_key, reverse=True)
     warnings: list[str] = []
@@ -186,68 +204,30 @@ def rank_run(
         )
     if excluded_loops and mode == "formal":
         warnings.append(
-            "WARNING: EXCLUDED NON-USABLE LOOPS — failed or incomplete loops "
-            "were not ranked: "
+            "WARNING: EXCLUDED NON-USABLE LOOPS — failed, incomplete, or "
+            "structurally invalid loops were not ranked: "
             + ", ".join(
-                f"{item['loop_id']} ({item['status']})"
+                f"{item['loop_id']} ({item['status']}: {item['reason']})"
                 for item in excluded_loops
             )
         )
-    top_three: list[dict[str, Any]] = []
-    portfolio_excluded: list[dict[str, Any]] = []
-    if cross_domain:
-        mechanism_counts: dict[str, int] = {}
-        portfolio_ranking: list[dict[str, Any]] = []
-        for entry in ranking:
-            mechanism = str(entry.get("normalized_central_mechanism", ""))
-            if mechanism and mechanism_counts.get(mechanism, 0) >= 2:
-                excluded = dict(entry)
-                excluded["portfolio_exclusion_reason"] = (
-                    "central_mechanism_cap_2"
-                )
-                portfolio_excluded.append(excluded)
-                continue
-            portfolio_ranking.append(entry)
-            if mechanism:
-                mechanism_counts[mechanism] = (
-                    mechanism_counts.get(mechanism, 0) + 1
-                )
-        ranking = portfolio_ranking
-        used_signatures: set[str] = set()
-        for entry in ranking:
-            signature = str(entry.get("normalized_transfer_signature", ""))
-            if not signature or signature in used_signatures:
-                continue
-            top_three.append(entry)
-            used_signatures.add(signature)
-            if len(top_three) == 3:
-                break
-        if len(top_three) < 3:
-            warnings.append(
-                f"WARNING: only {len(top_three)} qualified, transfer-distinct "
-                "cross-domain candidates are available; the top three were not "
-                "padded with unqualified or duplicate candidates."
+    if excluded_rounds:
+        warnings.append(
+            "WARNING: EXCLUDED INVALID COMMITTED ROUNDS — unreadable artifacts "
+            "or untyped reviewer marks were not ranked: "
+            + ", ".join(
+                f"{item['loop_id']} round {item['round']} ({item['reason']})"
+                for item in excluded_rounds
             )
-        top_ids = {
-            (entry["loop_id"], entry["round"]) for entry in top_three
-        }
-        ranking = [
-            *top_three,
-            *[
-                entry
-                for entry in ranking
-                if (entry["loop_id"], entry["round"]) not in top_ids
-            ],
-        ]
-    elif single_domain_qualification_enabled:
-        top_three = ranking[:3]
-        if len(top_three) < 3:
-            warnings.append(
-                f"WARNING: only {len(top_three)} qualified single-domain "
-                "candidates are available; the top three were not padded with "
-                "infeasible candidates."
-            )
-    elif single_domain_without_assessment:
+        )
+    top_three = ranking[:3]
+    if len(top_three) < 3:
+        kind = "cross-domain" if cross_domain else "single-domain"
+        warnings.append(
+            f"WARNING: only {len(top_three)} {kind} candidates with valid "
+            "committed rounds are available."
+        )
+    if single_domain_without_assessment:
         warnings.append(
             "WARNING: single-domain reviews do not contain idea_assessment; "
             "ranking used the no_assessment policy."
@@ -275,7 +255,9 @@ def rank_run(
         "user_intent": _run_user_intent(contexts),
         "marking_scheme": _representative_marking_scheme(contexts),
         "ranking": ranking,
+        "top_three": top_three,
         "excluded_loops": excluded_loops,
+        "excluded_rounds": excluded_rounds,
         "warnings": warnings,
     }
     if mode == "partial":
@@ -293,34 +275,49 @@ def rank_run(
                 ),
             }
         )
+        payload["portfolio_assessment"] = {
+            "status": "not_applicable",
+            "input_digest": None,
+            "ref": None,
+            "reason": "partial_ranking_uses_an_incomplete_frontier",
+        }
+    else:
+        payload["portfolio_assessment"] = load_portfolio_assessment(
+            run_root,
+            payload,
+        )
+        assessment_status = str(
+            payload["portfolio_assessment"].get("status", "missing")
+        )
+        if assessment_status != "available":
+            reason = str(
+                payload["portfolio_assessment"].get("reason", "") or ""
+            ).strip()
+            suffix = f" — {reason}" if reason else ""
+            warnings.append(
+                "WARNING: PORTFOLIO ASSESSMENT "
+                f"{assessment_status.upper()}{suffix}"
+            )
     if cross_domain:
         payload.update(
             {
                 "cross_domain": True,
-                "top_three": top_three,
-                "unqualified": unqualified,
-                "portfolio_excluded": portfolio_excluded,
                 "diagnostics": cross_diagnostics(
                     run_id,
                     ranking=ranking,
                     top_three=top_three,
-                    unqualified=unqualified,
-                    portfolio_excluded=portfolio_excluded,
                     warnings=warnings,
                 ),
             }
         )
-    elif single_domain_qualification_enabled:
+    elif single_domain_assessment_enabled:
         payload.update(
             {
-                "single_domain_qualification": True,
-                "top_three": top_three,
-                "unqualified": unqualified,
+                "single_domain_assessment": True,
                 "diagnostics": single_domain_diagnostics(
                     run_id,
                     ranking=ranking,
                     top_three=top_three,
-                    unqualified=unqualified,
                     warnings=warnings,
                 ),
             }
@@ -357,7 +354,11 @@ def normalized_review_marks(
     """Normalize one public review payload for quick and formal score views."""
     payload = review_payload(review)
     marks = payload.get("marks")
-    if not isinstance(marks, Mapping) or "total_score" not in marks:
+    fields = score_fields(scheme)
+    if not isinstance(marks, Mapping) or any(
+        not _is_finite_number(marks.get(field))
+        for field in fields
+    ):
         return None
     return normalized_marks(marks, scheme)
 
@@ -403,58 +404,64 @@ def _round_entry(
         None,
     )
     if proposer_id is None:
-        raise SystemExit(
-            f"committed round {committed.round_number} for {loop.loop_id} "
-            "has no configured proposer output"
-        )
-    proposer_output = _json_object(committed.proposals[proposer_id])
-    review = _json_object(committed.review)
+        raise _RoundExclusion("configured_proposer_artifact_is_missing")
+    raw_proposer_output = committed.proposals[proposer_id]
+    if not isinstance(raw_proposer_output, Mapping):
+        raise _RoundExclusion("invalid_proposer_artifact")
+    proposer_output = dict(raw_proposer_output)
+    if not isinstance(committed.review, Mapping):
+        raise _RoundExclusion("invalid_review_artifact")
+    review = dict(committed.review)
     payload = review_payload(review)
     marks = normalized_review_marks(review, scheme)
     if marks is None:
-        raise SystemExit(
-            f"committed round {committed.round_number} for {loop.loop_id} "
-            "has no valid reviewer marks"
-        )
+        raise _RoundExclusion("reviewer_marks_are_not_typed")
     title = proposer_output.get("title")
     if not isinstance(title, str) or not title.strip():
-        raise SystemExit(
-            f"committed round {committed.round_number} for {loop.loop_id} "
-            "has no proposal title"
-        )
+        raise _RoundExclusion("proposal_title_is_missing")
 
-    entry = {
-        "loop_id": loop.loop_id,
-        "round": committed.round_number,
-        "title": title.strip(),
-        "marks": marks,
-        "evidence_checked": _string_list(payload.get("evidence_checked")),
-        "tool_queries_used": _string_list(payload.get("tool_queries_used")),
-        "reviewer_limitations": _reviewer_limitations(payload),
-        "reviewer_benchmark": _reviewer_benchmark(payload),
-        "proposer_output": proposer_output,
-        "proposer_id": proposer_id,
-        "proposer_artifact": _safe_artifact_ref(
-            committed.proposal_refs[proposer_id]
-        ),
-        "review_artifact": _safe_artifact_ref(committed.review_ref),
-        "transcript_artifacts": [
-            _safe_artifact_ref(ref) for ref in committed.transcript_refs
-        ],
-        "marking_scheme": dict(scheme),
-    }
+    try:
+        entry = {
+            "loop_id": loop.loop_id,
+            "round": committed.round_number,
+            "title": title.strip(),
+            "marks": marks,
+            "evidence_checked": _string_list(payload.get("evidence_checked")),
+            "tool_queries_used": _string_list(payload.get("tool_queries_used")),
+            "reviewer_limitations": _reviewer_limitations(payload),
+            "reviewer_benchmark": _reviewer_benchmark(payload),
+            "proposer_output": proposer_output,
+            "proposer_id": proposer_id,
+            "proposer_artifact": _safe_artifact_ref(
+                committed.proposal_refs[proposer_id]
+            ),
+            "proposal_artifacts": {
+                worker_id: _safe_artifact_ref(ref)
+                for worker_id, ref in sorted(
+                    committed.proposal_refs.items()
+                )
+            },
+            "review_artifact": _safe_artifact_ref(committed.review_ref),
+            "transcript_artifacts": [
+                _safe_artifact_ref(ref) for ref in committed.transcript_refs
+            ],
+            "marking_scheme": dict(scheme),
+        }
+    except (AttributeError, KeyError, TypeError):
+        raise _RoundExclusion("invalid_artifact_reference") from None
     if cross_context is not None:
         assessment = payload.get("cross_domain_assessment", {})
-        qualified, reasons, signature, compatibility = cross_qualification(
-            proposer_output,
-            assessment,
-            marks,
-            cross_context=cross_context,
+        readiness, warnings, signature, compatibility = (
+            cross_scientific_readiness(
+                proposer_output,
+                assessment,
+                cross_context=cross_context,
+            )
         )
         entry.update(
             {
-                "qualified": qualified,
-                "qualification_reasons": reasons,
+                "scientific_readiness": readiness,
+                "scientific_warnings": warnings,
                 "cross_domain_assessment": (
                     assessment if isinstance(assessment, dict) else {}
                 ),
@@ -469,28 +476,34 @@ def _round_entry(
         )
     elif single_context is not None:
         assessment = payload.get("idea_assessment")
-        if (
-            single_context.get("requires_idea_assessment") is True
-            or isinstance(assessment, Mapping)
-        ):
-            qualified, reasons, feasibility = single_domain_qualification(
-                assessment
-            )
-            entry.update(
-                {
-                    "qualified": qualified,
-                    "qualification_policy": (
-                        "single_domain_feasibility_gate"
-                    ),
-                    "qualification_reasons": reasons,
-                    "idea_assessment": (
-                        assessment if isinstance(assessment, dict) else {}
-                    ),
-                    "feasibility_classification": feasibility,
-                }
-            )
-        else:
-            entry["qualification_policy"] = "single_domain_no_assessment"
+        readiness, warnings, feasibility = (
+            single_domain_scientific_readiness(assessment)
+        )
+        entry.update(
+            {
+                "scientific_readiness": readiness,
+                "scientific_warnings": warnings,
+                "scientific_readiness_policy": (
+                    "reviewer_assessment_diagnostic"
+                    if (
+                        single_context.get("requires_idea_assessment") is True
+                        or isinstance(assessment, Mapping)
+                    )
+                    else "single_domain_no_assessment"
+                ),
+                "idea_assessment": (
+                    assessment if isinstance(assessment, dict) else {}
+                ),
+                "feasibility_classification": feasibility,
+            }
+        )
+    else:
+        entry.update(
+            {
+                "scientific_readiness": "unassessed",
+                "scientific_warnings": ["missing_idea_assessment"],
+            }
+        )
     return entry
 
 
@@ -585,10 +598,6 @@ def _exclusion_reason(loop_inspection: Any) -> str:
     return f"loop_lifecycle_{loop_inspection.lifecycle}"
 
 
-def _json_object(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, Mapping) else {}
-
-
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -597,6 +606,14 @@ def _string_list(value: Any) -> list[str]:
         for item in value
         if isinstance(item, str) and item.strip()
     ]
+
+
+def _is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
 
 
 def _reviewer_limitations(payload: Mapping[str, Any]) -> list[str]:
@@ -614,6 +631,7 @@ def _reviewer_limitations(payload: Mapping[str, Any]) -> list[str]:
             (
                 "blocking_compatibility_failures",
                 "manageable_compatibility_risks",
+                "critical_concerns",
                 "disqualifying_reasons",
             ),
         ),

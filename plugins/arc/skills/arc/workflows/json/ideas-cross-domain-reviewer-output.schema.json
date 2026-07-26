@@ -22,7 +22,7 @@
         "blocking_compatibility_failures",
         "manageable_compatibility_risks",
         "novelty_coverage",
-        "disqualifying_reasons",
+        "critical_concerns",
         "recommended_action",
         "transfer_signature"
       ],
@@ -53,7 +53,11 @@
             "intersection": {"type": "boolean"}
           }
         },
-        "disqualifying_reasons": {"type": "array", "items": {"type": "string"}},
+        "critical_concerns": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Substantive scientific concerns for revision and visible reporting. These concerns are advisory and never remove the candidate from ranking."
+        },
         "recommended_action": {"type": "string", "enum": ["refine_current", "rebuild_bridge", "replace_idea"]},
         "transfer_signature": {
           "type": "object",

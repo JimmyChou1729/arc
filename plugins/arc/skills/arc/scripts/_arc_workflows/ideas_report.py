@@ -33,80 +33,70 @@ SINGLE_REPORT_COLUMNS = [
 ]
 
 
+def _readiness_counts(
+    candidates: list[dict[str, Any]],
+) -> dict[str, int]:
+    states = ("ready", "ready_with_risk", "not_ready", "unassessed")
+    return {
+        f"{state}_count": sum(
+            candidate.get("scientific_readiness") == state
+            for candidate in candidates
+        )
+        for state in states
+    }
+
+
 def cross_diagnostics(
     run_id: str,
     *,
     ranking: list[dict[str, Any]],
     top_three: list[dict[str, Any]],
-    unqualified: list[dict[str, Any]],
-    portfolio_excluded: list[dict[str, Any]],
     warnings: list[str],
 ) -> dict[str, Any]:
+    """Build non-gating v2 cross-domain diagnostics."""
     top_keys = {(entry["loop_id"], entry["round"]) for entry in top_three}
-    candidates = []
-    for qualified, entries in ((True, ranking), (False, unqualified)):
-        for entry in entries:
-            candidates.append(
-                {
-                    "loop_id": entry["loop_id"],
-                    "round": entry["round"],
-                    "title": entry["title"],
-                    "qualified": qualified,
-                    "qualification_reasons": entry.get(
-                        "qualification_reasons", []
-                    ),
-                    "compatibility_classification": entry.get(
-                        "compatibility_classification", {}
-                    ),
-                    "transfer_signature": entry.get(
-                        "normalized_transfer_signature", ""
-                    ),
-                    "central_mechanism": entry.get(
-                        "normalized_central_mechanism", ""
-                    ),
-                    "top_three": (
-                        entry["loop_id"],
-                        entry["round"],
-                    )
-                    in top_keys,
-                    "marks": entry["marks"],
-                }
+    candidates = [
+        {
+            "loop_id": entry["loop_id"],
+            "round": entry["round"],
+            "title": entry["title"],
+            "scientific_readiness": entry.get(
+                "scientific_readiness", "unassessed"
+            ),
+            "scientific_warnings": entry.get("scientific_warnings", []),
+            "compatibility_classification": entry.get(
+                "compatibility_classification", {}
+            ),
+            "transfer_signature": entry.get(
+                "normalized_transfer_signature", ""
+            ),
+            "central_mechanism": entry.get(
+                "normalized_central_mechanism", ""
+            ),
+            "top_three": (
+                entry["loop_id"],
+                entry["round"],
             )
-    for entry in portfolio_excluded:
-        candidates.append(
-            {
-                "loop_id": entry["loop_id"],
-                "round": entry["round"],
-                "title": entry["title"],
-                "qualified": True,
-                "portfolio_excluded": True,
-                "portfolio_exclusion_reason": entry[
-                    "portfolio_exclusion_reason"
-                ],
-                "qualification_reasons": entry.get(
-                    "qualification_reasons", []
-                ),
-                "transfer_signature": entry.get(
-                    "normalized_transfer_signature", ""
-                ),
-                "central_mechanism": entry.get(
-                    "normalized_central_mechanism", ""
-                ),
-                "top_three": False,
-                "marks": entry["marks"],
-            }
-        )
+            in top_keys,
+            "marks": entry["marks"],
+        }
+        for entry in ranking
+    ]
     return {
-        "schema_version": "arc.ideas.cross_domain_diagnostics.v1",
+        "schema_version": "arc.ideas.cross_domain_diagnostics.v2",
         "run_id": run_id,
-        "qualified_count": len(ranking),
-        "unqualified_count": len(unqualified),
-        "portfolio_excluded_count": len(portfolio_excluded),
+        "candidate_count": len(ranking),
+        **_readiness_counts(candidates),
         "top_three_count": len(top_three),
-        "distinct_qualified_transfer_signatures": len(
+        "distinct_transfer_signatures": len(
             {
-                entry.get("normalized_transfer_signature", "")
+                signature
                 for entry in ranking
+                if (
+                    signature := entry.get(
+                        "normalized_transfer_signature", ""
+                    )
+                )
             }
         ),
         "warnings": warnings,
@@ -119,52 +109,53 @@ def single_domain_diagnostics(
     *,
     ranking: list[dict[str, Any]],
     top_three: list[dict[str, Any]],
-    unqualified: list[dict[str, Any]],
     warnings: list[str],
 ) -> dict[str, Any]:
+    """Build non-gating v2 single-domain diagnostics."""
     top_keys = {(entry["loop_id"], entry["round"]) for entry in top_three}
     candidates = []
-    for qualified, entries in ((True, ranking), (False, unqualified)):
-        for entry in entries:
-            assessment = entry.get("idea_assessment", {})
-            candidates.append(
-                {
-                    "loop_id": entry["loop_id"],
-                    "round": entry["round"],
-                    "title": entry["title"],
-                    "qualified": qualified,
-                    "qualification_policy": entry.get(
-                        "qualification_policy", ""
-                    ),
-                    "qualification_reasons": entry.get(
-                        "qualification_reasons", []
-                    ),
-                    "problem_importance": (
-                        assessment.get("problem_importance", "")
-                        if isinstance(assessment, Mapping)
-                        else ""
-                    ),
-                    "importance_rationale": (
-                        assessment.get("importance_rationale", "")
-                        if isinstance(assessment, Mapping)
-                        else ""
-                    ),
-                    "feasibility_classification": entry.get(
-                        "feasibility_classification", {}
-                    ),
-                    "top_three": (
-                        entry["loop_id"],
-                        entry["round"],
-                    )
-                    in top_keys,
-                    "marks": entry["marks"],
-                }
-            )
+    for entry in ranking:
+        assessment = entry.get("idea_assessment", {})
+        candidates.append(
+            {
+                "loop_id": entry["loop_id"],
+                "round": entry["round"],
+                "title": entry["title"],
+                "scientific_readiness": entry.get(
+                    "scientific_readiness", "unassessed"
+                ),
+                "scientific_warnings": entry.get(
+                    "scientific_warnings", []
+                ),
+                "scientific_readiness_policy": entry.get(
+                    "scientific_readiness_policy", ""
+                ),
+                "problem_importance": (
+                    assessment.get("problem_importance", "")
+                    if isinstance(assessment, Mapping)
+                    else ""
+                ),
+                "importance_rationale": (
+                    assessment.get("importance_rationale", "")
+                    if isinstance(assessment, Mapping)
+                    else ""
+                ),
+                "feasibility_classification": entry.get(
+                    "feasibility_classification", {}
+                ),
+                "top_three": (
+                    entry["loop_id"],
+                    entry["round"],
+                )
+                in top_keys,
+                "marks": entry["marks"],
+            }
+        )
     return {
-        "schema_version": "arc.ideas.single_domain_diagnostics.v1",
+        "schema_version": "arc.ideas.single_domain_diagnostics.v2",
         "run_id": run_id,
-        "qualified_count": len(ranking),
-        "unqualified_count": len(unqualified),
+        "candidate_count": len(ranking),
+        **_readiness_counts(candidates),
         "top_three_count": len(top_three),
         "warnings": warnings,
         "candidates": candidates,
@@ -187,7 +178,7 @@ def markdown_table(payload: dict[str, Any]) -> str:
                 "",
             ]
         )
-    if payload.get("warnings"):
+    if payload.get("warnings") and payload.get("mode") == "partial":
         lines.extend(
             [
                 "# Ranking Warnings",
@@ -205,60 +196,6 @@ def markdown_table(payload: dict[str, Any]) -> str:
     )
     for entry in payload["ranking"]:
         lines.extend(["", *_appendix_section(entry)])
-    if payload.get("cross_domain"):
-        lines.extend(
-            ["", "# Appendix: Unqualified Cross-Domain Candidates"]
-        )
-        if not payload.get("unqualified"):
-            lines.extend(["", "None."])
-        for entry in payload.get("unqualified", []):
-            lines.extend(
-                [
-                    "",
-                    f"## `{entry['loop_id']}` — {_heading_text(entry['title'])}",
-                    "",
-                    f"- Best observed round: `{entry['round']}`",
-                    *_partial_metadata_lines(entry),
-                    *_formal_qualification_lines(entry),
-                ]
-            )
-        lines.extend(
-            [
-                "",
-                "# Appendix: Portfolio-Excluded Cross-Domain Candidates",
-            ]
-        )
-        if not payload.get("portfolio_excluded"):
-            lines.extend(["", "None."])
-        for entry in payload.get("portfolio_excluded", []):
-            lines.extend(
-                [
-                    "",
-                    f"## `{entry['loop_id']}` — {_heading_text(entry['title'])}",
-                    "",
-                    f"- Selected round: `{entry['round']}`",
-                    f"- Exclusion: `{entry['portfolio_exclusion_reason']}`",
-                    *_partial_metadata_lines(entry),
-                    *_formal_qualification_lines(entry),
-                ]
-            )
-    elif payload.get("single_domain_qualification"):
-        lines.extend(
-            ["", "# Appendix: Unqualified Single-Domain Candidates"]
-        )
-        if not payload.get("unqualified"):
-            lines.extend(["", "None."])
-        for entry in payload.get("unqualified", []):
-            lines.extend(
-                [
-                    "",
-                    f"## `{entry['loop_id']}` — {_heading_text(entry['title'])}",
-                    "",
-                    f"- Best observed round: `{entry['round']}`",
-                    *_partial_metadata_lines(entry),
-                    *_formal_qualification_lines(entry),
-                ]
-            )
     return "\n".join(lines)
 
 
@@ -273,15 +210,16 @@ def _summary_table(payload: dict[str, Any]) -> str:
     )
     lines = [
         (
-            "## Provisional Qualified Ideas"
+            "## Provisional Ideas"
             if payload.get("mode") == "partial"
             else "# Ideas"
         ),
         "",
-        "Abbreviations:",
-        "",
-        f"{abbreviations}.",
     ]
+    portfolio = _portfolio_assessment_lines(payload)
+    if portfolio:
+        lines.extend([*portfolio, ""])
+    lines.extend(["Abbreviations:", "", f"{abbreviations}."])
     for warning in payload.get("warnings", []):
         lines.extend(["", str(warning)])
     for entry in payload.get("ranking", []):
@@ -298,6 +236,8 @@ def _round_marks_summary_section(entry: dict[str, Any]) -> list[str]:
         _heading_text(entry["title"]),
         "",
         *_partial_metadata_lines(entry),
+        *_scientific_caveat_lines(entry),
+        "",
         _compact_round_marks_table(entry),
     ]
 
@@ -325,16 +265,23 @@ def _compact_round_marks_table(entry: dict[str, Any]) -> str:
 def _cross_summary_table(payload: dict[str, Any]) -> str:
     lines = [
         (
-            "## Provisional Qualified Ideas"
+            "## Provisional Ideas"
             if payload.get("mode") == "partial"
             else "# Ideas"
         ),
         "",
-        "Abbreviations:",
-        "",
-        "IR=intent relevance, TR=transfer quality, TC=target contribution, N=novelty, "
-        "CN=confidence of novelty, SV=scientific value, F=feasibility, WD=well-definedness, T=total.",
     ]
+    portfolio = _portfolio_assessment_lines(payload)
+    if portfolio:
+        lines.extend([*portfolio, ""])
+    lines.extend(
+        [
+            "Abbreviations:",
+            "",
+            "IR=intent relevance, TR=transfer quality, TC=target contribution, N=novelty, "
+            "CN=confidence of novelty, SV=scientific value, F=feasibility, WD=well-definedness, T=total.",
+        ]
+    )
     for warning in payload.get("warnings", []):
         lines.extend(["", str(warning)])
     for entry in payload.get("ranking", []):
@@ -351,8 +298,152 @@ def _round_marks_summary_section_cross(
         _heading_text(entry["title"]),
         "",
         *_partial_metadata_lines(entry),
+        *_scientific_caveat_lines(entry),
+        "",
         _compact_cross_marks_table(entry),
     ]
+
+
+def _portfolio_assessment_lines(
+    payload: Mapping[str, Any],
+) -> list[str]:
+    if payload.get("mode") == "partial":
+        return []
+    raw = payload.get("portfolio_assessment")
+    if not isinstance(raw, Mapping):
+        return []
+    status = str(raw.get("status", "missing")).strip() or "missing"
+    lines = [
+        "## Global Scientific Assessment (Advisory)",
+        "",
+        (
+            "This portfolio-level assessment is non-binding. It does not "
+            "change any referee mark, selected round, formal rank, top-three "
+            "membership, or candidate visibility."
+        ),
+        "",
+    ]
+    content = raw.get("content")
+    if status != "available" or not isinstance(content, Mapping):
+        reason = str(raw.get("reason", "") or "").strip()
+        detail = f" — {reason}" if reason else ""
+        lines.append(f"> Assessment status: `{status}`{detail}")
+        return lines
+
+    overall = str(
+        content.get("overall_assessment", "") or ""
+    ).strip()
+    if overall:
+        lines.extend([_math_markdown_text(overall), ""])
+
+    findings = content.get("cross_candidate_findings")
+    if isinstance(findings, list) and findings:
+        lines.extend(["### Cross-Candidate Findings", ""])
+        for finding in findings:
+            if not isinstance(finding, Mapping):
+                continue
+            topic = str(finding.get("topic", "") or "").strip()
+            text = str(finding.get("finding", "") or "").strip()
+            candidate_ids = finding.get("candidate_ids")
+            ids = (
+                [
+                    str(candidate_id).strip()
+                    for candidate_id in candidate_ids
+                    if str(candidate_id).strip()
+                ]
+                if isinstance(candidate_ids, list)
+                else []
+            )
+            scope = (
+                ", ".join(f"`{candidate_id}`" for candidate_id in ids)
+                if ids
+                else "portfolio-wide"
+            )
+            if topic and text:
+                lines.append(
+                    f"- **{topic}** ({scope}): {_math_markdown_text(text)}"
+                )
+        lines.append("")
+
+    notes = content.get("candidate_notes")
+    if isinstance(notes, list) and notes:
+        lines.extend(["### Candidate Notes", ""])
+        for note in notes:
+            if not isinstance(note, Mapping):
+                continue
+            candidate_id = str(
+                note.get("candidate_id", "") or ""
+            ).strip()
+            text = str(note.get("note", "") or "").strip()
+            if candidate_id and text:
+                lines.append(
+                    f"- `{candidate_id}`: {_math_markdown_text(text)}"
+                )
+        lines.append("")
+
+    directions = content.get("missing_or_underrepresented_directions")
+    if isinstance(directions, list) and directions:
+        lines.extend(
+            ["### Missing or Underrepresented Directions", ""]
+        )
+        for direction in directions:
+            if not isinstance(direction, Mapping):
+                continue
+            name = str(direction.get("direction", "") or "").strip()
+            rationale = str(direction.get("rationale", "") or "").strip()
+            first = str(
+                direction.get("minimal_first_calculation", "") or ""
+            ).strip()
+            assessment_status = str(
+                direction.get("assessment_status", "") or ""
+            ).strip()
+            if name:
+                lines.append(f"- **{name}**")
+                if rationale:
+                    lines.append(
+                        f"  - Rationale: {_math_markdown_text(rationale)}"
+                    )
+                if first:
+                    lines.append(
+                        "  - Minimal first calculation: "
+                        + _math_markdown_text(first)
+                    )
+                if assessment_status:
+                    lines.append(
+                        f"  - Status: `{assessment_status}`"
+                    )
+        lines.append("")
+
+    strategy = content.get("research_strategy")
+    if isinstance(strategy, list) and strategy:
+        lines.extend(
+            [
+                "### Research Strategy",
+                "",
+                *[
+                    f"- {_math_markdown_text(str(item).strip())}"
+                    for item in strategy
+                    if str(item).strip()
+                ],
+                "",
+            ]
+        )
+    limitations = content.get("limitations")
+    if isinstance(limitations, list) and limitations:
+        lines.extend(
+            [
+                "### Portfolio-Assessment Limitations",
+                "",
+                *[
+                    f"- {_math_markdown_text(str(item).strip())}"
+                    for item in limitations
+                    if str(item).strip()
+                ],
+            ]
+        )
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 def _compact_cross_marks_table(entry: dict[str, Any]) -> str:
@@ -392,6 +483,10 @@ def _appendix_section(entry: dict[str, Any]) -> list[str]:
         "#### Referee Marks by Round",
         "",
         _round_marks_table(entry),
+        "",
+        "#### Scientific Readiness and Caveats",
+        "",
+        *_scientific_caveat_lines(entry),
         *_scientific_taste_section(entry),
         "",
         "#### Focused Novelty Audit",
@@ -454,12 +549,11 @@ def _scientific_taste_section(entry: Mapping[str, Any]) -> list[str]:
 def _representative_single_entry(
     payload: Mapping[str, Any],
 ) -> Mapping[str, Any] | None:
-    for field in ("ranking", "unqualified"):
-        entries = payload.get(field)
-        if isinstance(entries, list):
-            for entry in entries:
-                if isinstance(entry, Mapping):
-                    return entry
+    entries = payload.get("ranking")
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, Mapping):
+                return entry
     scheme = payload.get("marking_scheme")
     if isinstance(scheme, Mapping):
         return {"marking_scheme": scheme}
@@ -506,28 +600,32 @@ def _partial_metadata_lines(entry: Mapping[str, Any]) -> list[str]:
         if pause_reason
         else "- Pause reason: none recorded"
     )
-    failures = entry.get("qualification_reasons")
-    lines.append(
-        "- Qualification failures: "
-        + (
-            ", ".join(str(reason) for reason in failures)
-            if isinstance(failures, list) and failures
-            else "none"
-        )
-    )
     return [*lines, ""]
 
 
-def _formal_qualification_lines(entry: Mapping[str, Any]) -> list[str]:
-    if "committed_round_count" in entry:
-        return []
-    return [
-        "- Qualification failures:",
-        *[
-            f"  - {reason}"
-            for reason in entry.get("qualification_reasons", [])
-        ],
+def _scientific_caveat_lines(entry: Mapping[str, Any]) -> list[str]:
+    readiness = str(
+        entry.get("scientific_readiness", "unassessed")
+    ).strip() or "unassessed"
+    warning_values = entry.get("scientific_warnings")
+    warnings = (
+        [
+            str(warning).strip()
+            for warning in warning_values
+            if str(warning).strip()
+        ]
+        if isinstance(warning_values, list)
+        else []
+    )
+    lines = [
+        f"- Scientific readiness: `{readiness}`",
+        "- Scientific caveats:",
     ]
+    if warnings:
+        lines.extend(f"  - {warning}" for warning in warnings)
+    else:
+        lines.append("  - None recorded.")
+    return lines
 
 
 def _round_marks_table(entry: dict[str, Any]) -> str:
