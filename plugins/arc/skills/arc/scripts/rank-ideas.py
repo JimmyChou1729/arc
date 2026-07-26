@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+sys.dont_write_bytecode = True
 
 from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 

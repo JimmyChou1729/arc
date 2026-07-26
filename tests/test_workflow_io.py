@@ -9,11 +9,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/arc/skills/arc/scripts"
+old_dont_write_bytecode = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(SCRIPTS))
 try:
     from _arc_workflows import workflow_io
 finally:
     sys.path.remove(str(SCRIPTS))
+    sys.dont_write_bytecode = old_dont_write_bytecode
 
 
 def test_json_object_reader_requires_an_object_root(tmp_path: Path) -> None:

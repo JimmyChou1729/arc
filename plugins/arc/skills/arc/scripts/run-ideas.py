@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
+sys.dont_write_bytecode = True
+
 from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 
 bootstrap_arc_pythonpath()

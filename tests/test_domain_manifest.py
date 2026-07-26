@@ -25,6 +25,8 @@ GROUPING_SCHEMA = (
 DOMAIN_STATE = Path(".arc") / "domain"
 DOMAIN_PACKAGES = DOMAIN_STATE / "packages"
 
+old_dont_write_bytecode = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(SCRIPTS))
 try:
     from _arc_workflows import (
@@ -34,6 +36,7 @@ try:
     )
 finally:
     sys.path.remove(str(SCRIPTS))
+    sys.dont_write_bytecode = old_dont_write_bytecode
 
 
 def _plain_json(value):

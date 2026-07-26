@@ -6,6 +6,8 @@ import json
 import sys
 from typing import Any
 
+sys.dont_write_bytecode = True
+
 from _arc_workflows.project_paths import (
     ProjectDirError,
     resolve_project_dir,

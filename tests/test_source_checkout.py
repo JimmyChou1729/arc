@@ -8,11 +8,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/arc/skills/arc/scripts"
+old_dont_write_bytecode = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(SCRIPTS))
 try:
     from _arc_workflows.source_checkout import validate_strict_checkout_path
 finally:
     sys.path.remove(str(SCRIPTS))
+    sys.dont_write_bytecode = old_dont_write_bytecode
 
 
 def test_checkout_path_policy_is_inactive_without_required_root(

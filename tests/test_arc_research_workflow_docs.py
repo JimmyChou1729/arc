@@ -1854,6 +1854,26 @@ def test_arc_skill_tree_contains_no_python_bytecode() -> None:
     assert bad_paths == []
 
 
+def test_arc_workflow_helpers_disable_bytecode_writes() -> None:
+    scripts = PLUGIN / "skills" / "arc" / "scripts"
+    package_init = (scripts / "_arc_workflows" / "__init__.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "sys.dont_write_bytecode = True" in package_init
+    for script in scripts.glob("*.py"):
+        source = script.read_text(encoding="utf-8")
+        workflow_imports = [
+            index
+            for statement in ("from _arc_workflows", "import _arc_workflows")
+            if (index := source.find(statement)) >= 0
+        ]
+        if workflow_imports:
+            assert 0 <= source.find("sys.dont_write_bytecode = True") < min(
+                workflow_imports
+            ), script
+
+
 def test_generated_python_caches_are_ignored_for_release_artifacts() -> None:
     text = (ROOT / ".gitignore").read_text(encoding="utf-8")
 

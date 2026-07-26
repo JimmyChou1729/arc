@@ -68,11 +68,14 @@ def _single_scheme() -> dict[str, Any]:
 
 
 def test_formal_normalization_rejects_missing_or_non_object_marks() -> None:
+    old_dont_write_bytecode = sys.dont_write_bytecode
     old_path = list(sys.path)
+    sys.dont_write_bytecode = True
     sys.path.insert(0, str(SCRIPT.parent))
     try:
         from _arc_workflows.ideas_ranking import normalized_review_marks
     finally:
+        sys.dont_write_bytecode = old_dont_write_bytecode
         sys.path[:] = old_path
 
     assert normalized_review_marks({"payload": {}}, _single_scheme()) is None
@@ -98,13 +101,16 @@ def test_report_normalizes_latex_delimiters_without_mangling_commands() -> None:
 
 
 def test_compatibility_classification_requires_current_fields() -> None:
+    old_dont_write_bytecode = sys.dont_write_bytecode
     old_path = list(sys.path)
+    sys.dont_write_bytecode = True
     sys.path.insert(0, str(SCRIPT.parent))
     try:
         from _arc_workflows.ideas_policy import (
             compatibility_classification,
         )
     finally:
+        sys.dont_write_bytecode = old_dont_write_bytecode
         sys.path[:] = old_path
 
     with pytest.raises(
@@ -136,11 +142,14 @@ def test_scientific_status_is_separate_from_durable_lifecycle(
     trace_verified: bool,
     expected: str,
 ) -> None:
+    old_dont_write_bytecode = sys.dont_write_bytecode
     old_path = list(sys.path)
+    sys.dont_write_bytecode = True
     sys.path.insert(0, str(SCRIPT.parent))
     try:
         from _arc_workflows.ideas_policy import scientific_run_status
     finally:
+        sys.dont_write_bytecode = old_dont_write_bytecode
         sys.path[:] = old_path
 
     assert (

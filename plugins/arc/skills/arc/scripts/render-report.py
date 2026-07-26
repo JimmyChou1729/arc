@@ -8,6 +8,8 @@ import json
 import subprocess
 import sys
 
+sys.dont_write_bytecode = True
+
 from _arc_workflows.report_delivery import render_markdown_pdf
 
 

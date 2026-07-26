@@ -53,10 +53,13 @@ def _load_rank_module():
     spec = importlib.util.spec_from_file_location("rank_ideas_delivery", RANK_SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    old_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
     sys.path.insert(0, str(RANK_SCRIPT.parent))
     try:
         spec.loader.exec_module(module)
     finally:
+        sys.dont_write_bytecode = old_dont_write_bytecode
         sys.path.remove(str(RANK_SCRIPT.parent))
     return module
 
@@ -105,10 +108,13 @@ def test_report_delivery_refuses_hidden_output(tmp_path: Path) -> None:
 
 
 def test_visible_copy_refuses_non_pdf_delivery(tmp_path: Path) -> None:
+    old_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
     sys.path.insert(0, str(RANK_SCRIPT.parent))
     try:
         from _arc_workflows.report_delivery import publish_visible_copy
     finally:
+        sys.dont_write_bytecode = old_dont_write_bytecode
         sys.path.remove(str(RANK_SCRIPT.parent))
 
     project = tmp_path / "project"
