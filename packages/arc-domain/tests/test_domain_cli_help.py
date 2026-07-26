@@ -44,3 +44,12 @@ def test_usage_error_points_to_contextual_help(
     assert result["error"]["details"] == {
         "help_command": "arc-domain status --help"
     }
+
+
+def test_build_help_describes_policy_as_inline_complete_json(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["build", "--help"]) == 0
+    output = capsys.readouterr().out
+    assert "inline complete domain-build policy JSON object" in output
+    assert "path to a domain-build policy" not in output

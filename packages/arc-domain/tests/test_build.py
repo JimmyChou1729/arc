@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from arc_domain.contracts import (
     encode_domain_build_request,
 )
 from arc_jobs import (
+    EventWriter,
     ImmutableArtifactStore,
     ResumeReason,
     RunRepository,
@@ -40,6 +42,7 @@ SEED = "arXiv:2401.00001"
 FOUNDATION = "arXiv:2001.00001"
 DOMAIN_PAPER = "arXiv:2501.00001"
 EXTRA_PARENT = "arXiv:1901.00001"
+SECOND_CITER = "arXiv:2502.00002"
 
 
 def _metadata(paper_id: str, *, title: str, year: int, citations: int) -> dict:
@@ -103,6 +106,28 @@ class FakePaperAccess:
                 }
             ],
         }
+
+
+class DisjointCiterPaperAccess(FakePaperAccess):
+    def __init__(self) -> None:
+        super().__init__()
+        self.metadata_by_id[DOMAIN_PAPER]["published"] = "2025-01-15"
+        self.metadata_by_id[SECOND_CITER] = _metadata(
+            SECOND_CITER,
+            title="Independent recent method",
+            year=2025,
+            citations=5,
+        )
+        self.metadata_by_id[SECOND_CITER]["published"] = "2025-02-15"
+
+    def citers(self, paper_id: str, *, limit: int, sort: str) -> list[dict]:
+        self.calls.append(("citers", paper_id, limit, sort))
+        if paper_id == SEED:
+            return [dict(self.metadata_by_id[DOMAIN_PAPER])]
+        if paper_id == FOUNDATION:
+            selected = DOMAIN_PAPER if sort == "mostrecent" else SECOND_CITER
+            return [dict(self.metadata_by_id[selected])]
+        return []
 
 
 class FakeTaskService:
@@ -461,6 +486,7 @@ def test_complete_build_is_durable_bounded_and_uses_optional_summary_fallback(
     assert {warning.code for warning in result.warnings} == {
         "conclusion_section_unavailable",
         "domain_summary_unavailable",
+        "recency_date_precision_limited",
     }
     store = ImmutableArtifactStore(
         repository.run_directory(snapshot.run_id), repository_root=repository.root
@@ -474,6 +500,59 @@ def test_complete_build_is_durable_bounded_and_uses_optional_summary_fallback(
     }
     assert ("citers", FOUNDATION, 10, "mostrecent") in paper.calls
     assert ("citers", FOUNDATION, 10, "mostcited") in paper.calls
+    events = EventWriter(
+        repository.run_directory(snapshot.run_id) / "events.jsonl",
+        run_id=snapshot.run_id,
+    ).tail()
+    stages = {
+        event["data"]["stage"]
+        for event in events
+        if event.get("event") == "domain_operation_started"
+    }
+    assert stages == {
+        "foundation",
+        "network",
+        "paper_acquisition",
+        "summary",
+        "render",
+        "finalize",
+    }
+
+
+def test_representative_recency_stats_cover_union_before_pool_limit(
+    tmp_path: Path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs-root")
+    base = _request()
+    request = replace(
+        base,
+        policy=replace(
+            base.policy,
+            citer_pool_limit=1,
+            ranked_paper_limit=1,
+        ),
+    )
+
+    snapshot = DomainBuildRunner(repository).execute(
+        request,
+        paper_access=DisjointCiterPaperAccess(),
+        task_service=FakeTaskService(),
+        reference_service=NoReferenceInference(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    store = ImmutableArtifactStore(
+        repository.run_directory(snapshot.run_id),
+        repository_root=repository.root,
+    )
+    network_input_ref = store.find("network/input")
+    assert network_input_ref is not None
+    network_input = json.loads(
+        store.read_bytes(network_input_ref).decode("utf-8")
+    )
+    assert len(network_input["citer_pool"]) == 1
+    assert network_input["candidate_recency"]["unique_citers"] == 2
+    assert network_input["candidate_recency"]["exact_date_citers"] == 2
 
 
 def test_paused_network_replays_completed_foundation_and_resumes_same_run(

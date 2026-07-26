@@ -45,6 +45,7 @@ from .build import validate_domain_build_workers
 from .catalog import DomainPublicationError, publish_domain_result, read_domain_catalog
 from .fetch import DomainPaperAccess
 from .paths import DomainPaths
+from .progress import project_domain_progress
 
 
 class _UsageError(ValueError):
@@ -89,7 +90,10 @@ def _parser() -> _Parser:
     )
     build.add_argument("seed_paper", help="seed paper identifier")
     build.add_argument("--intent", default="", help="research intent used to focus the build")
-    build.add_argument("--policy", help="path to a domain-build policy JSON document")
+    build.add_argument(
+        "--policy",
+        help="inline complete domain-build policy JSON object",
+    )
     build.add_argument("--recent-window-days", type=int, help="override the recent-paper window")
     build.add_argument("--citer-pool-limit", type=int, help="override the citer candidate limit")
     build.add_argument("--ranked-paper-limit", type=int, help="override the ranked-paper limit")
@@ -380,6 +384,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
         snapshot = repository.inspect(catalog.latest).snapshot
     base = command_result_from_snapshot(snapshot, query=True)
     data = dict(base.data)
+    data["progress"] = project_domain_progress(repository, snapshot)
     if domain_id is not None:
         data["domain"] = {
             "id": domain_id,

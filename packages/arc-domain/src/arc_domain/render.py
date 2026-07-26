@@ -39,6 +39,8 @@ def _render(graph: Mapping[str, Any]) -> str:
     ranked_rows = "\n".join(_ranked_row(node) for node in sorted(nodes, key=_node_rank_key))
     node_count = len(nodes)
     edge_count = len(edges)
+    recency_summary = _recency_summary(graph)
+    recency_warning = _recency_warning(graph)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -65,6 +67,7 @@ body {{ margin:0; font-family: Arial, sans-serif; color:#1f2933; background:#eef
 header {{ padding:14px 20px; background:#ffffff; border-bottom:1px solid #d6dde7; }}
 h1 {{ margin:0; font-size:20px; font-weight:700; }}
 .meta {{ margin-top:4px; color:#5f6b7a; font-size:13px; }}
+.warning {{ margin-top:8px; color:#854d0e; background:#fefce8; border:1px solid #fde68a; border-radius:5px; padding:6px 9px; font-size:12px; }}
 .layout {{ display:grid; grid-template-columns:minmax(580px, 1fr) 560px; min-height:calc(100vh - 65px); }}
 .graph-wrap {{ position:relative; background:#ffffff; min-height:calc(100vh - 65px); overflow:hidden; }}
 #mynetwork {{ width:100%; height:calc(100vh - 65px); min-height:560px; background:radial-gradient(circle at 50% 42%, #ffffff 0%, #f8fafc 58%, #edf2f7 100%); }}
@@ -97,7 +100,8 @@ a {{ color:#2563eb; }}
 <body>
 <header>
   <h1>ARC Domain Network</h1>
-  <div class="meta">Foundation: {html.escape(str(graph.get("foundation_paper") or ""))} | Nodes: {node_count} | Edges: {edge_count}</div>
+  <div class="meta">Foundation: {html.escape(str(graph.get("foundation_paper") or ""))} | Nodes: {node_count} | Edges: {edge_count}{html.escape(recency_summary)}</div>
+  {recency_warning}
 </header>
 <div class="layout">
 <div class="graph-wrap">
@@ -268,6 +272,7 @@ a {{ color:#2563eb; }}
       <div class="muted">Authors: ${{escapeHtml(formatAuthors(node.authors))}}</div>
       <p>${{escapeHtml((node.abstract || '').slice(0, 1000))}}</p>
       <div class="muted">Year: ${{node.year || ''}} | Citations: ${{node.citation_count || 0}}${{scoreText(node)}}</div>
+      ${{publicDateText(node)}}
       ${{domainScoreDetails(node)}}
       ${{paperLink(node)}}`;
     typesetMath(details);
@@ -281,6 +286,13 @@ a {{ color:#2563eb; }}
   function domainScoreDetails(node) {{
     if (node.role !== 'domain_paper') return '';
     return `<div class="muted">Citation/year: ${{node.citation_per_year || ''}} | Graph citers: ${{node.in_graph_citer_count || 0}} | Ref edges: ${{node.reference_edge_count || 0}} | Intent overlap: ${{node.intent_overlap || ''}}</div>`;
+  }}
+
+  function publicDateText(node) {{
+    if (!node.first_public_date) return '';
+    const precision = node.first_public_date_precision ? ` (${{escapeHtml(node.first_public_date_precision)}} precision)` : '';
+    const basis = node.recency_basis ? ` via ${{escapeHtml(node.recency_basis)}}` : '';
+    return `<div class="muted">First public: ${{escapeHtml(node.first_public_date)}}${{precision}}${{basis}}</div>`;
   }}
 
   function typesetMath(element) {{
@@ -377,6 +389,9 @@ def _vis_node(node: dict[str, Any]) -> dict[str, Any]:
         "reference_edge_count": node.get("reference_edge_count"),
         "reference_edge_score": node.get("reference_edge_score"),
         "support_count": node.get("support_count"),
+        "first_public_date": node.get("first_public_date"),
+        "first_public_date_precision": node.get("first_public_date_precision"),
+        "recency_basis": node.get("recency_basis"),
         "title": _tooltip(node),
         "value": size,
         "size": size,
@@ -447,7 +462,45 @@ def _tooltip(node: dict[str, Any]) -> str:
         parts.append(f"Year: {html.escape(str(node.get('year')))}")
     if node.get("citation_count") is not None:
         parts.append(f"Citations: {html.escape(str(node.get('citation_count')))}")
+    if node.get("first_public_date"):
+        precision = str(node.get("first_public_date_precision") or "unknown")
+        basis = str(node.get("recency_basis") or "unavailable")
+        parts.append(
+            "First public: "
+            f"{html.escape(str(node.get('first_public_date')))} "
+            f"({html.escape(precision)} precision; "
+            f"{html.escape(basis)})"
+        )
     return "<br>".join(part for part in parts if part)
+
+
+def _recency_summary(graph: Mapping[str, Any]) -> str:
+    recency = graph.get("recency")
+    if not isinstance(recency, Mapping):
+        return ""
+    exact = int(recency.get("exact_date_count") or 0)
+    reduced = int(recency.get("reduced_precision_date_count") or 0)
+    ambiguous = int(recency.get("ambiguous_date_count") or 0)
+    return (
+        f" | Candidate first-public dates: {exact} exact, "
+        f"{reduced} reduced precision, {ambiguous} ambiguous"
+    )
+
+
+def _recency_warning(graph: Mapping[str, Any]) -> str:
+    recency = graph.get("recency")
+    if not isinstance(recency, Mapping):
+        return ""
+    reduced = int(recency.get("reduced_precision_date_count") or 0)
+    ambiguous = int(recency.get("ambiguous_date_count") or 0)
+    if not reduced and not ambiguous:
+        return ""
+    return (
+        '<div class="warning">Date precision notice: '
+        f"{reduced} candidate paper(s) use year/month first-public dates; "
+        f"{ambiguous} candidate(s) overlapped a recency-window boundary and "
+        "were treated as ambiguous.</div>"
+    )
 
 
 def _script_json(data: Any) -> str:

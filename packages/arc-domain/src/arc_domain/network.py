@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from calendar import monthrange
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -29,6 +31,18 @@ REFERENCE_EDGE_WEIGHT = 0.5
 RECENT_ARXIV_WINDOW_DAYS = 365
 MAX_GRAPH_PAPER_COUNT = 90
 _PUBLIC_DATE_FIELDS = ("published", "preprint_date", "earliest_date", "created")
+_DATE_PRECISION_ORDER = {"year": 1, "month": 2, "day": 3}
+
+
+@dataclass(frozen=True)
+class _DateEvidence:
+    """One public-date claim without inventing unavailable precision."""
+
+    value: str
+    precision: str
+    lower: date
+    upper: date
+    basis: str
 
 
 def strict_window_citer_streams(
@@ -74,20 +88,26 @@ def strict_window_citer_streams(
 
     start = as_of_date - timedelta(days=window_days)
     eligible: set[str] = set()
-    stats = {
-        "unique_citers": len(records),
-        "eligible_citers": 0,
-        "excluded_missing_first_public_date": 0,
-        "excluded_outside_window": 0,
-    }
+    stats = _empty_recency_stats(len(records))
     for paper_id, record in records.items():
-        paper_date, _basis = first_public_date(record)
-        if paper_date is None:
+        evidence = _first_public_date_evidence(record)
+        if evidence is None:
             stats["excluded_missing_first_public_date"] += 1
-        elif start <= paper_date <= as_of_date:
-            eligible.add(paper_id)
+            continue
+        _apply_date_evidence(record, evidence)
+        if evidence.precision == "day":
+            stats["exact_date_citers"] += 1
         else:
+            stats["reduced_precision_date_citers"] += 1
+        membership = _window_membership(
+            evidence, start=start, end=as_of_date
+        )
+        if membership == "inside":
+            eligible.add(paper_id)
+        elif membership == "outside":
             stats["excluded_outside_window"] += 1
+        else:
+            stats["excluded_ambiguous_first_public_date"] += 1
     stats["eligible_citers"] = len(eligible)
     return (
         [dict(records[paper_id]) for paper_id in stream_ids["mostrecent"] if paper_id in eligible],
@@ -97,13 +117,48 @@ def strict_window_citer_streams(
 
 
 def first_public_date(record: dict[str, Any]) -> tuple[date | None, str | None]:
-    """Return the earliest usable public date without considering updates."""
+    """Return a compatible lower-bound date and basis without considering updates.
 
-    paper_date, basis = _paper_date_with_basis(record)
-    if paper_date is not None:
-        return paper_date, basis
-    fallback = _arxiv_month_date(record)
-    return fallback, "arxiv_id_month" if fallback is not None else None
+    Internal window decisions use bounded date evidence instead of this
+    compatibility projection, so a year or month is never treated as an exact
+    first day.
+    """
+
+    evidence = _first_public_date_evidence(record)
+    if evidence is None:
+        return None, None
+    return evidence.lower, evidence.basis
+
+
+def recency_candidate_stats(
+    records: list[dict[str, Any]],
+    *,
+    as_of_date: date,
+    window_days: int,
+) -> dict[str, int]:
+    """Summarize the complete deduplicated candidate pool by date evidence."""
+
+    if isinstance(window_days, bool) or not isinstance(window_days, int) or window_days < 1:
+        raise ValueError("window_days must be a positive integer")
+    start = as_of_date - timedelta(days=window_days)
+    stats = _empty_recency_stats(len(records))
+    for record in records:
+        evidence = _first_public_date_evidence(record)
+        if evidence is None:
+            stats["excluded_missing_first_public_date"] += 1
+            continue
+        if evidence.precision == "day":
+            stats["exact_date_citers"] += 1
+        else:
+            stats["reduced_precision_date_citers"] += 1
+        membership = _window_membership(evidence, start=start, end=as_of_date)
+        if membership == "inside":
+            stats["eligible_citers"] += 1
+        elif membership == "outside":
+            stats["excluded_outside_window"] += 1
+        else:
+            stats["excluded_ambiguous_first_public_date"] += 1
+    return stats
 
 
 def merge_citer_pool(
@@ -342,15 +397,17 @@ def _select_domain_papers(
         record["in_graph_citer_score"] = 0.0
         record["reference_edge_count"] = 0
         record["reference_edge_score"] = 0.0
-        paper_date, basis = first_public_date(record)
-        record["first_public_date"] = paper_date.isoformat() if paper_date else None
-        record["recency_basis"] = basis if paper_date else None
+        evidence = _first_public_date_evidence(record)
+        _apply_date_evidence(record, evidence)
         if strict_window:
-            record["recent_arxiv"] = bool(
-                paper_date is not None
-                and current - timedelta(days=recent_window_days)
-                <= paper_date
-                <= current
+            record["recent_arxiv"] = (
+                evidence is not None
+                and _window_membership(
+                    evidence,
+                    start=current - timedelta(days=recent_window_days),
+                    end=current,
+                )
+                == "inside"
             )
         else:
             record["recent_arxiv"] = _is_recent_arxiv_paper(
@@ -616,6 +673,7 @@ def _build_graph(
     created_at: str,
     recent_window_days: int = RECENT_ARXIV_WINDOW_DAYS,
     as_of_date: date | None = None,
+    candidate_recency_stats: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     nodes: dict[str, dict[str, Any]] = {}
     foundation_id = normalize_paper_id(foundation.get("paper_id") or "")
@@ -653,13 +711,39 @@ def _build_graph(
                 _add_edge(edges, seen_edges, source_id, target_id, relation="cites")
     current = as_of_date or datetime.now(timezone.utc).date()
     included = sum(bool(item.get("recent_arxiv")) for item in accepted_selected)
+    precision = Counter(
+        str(item.get("first_public_date_precision") or "missing")
+        for item in accepted_selected
+    )
+    candidate_stats = dict(candidate_recency_stats or {})
+    candidate_exact = int(
+        candidate_stats.get("exact_date_citers", precision.get("day", 0))
+    )
+    candidate_reduced = int(
+        candidate_stats.get(
+            "reduced_precision_date_citers",
+            precision.get("month", 0) + precision.get("year", 0),
+        )
+    )
+    candidate_ambiguous = int(
+        candidate_stats.get("excluded_ambiguous_first_public_date", 0)
+    )
     recency: dict[str, Any] = {
         "window_days": recent_window_days,
         "start_date": (current - timedelta(days=recent_window_days)).isoformat(),
         "end_date": current.isoformat(),
         "recency_basis": dict(sorted(Counter(str(item.get("recency_basis") or "unavailable") for item in accepted_selected).items())),
+        "first_public_date_precision": dict(sorted(precision.items())),
+        "selected_exact_date_count": precision.get("day", 0),
+        "selected_reduced_precision_date_count": (
+            precision.get("month", 0) + precision.get("year", 0)
+        ),
+        "exact_date_count": candidate_exact,
+        "reduced_precision_date_count": candidate_reduced,
+        "ambiguous_date_count": candidate_ambiguous,
         "included_count": included,
         "excluded_count": len(accepted_selected) - included,
+        "candidate_pool": candidate_stats,
     }
     return {
         "schema_version": "arc.domain_graph.v1",
@@ -675,6 +759,7 @@ def _build_graph(
 
 def _node(paper_record: dict[str, Any], *, role: str) -> dict[str, Any]:
     paper_id = normalize_paper_id(paper_record.get("paper_id") or paper_record.get("upi") or "")
+    evidence = _first_public_date_evidence(paper_record)
     node = {
         "id": paper_id,
         "paper_id": paper_id,
@@ -699,6 +784,18 @@ def _node(paper_record: dict[str, Any], *, role: str) -> dict[str, Any]:
         "selection_reason": paper_record.get("selection_reason") or paper_record.get("reason", ""),
         "support_count": paper_record.get("support_count"),
         "identifiers": paper_record.get("identifiers") or {},
+        "first_public_date": (
+            paper_record.get("first_public_date")
+            or (evidence.value if evidence is not None else None)
+        ),
+        "first_public_date_precision": (
+            paper_record.get("first_public_date_precision")
+            or (evidence.precision if evidence is not None else None)
+        ),
+        "recency_basis": (
+            paper_record.get("recency_basis")
+            or (evidence.basis if evidence is not None else None)
+        ),
     }
     for field in (
         "source_role",
@@ -763,13 +860,18 @@ def _is_recent_arxiv_paper(
 ) -> bool:
     if not _has_arxiv_id(record):
         return False
-    paper_date = _paper_date(record)
-    if paper_date is None:
-        paper_date = _arxiv_month_date(record)
-    if paper_date is None:
+    evidence = _first_public_date_evidence(record)
+    if evidence is None:
         return False
     current = (now or datetime.now(timezone.utc)).date()
-    return current - timedelta(days=window_days) <= paper_date <= current
+    return (
+        _window_membership(
+            evidence,
+            start=current - timedelta(days=window_days),
+            end=current,
+        )
+        != "outside"
+    )
 
 
 def _has_arxiv_id(record: dict[str, Any]) -> bool:
@@ -790,16 +892,38 @@ def _paper_date(record: dict[str, Any]) -> date | None:
 
 
 def _paper_date_with_basis(record: dict[str, Any]) -> tuple[date | None, str | None]:
-    candidates: list[tuple[date, int, str]] = []
+    evidence = _paper_date_evidence(record)
+    if evidence is None:
+        return None, None
+    return evidence.lower, evidence.basis
+
+
+def _paper_date_evidence(record: dict[str, Any]) -> _DateEvidence | None:
+    selected: _DateEvidence | None = None
     for priority, key in enumerate(_PUBLIC_DATE_FIELDS):
         value = str(record.get(key) or "").strip()
-        parsed = _parse_date(value)
-        if parsed is not None:
-            candidates.append((parsed, priority, key))
-    if not candidates:
-        return None, None
-    earliest, _priority, basis = min(candidates)
-    return earliest, basis
+        candidate = _parse_date_evidence(value, basis=key)
+        if candidate is not None:
+            selected = _prefer_date_evidence(
+                selected,
+                candidate,
+                left_priority=(
+                    _PUBLIC_DATE_FIELDS.index(selected.basis)
+                    if selected is not None and selected.basis in _PUBLIC_DATE_FIELDS
+                    else len(_PUBLIC_DATE_FIELDS)
+                ),
+                right_priority=priority,
+            )
+    return selected
+
+
+def _first_public_date_evidence(
+    record: dict[str, Any],
+) -> _DateEvidence | None:
+    evidence = _paper_date_evidence(record)
+    if evidence is not None:
+        return evidence
+    return _arxiv_month_evidence(record)
 
 
 def _merge_citer_metadata(
@@ -815,39 +939,157 @@ def _merge_citer_metadata(
         if key in excluded or value in (None, "", [], {}):
             continue
         if key in _PUBLIC_DATE_FIELDS:
-            current_date = _parse_date(str(target.get(key) or "").strip())
-            incoming_date = _parse_date(str(value).strip())
-            if current_date is not None and (
-                incoming_date is None or current_date <= incoming_date
-            ):
+            current = _parse_date_evidence(
+                str(target.get(key) or "").strip(), basis=key
+            )
+            incoming_evidence = _parse_date_evidence(
+                str(value).strip(), basis=key
+            )
+            preferred = _prefer_date_evidence(
+                current,
+                incoming_evidence,
+                left_priority=0,
+                right_priority=0,
+            )
+            if preferred is current:
                 continue
         target[key] = value
 
 
 def _parse_date(value: str) -> date | None:
+    evidence = _parse_date_evidence(value, basis="unknown")
+    return evidence.lower if evidence is not None else None
+
+
+def _parse_date_evidence(
+    value: str,
+    *,
+    basis: str,
+) -> _DateEvidence | None:
     if not value:
         return None
-    match = re.match(r"^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?", value)
-    if not match:
-        return None
-    year = int(match.group(1))
-    month = int(match.group(2) or 1)
-    day = int(match.group(3) or 1)
+    day_match = re.fullmatch(
+        r"(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?",
+        value,
+    )
+    month_match = re.fullmatch(r"(\d{4})-(\d{2})", value)
+    year_match = re.fullmatch(r"(\d{4})", value)
     try:
-        return date(year, month, day)
+        if day_match is not None:
+            exact = date(
+                int(day_match.group(1)),
+                int(day_match.group(2)),
+                int(day_match.group(3)),
+            )
+            return _DateEvidence(
+                exact.isoformat(), "day", exact, exact, basis
+            )
+        if month_match is not None:
+            year = int(month_match.group(1))
+            month = int(month_match.group(2))
+            lower = date(year, month, 1)
+            upper = date(year, month, monthrange(year, month)[1])
+            return _DateEvidence(
+                f"{year:04d}-{month:02d}", "month", lower, upper, basis
+            )
+        if year_match is not None:
+            year = int(year_match.group(1))
+            return _DateEvidence(
+                f"{year:04d}",
+                "year",
+                date(year, 1, 1),
+                date(year, 12, 31),
+                basis,
+            )
     except ValueError:
         return None
+    return None
+
+
+def _prefer_date_evidence(
+    left: _DateEvidence | None,
+    right: _DateEvidence | None,
+    *,
+    left_priority: int,
+    right_priority: int,
+) -> _DateEvidence | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    if left.upper < right.lower:
+        return left
+    if right.upper < left.lower:
+        return right
+    left_precision = _DATE_PRECISION_ORDER[left.precision]
+    right_precision = _DATE_PRECISION_ORDER[right.precision]
+    if left_precision != right_precision:
+        return left if left_precision > right_precision else right
+    if left_priority != right_priority:
+        return left if left_priority < right_priority else right
+    return left if (left.lower, left.value) <= (right.lower, right.value) else right
+
+
+def _window_membership(
+    evidence: _DateEvidence,
+    *,
+    start: date,
+    end: date,
+) -> str:
+    if evidence.lower >= start and evidence.upper <= end:
+        return "inside"
+    if evidence.upper < start or evidence.lower > end:
+        return "outside"
+    return "ambiguous"
+
+
+def _apply_date_evidence(
+    record: dict[str, Any],
+    evidence: _DateEvidence | None,
+) -> None:
+    record["first_public_date"] = (
+        evidence.value if evidence is not None else None
+    )
+    record["first_public_date_precision"] = (
+        evidence.precision if evidence is not None else None
+    )
+    record["recency_basis"] = evidence.basis if evidence is not None else None
+
+
+def _empty_recency_stats(unique_citers: int) -> dict[str, int]:
+    return {
+        "unique_citers": unique_citers,
+        "eligible_citers": 0,
+        "exact_date_citers": 0,
+        "reduced_precision_date_citers": 0,
+        "excluded_missing_first_public_date": 0,
+        "excluded_ambiguous_first_public_date": 0,
+        "excluded_outside_window": 0,
+    }
 
 
 def _arxiv_month_date(record: dict[str, Any]) -> date | None:
+    evidence = _arxiv_month_evidence(record)
+    return evidence.lower if evidence is not None else None
+
+
+def _arxiv_month_evidence(
+    record: dict[str, Any],
+) -> _DateEvidence | None:
     paper_id = normalize_paper_id(record.get("paper_id") or paper_key(record))
     arxiv_id = arxiv_path_id(paper_id)
-    match = re.match(r"^(\d{2})(\d{2})\.", arxiv_id)
+    match = re.fullmatch(r"(\d{2})(\d{2})\.\d{4,5}", arxiv_id)
     if not match:
         return None
     year = 2000 + int(match.group(1))
     month = int(match.group(2))
     try:
-        return date(year, month, 1)
+        return _DateEvidence(
+            f"{year:04d}-{month:02d}",
+            "month",
+            date(year, month, 1),
+            date(year, month, monthrange(year, month)[1]),
+            "arxiv_id_month",
+        )
     except ValueError:
         return None

@@ -209,7 +209,10 @@ def test_strict_window_filters_unique_citers_before_merge_and_accepts_dated_non_
     assert stats == {
         "unique_citers": 5,
         "eligible_citers": 2,
+        "exact_date_citers": 4,
+        "reduced_precision_date_citers": 0,
         "excluded_missing_first_public_date": 1,
+        "excluded_ambiguous_first_public_date": 0,
         "excluded_outside_window": 2,
     }
     merged = network.merge_citer_pool(
@@ -254,7 +257,10 @@ def test_strict_window_uses_earliest_field_and_cross_stream_date_at_boundary() -
     assert stats == {
         "unique_citers": 3,
         "eligible_citers": 1,
+        "exact_date_citers": 3,
+        "reduced_precision_date_citers": 0,
         "excluded_missing_first_public_date": 0,
+        "excluded_ambiguous_first_public_date": 0,
         "excluded_outside_window": 2,
     }
 
@@ -373,3 +379,47 @@ def test_graph_role_precedence_is_defensive_and_globally_unique() -> None:
     assert graph["recency"]["included_count"] == 1
     assert graph["recency"]["excluded_count"] == 0
     assert graph["recency"]["recency_basis"] == {"published": 1}
+
+
+def test_graph_projects_date_precision_and_complete_candidate_stats() -> None:
+    candidate_stats = {
+        "unique_citers": 4,
+        "eligible_citers": 2,
+        "exact_date_citers": 1,
+        "reduced_precision_date_citers": 3,
+        "excluded_missing_first_public_date": 0,
+        "excluded_ambiguous_first_public_date": 2,
+        "excluded_outside_window": 0,
+    }
+    graph = network._build_graph(
+        domain_id="domain-date-evidence",
+        foundation=_paper(FOUNDATION),
+        parent_foundations=[],
+        selected_papers=[
+            _paper(
+                PAPER_A,
+                published="2025-07",
+                first_public_date="2025-07",
+                first_public_date_precision="month",
+                recency_basis="published",
+                recent_arxiv=True,
+            )
+        ],
+        common_references=[],
+        refs_by_selected={},
+        intent="",
+        created_at="2026-07-24T00:00:00+00:00",
+        as_of_date=date(2026, 7, 24),
+        candidate_recency_stats=candidate_stats,
+    )
+
+    node = next(item for item in graph["nodes"] if item["paper_id"] == PAPER_A)
+    assert node["first_public_date"] == "2025-07"
+    assert node["first_public_date_precision"] == "month"
+    assert node["recency_basis"] == "published"
+    assert graph["recency"]["exact_date_count"] == 1
+    assert graph["recency"]["reduced_precision_date_count"] == 3
+    assert graph["recency"]["selected_exact_date_count"] == 0
+    assert graph["recency"]["selected_reduced_precision_date_count"] == 1
+    assert graph["recency"]["ambiguous_date_count"] == 2
+    assert graph["recency"]["candidate_pool"] == candidate_stats

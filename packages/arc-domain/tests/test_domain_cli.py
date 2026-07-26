@@ -355,6 +355,8 @@ def test_status_uses_explicit_run_or_catalog_latest(tmp_path: Path, capsys) -> N
         "latest": "newest",
         "active": "newest",
     }
+    assert domain_status["data"]["progress"]["diagnostic_code"] is None
+    assert domain_status["data"]["progress"]["event_sequence"] > 0
 
     assert cli.main(["status", "--run-id", "first", "--project-dir", str(tmp_path)]) == 0
     run_status = _envelope(capsys)
@@ -434,6 +436,30 @@ def test_invalid_requests_always_emit_shared_envelope(argv: list[str], capsys) -
     envelope = _envelope(capsys)
     assert envelope["status"] == "failed"
     assert envelope["error"]["code"] == "invalid_request"
+
+
+def test_policy_file_path_string_is_not_accepted_as_inline_json(
+    tmp_path: Path, capsys
+) -> None:
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(json.dumps(POLICY), encoding="utf-8")
+
+    assert (
+        cli.main(
+            [
+                "build",
+                "arXiv:2401.00001",
+                "--policy",
+                str(policy_path),
+                "--project-dir",
+                str(tmp_path),
+            ]
+        )
+        == 2
+    )
+    envelope = _envelope(capsys)
+    assert envelope["error"]["code"] == "invalid_request"
+    assert "--policy must be a JSON object" in envelope["error"]["message"]
 
 
 @pytest.mark.parametrize(

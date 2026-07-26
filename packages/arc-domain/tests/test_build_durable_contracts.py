@@ -694,7 +694,10 @@ def test_strict_window_excludes_undated_and_old_citers_before_ranking(
     assert network_input["strict_window"] == {
         "unique_citers": 3,
         "eligible_citers": 1,
+        "exact_date_citers": 2,
+        "reduced_precision_date_citers": 0,
         "excluded_missing_first_public_date": 1,
+        "excluded_ambiguous_first_public_date": 0,
         "excluded_outside_window": 1,
     }
 

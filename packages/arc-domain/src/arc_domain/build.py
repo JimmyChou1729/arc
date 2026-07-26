@@ -83,6 +83,7 @@ from .network import (
     intent_ranking_prompt,
     merge_citer_pool,
     normalize_intent_ranking,
+    recency_candidate_stats,
     strict_window_citer_streams,
 )
 from .package_view import (
@@ -169,6 +170,24 @@ class DomainBuildHandler:
     def semantic_input(self) -> dict[str, JsonValue]:
         return _encode_domain_build_semantic_input(self.request)
 
+    @staticmethod
+    def _operation_started(
+        context: RunContext,
+        *,
+        stage: str,
+        operation: str,
+        total_units: int = 1,
+        group_id: str | None = None,
+    ) -> None:
+        data: dict[str, JsonValue] = {
+            "stage": stage,
+            "operation": operation,
+            "total_units": total_units,
+        }
+        if group_id is not None:
+            data["group_id"] = group_id
+        context.events.emit("domain_operation_started", data)
+
     def execute(self, context: RunContext):
         if dict(context.semantic_input) != self.semantic_input():
             return Failed(
@@ -182,11 +201,17 @@ class DomainBuildHandler:
                 context, error_code="domain_resume_input_invalid"
             )
             warnings: list[DomainBuildWarning] = []
+            self._operation_started(
+                context, stage="foundation", operation="foundation"
+            )
             selection_outcome = self._foundation(context, resume_input, warnings)
             if isinstance(selection_outcome, (Paused, Failed)):
                 return selection_outcome
             selection, foundation_ref = selection_outcome
 
+            self._operation_started(
+                context, stage="network", operation="network"
+            )
             graph_outcome = self._network(
                 context, resume_input, selection, warnings
             )
@@ -194,8 +219,16 @@ class DomainBuildHandler:
                 return graph_outcome
             graph, graph_ref = graph_outcome
 
+            self._operation_started(
+                context,
+                stage="paper_acquisition",
+                operation="paper_acquisition",
+            )
             paper_pack, evidence_pack, paper_pack_ref, evidence_pack_ref = self._packs(
                 context, graph, warnings
+            )
+            self._operation_started(
+                context, stage="summary", operation="summary"
             )
             summary_outcome = self._summary(
                 context,
@@ -212,6 +245,9 @@ class DomainBuildHandler:
 
             html_ref = context.artifacts.find(_NETWORK_HTML_ARTIFACT)
             if html_ref is None:
+                self._operation_started(
+                    context, stage="render", operation="network_html"
+                )
                 html_ref = context.artifacts.publish_bytes(
                     _NETWORK_HTML_ARTIFACT,
                     render_network_html(graph).encode("utf-8"),
@@ -230,6 +266,9 @@ class DomainBuildHandler:
             )
             result_ref = context.artifacts.find(_RESULT_ARTIFACT)
             if result_ref is None:
+                self._operation_started(
+                    context, stage="finalize", operation="result"
+                )
                 result_ref = context.artifacts.publish_json(
                     _RESULT_ARTIFACT, encode_domain_build_result(result)
                 )
@@ -256,6 +295,11 @@ class DomainBuildHandler:
         seed_id = self.request.seed_paper
         input_ref = context.artifacts.find("foundation/input")
         if input_ref is None:
+            self._operation_started(
+                context,
+                stage="foundation",
+                operation="foundation_seed_acquisition",
+            )
             seed_metadata = self.paper.metadata(seed_id)
             newest_citers = self.paper.citers(
                 seed_id,
@@ -356,6 +400,11 @@ class DomainBuildHandler:
             JsonOutput(FOUNDATION_CANDIDATE_AUDIT_SCHEMA, repair="format"),
             self.request.model,
         )
+        self._operation_started(
+            context,
+            stage="foundation",
+            operation="foundation_candidate_audit_llm",
+        )
         audit_outcome = execute_routed(
             self.task_service,
             context,
@@ -386,6 +435,11 @@ class DomainBuildHandler:
         expansion_request = audit_expansion_request(audit, self.request.intent)
         expansion_report: dict[str, Any] = {"status": "not_requested"}
         if expansion_request is not None:
+            self._operation_started(
+                context,
+                stage="foundation",
+                operation="foundation_reference_inference_llm",
+            )
             reference_outcome = self.reference_service.infer(
                 context,
                 expansion_request,
@@ -451,6 +505,11 @@ class DomainBuildHandler:
             ),
             JsonOutput(FOUNDATION_SELECTION_SCHEMA, repair="format"),
             self.request.model,
+        )
+        self._operation_started(
+            context,
+            stage="foundation",
+            operation="foundation_selection_llm",
         )
         selection_outcome = execute_routed(
             self.task_service,
@@ -524,6 +583,11 @@ class DomainBuildHandler:
         network_input_ref = context.artifacts.find("network/input")
         strict_window_stats: dict[str, int] | None = None
         if network_input_ref is None:
+            self._operation_started(
+                context,
+                stage="network",
+                operation="foundation_citer_acquisition",
+            )
             foundation = self.paper.metadata(foundation_id)
             foundation["paper_id"] = foundation_id
             foundation["reason"] = str(selected_choice.get("reason") or "")
@@ -541,6 +605,18 @@ class DomainBuildHandler:
                     as_of_date=date.fromisoformat(policy.as_of_date),
                     window_days=policy.recent_window_days,
                 )
+            else:
+                complete_candidate_pool = merge_citer_pool(
+                    foundation_id,
+                    most_recent=most_recent,
+                    most_cited=most_cited,
+                    limit=max(1, len(most_recent) + len(most_cited)),
+                )
+                strict_window_stats = recency_candidate_stats(
+                    complete_candidate_pool,
+                    as_of_date=date.fromisoformat(policy.as_of_date),
+                    window_days=policy.recent_window_days,
+                )
             citer_pool = merge_citer_pool(
                 foundation_id,
                 most_recent=most_recent,
@@ -552,6 +628,11 @@ class DomainBuildHandler:
                 "citer_pool": citer_pool,
             }
             if strict_window_stats is not None:
+                network_input["candidate_recency"] = strict_window_stats
+            if (
+                strict_window_stats is not None
+                and policy.citer_selection_mode == "strict_window"
+            ):
                 network_input["strict_window"] = strict_window_stats
             context.artifacts.publish_json("network/input", network_input)
         else:
@@ -562,7 +643,9 @@ class DomainBuildHandler:
             citer_pool = _mapping_list(
                 network_input.get("citer_pool"), "citer pool"
             )
-            raw_stats = network_input.get("strict_window")
+            raw_stats = network_input.get(
+                "candidate_recency", network_input.get("strict_window")
+            )
             if isinstance(raw_stats, Mapping):
                 strict_window_stats = {
                     key: int(value)
@@ -574,18 +657,43 @@ class DomainBuildHandler:
             missing_dates = strict_window_stats.get(
                 "excluded_missing_first_public_date", 0
             )
+            ambiguous_dates = strict_window_stats.get(
+                "excluded_ambiguous_first_public_date", 0
+            )
             outside_window = strict_window_stats.get("excluded_outside_window", 0)
-            if missing_dates or outside_window:
+            if (
+                policy.citer_selection_mode == "strict_window"
+                and (missing_dates or ambiguous_dates or outside_window)
+            ):
                 warnings.append(
                     DomainBuildWarning(
                         "strict_window_citers_excluded",
                         "Excluded "
                         f"{missing_dates} citer(s) without a first-public date and "
+                        f"{ambiguous_dates} citer(s) with a date interval crossing "
+                        "the requested boundary and "
                         f"{outside_window} citer(s) outside the requested window.",
                         "network",
                     )
                 )
-            if strict_window_stats.get("eligible_citers", 0) == 0:
+            reduced_dates = strict_window_stats.get(
+                "reduced_precision_date_citers", 0
+            )
+            if reduced_dates or ambiguous_dates:
+                warnings.append(
+                    DomainBuildWarning(
+                        "recency_date_precision_limited",
+                        f"Found {reduced_dates} citer(s) with year/month "
+                        "first-public dates and "
+                        f"{ambiguous_dates} ambiguous strict-window boundary "
+                        "classification(s).",
+                        "network",
+                    )
+                )
+            if (
+                policy.citer_selection_mode == "strict_window"
+                and strict_window_stats.get("eligible_citers", 0) == 0
+            ):
                 warnings.append(
                     DomainBuildWarning(
                         "strict_window_no_eligible_citers",
@@ -606,6 +714,11 @@ class DomainBuildHandler:
                 intent_ranking_prompt(citer_pool, intent=self.request.intent),
                 JsonOutput(INTENT_RANKING_SCHEMA, repair="format"),
                 self.request.model,
+            )
+            self._operation_started(
+                context,
+                stage="network",
+                operation="intent_ranking_llm",
             )
             ranking_outcome = execute_routed(
                 self.task_service,
@@ -765,6 +878,7 @@ class DomainBuildHandler:
             created_at=created_at,
             recent_window_days=policy.recent_window_days,
             as_of_date=date.fromisoformat(policy.as_of_date),
+            candidate_recency_stats=strict_window_stats,
         )
         if len(graph.get("nodes", [])) > policy.graph_node_limit:
             raise DomainBuildStageError(
@@ -908,6 +1022,11 @@ class DomainBuildHandler:
             JsonOutput(DOMAIN_SUMMARY_SCHEMA, repair="format"),
             self.request.model,
         )
+        self._operation_started(
+            context,
+            stage="summary",
+            operation="domain_summary_llm",
+        )
         outcome = execute_routed(
             self.task_service,
             context,
@@ -980,6 +1099,19 @@ class DomainBuildHandler:
         units = tuple(
             WorkUnit(unit_id, {"paper_id": paper_id})
             for unit_id, paper_id in by_unit.items()
+        )
+        if group_id.startswith("foundation-"):
+            stage = "foundation"
+        elif group_id.startswith("packs-"):
+            stage = "paper_acquisition"
+        else:
+            stage = "network"
+        self._operation_started(
+            context,
+            stage=stage,
+            operation=group_id,
+            total_units=len(units),
+            group_id=group_id,
         )
 
         def worker(unit: WorkUnit):

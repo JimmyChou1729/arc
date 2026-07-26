@@ -289,3 +289,100 @@ def test_graph_v1_keeps_domain_identity_and_resolved_recency_date():
     assert graph["domain_id"] == "domain-a"
     assert graph["created_at"] == "2026-07-24T12:00:00+00:00"
     assert graph["recency"]["end_date"] == "2026-07-24"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2025junk",
+        "2025-01bad",
+        "2025-01-02 trailing",
+        "02025",
+        "2025-13",
+        "2025-02-30",
+    ],
+)
+def test_public_date_parser_rejects_malformed_or_prefixed_values(value: str):
+    assert network._parse_date(value) is None
+
+
+def test_date_evidence_preserves_precision_and_prefers_overlap_precision():
+    year = network._parse_date_evidence("2024", basis="published")
+    month = network._parse_date_evidence("2024-02", basis="published")
+    day = network._parse_date_evidence("2024-02-29", basis="preprint_date")
+
+    assert year is not None
+    assert (year.value, year.precision, year.lower, year.upper) == (
+        "2024",
+        "year",
+        date(2024, 1, 1),
+        date(2024, 12, 31),
+    )
+    assert month is not None
+    assert (month.lower, month.upper) == (
+        date(2024, 2, 1),
+        date(2024, 2, 29),
+    )
+    evidence = network._first_public_date_evidence(
+        {
+            "paper_id": "doi:10.1000/precision",
+            "published": "2024",
+            "preprint_date": "2024-02-29",
+        }
+    )
+    assert evidence == day
+
+
+def test_strict_window_uses_bounds_and_excludes_partial_overlap():
+    inside_year = _paper("doi:10.1000/year-inside", published="2026")
+    ambiguous_year = _paper("doi:10.1000/year-edge", published="2025")
+    ambiguous_month = _paper("doi:10.1000/month-edge", published="2025-12")
+    exact_boundary = _paper(
+        "doi:10.1000/day-edge", published="2025-12-31"
+    )
+
+    recent, cited, stats = network.strict_window_citer_streams(
+        "arXiv:2001.00001",
+        most_recent=[
+            inside_year,
+            ambiguous_year,
+            ambiguous_month,
+            exact_boundary,
+        ],
+        most_cited=[],
+        as_of_date=date(2026, 12, 31),
+        window_days=365,
+    )
+
+    assert [item["paper_id"] for item in recent] == [
+        inside_year["paper_id"],
+        exact_boundary["paper_id"],
+    ]
+    assert cited == []
+    assert stats == {
+        "unique_citers": 4,
+        "eligible_citers": 2,
+        "exact_date_citers": 1,
+        "reduced_precision_date_citers": 3,
+        "excluded_missing_first_public_date": 0,
+        "excluded_ambiguous_first_public_date": 2,
+        "excluded_outside_window": 0,
+    }
+
+
+def test_merge_overlapping_same_field_prefers_higher_precision():
+    merged = network.merge_citer_pool(
+        "arXiv:1901.00001",
+        most_recent=[
+            _paper("doi:10.1000/merged-precision", published="2024")
+        ],
+        most_cited=[
+            _paper(
+                "doi:10.1000/merged-precision",
+                published="2024-03-04",
+            )
+        ],
+        limit=1,
+    )
+
+    assert merged[0]["published"] == "2024-03-04"

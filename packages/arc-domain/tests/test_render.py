@@ -89,3 +89,35 @@ def test_render_pins_mathjax_and_uses_canonical_paper_links_everywhere():
     assert "arxivHref" not in rendered
     assert 'href="#"' not in rendered
     assert rendered.count('rel="noopener noreferrer"') == 4
+
+
+def test_render_shows_one_aggregate_precision_notice_and_node_date_tooltip():
+    graph = {
+        "foundation_paper": "arXiv:2401.00001",
+        "recency": {
+            "exact_date_count": 1,
+            "reduced_precision_date_count": 2,
+            "ambiguous_date_count": 3,
+        },
+        "nodes": [
+            {
+                "id": "paper",
+                "paper_id": "arXiv:2401.00002",
+                "title": "Reduced precision",
+                "role": "domain_paper",
+                "first_public_date": "2024-01",
+                "first_public_date_precision": "month",
+                "recency_basis": "published",
+            }
+        ],
+        "edges": [],
+    }
+
+    rendered = render_network_html(graph)
+
+    assert (
+        "Candidate first-public dates: 1 exact, 2 reduced precision, "
+        "3 ambiguous"
+    ) in rendered
+    assert rendered.count("Date precision notice:") == 1
+    assert "First public: 2024-01 (month precision; published)" in rendered
