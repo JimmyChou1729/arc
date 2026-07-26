@@ -1,0 +1,112 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "overall_assessment",
+    "cross_candidate_findings",
+    "candidate_notes",
+    "missing_or_underrepresented_directions",
+    "research_strategy",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "arc.ideas.portfolio_assessment.v1"
+    },
+    "overall_assessment": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cross_candidate_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["topic", "finding", "candidate_ids"],
+        "properties": {
+          "topic": {
+            "type": "string",
+            "minLength": 1
+          },
+          "finding": {
+            "type": "string",
+            "minLength": 1
+          },
+          "candidate_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "candidate_notes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["candidate_id", "note"],
+        "properties": {
+          "candidate_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "missing_or_underrepresented_directions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "direction",
+          "rationale",
+          "minimal_first_calculation",
+          "assessment_status"
+        ],
+        "properties": {
+          "direction": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minimal_first_calculation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "assessment_status": {
+            "type": "string",
+            "const": "unranked_novelty_unassessed"
+          }
+        }
+      }
+    },
+    "research_strategy": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

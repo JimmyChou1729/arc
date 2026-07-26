@@ -35,6 +35,10 @@ from _arc_workflows.ideas_policy import (
     max_concurrent_loops,
     model_tier_warnings,
 )
+from _arc_workflows.ideas_portfolio_assessment import (
+    PortfolioAssessmentRunner,
+    generate_portfolio_assessment,
+)
 from _arc_workflows.ideas_progress import (
     combined_progress_callback,
     foreground_progress_callback,
@@ -91,6 +95,7 @@ def run_ideas(
     base_env: Mapping[str, str] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     stop_controller: IdeasStopController | None = None,
+    portfolio_assessment_runner: PortfolioAssessmentRunner | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Materialize and run one typed proposer-reviewer ideas batch."""
@@ -154,8 +159,9 @@ def run_ideas(
         ):
             progress.emit(event)
 
+    task_service = llm_service or LLMTaskService()
     handler = ProposerReviewerHandler(
-        ProposerReviewerService(llm_service or LLMTaskService()),
+        ProposerReviewerService(task_service),
         options=ExecutionOptions(
             max_concurrent_loops=max_concurrent,
             max_concurrent_workers=1,
@@ -215,6 +221,9 @@ def run_ideas(
             warnings=warnings,
             max_concurrent=max_concurrent,
             error=execution_error,
+            task_service=task_service,
+            portfolio_assessment_runner=portfolio_assessment_runner,
+            llm_options=llm_options,
         )
         _maybe_publish_partial(ideas_config, result, warnings)
         progress.emit(
@@ -259,6 +268,16 @@ def run_ideas(
         warnings.append(
             f"committed_trace_unavailable: {type(exc).__name__}"
         )
+    portfolio_assessment = _maybe_generate_portfolio_assessment(
+        ideas_config,
+        repository=repository,
+        inspection=inspection,
+        trace=trace,
+        warnings=warnings,
+        task_service=task_service,
+        runner=portfolio_assessment_runner,
+        llm_options=llm_options,
+    )
     result = observed_result(
         ideas_config,
         repository=repository,
@@ -268,12 +287,67 @@ def run_ideas(
         max_concurrent=max_concurrent,
         inspection=inspection,
         trace=trace,
+        portfolio_assessment=portfolio_assessment,
     )
     _maybe_publish_partial(ideas_config, result, warnings)
     progress.emit(
         {"event": "ideas_batch_finished", "status": result["status"]}
     )
     _append_progress_errors(warnings, progress)
+    return result
+
+
+def _maybe_generate_portfolio_assessment(
+    config: IdeasConfig,
+    *,
+    repository: RunRepository,
+    inspection: Any,
+    trace: Any,
+    warnings: list[str],
+    task_service: Any,
+    runner: PortfolioAssessmentRunner | None,
+    llm_options: LLMExecutionOptions,
+) -> dict[str, Any]:
+    if trace is None:
+        return {
+            "status": "not_run",
+            "input_digest": None,
+            "ref": None,
+            "reason": "committed_trace_unavailable",
+        }
+    if not any(loop.lifecycle == "succeeded" for loop in inspection.loops):
+        return {
+            "status": "not_run",
+            "input_digest": None,
+            "ref": None,
+            "reason": "no_succeeded_loops",
+        }
+    try:
+        result = generate_portfolio_assessment(
+            repository.root,
+            config.run_id,
+            user_intent=config.user_intent,
+            runner=runner,
+            task_service=task_service,
+            llm_options=llm_options,
+            inspection=inspection,
+            trace=trace,
+        )
+    except Exception as exc:
+        result = {
+            "status": "failed",
+            "input_digest": None,
+            "ref": None,
+            "reason": type(exc).__name__,
+        }
+    if result.get("status") != "available":
+        status = str(result.get("status", "failed")).upper()
+        reason = result.get("reason")
+        suffix = f" — {reason}" if isinstance(reason, str) and reason else ""
+        _append_unique_warning(
+            warnings,
+            f"WARNING: PORTFOLIO ASSESSMENT {status}{suffix}",
+        )
     return result
 
 
@@ -326,6 +400,9 @@ def _recover_execution_failure(
     warnings: list[str],
     max_concurrent: int,
     error: Exception,
+    task_service: Any,
+    portfolio_assessment_runner: PortfolioAssessmentRunner | None,
+    llm_options: LLMExecutionOptions,
 ) -> dict[str, Any]:
     try:
         inspection = inspect_batch(repository, config.run_id)
@@ -359,6 +436,16 @@ def _recover_execution_failure(
                 "committed_trace_unavailable: "
                 f"{type(trace_error).__name__}"
             )
+        portfolio_assessment = _maybe_generate_portfolio_assessment(
+            config,
+            repository=repository,
+            inspection=inspection,
+            trace=trace,
+            warnings=warnings,
+            task_service=task_service,
+            runner=portfolio_assessment_runner,
+            llm_options=llm_options,
+        )
         result = observed_result(
             config,
             repository=repository,
@@ -368,6 +455,7 @@ def _recover_execution_failure(
             max_concurrent=max_concurrent,
             inspection=inspection,
             trace=trace,
+            portfolio_assessment=portfolio_assessment,
         )
         result["status"] = "failed"
         result["batch"]["durable_lifecycle"] = inspection.durable_lifecycle

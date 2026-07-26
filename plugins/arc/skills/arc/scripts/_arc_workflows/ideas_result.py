@@ -24,7 +24,7 @@ from _arc_workflows.ideas_ranking import (
 from _arc_workflows.ideas_models import IdeaPlan
 
 
-IDEAS_RESULT_SCHEMA = "arc.workflow.ideas.result.v3"
+IDEAS_RESULT_SCHEMA = "arc.workflow.ideas.result.v4"
 
 
 def observed_result(
@@ -37,6 +37,7 @@ def observed_result(
     max_concurrent: int,
     inspection: BatchInspection,
     trace: BatchTrace | None,
+    portfolio_assessment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         score_table = round_score_table(
@@ -139,6 +140,9 @@ def observed_result(
                 inspection.activity_integrity_error
             ),
         },
+        "portfolio_assessment": _portfolio_assessment_summary(
+            portfolio_assessment
+        ),
         "loops": loops,
         "round_score_table": score_table,
     }
@@ -168,6 +172,7 @@ def dry_run_result(
         "max_concurrent_loops": max_concurrent,
         "batch_request": encode_batch_request(request),
         "workspace_inputs": list(workspace_inputs or ()),
+        "portfolio_assessment": _portfolio_assessment_summary(None),
         "loops": [
             {
                 "idea_id": idea.idea_id,
@@ -246,6 +251,35 @@ def _document(value: Any) -> Any:
 def _append_warning(warnings: list[str], warning: str) -> None:
     if warning not in warnings:
         warnings.append(warning)
+
+
+def _portfolio_assessment_summary(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if value is None:
+        return {
+            "status": "not_run",
+            "input_digest": None,
+            "ref": None,
+            "reused": False,
+            "reason": "run_not_observed",
+        }
+    ref = value.get("ref")
+    return {
+        "status": str(value.get("status", "failed")),
+        "input_digest": (
+            str(value["input_digest"])
+            if isinstance(value.get("input_digest"), str)
+            else None
+        ),
+        "ref": dict(ref) if isinstance(ref, Mapping) else None,
+        "reused": value.get("reused") is True,
+        "reason": (
+            str(value["reason"])
+            if isinstance(value.get("reason"), str)
+            else None
+        ),
+    }
 
 
 def round_score_table(

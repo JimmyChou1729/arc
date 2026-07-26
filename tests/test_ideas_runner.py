@@ -5,10 +5,28 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from threading import Event, Lock, Thread
+from types import SimpleNamespace
 from typing import Any
 
-from arc_jobs import ImmutableArtifactStore, RunEngine, canonical_json_bytes
-from arc_llm import HostAuthority, LLMCompleted, LLMExecutionOptions
+from arc_jobs import (
+    Awaiting,
+    ImmutableArtifactStore,
+    Paused,
+    ResumeReason,
+    RunEngine,
+    RunRepository,
+    RunSpec,
+    canonical_json_bytes,
+)
+from arc_llm import (
+    HostAuthority,
+    InvalidRequestError,
+    LLMCompleted,
+    LLMExecutionOptions,
+    LLMFailed,
+    LLMPaused,
+)
 from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 from arc_proposer_reviewer.protocol import decode_batch_request
 
@@ -198,17 +216,158 @@ class _FakeLLM:
                         "preserves_proposer_direction": True,
                         "comparison": "One coherent idea with a natural range of cases.",
                     },
+                    "idea_assessment": {
+                        "problem_importance": "substantive",
+                        "importance_rationale": "The result changes a concrete prediction.",
+                        "mathematical_well_definedness": "well_defined",
+                        "feasibility_status": "feasible",
+                        "bounded_first_calculation_ready": True,
+                        "blocking_feasibility_failures": [],
+                        "manageable_feasibility_risks": ["Check one approximation."],
+                        "external_method_status": "not_used",
+                        "external_method_rationale": "No external method is used.",
+                    },
                 },
             },
             "fake", "fake-model", None, None,
         )
 
 
+def _portfolio_value() -> dict[str, Any]:
+    return {
+        "schema_version": "arc.ideas.portfolio_assessment.v1",
+        "overall_assessment": (
+            "The portfolio contains one bounded candidate history."
+        ),
+        "cross_candidate_findings": [
+            {
+                "topic": "shared baseline",
+                "finding": "The calculation has a minimal controlled baseline.",
+                "candidate_ids": ["domain_idea_001"],
+            }
+        ],
+        "candidate_notes": [
+            {
+                "candidate_id": "domain_idea_001",
+                "note": "The committed revision keeps one coherent nucleus.",
+            }
+        ],
+        "missing_or_underrepresented_directions": [
+            {
+                "direction": "An independent analytic cross-check",
+                "rationale": "It is underrepresented in the candidate history.",
+                "minimal_first_calculation": (
+                    "Evaluate the same observable in the simplest analytic limit."
+                ),
+                "assessment_status": "unranked_novelty_unassessed",
+            }
+        ],
+        "research_strategy": [
+            "Complete the bounded baseline before optional extensions."
+        ],
+        "limitations": ["Only one candidate loop was available."],
+    }
+
+
+class _FakePortfolioRunner:
+    def __init__(self) -> None:
+        self.requests = []
+        self.run_roots: list[Path] = []
+        self.options: list[LLMExecutionOptions] = []
+
+    def __call__(self, request, run_root, *, options):
+        self.requests.append(request)
+        self.run_roots.append(run_root)
+        self.options.append(options)
+        return LLMCompleted(
+            _portfolio_value(),
+            "fake",
+            "fake-model",
+            None,
+            None,
+        )
+
+
+def test_portfolio_assessment_contract_is_general_and_advisory() -> None:
+    schema = json.loads(
+        (
+            WORKFLOW_JSON / "ideas-portfolio-assessment.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    prompt = (
+        WORKFLOW_JSON / "ideas-portfolio-assessment.prompt.md"
+    ).read_text(encoding="utf-8")
+
+    assert schema["required"] == [
+        "schema_version",
+        "overall_assessment",
+        "cross_candidate_findings",
+        "candidate_notes",
+        "missing_or_underrepresented_directions",
+        "research_strategy",
+        "limitations",
+    ]
+    serialized = json.dumps(schema)
+    for forbidden in ("marks", "qualification", "ranking", "selection"):
+        assert f'"{forbidden}"' not in serialized
+    prompt_flat = " ".join(prompt.split())
+    assert "no required taxonomy, quota" in prompt_flat
+    assert "Do not assign marks, rankings, qualification decisions" in prompt_flat
+    assert (
+        "Do not infer that a citation-neighborhood no-hit proves novelty"
+        in prompt_flat
+    )
+    assert "unranked and novelty-unassessed" in prompt_flat
+
+
+def test_portfolio_frontier_preserves_all_proposer_artifacts() -> None:
+    _load_runner_module()
+    portfolio_module = sys.modules[
+        "_arc_workflows.ideas_portfolio_assessment"
+    ]
+
+    rounds = portfolio_module._ranking_identity_rounds(
+        {
+            "ranking": [
+                {
+                    "loop_id": "idea-001",
+                    "round": 1,
+                    "proposal_artifacts": {
+                        "proposer-a": {"sha256": "a" * 64},
+                        "proposer-b": {"sha256": "b" * 64},
+                    },
+                    "review_artifact": {"sha256": "c" * 64},
+                }
+            ]
+        }
+    )
+
+    assert rounds == [
+        {
+            "candidate_id": "idea-001",
+            "round": 1,
+            "proposals": [
+                {"proposer_id": "proposer-a", "sha256": "a" * 64},
+                {"proposer_id": "proposer-b", "sha256": "b" * 64},
+            ],
+            "review_sha256": "c" * 64,
+        }
+    ]
+
+
 def test_dry_run_has_closed_workers_and_direct_research_policy(tmp_path: Path) -> None:
     runner = _load_runner_module()
     result = runner.run_ideas(_config(tmp_path), dry_run=True)
     worker = result["batch_request"]["loops"][0]["proposers"][0]
+    assert result["schema_version"] == "arc.workflow.ideas.result.v4"
     assert result["status"] == "dry_run"
+    assert result["portfolio_assessment"] == {
+        "status": "not_run",
+        "input_digest": None,
+        "ref": None,
+        "reused": False,
+        "reason": "run_not_observed",
+    }
     assert result["batch_request"]["schema_version"] == BATCH_SCHEMA_VERSION
     assert result["batch_request"]["inputs"] == []
     assert result["workspace_inputs"] == [
@@ -374,16 +533,377 @@ def test_dry_run_does_not_read_workspace_input_bytes(
 def test_run_uses_one_explicit_runtime_carrier(tmp_path: Path) -> None:
     runner = _load_runner_module()
     fake = _FakeLLM()
+    portfolio = _FakePortfolioRunner()
     runtime = LLMExecutionOptions(host_authority=HostAuthority.RESTRICTED)
-    result = runner.run_ideas(_config(tmp_path), llm_service=fake, llm_options=runtime)
+    result = runner.run_ideas(
+        _config(tmp_path),
+        llm_service=fake,
+        llm_options=runtime,
+        portfolio_assessment_runner=portfolio,
+    )
     assert result["status"] == "succeeded"
     assert "evidence" not in result
     assert fake.options and all(item is runtime for item in fake.options)
+    assert portfolio.options == [runtime]
     assert fake.requests and all(len(request.inputs) == 1 for request in fake.requests)
     source = fake.requests[0].inputs[0].source
     assert source.source_run_id == "ideas-test"
     assert source.source_artifact_id.endswith("domain-markdown-001")
     assert "# Brief" not in fake.requests[0].prompt
+
+
+def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    config = _config(tmp_path)
+    config["loops_per_variant"] = 2
+    fake = _FakeLLM()
+    portfolio = _FakePortfolioRunner()
+
+    first = runner.run_ideas(
+        config,
+        llm_service=fake,
+        portfolio_assessment_runner=portfolio,
+    )
+
+    assert first["schema_version"] == "arc.workflow.ideas.result.v4"
+    assert first["status"] == "succeeded"
+    assessment = first["portfolio_assessment"]
+    assert assessment["status"] == "available"
+    assert assessment["ref"]["artifact_id"].startswith(
+        "ideas/portfolio-assessments/v1/"
+    )
+    assert assessment["reused"] is False
+    assert len(portfolio.requests) == 1
+    request = portfolio.requests[0]
+    assert request.model.tier == "high"
+    assert json.dumps(config["user_intent"]) in request.prompt
+    assert '"candidate_id": "domain_idea_001"' in request.prompt
+    assert request.prompt.index(
+        '"candidate_id": "domain_idea_001"'
+    ) < request.prompt.index('"candidate_id": "domain_idea_002"')
+    assert '"round": 1' in request.prompt
+    assert request.prompt.count('"round":') == first["reviewer_call_count"]
+    assert "reviewer_benchmark" in request.prompt
+    assert "reviewer_assessment" in request.prompt
+    assert "reviewer_evidence" in request.prompt
+    assert "reviewer_tool_queries" in request.prompt
+    assert "reviewer_limitations" in request.prompt
+    assert "total_score" not in request.prompt
+    assert '"marks"' not in request.prompt
+    assert '"qualification"' not in request.prompt
+    assert portfolio.run_roots[0].is_relative_to(
+        Path(config["run_dir"]) / "runs" / config["run_id"]
+    )
+
+    ranked = runner.rank_run(Path(config["run_dir"]), config["run_id"])
+    portfolio_module = sys.modules[
+        "_arc_workflows.ideas_portfolio_assessment"
+    ]
+    loaded = portfolio_module.load_portfolio_assessment(
+        config["run_dir"],
+        ranked,
+    )
+    assert loaded["status"] == "available"
+    assert loaded["ref"] == assessment["ref"]
+    assert loaded["content"] == _portfolio_value()
+    incomplete_ranking = {
+        **ranked,
+        "ranking": ranked["ranking"][:1],
+    }
+    assert portfolio_module.load_portfolio_assessment(
+        config["run_dir"],
+        incomplete_ranking,
+    )["status"] == "mismatch"
+
+    second = runner.run_ideas(
+        config,
+        llm_service=fake,
+        portfolio_assessment_runner=portfolio,
+    )
+    assert second["status"] == "succeeded"
+    assert second["portfolio_assessment"]["status"] == "available"
+    assert second["portfolio_assessment"]["reused"] is True
+    assert second["portfolio_assessment"]["ref"] == assessment["ref"]
+    assert len(portfolio.requests) == 1
+
+
+def test_portfolio_pause_and_failure_do_not_change_ideas_status(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+
+    def pause(_request, _run_root, *, options):
+        del options
+        return LLMPaused(
+            ResumeReason.EXTERNAL_CONDITION,
+            "portfolio-pause",
+        )
+
+    paused = runner.run_ideas(
+        _config(tmp_path / "paused"),
+        llm_service=_FakeLLM(),
+        portfolio_assessment_runner=pause,
+    )
+    assert paused["status"] == "succeeded"
+    assert paused["portfolio_assessment"]["status"] == "paused"
+    assert paused["portfolio_assessment"]["ref"] is None
+    assert any(
+        warning
+        == "WARNING: PORTFOLIO ASSESSMENT PAUSED — external_condition"
+        for warning in paused["warnings"]
+    )
+
+    def fail(_request, _run_root, *, options):
+        del options
+        return LLMFailed(InvalidRequestError("deliberate advisory failure"))
+
+    failed = runner.run_ideas(
+        _config(tmp_path / "failed"),
+        llm_service=_FakeLLM(),
+        portfolio_assessment_runner=fail,
+    )
+    assert failed["status"] == "succeeded"
+    assert failed["portfolio_assessment"]["status"] == "failed"
+    assert failed["portfolio_assessment"]["ref"] is None
+    assert any(
+        warning
+        == "WARNING: PORTFOLIO ASSESSMENT FAILED — invalid_request"
+        for warning in failed["warnings"]
+    )
+
+
+def test_failed_default_portfolio_run_retries_same_durable_lineage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    config = _config(tmp_path)
+    portfolio_module = sys.modules[
+        "_arc_workflows.ideas_portfolio_assessment"
+    ]
+    run_ids: list[str] = []
+
+    class FlakyStandaloneClient:
+        def __init__(self, *, service):
+            del service
+
+        def generate(self, _request, *, run_root, run_id, options):
+            del run_root, options
+            run_ids.append(run_id)
+            if len(run_ids) == 1:
+                return SimpleNamespace(
+                    outcome=LLMFailed(
+                        InvalidRequestError(
+                            "transient advisory failure fixture"
+                        )
+                    )
+                )
+            return SimpleNamespace(
+                outcome=LLMCompleted(
+                    _portfolio_value(),
+                    "fake",
+                    "fake-model",
+                    None,
+                    None,
+                )
+            )
+
+    monkeypatch.setattr(
+        portfolio_module,
+        "LLMClient",
+        FlakyStandaloneClient,
+    )
+
+    first = runner.run_ideas(config, llm_service=_FakeLLM())
+    second = runner.run_ideas(config, llm_service=_FakeLLM())
+
+    assert first["status"] == "succeeded"
+    assert first["portfolio_assessment"]["status"] == "failed"
+    assert second["status"] == "succeeded"
+    assert second["portfolio_assessment"]["status"] == "available"
+    assert len(run_ids) == 2
+    assert run_ids[0] == run_ids[1]
+
+
+def test_default_portfolio_run_resumes_paused_durable_lineage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    portfolio_module = sys.modules[
+        "_arc_workflows.ideas_portfolio_assessment"
+    ]
+    digest = "a" * 64
+    durable_run_id = f"portfolio-{digest[:24]}"
+    run_root = tmp_path / "portfolio-assessment-llm"
+
+    class PauseHandler:
+        name = "pause-fixture"
+
+        def execute(self, _context):
+            return Paused(
+                Awaiting(
+                    ResumeReason.EXTERNAL_CONDITION,
+                    "retry-without-input",
+                    False,
+                )
+            )
+
+    RunEngine(RunRepository(run_root)).execute(
+        RunSpec(durable_run_id, PauseHandler.name, {}),
+        PauseHandler(),
+    )
+    calls: list[tuple[str, str]] = []
+
+    class RecoveringClient:
+        def __init__(self, *, service):
+            del service
+
+        def generate(self, *_args, **_kwargs):
+            raise AssertionError("paused lineage must be resumed")
+
+        def resume(self, *, run_root, run_id, options):
+            del run_root, options
+            calls.append(("resume", run_id))
+            return SimpleNamespace(
+                outcome=LLMCompleted(
+                    _portfolio_value(),
+                    "fake",
+                    "fake-model",
+                    None,
+                    None,
+                )
+            )
+
+    monkeypatch.setattr(portfolio_module, "LLMClient", RecoveringClient)
+    outcome = portfolio_module._run_default_assessment(
+        object(),
+        assessment_run_root=run_root,
+        input_digest=digest,
+        task_service=_FakeLLM(),
+        llm_options=LLMExecutionOptions(),
+    )
+
+    assert isinstance(outcome, LLMCompleted)
+    assert calls == [("resume", durable_run_id)]
+
+
+def test_concurrent_portfolio_calls_share_one_provider_attempt(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    config = _config(tmp_path)
+
+    def pause(_request, _run_root, *, options):
+        del options
+        return LLMPaused(
+            ResumeReason.EXTERNAL_CONDITION,
+            "leave-public-artifact-missing",
+        )
+
+    initial = runner.run_ideas(
+        config,
+        llm_service=_FakeLLM(),
+        portfolio_assessment_runner=pause,
+    )
+    assert initial["portfolio_assessment"]["status"] == "paused"
+    portfolio_module = sys.modules[
+        "_arc_workflows.ideas_portfolio_assessment"
+    ]
+    entered = Event()
+    release = Event()
+    call_lock = Lock()
+    call_count = 0
+
+    def blocking_success(_request, _run_root, *, options):
+        nonlocal call_count
+        del options
+        with call_lock:
+            call_count += 1
+        entered.set()
+        assert release.wait(timeout=5)
+        return LLMCompleted(
+            _portfolio_value(),
+            "fake",
+            "fake-model",
+            None,
+            None,
+        )
+
+    results: list[dict[str, Any]] = []
+
+    def invoke() -> None:
+        results.append(
+            portfolio_module.generate_portfolio_assessment(
+                config["run_dir"],
+                config["run_id"],
+                user_intent=config["user_intent"],
+                runner=blocking_success,
+            )
+        )
+
+    first = Thread(target=invoke)
+    second = Thread(target=invoke)
+    first.start()
+    assert entered.wait(timeout=5)
+    second.start()
+    release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert call_count == 1
+    assert sorted(result["reused"] for result in results) == [False, True]
+    assert {result["status"] for result in results} == {"available"}
+
+
+def test_corrupt_portfolio_artifact_is_warning_only(tmp_path: Path) -> None:
+    runner = _load_runner_module()
+    config = _config(tmp_path)
+    portfolio = _FakePortfolioRunner()
+    first = runner.run_ideas(
+        config,
+        llm_service=_FakeLLM(),
+        portfolio_assessment_runner=portfolio,
+    )
+    artifact_id = first["portfolio_assessment"]["ref"]["artifact_id"]
+    repository = RunRepository(Path(config["run_dir"]))
+    store = ImmutableArtifactStore(
+        repository.run_directory(config["run_id"]),
+        repository_root=repository.root,
+    )
+    ref = store.find(artifact_id)
+    assert ref is not None
+    (repository.run_directory(config["run_id"]) / ref.relative_path).write_text(
+        "{}",
+        encoding="utf-8",
+    )
+
+    ranked = runner.rank_run(Path(config["run_dir"]), config["run_id"])
+    portfolio_module = sys.modules[
+        "_arc_workflows.ideas_portfolio_assessment"
+    ]
+    assert portfolio_module.load_portfolio_assessment(
+        config["run_dir"],
+        ranked,
+    )["status"] == "corrupt"
+
+    replay = runner.run_ideas(
+        config,
+        llm_service=_FakeLLM(),
+        portfolio_assessment_runner=portfolio,
+    )
+    assert replay["status"] == "succeeded"
+    assert replay["portfolio_assessment"]["status"] == "corrupt"
+    assert replay["portfolio_assessment"]["ref"] is None
+    assert any(
+        warning.startswith("WARNING: PORTFOLIO ASSESSMENT CORRUPT —")
+        for warning in replay["warnings"]
+    )
+    assert len(portfolio.requests) == 1
 
 
 def test_custom_executor_receives_persisted_materialized_input(
@@ -413,6 +933,7 @@ def test_custom_executor_receives_persisted_materialized_input(
         llm_service=fake,
         executor=execute,
         progress_callback=progress_events.append,
+        portfolio_assessment_runner=_FakePortfolioRunner(),
     )
 
     request = captured["request"]
