@@ -89,7 +89,10 @@ arc-llm generate \
 
 Choose `<host-authority>` once for each run: use `unrestricted` only when the
 host explicitly reports unrestricted authority; otherwise use `unknown`. Reuse
-the identical value for any resume of that run.
+the identical value for any resume of that run. Under `restricted` or
+`unknown`, follow `manuals/arc-llm.md`: without an explicitly supplied broker,
+a model host request becomes a durable manual pause, not a call to an assumed
+universal broker.
 
 Before using a response, normalize `selected_paper_id` locally and require it
 to equal one of that field's recorded candidate IDs. Also require every
@@ -277,10 +280,11 @@ Questions`, `## Reading Guide`, `## Research Guidance`,
 `## Research Directions and Questions`, or `## Idea Examples` sections.
 
 Do not render `warnings` in the domain summary Markdown. If the domain summary
-JSON has warnings, print `WARNING:` immediately, append them to
-`<project-dir>/.arc/domain/warnings.md`, and append them to
-`<project-dir>/.arc/self-reflect.md` with the current workflow entry for later
-workflow review.
+JSON has warnings, print `WARNING:` immediately and append them to
+`<project-dir>/.arc/domain/warnings.md`. Follow `rules/self-reflection.md`: add
+a reflection entry only when a warning identifies a concrete gap, actionable
+improvement, or incomplete requested outcome, and treat append failure as a
+visible warning rather than a domain-build failure.
 
 For the hidden domain summary Markdown, follow `rules/math_typeset.md` for
 math and TeX snippets. Do not publish it as a visible Markdown report.
@@ -375,7 +379,11 @@ manifest and leave existing published artifacts unchanged.
 Show the completed domain artifact and manifest paths. If domain construction
 was the requested outcome, report them and stop in either automation level.
 When the caller explicitly requested a downstream workflow, `interactive`
-mode pauses here before entering it; `auto` continues without asking unless a
-warning or failure occurred. Continue only to a workflow the caller requested
-or that `SKILL.md` identifies as a prerequisite. `auto` does not authorize idea
-generation or otherwise expand scope.
+mode pauses here before entering it. In `auto`, continue into that explicitly
+requested workflow when the domain command completed and the manifest and all
+required artifacts validate. Print nonblocking degraded warnings, but do not
+let those warnings alone block the requested handoff; downstream consumers use
+only verified material. A typed pause or failure, missing required artifact, or
+integrity failure still blocks the handoff. Continue only to a workflow the
+caller requested or that `SKILL.md` identifies as a prerequisite. `auto` does
+not authorize idea generation or otherwise expand scope.

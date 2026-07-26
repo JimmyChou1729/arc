@@ -19,6 +19,11 @@ This reference applies to all ARC research workflows.
 - Do not silently skip or compress important decisions.
 - Do not skip steps or kill scripts/jobs because they are slow or temporarily
   quiet.
+- Treat pipe activity or a recent event as a weak liveness signal, not proof of
+  scientific progress. Conversely, silence alone is not proof of a loop.
+- When considering a cooperative stop, compare successive public snapshots.
+  Stop only for a recorded recurring error or repeated lack of goal-directed
+  progress, and always honor an explicit user stop.
 - Whenever you detect a potential error, anomalous result, inconsistency, or
   suspicious pattern, print a visible `WARNING:` message immediately and explain
   the concern before proceeding.

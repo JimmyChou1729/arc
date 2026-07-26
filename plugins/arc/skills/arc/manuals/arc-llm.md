@@ -60,6 +60,12 @@ Set `<host-authority>` once per run: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
 identical value for every resume of that run.
 
+With `restricted` or `unknown` authority, provider output uses ARC's host-turn
+contract. If the model requests a host action and the runtime holder did not
+explicitly supply a broker, the request becomes a durable manual pause. ARC
+does not ship or assume a production universal broker. Read the typed pause,
+perform only authorized work, and resume the same run with the requested input.
+
 ## Resume or Stop
 
 ```bash

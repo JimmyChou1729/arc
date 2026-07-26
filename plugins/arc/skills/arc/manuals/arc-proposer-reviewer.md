@@ -53,9 +53,13 @@ sessions, partial files, or physical durable-state paths.
 
 Interactive workers do not have an arbitrary tool-turn quota. Normal research
 may take a long time. Compare public `inspect` snapshots and stop cautiously
-only when interaction turns continue without useful progress, failures recur,
-or the provider is no longer advancing the task. A stop pauses the current
-attempt and preserves its durable frontier for same-run resume.
+only when successive snapshots show the same recurring failure or repeated
+turns with no concrete contribution toward the requested scientific objective.
+Elapsed time, temporary silence, and pipe activity alone are not stop
+conditions. Record the compared evidence and reason; always honor an explicit
+user stop. A stop pauses the current attempt and preserves its durable frontier
+for same-run resume. Scientific proposer-reviewer rounds remain finite and
+configurable; do not continue merely because rounds remain.
 
 ## Resume
 

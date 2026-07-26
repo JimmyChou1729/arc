@@ -16,7 +16,8 @@ arc-domain build <seed-paper> --intent "<scientific intent>" \
 
 Set `<host-authority>` once per run: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
-identical value for every resume of that run.
+identical value for every resume of that run. For `restricted` or `unknown`
+host requests, follow `manuals/arc-llm.md`; do not assume a universal broker.
 
 The result reports both a durable `run_id` and a stable `domain_id`. Keep both:
 the run ID controls this attempt, while the domain ID selects the published

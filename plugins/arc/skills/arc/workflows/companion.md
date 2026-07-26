@@ -48,7 +48,9 @@ arc-companion build <source-path-or-paper-id> \
 
 Choose `<host-authority>` once: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
-identical value when resuming this run.
+identical value when resuming this run. Under `restricted` or `unknown`, follow
+`manuals/arc-llm.md`: without an explicitly supplied broker, a model host
+request becomes a durable manual pause.
 
 Add `--pdf <path>` for a local validator or `--pdf fetch` for a remote paper.
 Use `--refresh` only when fresh remote source bytes were requested.

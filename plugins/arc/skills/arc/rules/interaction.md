@@ -33,11 +33,16 @@ boundary. Do not stop a provider call, CLI command, or background job already
 submitted. An `interactive` to `auto` switch while awaiting ordinary milestone
 confirmation also approves that checkpoint and continues.
 
-Automation steering never bypasses authorization requirements, destructive
-action review, duplicate-charge risk, unresolved scientific ambiguity, a
-`Human expert question:`, error recovery, or another mandatory safety gate.
-It also does not authorize a downstream workflow. Perform exactly the scope
-requested by the caller.
+Automation steering never bypasses a genuine authorization or destructive
+action boundary. Ask the user for scientific judgment only after available
+evidence and deterministic checks are exhausted and the remaining choice is
+owned by the user, such as an unresolved convention or acceptance standard
+that materially changes the result. Label that request `Human expert
+question:` when the owning workflow requires it. Ordinary validation,
+recoverable errors, and verified degraded results are not mandatory user
+questions: handle them automatically while preserving visible warnings and
+typed pause/failure contracts. Automation does not authorize a downstream
+workflow. Perform exactly the scope requested by the caller.
 
 In `interactive`, use these major milestones: Domain pauses after domain
 artifacts and the manifest are complete and before an explicitly requested

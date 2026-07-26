@@ -19,7 +19,8 @@ arc-translate detect-language <source> \
 
 Set `<host-authority>` once per run: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
-identical value for every resume of that run.
+identical value for every resume of that run. For `restricted` or `unknown`
+host requests, follow `manuals/arc-llm.md`; do not assume a universal broker.
 
 If the detected source language already matches the target, stop. Otherwise
 build the glossary and translate all source blocks:

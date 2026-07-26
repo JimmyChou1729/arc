@@ -69,7 +69,8 @@ arc-paper extract-keywords <source> \
 
 Use `unrestricted` for `<host-authority>` only when the host explicitly
 reports unrestricted authority; otherwise use `unknown`. Reuse that value if
-the durable keyword run is resumed.
+the durable keyword run is resumed. For `restricted` or `unknown` host
+requests, follow `manuals/arc-llm.md`; do not assume a universal broker.
 
 The count is an estimate. Terms are selected chapter by chapter for relevance,
 deduplicated, and then labeled with machine-counted occurrence frequency.

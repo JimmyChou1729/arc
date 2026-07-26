@@ -95,8 +95,8 @@ snapshot:
 Compare snapshots rather than treating elapsed time alone as failure. Inspect
 the active worker, last activity, pause information, and sanitized failure
 causes. Be patient when these show normal scientific progress. Stop only when
-snapshots show recurring errors or a provider that is no longer making useful
-progress:
+successive snapshots show the same recurring errors or repeated interaction
+without a concrete contribution toward the requested scientific objective:
 
 ```bash
 <skill-dir>/scripts/arc-runtime arc-proposer-reviewer stop \
@@ -105,9 +105,11 @@ progress:
   --reason "<specific observed reason>"
 ```
 
-Use stop cautiously and record the concrete reason. `SIGINT` and `SIGTERM`
-remain available for the foreground process. A stop pauses the current attempt
-for same-run resume.
+Use stop cautiously, cite the compared snapshots, and record the concrete
+reason. Elapsed time, temporary silence, and pipe activity alone are not stop
+decisions. Always honor an explicit user stop. `SIGINT` and `SIGTERM` remain
+available for the foreground process. A stop pauses the current attempt for
+same-run resume.
 
 Step 2: Treat the runner result as the public batch handoff. It materializes
 one `BatchRequest` and executes it through `ProposerReviewerHandler` in the
@@ -150,10 +152,13 @@ capability, state the limitation once and continue from the available evidence.
 
 Set `<host-authority>` to `unrestricted` only when the host explicitly reports
 unrestricted permissions; otherwise set it to `unknown` and reuse that value
-when resuming the same run. Restricted hosts use the generic host broker; this workflow does not define a
-paper-operation allowlist, a tool ledger, or a host-specific fallback. The
-runtime holder supplies this explicit attestation and the LLM service selects
-the corresponding safe mode.
+when resuming the same run. Under `restricted` or `unknown`, a model host
+request becomes a durable manual pause when the runtime holder did not
+explicitly supply a broker. ARC does not assume a production universal broker;
+inspect the typed pause and resume the same run with the required input. This
+workflow does not define a paper-operation allowlist, a tool ledger, or a
+host-specific fallback. The runtime holder supplies the authority attestation
+and any explicit broker; the LLM service selects the corresponding safe mode.
 
 Final ranked ideas must come from `run-ideas.py`'s public committed batch data
 and the read-only ranking helper, not ad-hoc agent judgment. In cross-domain mode,

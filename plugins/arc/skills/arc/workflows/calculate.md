@@ -46,8 +46,10 @@ The default template uses high reasoning effort and medium verbosity because the
 The runner reads worker prompt/schema templates from `workflows/json/calculate-proposer.template.json`, `workflows/json/calculate-reviewer.template.json`, and `workflows/json/calculate-reviewer-output.schema.json`.
 
 `"max_recalculations": 1` means 2 total attempts: 1 initial attempt + 1 recalculation.
-Do not increase attempts unless the user asks.
-
+Keep this finite default. The main agent may choose a higher finite value without
+asking only when it records a concrete new hypothesis, algorithm, or recovery
+path that makes the additional attempt scientifically distinct. Do not repeat
+the same strategy or use an unbounded retry loop.
 Each ready step and attempt creates one deterministic, independent public `arc_proposer_reviewer.BatchRequest`: one loop, one committed round, the active proposers, and one reviewer. Attempts do not reuse a private workflow session or artifact layout. The runner executes that request through `arc-jobs` and `arc-proposer-reviewer`, then reads proposal and review JSON only from the public committed round. A returned attempt records its public batch run ID and loop ID; use those identities rather than constructing artifact paths.
 
 For retryable proposer disagreement statuses, use the recalculation budget before pausing for human input. A `two_agree` decision locks the two accepted proposer outputs and runs only the one selected proposer again. Other retryable outcomes restart the active proposer set within the remaining budget.
@@ -104,7 +106,10 @@ python3 <skill-dir>/scripts/run-calculate.py \
 
 Set `<host-authority>` to `unrestricted` only when the host explicitly reports
 unrestricted permissions; otherwise set it to `unknown` and reuse that value
-when resuming the same calculation run.
+when resuming the same calculation run. Under `restricted` or `unknown`, a model
+host request becomes a durable manual pause without an explicitly supplied
+broker; inspect the typed pause and resume the same run with its required input.
+ARC does not assume a production universal broker.
 
 The command exits `0` for `completed`, `dry_run`, `blocked_for_user`, and
 `blocked_for_revision`. A blocked result is a normal nonterminal workflow

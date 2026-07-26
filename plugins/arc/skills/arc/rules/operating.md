@@ -14,7 +14,10 @@ commands live in the package-specific references.
 - The `arc` plugin is CLI-only and does not register or ship an MCP server.
 - For user choices and confirmations, use
   `rules/interaction.md`.
-- Do not stop a job unless the user explicitly asks.
+- Always honor an explicit user stop. Otherwise, never stop for elapsed time,
+  workload size, or temporary quiet alone. A workflow may request a cooperative
+  stop when successive public status snapshots show the same recurring error
+  or no goal-directed progress; record the snapshots and the concrete reason.
 - Report cache paths or artifact paths when they help the user inspect results.
 - The scientific integrity and robustness rules in
   `rules/integrity.md` apply to all ARC workflows.

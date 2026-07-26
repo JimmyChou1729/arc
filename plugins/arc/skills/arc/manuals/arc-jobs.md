@@ -25,7 +25,9 @@ arc-jobs stop \
 ```
 
 Resume through the owning package with the same run ID. Do not stop a run only
-because a model call is slow.
+because a model call is slow or temporarily quiet. Outside an explicit user
+stop, compare successive public snapshots and request a cooperative stop only
+for a recorded recurring error or repeated lack of goal-directed progress.
 
 ## Markdown Report Export
 

@@ -578,10 +578,15 @@ def test_ideas_workflow_describes_direct_research_tools() -> None:
 
 def test_self_reflection_allows_missing_git_metadata() -> None:
     text = (SKILL / "rules/self-reflection.md").read_text(encoding="utf-8")
+    compact = " ".join(text.split())
 
     assert "Git: unavailable" in text
     assert "Archive:" in text
     assert "Run: <run_id>" in text
+    assert "concrete gap, an actionable ARC improvement, or an incomplete requested outcome" in compact
+    assert "print a visible `WARNING:`" in compact
+    assert "reflection logging is not a completion gate" in compact
+    assert "do not append a no-op entry" in compact
 
 
 def test_interaction_rules_define_portable_selection_menu() -> None:
@@ -649,12 +654,12 @@ def test_runtime_steering_preserves_hard_gates_and_major_milestones() -> None:
     )
 
     for phrase in [
-        "authorization requirements",
-        "destructive action review",
-        "duplicate-charge risk",
-        "unresolved scientific ambiguity",
+        "genuine authorization or destructive action boundary",
+        "available evidence and deterministic checks are exhausted",
+        "remaining choice is owned by the user",
+        "unresolved convention or acceptance standard",
         "`Human expert question:`",
-        "error recovery",
+        "Ordinary validation, recoverable errors, and verified degraded results",
         "after domain artifacts and the manifest are complete",
         "after the top three",
         "after main-agent preflight",
@@ -667,6 +672,57 @@ def test_runtime_steering_preserves_hard_gates_and_major_milestones() -> None:
 
     assert "Use this protocol for real business choices" in interaction
     assert "Do not use it to choose an automation level" in interaction
+    assert "unresolved scientific ambiguity" not in interaction
+    assert "error recovery, or another mandatory safety gate" not in interaction
+
+
+def test_operating_rules_use_evidence_not_time_or_silence_for_stop() -> None:
+    operating = " ".join(
+        (SKILL / "rules/operating.md").read_text(encoding="utf-8").split()
+    )
+    integrity = " ".join(
+        (SKILL / "rules/integrity.md").read_text(encoding="utf-8").split()
+    )
+    jobs = " ".join(
+        (SKILL / "manuals/arc-jobs.md").read_text(encoding="utf-8").split()
+    )
+    proposer = " ".join(
+        (SKILL / "manuals/arc-proposer-reviewer.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+
+    for text in (operating, integrity, jobs, proposer):
+        assert "successive public" in text or "successive snapshots" in text
+        assert "recurring error" in text or "recurring failure" in text
+        assert "goal-directed progress" in text or "scientific objective" in text
+    assert "Always honor an explicit user stop" in operating
+    assert "silence alone is not proof of a loop" in integrity
+    assert "pipe activity alone are not stop conditions" in proposer
+    assert "Scientific proposer-reviewer rounds remain finite and configurable" in proposer
+
+
+def test_restricted_host_requests_use_manual_pause_without_universal_broker() -> None:
+    llm = " ".join(
+        (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8").split()
+    )
+    ideas = " ".join((WF / "ideas.md").read_text(encoding="utf-8").split())
+    calculate = " ".join((WF / "calculate.md").read_text(encoding="utf-8").split())
+
+    for text in (llm, ideas, calculate):
+        assert "`restricted` or `unknown`" in text
+        assert "durable manual pause" in text
+        assert "production universal broker" in text
+    assert "generic host broker" not in ideas
+
+
+def test_domain_auto_handoff_preserves_visible_nonblocking_warnings() -> None:
+    domain = " ".join((WF / "domain.md").read_text(encoding="utf-8").split())
+
+    assert "manifest and all required artifacts validate" in domain
+    assert "Print nonblocking degraded warnings" in domain
+    assert "do not let those warnings alone block the requested handoff" in domain
+    assert "typed pause or failure, missing required artifact, or integrity failure" in domain
 
 
 def test_automatic_workflows_preserve_requested_scope() -> None:
@@ -965,11 +1021,15 @@ def test_calculate_documents_public_batch_and_blind_reference_contract() -> None
 
 def test_calculate_uses_two_total_consensus_attempts() -> None:
     text = (WF / "calculate.md").read_text(encoding="utf-8").lower()
+    compact = " ".join(text.split())
 
     assert '"max_recalculations": 1' in text
     assert "2 total attempts" in text
     assert "1 initial attempt + 1 recalculation" in text
     assert "3 total attempts" not in text
+    assert "higher finite value" in text
+    assert "concrete new hypothesis, algorithm, or recovery path" in compact
+    assert "unbounded retry loop" in text
 
 
 def test_calculate_uses_reviewer_judgment_not_mandatory_sympy_gate() -> None:
@@ -1157,7 +1217,8 @@ def test_ideas_workflow_documents_direct_tool_contract() -> None:
     assert "web, ARC paper tools, and the shared ARC paper cache" in compact
     assert "paper-operation allowlist" in compact
     assert "tool ledger" in compact
-    assert "generic host broker" in compact
+    assert "does not assume a production universal broker" in compact
+    assert "generic host broker" not in compact
     assert "`inspect_batch`" in text
     assert "`read_batch_trace`" in text
     assert "`read_batch_round`" in text
@@ -1282,7 +1343,8 @@ def test_ideas_workflow_has_no_typed_evidence_accounting() -> None:
 
     assert "tool ledger" in compact
     assert "paper-operation allowlist" in compact
-    assert "generic host broker" in compact
+    assert "does not assume a production universal broker" in compact
+    assert "generic host broker" not in compact
     assert "`arc.ideas.selected_rounds.v5`" in ideas
     assert "scientific `status` separately from `durable_lifecycle`" in compact
     assert "no `run_lifecycle` alias" in compact
