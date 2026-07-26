@@ -102,6 +102,27 @@ class _GuideTasks:
                     }
                 ]
             }
+        elif "evidence-research-prompt" in contract:
+            value = {
+                "responses": [
+                    {
+                        "request_id": "research-log",
+                        "candidates": [
+                            {
+                                "evidence_id": f"candidate-{index}",
+                                "title": f"Candidate {index}",
+                                "content": "Inspected but not selected.",
+                                "source": f"fixture:{index}",
+                            }
+                            for index in range(1, 21)
+                        ],
+                        "selected_evidence_ids": [],
+                        "selection_rationale": (
+                            "No candidate adds value to this visual-label fixture."
+                        ),
+                    }
+                ]
+            }
         elif "chapter-plan-prompt" in contract:
             self.plan_labels.extend(
                 str(block["payload"]["label"])
@@ -156,32 +177,6 @@ class _ScriptedReviewer:
 
     def review(self, *_args, **_kwargs):
         return self.outcomes.popleft()
-
-
-def _evidence_input(snapshot) -> dict:
-    assert snapshot.awaiting is not None
-    return {
-        "schema_version": "arc.companion.evidence_response.v2",
-        "resume_key": snapshot.awaiting.resume_key,
-        "responses": [
-            {
-                "request_id": "research-log",
-                "candidates": [
-                    {
-                        "evidence_id": f"candidate-{index}",
-                        "title": f"Candidate {index}",
-                        "content": "Inspected but not selected.",
-                        "source": f"fixture:{index}",
-                    }
-                    for index in range(1, 21)
-                ],
-                "selected_evidence_ids": [],
-                "selection_rationale": (
-                    "No candidate adds value to this visual-label fixture."
-                ),
-            }
-        ],
-    }
 
 
 def _corrected_source(document: RichDocument, _outcome) -> RichDocument:
@@ -242,7 +237,7 @@ def test_complete_visual_mapping_becomes_the_effective_build_source(
     tasks = _GuideTasks()
     service = CompanionService(tmp_path / "jobs")
 
-    evidence_pause = service.build(
+    completed = service.build(
         CompanionBuildRequest(
             source, validator_digests=(pdf.artifact_digest,)
         ),
@@ -252,17 +247,6 @@ def test_complete_visual_mapping_becomes_the_effective_build_source(
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=_Translation(),  # type: ignore[arg-type]
     )
-    assert evidence_pause.status is RunStatus.PAUSED
-    completed = service.resume(
-        evidence_pause.run_id,
-        input=_evidence_input(evidence_pause),
-        execution=CompanionExecutionOptions(
-            paper_cache_root=repository.root
-        ),
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=_Translation(),  # type: ignore[arg-type]
-    )
-
     assert completed.status is RunStatus.SUCCEEDED
     assert tasks.plan_labels == ["1", "2"]
     book = service.accepted_book(completed.run_id)
@@ -300,7 +284,7 @@ def test_incomplete_visual_mapping_warns_and_keeps_all_web_labels(
     tasks = _GuideTasks()
     service = CompanionService(tmp_path / "jobs")
 
-    evidence_pause = service.build(
+    completed = service.build(
         CompanionBuildRequest(
             source, validator_digests=(pdf.artifact_digest,)
         ),
@@ -310,17 +294,6 @@ def test_incomplete_visual_mapping_warns_and_keeps_all_web_labels(
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=_Translation(),  # type: ignore[arg-type]
     )
-    assert evidence_pause.status is RunStatus.PAUSED
-    completed = service.resume(
-        evidence_pause.run_id,
-        input=_evidence_input(evidence_pause),
-        execution=CompanionExecutionOptions(
-            paper_cache_root=repository.root
-        ),
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=_Translation(),  # type: ignore[arg-type]
-    )
-
     assert completed.status is RunStatus.SUCCEEDED
     assert tasks.plan_labels == ["1", "3"]
     assert service.accepted_book(completed.run_id).document_digest == (
@@ -378,16 +351,8 @@ def test_visual_pause_propagates_and_resume_continues_the_build(
     assert paused.status is RunStatus.PAUSED
     assert service.build_diagnostics(paused.run_id) is None
 
-    evidence_pause = service.resume(
-        paused.run_id,
-        execution=execution,
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=translation,  # type: ignore[arg-type]
-    )
-    assert evidence_pause.status is RunStatus.PAUSED
     completed = service.resume(
-        evidence_pause.run_id,
-        input=_evidence_input(evidence_pause),
+        paused.run_id,
         execution=execution,
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,  # type: ignore[arg-type]
@@ -434,16 +399,8 @@ def test_effective_source_replays_after_a_later_build_pause(
     assert service.build_diagnostics(paused.run_id)["status"] == "applied"
     assert not _ScriptedReviewer.outcomes
 
-    evidence_pause = service.resume(
-        paused.run_id,
-        execution=execution,
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=translation,  # type: ignore[arg-type]
-    )
-    assert evidence_pause.status is RunStatus.PAUSED
     completed = service.resume(
-        evidence_pause.run_id,
-        input=_evidence_input(evidence_pause),
+        paused.run_id,
         execution=execution,
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,  # type: ignore[arg-type]

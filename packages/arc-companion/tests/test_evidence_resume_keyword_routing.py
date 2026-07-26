@@ -26,6 +26,7 @@ from arc_companion.prompts import (
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
+    EVIDENCE_RESEARCH_PROMPT_VERSION,
     LITERATURE_REQUEST_PROMPT_VERSION,
     LITERATURE_SURVEY_PROMPT_VERSION,
 )
@@ -111,6 +112,27 @@ class _EvidenceResumeTasks:
                     for term in payload["terms"]
                 ]
             }
+        elif contract == EVIDENCE_RESEARCH_PROMPT_VERSION:
+            value = {
+                "responses": [
+                    {
+                        "request_id": "supporting-paper",
+                        "candidates": [
+                            {
+                                "evidence_id": f"support-{index}",
+                                "title": f"Supporting result {index}",
+                                "content": "A bounded offline evidence excerpt.",
+                                "source": f"fixture:{index}",
+                            }
+                            for index in range(1, 21)
+                        ],
+                        "selected_evidence_ids": ["support-1"],
+                        "selection_rationale": (
+                            "Only the first source is directly relevant."
+                        ),
+                    }
+                ]
+            }
         elif contract == TRANSLATION_PROMPT_VERSION:
             value = {
                 "translations": [
@@ -172,7 +194,7 @@ def _document(tmp_path: Path):
     return RichDocumentParserService(repository).parse_source(artifact)
 
 
-def test_companion_evidence_resume_reaches_keyword_glossary_and_book(
+def test_direct_evidence_research_reaches_keyword_glossary_and_book(
     tmp_path: Path,
 ) -> None:
     document = _document(tmp_path)
@@ -183,45 +205,15 @@ def test_companion_evidence_resume_reaches_keyword_glossary_and_book(
         paper_cache_root=tmp_path / "paper-cache",
     )
 
-    first = service.build(
+    completed = service.build(
         CompanionBuildRequest(document, target_language="zh-CN"),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,
     )
 
-    assert first.status is RunStatus.PAUSED
-    assert first.awaiting is not None
-    assert first.awaiting.response_contract == "arc.companion.evidence_response.v2"
-
-    resumed = service.resume(
-        first.run_id,
-        input={
-            "schema_version": "arc.companion.evidence_response.v2",
-            "resume_key": first.awaiting.resume_key,
-            "responses": [
-                {
-                    "request_id": "supporting-paper",
-                    "candidates": [
-                        {
-                            "evidence_id": f"support-{index}",
-                            "title": f"Supporting result {index}",
-                            "content": "A bounded offline evidence excerpt.",
-                            "source": f"fixture:{index}",
-                        }
-                        for index in range(1, 21)
-                    ],
-                    "selected_evidence_ids": ["support-1"],
-                    "selection_rationale": "Only the first source is directly relevant.",
-                }
-            ],
-        },
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=translation,
-    )
-
-    assert resumed.status is RunStatus.SUCCEEDED
+    assert completed.status is RunStatus.SUCCEEDED
     assert tasks.keyword_resume_inputs == [None]
-    book = service.accepted_book(resumed.run_id)
+    book = service.accepted_book(completed.run_id)
     assert [item.evidence_id for item in book.bibliography] == ["support-1"]
     assert book.bibliography[0].title == "Supporting result 1"
     assert book.translation_mode == "enabled"

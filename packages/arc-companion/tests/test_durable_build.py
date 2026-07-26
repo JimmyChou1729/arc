@@ -8,8 +8,8 @@ from threading import Event, Lock
 
 import pytest
 
-from arc_jobs import RunRepository, RunStatus
-from arc_llm import LLMCompleted
+from arc_jobs import ResumeReason, RunRepository, RunStatus
+from arc_llm import LLMCompleted, LLMPaused
 from arc_paper import (
     RichDocumentParserService,
     SourceFormat,
@@ -27,6 +27,7 @@ from arc_companion.prompts import (
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
+    EVIDENCE_RESEARCH_PROMPT_VERSION,
     LITERATURE_REQUEST_PROMPT_VERSION,
 )
 from arc_companion.request_contracts import (
@@ -49,10 +50,12 @@ class FakeGuideTasks:
         guide_started: Event | None = None,
         translation_started: Event | None = None,
         remove_second_unit: bool = False,
+        malformed_evidence: bool = False,
     ) -> None:
         self.guide_started = guide_started
         self.translation_started = translation_started
         self.remove_second_unit = remove_second_unit
+        self.malformed_evidence = malformed_evidence
         self.counts: Counter[str] = Counter()
         self.guide_glossaries: dict[str, list[dict]] = {}
         self._completed = {}
@@ -84,6 +87,29 @@ class FakeGuideTasks:
                         "anchor_block_ids": [
                             payload["blocks"][0]["block_id"]
                         ],
+                    }
+                ]
+            }
+        elif contract == EVIDENCE_RESEARCH_PROMPT_VERSION:
+            value = {
+                "responses": [
+                    {
+                        "request_id": "research-log",
+                        "candidates": [
+                            {
+                                "evidence_id": f"candidate-{index}",
+                                "title": f"Candidate {index}",
+                                "content": "Inspected but not selected.",
+                                "source": f"fixture:{index}",
+                            }
+                            for index in range(
+                                1, 20 if self.malformed_evidence else 21
+                            )
+                        ],
+                        "selected_evidence_ids": [],
+                        "selection_rationale": (
+                            "None adds value beyond this self-contained fixture."
+                        ),
                     }
                 ]
             }
@@ -261,6 +287,28 @@ class FakeTranslationAdapter:
         }
 
 
+class _HostTurnEvidenceTasks(FakeGuideTasks):
+    def execute_or_resume(self, context, request, **kwargs):
+        contract, _payload = _request_payload(request.prompt)
+        if contract == EVIDENCE_RESEARCH_PROMPT_VERSION:
+            request_ref = context.artifacts.publish_json(
+                "test/host-turn-request",
+                {
+                    "schema_version": "arc.llm.host_turn.v1",
+                    "state": "request_host",
+                },
+            )
+            return LLMPaused(
+                ResumeReason.INTERACTION_REQUIRED,
+                "arc-llm-host-turn",
+                {"code": "host_broker_required"},
+                request_ref=request_ref,
+                input_required=True,
+                response_contract="arc.llm.resume_input.v3",
+            )
+        return super().execute_or_resume(context, request, **kwargs)
+
+
 def _document(tmp_path: Path):
     repository = SourceRepository(tmp_path / "paper")
     artifact = repository.store_bytes(
@@ -281,32 +329,6 @@ def _request_payload(prompt: str) -> tuple[str, dict]:
     _instruction, marker, payload = rest.partition("\n\nInput JSON:\n")
     assert marker
     return first.removeprefix("Contract: "), json.loads(payload)
-
-
-def _evidence_input(snapshot) -> dict:
-    assert snapshot.awaiting is not None
-    return {
-        "schema_version": "arc.companion.evidence_response.v2",
-        "resume_key": snapshot.awaiting.resume_key,
-        "responses": [
-            {
-                "request_id": "research-log",
-                "candidates": [
-                    {
-                        "evidence_id": f"candidate-{index}",
-                        "title": f"Candidate {index}",
-                        "content": "Inspected but not selected.",
-                        "source": f"fixture:{index}",
-                    }
-                    for index in range(1, 21)
-                ],
-                "selected_evidence_ids": [],
-                "selection_rationale": (
-                    "None adds value beyond this self-contained fixture."
-                ),
-            }
-        ],
-    }
 
 
 def test_translation_and_guide_share_post_glossary_group(
@@ -332,27 +354,14 @@ def test_translation_and_guide_share_post_glossary_group(
     assert service.repository.read_spec(
         prepared.run_id
     ).handler == COMPANION_BUILD_HANDLER
-    paused = service.execute(
+    completed = service.execute(
         prepared.run_id,
         execution=CompanionExecutionOptions(workers=2),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,
     )
-    assert paused.status is RunStatus.PAUSED
-    completed = service.resume(
-        paused.run_id,
-        input=_evidence_input(paused),
-        execution=CompanionExecutionOptions(workers=2),
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=translation,
-    )
-
     assert completed.status is RunStatus.SUCCEEDED
-    assert translation.calls[0:3] == [
-        "language",
-        "language",
-        "glossary",
-    ]
+    assert translation.calls[0:2] == ["language", "glossary"]
     assert translation.approx_counts == [73]
     assert tasks.counts[CHAPTER_PLAN_PROMPT_VERSION] == 2
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
@@ -395,21 +404,13 @@ def test_same_language_skips_all_translation_owned_steps(
         ),
     )
 
-    paused = service.build(
+    completed = service.build(
         CompanionBuildRequest(document, target_language="en-US"),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,
     )
-    assert paused.status is RunStatus.PAUSED
-    completed = service.resume(
-        paused.run_id,
-        input=_evidence_input(paused),
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=translation,
-    )
-
     assert completed.status is RunStatus.SUCCEEDED
-    assert translation.calls == ["language", "language"]
+    assert translation.calls == ["language"]
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
     book = service.accepted_book(completed.run_id)
     assert book.translation_mode == "skipped"
@@ -425,19 +426,11 @@ def test_review_remove_publishes_ordered_subset_without_retry(
     translation = FakeTranslationAdapter(mode="skipped")
     service = CompanionService(tmp_path / "jobs")
 
-    paused = service.build(
+    completed = service.build(
         CompanionBuildRequest(document, target_language="en"),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,
     )
-    assert paused.status is RunStatus.PAUSED
-    completed = service.resume(
-        paused.run_id,
-        input=_evidence_input(paused),
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=translation,
-    )
-
     assert completed.status is RunStatus.SUCCEEDED
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
     assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 2
@@ -445,6 +438,71 @@ def test_review_remove_publishes_ordered_subset_without_retry(
         [unit.unit_id for unit in chapter.learning_units]
         for chapter in service.accepted_book(completed.run_id).chapters
     ] == [["intuition"], ["intuition"]]
+
+
+def test_malformed_evidence_candidate_reports_path_and_reuses_edit(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path)
+    tasks = FakeGuideTasks(malformed_evidence=True)
+    translation = FakeTranslationAdapter(mode="skipped")
+    service = CompanionService(tmp_path / "jobs")
+
+    failed = service.build(
+        CompanionBuildRequest(document, target_language="en"),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=translation,
+    )
+
+    assert failed.status is RunStatus.FAILED
+    assert failed.error is not None
+    candidate_path = Path(
+        str(failed.error.details["candidate_path"])
+    )
+    assert candidate_path == (
+        service.repository.run_directory(failed.run_id)
+        / "working/candidates/planning/evidence-research.json"
+    )
+    raw = json.loads(candidate_path.read_text(encoding="utf-8"))
+    raw["responses"][0]["candidates"].append(
+        {
+            "evidence_id": "candidate-20",
+            "title": "Candidate 20",
+            "content": "Inspected but not selected.",
+            "source": "fixture:20",
+        }
+    )
+    candidate_path.write_text(
+        json.dumps(raw), encoding="utf-8"
+    )
+    evidence_calls = tasks.counts[EVIDENCE_RESEARCH_PROMPT_VERSION]
+
+    recovered = service.resume(
+        failed.run_id,
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=translation,
+    )
+
+    assert recovered.status is RunStatus.SUCCEEDED
+    assert tasks.counts[EVIDENCE_RESEARCH_PROMPT_VERSION] == evidence_calls
+
+
+def test_evidence_research_propagates_native_arc_llm_host_turn_pause(
+    tmp_path: Path,
+) -> None:
+    service = CompanionService(tmp_path / "jobs")
+
+    paused = service.build(
+        CompanionBuildRequest(_document(tmp_path), target_language="en"),
+        task_service=_HostTurnEvidenceTasks(),  # type: ignore[arg-type]
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
+    )
+
+    assert paused.status is RunStatus.PAUSED
+    assert paused.awaiting is not None
+    assert paused.awaiting.resume_key == "arc-llm-host-turn"
+    assert paused.awaiting.response_contract == "arc.llm.resume_input.v3"
+    assert paused.awaiting.details == {"code": "host_broker_required"}
 
 
 @pytest.mark.parametrize("value", [0, 201, True])

@@ -48,6 +48,8 @@ from .translation_reuse import (
     stage_translation_reuse_plan,
 )
 
+_LEGACY_COMPANION_BUILD_HANDLER_V3 = "arc.companion.build.v3"
+
 
 class CompanionServiceError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
@@ -153,7 +155,10 @@ class CompanionService:
         task_service: LLMTaskService | None,
         translation_adapter: CompanionTranslationAdapter | None,
     ) -> CompanionBuildHandler:
-        if spec.handler == COMPANION_BUILD_HANDLER:
+        if spec.handler in {
+            COMPANION_BUILD_HANDLER,
+            _LEGACY_COMPANION_BUILD_HANDLER_V3,
+        }:
             request, recipe = decode_handler_semantic_input(
                 spec.semantic_input
             )

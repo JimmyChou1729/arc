@@ -95,10 +95,16 @@ derived from headings and cover every source block exactly once.
 Guide planning is evidence-first. Before chapter planning, inspect at least 20
 distinct candidate works or substantive discussions across sources named by
 the document, important prior history, and later work central to its debates.
-This is an inspection requirement, not an inclusion quota. Freeze the research
-log, select only evidence that directly adds reader value, and allow only
-selected evidence into chapter planning and the bibliography. Do not retain a
-source merely to make the survey look broad.
+Companion runs this research as a standard `arc-llm` task. Under
+`unrestricted`, the model agent directly uses its available search, Web, and
+paper tools; do not create or supply a Companion evidence response. Under
+`restricted` or `unknown`, any required host action uses the ordinary
+`arc-llm` host-turn/broker contract. This is an inspection requirement, not an
+inclusion quota. Freeze the research log, select only evidence that directly
+adds reader value, and allow only selected evidence into chapter planning and
+the bibliography. English Wikipedia is an optional ordinary candidate; reject
+other language editions. Evidence prose and translated excerpts use the target
+language while English page titles and URLs retain source identity.
 
 Treat paragraph-local notes and chapter-level or cross-paragraph notes as
 equally legitimate. Choose placement from the explanatory need, with no quota
@@ -123,10 +129,10 @@ occurring glossary entries.
 
 ### Step 2: Resolve a pause
 
-Inspect the returned `resume` descriptor and request artifact. Resolve paper
-evidence with `arc-paper`; resolve other Web or user evidence with the
-appropriate host tool. Freeze the response and resume with the same opaque
-resume key:
+Inspect the returned `resume` descriptor and request artifact. A model-requested
+host action is an `arc-llm` host turn and follows `manuals/arc-llm.md`; Companion
+does not define a separate evidence-input or evidence-resume contract. Resume
+with the same opaque resume key when input is required:
 
 ```bash
 arc-companion resume --project-dir <project-dir> \
@@ -143,8 +149,7 @@ For a failed build, inspect
 written before semantic validation and errors report their exact paths. Edit a
 candidate to adopt the repaired content on resume, or delete it to regenerate
 that step. Keep visual QA under
-`.arc/companion/diagnostics/visual/<run-id>/` and explicit manual pause inputs
-under `.arc/companion/operator-inputs/<run-id>/`; do not create attempt-named
+`.arc/companion/diagnostics/visual/<run-id>/`; do not create attempt-named
 project roots or loose project-level QA directories.
 
 ## Phase 3: Deliver

@@ -471,6 +471,7 @@ def test_legacy_v4_recipe_can_supply_exact_translation_identity(
         if key
         not in {
             "author_identity_prompt",
+            "evidence_research_prompt",
             "literature_request_prompt",
             "literature_survey_prompt",
         }

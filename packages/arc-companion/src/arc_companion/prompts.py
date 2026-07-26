@@ -10,6 +10,9 @@ from typing import Any
 LITERATURE_REQUEST_PROMPT_VERSION = (
     "arc.companion.literature-request-prompt.v2"
 )
+EVIDENCE_RESEARCH_PROMPT_VERSION = (
+    "arc.companion.evidence-research-prompt.v1"
+)
 LITERATURE_SURVEY_PROMPT_VERSION = (
     "arc.companion.literature-survey-prompt.v2"
 )
@@ -66,6 +69,42 @@ LITERATURE_REQUEST_PLAN_SCHEMA = _closed(
         }
     },
     ("requests",),
+)
+_EVIDENCE_CANDIDATE = _closed(
+    {
+        "evidence_id": _NONEMPTY,
+        "title": _NONEMPTY,
+        "content": _NONEMPTY,
+        "source": _NONEMPTY,
+    },
+    ("evidence_id", "title", "content", "source"),
+)
+_EVIDENCE_RESPONSE = _closed(
+    {
+        "request_id": _NONEMPTY,
+        "candidates": {
+            "type": "array",
+            "items": _EVIDENCE_CANDIDATE,
+        },
+        "selected_evidence_ids": _STRING_IDS,
+        "selection_rationale": _NONEMPTY,
+    },
+    (
+        "request_id",
+        "candidates",
+        "selected_evidence_ids",
+        "selection_rationale",
+    ),
+)
+EVIDENCE_RESEARCH_SCHEMA = _closed(
+    {
+        "responses": {
+            "type": "array",
+            "items": _EVIDENCE_RESPONSE,
+            "minItems": 1,
+        }
+    },
+    ("responses",),
 )
 _SURVEY_THEME = _closed(
     {
@@ -245,6 +284,48 @@ def literature_survey_prompt(
                 if prior_companion is not None
                 else None
             ),
+        },
+    )
+
+
+def evidence_research_prompt(
+    *,
+    requests: Sequence[Mapping[str, Any]],
+    blocks: Sequence[Mapping[str, Any]],
+    target_language: str,
+    intent: str,
+) -> str:
+    return _prompt(
+        EVIDENCE_RESEARCH_PROMPT_VERSION,
+        """
+        Act as the evidence researcher for this Companion. Complete every
+        literature request by using the search, web, paper, and other research
+        tools available in the current host mode. In direct mode, use those
+        tools yourself; if the host mode requires a host turn, use only the
+        standard arc-llm host-turn contract. Inspect at least 20 distinct
+        candidates across the full research log, including relevant sources
+        named by the document, important prior history, and later work central
+        to the main debates. This is a research-coverage requirement, not a
+        selection quota. Give every candidate a unique evidence ID, return
+        exactly one response for every planned request, select only candidates
+        that add direct explanatory value, and explain each selection in the
+        target language.
+
+        English Wikipedia is an optional ordinary candidate, never a required
+        source or default authority. Only en.wikipedia.org URLs are allowed for
+        Wikipedia; discard every other language edition and find the English
+        page or a different source. Write candidate evidence notes and
+        selection rationales in the target language. Translate any English
+        quotation or excerpt used in those notes into the target language while
+        keeping the English page title, English URL, and citation identity.
+        Never substitute a translated Wikipedia edition for the English source.
+        Preserve source URLs and never invent sources or identifiers.
+        """,
+        {
+            "target_language": target_language,
+            "intent": intent,
+            "requests": list(requests),
+            "blocks": list(blocks),
         },
     )
 
@@ -448,6 +529,8 @@ __all__ = [
     "CHAPTER_GUIDE_SCHEMA",
     "CHAPTER_PLAN_PROMPT_VERSION",
     "CHAPTER_PLAN_SCHEMA",
+    "EVIDENCE_RESEARCH_PROMPT_VERSION",
+    "EVIDENCE_RESEARCH_SCHEMA",
     "LITERATURE_REQUEST_PLAN_SCHEMA",
     "LITERATURE_REQUEST_PROMPT_VERSION",
     "LITERATURE_SURVEY_PROMPT_VERSION",
@@ -456,6 +539,7 @@ __all__ = [
     "chapter_guide_prompt",
     "chapter_guide_review_prompt",
     "chapter_plan_prompt",
+    "evidence_research_prompt",
     "literature_request_prompt",
     "literature_survey_prompt",
 ]

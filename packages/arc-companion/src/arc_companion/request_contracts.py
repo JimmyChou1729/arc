@@ -21,6 +21,7 @@ from .prompts import (
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
+    EVIDENCE_RESEARCH_PROMPT_VERSION,
     LITERATURE_REQUEST_PROMPT_VERSION,
     LITERATURE_SURVEY_PROMPT_VERSION,
 )
@@ -30,7 +31,10 @@ from .reader_labels import resolve_reader_labels
 COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v4"
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3 = "arc.companion.build_request.v3"
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2 = "arc.companion.build_request.v2"
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v6"
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v7"
+_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V6 = (
+    "arc.companion.generation_recipe.v6"
+)
 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V5 = (
     "arc.companion.generation_recipe.v5"
 )
@@ -149,6 +153,7 @@ class CompanionGenerationRecipe:
     model: ModelSelection = field(default_factory=ModelSelection)
     approx_term_count: int = 50
     literature_request_prompt: str = LITERATURE_REQUEST_PROMPT_VERSION
+    evidence_research_prompt: str = EVIDENCE_RESEARCH_PROMPT_VERSION
     literature_survey_prompt: str = LITERATURE_SURVEY_PROMPT_VERSION
     author_identity_prompt: str = AUTHOR_IDENTITY_PROMPT_VERSION
     chapter_plan_prompt: str = CHAPTER_PLAN_PROMPT_VERSION
@@ -173,6 +178,7 @@ class CompanionGenerationRecipe:
             )
         expected = {
             "literature_request_prompt": LITERATURE_REQUEST_PROMPT_VERSION,
+            "evidence_research_prompt": EVIDENCE_RESEARCH_PROMPT_VERSION,
             "literature_survey_prompt": LITERATURE_SURVEY_PROMPT_VERSION,
             "author_identity_prompt": AUTHOR_IDENTITY_PROMPT_VERSION,
             "chapter_plan_prompt": CHAPTER_PLAN_PROMPT_VERSION,
@@ -244,6 +250,7 @@ def encode_generation_recipe(
         },
         "approx_term_count": recipe.approx_term_count,
         "literature_request_prompt": recipe.literature_request_prompt,
+        "evidence_research_prompt": recipe.evidence_research_prompt,
         "literature_survey_prompt": recipe.literature_survey_prompt,
         "author_identity_prompt": recipe.author_identity_prompt,
         "chapter_plan_prompt": recipe.chapter_plan_prompt,
@@ -351,6 +358,13 @@ def decode_generation_recipe(
     if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA:
         fields = common_fields | {
             "literature_request_prompt",
+            "evidence_research_prompt",
+            "literature_survey_prompt",
+            "author_identity_prompt",
+        }
+    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V6:
+        fields = common_fields | {
+            "literature_request_prompt",
             "literature_survey_prompt",
             "author_identity_prompt",
         }
@@ -382,6 +396,7 @@ def decode_generation_recipe(
         _string(raw_recipe, "literature_request_prompt")
         _string(raw_recipe, "literature_survey_prompt")
     if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA:
+        _string(raw_recipe, "evidence_research_prompt")
         _string(raw_recipe, "author_identity_prompt")
     legacy_recipe = schema_version != COMPANION_GENERATION_RECIPE_SCHEMA
     return CompanionGenerationRecipe(
@@ -395,6 +410,11 @@ def decode_generation_recipe(
             LITERATURE_REQUEST_PROMPT_VERSION
             if legacy_recipe
             else _string(raw_recipe, "literature_request_prompt")
+        ),
+        evidence_research_prompt=(
+            _string(raw_recipe, "evidence_research_prompt")
+            if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA
+            else EVIDENCE_RESEARCH_PROMPT_VERSION
         ),
         literature_survey_prompt=(
             LITERATURE_SURVEY_PROMPT_VERSION

@@ -248,15 +248,30 @@ def test_recipe_identity_reserves_author_prompt_and_decodes_v5(
     legacy = {
         key: value
         for key, value in encoded.items()
-        if key != "author_identity_prompt"
+        if key
+        not in {"author_identity_prompt", "evidence_research_prompt"}
     }
     legacy["schema_version"] = "arc.companion.generation_recipe.v5"
 
     decoded = decode_generation_recipe(legacy)
 
-    assert encoded["schema_version"] == "arc.companion.generation_recipe.v6"
+    assert encoded["schema_version"] == "arc.companion.generation_recipe.v7"
     assert encoded["author_identity_prompt"] == recipe.author_identity_prompt
     assert decoded.author_identity_prompt == recipe.author_identity_prompt
+
+
+def test_recipe_identity_decodes_v6_without_evidence_prompt() -> None:
+    recipe = CompanionGenerationRecipe()
+    legacy = {
+        key: value
+        for key, value in encode_generation_recipe(recipe).items()
+        if key != "evidence_research_prompt"
+    }
+    legacy["schema_version"] = "arc.companion.generation_recipe.v6"
+
+    decoded = decode_generation_recipe(legacy)
+
+    assert decoded.evidence_research_prompt == recipe.evidence_research_prompt
 
 
 def test_cli_parses_repeatable_authors_and_strict_reader_label_file(

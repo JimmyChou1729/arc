@@ -6,12 +6,11 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
+from urllib.parse import urlparse
 
 from arc_jobs import (
-    Awaiting,
     JsonValue,
     Paused,
-    ResumeReason,
     RunContext,
     canonical_json_bytes,
 )
@@ -26,17 +25,20 @@ from .generation_validation import CompanionContentError
 
 
 _EVIDENCE_ARTIFACT = "planning/evidence"
-_EVIDENCE_REQUEST_ARTIFACT = "planning/evidence-request"
-_EVIDENCE_INTERACTION_SCHEMA = "arc.companion.evidence_response.v2"
+_EVIDENCE_RESEARCH_SCHEMA = "arc.companion.evidence_research.v1"
+_LEGACY_EVIDENCE_INTERACTION_SCHEMA = "arc.companion.evidence_response.v2"
 _SUPERVISION_SCHEMA = "arc.companion.review_supervision.v1"
 
 
-def collect_evidence(
+def frozen_evidence(
     context: RunContext,
     request_plan: Mapping[str, Any],
-) -> dict[str, tuple[dict[str, Any], ...]] | Paused:
-    """Freeze a multi-candidate research log and its selected evidence."""
+) -> dict[str, tuple[dict[str, Any], ...]] | None:
+    """Load and validate a current or legacy frozen evidence artifact."""
 
+    existing = context.artifacts.find(_EVIDENCE_ARTIFACT)
+    if existing is None:
+        return None
     requests = mapping_list(
         request_plan.get("requests"), "literature requests"
     )
@@ -46,94 +48,53 @@ def collect_evidence(
             "evidence_request_invalid",
             "evidence request IDs must be unique across the book",
         )
-    existing = context.artifacts.find(_EVIDENCE_ARTIFACT)
-    if existing is not None:
-        document = read_json(context, existing, "frozen evidence")
-        if set(document) != {
-            "schema_version",
-            "research_log",
-            "selected_evidence",
-        } or document.get("schema_version") != _EVIDENCE_INTERACTION_SCHEMA:
-            raise CompanionContentError(
-                "evidence_response_invalid",
-                "frozen evidence has invalid fields",
-            )
-        collection = _validate_evidence_responses(
-            document.get("research_log"), requests=requests
+    document = read_json(context, existing, "frozen evidence")
+    if set(document) != {
+        "schema_version",
+        "research_log",
+        "selected_evidence",
+    } or document.get("schema_version") not in {
+        _EVIDENCE_RESEARCH_SCHEMA,
+        _LEGACY_EVIDENCE_INTERACTION_SCHEMA,
+    }:
+        raise CompanionContentError(
+            "evidence_response_invalid",
+            "frozen evidence has invalid fields",
         )
-        if list(collection["selected_evidence"]) != document.get(
-            "selected_evidence"
-        ):
-            raise CompanionContentError(
-                "evidence_response_invalid",
-                "frozen selected evidence does not match the research log",
-            )
-        return collection
-    digest = hashlib.sha256(canonical_json_bytes(requests)).hexdigest()
-    resume_key = f"evidence-{digest[:24]}"
-    value = context.resume_input
-    if value is not None and value.get("resume_key") == resume_key:
-        if set(value) != {"schema_version", "resume_key", "responses"}:
-            raise CompanionContentError(
-                "evidence_response_invalid",
-                "evidence response has invalid fields",
-            )
-        if value.get("schema_version") != _EVIDENCE_INTERACTION_SCHEMA:
-            raise CompanionContentError(
-                "evidence_response_invalid",
-                "evidence response schema is unsupported",
-            )
-        collection = _validate_evidence_responses(
-            value.get("responses"), requests=requests
-        )
-        context.artifacts.publish_json(
-            _EVIDENCE_ARTIFACT,
-            {
-                "schema_version": _EVIDENCE_INTERACTION_SCHEMA,
-                "research_log": list(collection["research_log"]),
-                "selected_evidence": list(
-                    collection["selected_evidence"]
-                ),
-            },
-        )
-        return collection
-
-    request_ref = context.artifacts.find(_EVIDENCE_REQUEST_ARTIFACT)
-    if request_ref is None:
-        request_ref = context.artifacts.publish_json(
-            _EVIDENCE_REQUEST_ARTIFACT,
-            {
-                "schema_version": "arc.companion.evidence_request.v2",
-                "resume_key": resume_key,
-                "response_schema": _evidence_response_schema(request_ids),
-                "minimum_candidate_count": 20,
-                "candidate_categories": [
-                    "source_named",
-                    "important_prior_history",
-                    "later_core_debate",
-                ],
-                "requests": [
-                    {
-                        "request_id": item["request_id"],
-                        "kind": item["kind"],
-                        "query": item["query"],
-                        "purpose": item["purpose"],
-                        "anchors": list(item["anchor_block_ids"]),
-                    }
-                    for item in requests
-                ],
-            },
-        )
-    return Paused(
-        Awaiting(
-            ResumeReason.INTERACTION_REQUIRED,
-            resume_key,
-            True,
-            request_ref,
-            _EVIDENCE_INTERACTION_SCHEMA,
-            {"request_count": len(requests)},
-        )
+    collection = validate_evidence_research(
+        {"responses": document.get("research_log")},
+        requests=requests,
     )
+    if list(collection["selected_evidence"]) != document.get(
+        "selected_evidence"
+    ):
+        raise CompanionContentError(
+            "evidence_response_invalid",
+            "frozen selected evidence does not match the research log",
+        )
+    return collection
+
+
+def freeze_evidence(
+    context: RunContext,
+    request_plan: Mapping[str, Any],
+    value: Any,
+) -> dict[str, tuple[dict[str, Any], ...]]:
+    """Validate model research and publish the immutable selected subset."""
+
+    requests = mapping_list(
+        request_plan.get("requests"), "literature requests"
+    )
+    collection = validate_evidence_research(value, requests=requests)
+    context.artifacts.publish_json(
+        _EVIDENCE_ARTIFACT,
+        {
+            "schema_version": _EVIDENCE_RESEARCH_SCHEMA,
+            "research_log": list(collection["research_log"]),
+            "selected_evidence": list(collection["selected_evidence"]),
+        },
+    )
+    return collection
 
 
 def review_supervision(
@@ -316,12 +277,17 @@ def mapping_list(
     return [dict(item) for item in value]
 
 
-def _validate_evidence_responses(
+def validate_evidence_research(
     value: Any,
     *,
     requests: Sequence[Mapping[str, Any]],
 ) -> dict[str, tuple[dict[str, Any], ...]]:
-    responses = mapping_list(value, "evidence responses")
+    if not isinstance(value, Mapping) or set(value) != {"responses"}:
+        raise CompanionContentError(
+            "evidence_response_invalid",
+            "evidence research must contain exactly responses",
+        )
+    responses = mapping_list(value.get("responses"), "evidence responses")
     expected_ids = [str(item["request_id"]) for item in requests]
     by_request: dict[str, dict[str, Any]] = {}
     evidence_ids: set[str] = set()
@@ -393,6 +359,7 @@ def _validate_evidence_responses(
                 "content": str(candidate["content"]).strip(),
                 "source": str(candidate["source"]).strip(),
             }
+            _validate_wikipedia_source(normalized["source"])
             candidate_by_id[evidence_id] = normalized
             evidence_ids.add(evidence_id)
         selected_ids = response["selected_evidence_ids"]
@@ -444,74 +411,27 @@ def _validate_evidence_responses(
     }
 
 
-def _evidence_response_schema(
-    request_ids: Sequence[str],
-) -> dict[str, Any]:
-    nonempty = {"type": "string", "minLength": 1}
-    return {
-        "type": "object",
-        "properties": {
-            "schema_version": {
-                "const": _EVIDENCE_INTERACTION_SCHEMA,
-            },
-            "resume_key": nonempty,
-            "responses": {
-                "type": "array",
-                "minItems": len(request_ids),
-                "maxItems": len(request_ids),
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "request_id": {
-                            "type": "string",
-                            "enum": list(request_ids),
-                        },
-                        "candidates": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "evidence_id": nonempty,
-                                    "title": nonempty,
-                                    "content": nonempty,
-                                    "source": nonempty,
-                                },
-                                "required": [
-                                    "evidence_id",
-                                    "title",
-                                    "content",
-                                    "source",
-                                ],
-                                "additionalProperties": False,
-                            },
-                        },
-                        "selected_evidence_ids": {
-                            "type": "array",
-                            "items": nonempty,
-                            "uniqueItems": True,
-                        },
-                        "selection_rationale": nonempty,
-                    },
-                    "required": [
-                        "request_id",
-                        "candidates",
-                        "selected_evidence_ids",
-                        "selection_rationale",
-                    ],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        "required": ["schema_version", "resume_key", "responses"],
-        "additionalProperties": False,
-    }
+def _validate_wikipedia_source(source: str) -> None:
+    hostname = urlparse(source).hostname
+    if hostname is None:
+        return
+    hostname = hostname.rstrip(".").lower()
+    if (
+        hostname == "wikipedia.org"
+        or hostname.endswith(".wikipedia.org")
+    ) and hostname != "en.wikipedia.org":
+        raise CompanionContentError(
+            "evidence_response_invalid",
+            "Wikipedia evidence must use en.wikipedia.org",
+        )
 
 
 __all__ = [
     "accepted_chapter_document",
     "bibliography_contracts",
-    "collect_evidence",
     "evidence_digest",
+    "freeze_evidence",
+    "frozen_evidence",
     "mapping",
     "mapping_list",
     "planned_source_documents",
@@ -519,4 +439,5 @@ __all__ = [
     "ref_document",
     "review_supervision",
     "task_id",
+    "validate_evidence_research",
 ]

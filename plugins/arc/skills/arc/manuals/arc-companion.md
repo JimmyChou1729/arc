@@ -3,8 +3,8 @@
 `arc-companion` builds a source-anchored reading companion with translation,
 guides, searchable PDF, and Web reader. Use this manual for package commands.
 
-Build and resume require public `arc-translate`, paper, LLM, and jobs
-dependencies; an incomplete runtime returns `runtime_dependency_missing`.
+Build and resume require public `arc-translate`, paper, LLM, and jobs dependencies;
+an incomplete runtime returns `runtime_dependency_missing`.
 
 ## Build from a Local Rich Source
 
@@ -26,16 +26,13 @@ invoking a translation provider. Companion also copies the prior accepted guide
 as optional model context: the model may improve, recombine, or discard old
 ideas; its structure and bibliography are not current constraints.
 
-Use the directory explicitly chosen by the user as `<project-dir>` itself;
-do not append `companion`, `build-v2`, `fresh`, or an attempt-specific suffix.
-Inside the ARC checkout, choose a stable ignored path below `local/`. This
-`local/` convention does not apply to an external directory supplied by the
-user.
+Use the user-chosen `<project-dir>` itself; do not append `companion`, `build-v2`,
+`fresh`, or an attempt suffix. Inside this checkout, use a stable ignored path
+below `local/`; that convention does not apply to an external user directory.
 
-Set `<host-authority>` once per run: use `unrestricted` only when the host
-explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
-identical value for every resume of that run. For `restricted` or `unknown`
-host requests, follow `manuals/arc-llm.md`; do not assume a universal broker.
+Set `<host-authority>` once per run: use `unrestricted` only when explicitly
+reported; otherwise use `unknown`. Reuse it for every resume. For `restricted`
+or `unknown` host requests, follow `manuals/arc-llm.md`.
 
 The root may contain unrelated user files; Companion preserves them. It claims
 only `.arc/companion/`, `releases/`, `companion.pdf`, and `companion.html`, and
@@ -62,6 +59,12 @@ Before chapter planning, Companion requests one document-wide log of at least
 20 candidate works or discussions across named sources, prior history, and
 central later debates. This is an inspection floor, not a citation target;
 only directly relevant selected evidence reaches planning and bibliography.
+This is a standard `arc-llm` research task: an unrestricted model uses its
+search, Web, and paper tools directly, while restricted or unknown execution
+uses the native host-turn/broker contract when necessary. Companion has no
+separate evidence resume input. English Wikipedia may be used as an ordinary
+candidate, but non-English Wikipedia editions are rejected; target-language
+notes keep English page titles and URLs as source identity.
 
 Paragraph-local and chapter-level/cross-paragraph units have equal status and no
 placement quota. Retain only distinct motivation, presentation, implication,

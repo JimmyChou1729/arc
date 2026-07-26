@@ -42,8 +42,9 @@ from arc_paper import (
 from ._build_support import (
     accepted_chapter_document,
     bibliography_contracts,
-    collect_evidence,
     evidence_digest,
+    freeze_evidence,
+    frozen_evidence,
     mapping,
     mapping_list,
     planned_source_documents,
@@ -83,6 +84,8 @@ from .prompts import (
     CHAPTER_GUIDE_REVIEW_SCHEMA,
     CHAPTER_GUIDE_SCHEMA,
     CHAPTER_PLAN_SCHEMA,
+    EVIDENCE_RESEARCH_PROMPT_VERSION,
+    EVIDENCE_RESEARCH_SCHEMA,
     LITERATURE_REQUEST_PLAN_SCHEMA,
     LITERATURE_REQUEST_PROMPT_VERSION,
     LITERATURE_SURVEY_PROMPT_VERSION,
@@ -91,6 +94,7 @@ from .prompts import (
     chapter_guide_prompt,
     chapter_guide_review_prompt,
     chapter_plan_prompt,
+    evidence_research_prompt,
     literature_request_prompt,
     literature_survey_prompt,
 )
@@ -117,7 +121,7 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v3"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v4"
 COMPANION_BUILD_DIAGNOSTICS_SCHEMA = "arc.companion.build_diagnostics.v1"
 _BOOK_ARTIFACT = "book/accepted"
 _DIAGNOSTICS_ARTIFACT = "diagnostics/build"
@@ -223,10 +227,13 @@ class CompanionBuildHandler:
             )
             if isinstance(literature_requests, (Paused, Failed)):
                 return literature_requests
-            evidence_collection = collect_evidence(
-                context, literature_requests
+            evidence_collection = self._evidence_research(
+                context,
+                resume_input,
+                source,
+                literature_requests,
             )
-            if isinstance(evidence_collection, Paused):
+            if isinstance(evidence_collection, (Paused, Failed)):
                 return evidence_collection
             evidence = evidence_collection["selected_evidence"]
             literature_survey = self._literature_survey(
@@ -744,6 +751,74 @@ class CompanionBuildHandler:
         )
         context.artifacts.publish_json(artifact_id, value)
         return value
+
+    def _evidence_research(
+        self,
+        context: RunContext,
+        resume_input: Any,
+        source: RichDocument,
+        request_plan: Mapping[str, Any],
+    ) -> Mapping[str, Any] | Paused | Failed:
+        existing = frozen_evidence(context, request_plan)
+        if existing is not None:
+            return existing
+        candidate_id = "planning/evidence-research.json"
+        candidate_path = context.working.find_candidate(candidate_id)
+        if candidate_path is None:
+            prompt_contract = getattr(
+                self.recipe,
+                "evidence_research_prompt",
+                EVIDENCE_RESEARCH_PROMPT_VERSION,
+            )
+            semantic = {
+                "document_digest": source.document_digest,
+                "target_language": self.request.target_language,
+                "intent": self.request.effective_intent,
+                "request_plan_digest": hashlib.sha256(
+                    canonical_json_bytes(dict(request_plan))
+                ).hexdigest(),
+                "prompt_contract": prompt_contract,
+            }
+            request = LLMRequest(
+                task_id("evidence-research", semantic),
+                evidence_research_prompt(
+                    requests=mapping_list(
+                        request_plan.get("requests"),
+                        "literature requests",
+                    ),
+                    blocks=[
+                        _source_block_document(source, item)
+                        for item in source.blocks
+                    ],
+                    target_language=self.request.target_language,
+                    intent=self.request.effective_intent,
+                ),
+                JsonOutput(EVIDENCE_RESEARCH_SCHEMA, repair="format"),
+                self.recipe.model,
+            )
+            outcome = execute_task(
+                self.task_service,
+                context,
+                request,
+                resume_input=resume_input,
+                options=self.execution.llm,
+            )
+            if isinstance(outcome, LLMPaused):
+                return Paused(awaiting_from_pause(outcome))
+            if isinstance(outcome, LLMFailed):
+                return Failed(run_error_from_failure(outcome))
+            ensure_not_stopped(outcome, "evidence research")
+            assert isinstance(outcome, LLMCompleted)
+            raw = mapping(outcome.value, "evidence research")
+            candidate_path = context.working.write_candidate_json(
+                candidate_id, raw
+            )
+        else:
+            raw = context.working.read_candidate_json(candidate_id)
+        try:
+            return freeze_evidence(context, request_plan, raw)
+        except CompanionContentError as exc:
+            return Failed(_candidate_error(exc, candidate_path))
 
     def _plans(
         self,

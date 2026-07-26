@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from arc_llm import ModelSelection
@@ -18,6 +19,10 @@ from arc_paper import (
 import arc_companion.request_contracts as request_contracts
 from arc_companion import __all__ as public_names
 from arc_companion.build import CompanionBuildHandler
+from arc_companion._build_support import (
+    frozen_evidence,
+    validate_evidence_research,
+)
 from arc_companion.contracts import AcceptedBook, AcceptedChapter, SourceAnchor
 from arc_companion.generation_validation import (
     CompanionContentError,
@@ -30,9 +35,11 @@ from arc_companion.generation_validation import (
 from arc_companion.prompts import (
     AUTHOR_IDENTITY_SCHEMA,
     CHAPTER_PLAN_SCHEMA,
+    EVIDENCE_RESEARCH_SCHEMA,
     LITERATURE_REQUEST_PLAN_SCHEMA,
     author_identity_prompt,
     chapter_plan_prompt,
+    evidence_research_prompt,
     literature_request_prompt,
 )
 from arc_companion.request_contracts import (
@@ -51,7 +58,7 @@ from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
-    assert CompanionBuildHandler.name == "arc.companion.build.v3"
+    assert CompanionBuildHandler.name == "arc.companion.build.v4"
     assert not any(name.startswith("Legacy") for name in public_names)
     for module_name in (
         "arc_companion.build_v2",
@@ -137,6 +144,126 @@ def test_evidence_first_prompts_encode_selective_value_contract() -> None:
     ):
         assert phrase in plan
     assert "reader question" not in plan.casefold()
+
+
+def _research_output(source: str = "https://example.test/source") -> dict:
+    return {
+        "responses": [
+            {
+                "request_id": "request",
+                "candidates": [
+                    {
+                        "evidence_id": f"evidence-{index}",
+                        "title": f"Evidence {index}",
+                        "content": "目标语言证据说明。",
+                        "source": (
+                            source
+                            if index == 1
+                            else f"https://example.test/{index}"
+                        ),
+                    }
+                    for index in range(1, 21)
+                ],
+                "selected_evidence_ids": ["evidence-1"],
+                "selection_rationale": "该来源直接支持读者理解。",
+            }
+        ]
+    }
+
+
+def test_evidence_research_prompt_and_schema_use_direct_agent_contract() -> None:
+    prompt = evidence_research_prompt(
+        requests=[
+            {
+                "request_id": "request",
+                "kind": "web",
+                "query": "context",
+                "purpose": "reader context",
+                "anchor_block_ids": ["b1"],
+            }
+        ],
+        blocks=[{"block_id": "b1", "text": "source"}],
+        target_language="zh-CN",
+        intent="Explain the source.",
+    )
+
+    assert set(EVIDENCE_RESEARCH_SCHEMA["properties"]) == {"responses"}
+    for phrase in (
+        "search, web, paper",
+        "standard arc-llm host-turn contract",
+        "at least 20 distinct candidates",
+        "Only en.wikipedia.org",
+        "Translate any English quotation",
+        "keeping the English page title",
+    ):
+        assert phrase in prompt
+
+
+def test_evidence_research_accepts_only_english_wikipedia() -> None:
+    requests = [{"request_id": "request"}]
+    result = validate_evidence_research(
+        _research_output(
+            "https://en.wikipedia.org/wiki/Noether%27s_theorem"
+        ),
+        requests=requests,
+    )
+    assert result["selected_evidence"][0]["title"] == "Evidence 1"
+
+    for hostname in ("zh.wikipedia.org", "fr.wikipedia.org", "wikipedia.org"):
+        with pytest.raises(
+            CompanionContentError, match="en.wikipedia.org"
+        ):
+            validate_evidence_research(
+                _research_output(f"https://{hostname}/wiki/Test"),
+                requests=requests,
+            )
+
+
+def test_evidence_research_requires_global_candidate_and_request_coverage() -> None:
+    requests = [{"request_id": "request"}, {"request_id": "second"}]
+    missing = _research_output()
+    with pytest.raises(
+        CompanionContentError, match="exactly cover every planned request"
+    ):
+        validate_evidence_research(missing, requests=requests)
+
+    too_few = _research_output()
+    too_few["responses"][0]["candidates"] = too_few["responses"][0][
+        "candidates"
+    ][:19]
+    with pytest.raises(
+        CompanionContentError, match="at least 20 distinct candidates"
+    ):
+        validate_evidence_research(
+            too_few, requests=[{"request_id": "request"}]
+        )
+
+
+def test_legacy_frozen_evidence_replays_without_research_call() -> None:
+    research = _research_output()
+    selected = validate_evidence_research(
+        research, requests=[{"request_id": "request"}]
+    )["selected_evidence"]
+    document = {
+        "schema_version": "arc.companion.evidence_response.v2",
+        "research_log": research["responses"],
+        "selected_evidence": list(selected),
+    }
+
+    class _Artifacts:
+        def find(self, artifact_id: str):
+            return artifact_id if artifact_id == "planning/evidence" else None
+
+        def read_bytes(self, _ref) -> bytes:
+            return json.dumps(document).encode("utf-8")
+
+    replayed = frozen_evidence(
+        SimpleNamespace(artifacts=_Artifacts()),  # type: ignore[arg-type]
+        {"requests": [{"request_id": "request"}]},
+    )
+
+    assert replayed is not None
+    assert replayed["selected_evidence"] == selected
 
 
 def test_prior_companion_is_reference_context_not_a_template() -> None:
@@ -493,7 +620,7 @@ def test_provider_model_and_prompt_contract_change_run_identity(
     recipe_input = semantic_input["generation_recipe"]
     assert (
         recipe_input["schema_version"]
-        == "arc.companion.generation_recipe.v6"
+        == "arc.companion.generation_recipe.v7"
     )
     assert (
         recipe_input["author_identity_prompt"]
@@ -502,6 +629,10 @@ def test_provider_model_and_prompt_contract_change_run_identity(
     assert (
         recipe_input["literature_request_prompt"]
         == auto.literature_request_prompt
+    )
+    assert (
+        recipe_input["evidence_research_prompt"]
+        == auto.evidence_research_prompt
     )
     assert (
         recipe_input["literature_survey_prompt"]
