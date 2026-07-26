@@ -21,6 +21,8 @@ IDEAS_MODULES = SCRIPTS / "_arc_workflows"
 
 
 def _load_runner_module():
+    old_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
     sys.path.insert(0, str(SCRIPTS))
     try:
         spec = importlib.util.spec_from_file_location("run_ideas", RUNNER)
@@ -30,6 +32,7 @@ def _load_runner_module():
         spec.loader.exec_module(module)
         return module
     finally:
+        sys.dont_write_bytecode = old_dont_write_bytecode
         sys.path.remove(str(SCRIPTS))
 
 
