@@ -138,9 +138,12 @@ def plan_translation_reuse(
         )
     spec = repository.read_working_spec(run_id)
     # Imported lazily to keep render-only package imports lightweight.
-    from .build import COMPANION_BUILD_HANDLER, _glossary_contracts
+    from .build import (
+        COMPATIBLE_COMPANION_BUILD_HANDLERS,
+        _glossary_contracts,
+    )
 
-    if spec.handler != COMPANION_BUILD_HANDLER:
+    if spec.handler not in COMPATIBLE_COMPANION_BUILD_HANDLERS:
         raise TranslationReuseError(
             "translation_reuse_handler_incompatible",
             "translation reuse source uses an incompatible Companion handler",

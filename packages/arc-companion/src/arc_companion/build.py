@@ -122,6 +122,12 @@ from .validation import require_valid_accepted_book
 
 
 COMPANION_BUILD_HANDLER = "arc.companion.build.v4"
+COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
+    {
+        COMPANION_BUILD_HANDLER,
+        "arc.companion.build.v3",
+    }
+)
 COMPANION_BUILD_DIAGNOSTICS_SCHEMA = "arc.companion.build_diagnostics.v1"
 _BOOK_ARTIFACT = "book/accepted"
 _DIAGNOSTICS_ARTIFACT = "diagnostics/build"
@@ -1671,6 +1677,7 @@ def validate_build_diagnostics(value: Mapping[str, Any]) -> None:
 __all__ = [
     "COMPANION_BUILD_DIAGNOSTICS_SCHEMA",
     "COMPANION_BUILD_HANDLER",
+    "COMPATIBLE_COMPANION_BUILD_HANDLERS",
     "CompanionBuildHandler",
     "validate_build_diagnostics",
 ]

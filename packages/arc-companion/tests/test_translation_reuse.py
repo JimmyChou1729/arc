@@ -10,6 +10,7 @@ from arc_jobs import (
     RunContext,
     RunEngine,
     RunError,
+    RunRepository,
     RunStatus,
     Succeeded,
     atomic_write_json,
@@ -498,6 +499,36 @@ def test_legacy_v4_recipe_can_supply_exact_translation_identity(
     )
     assert decoded_request.target_language == request.target_language
     assert approx_count == 7
+
+
+def test_legacy_v3_handler_can_supply_translation_reuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, request, recipe = _successful_source(tmp_path)
+    run_id = paths.current_run_id
+    assert run_id is not None
+    original = RunRepository.read_working_spec
+
+    def legacy_spec(repository: RunRepository, selected: str):
+        return replace(
+            original(repository, selected),
+            handler="arc.companion.build.v3",
+        )
+
+    monkeypatch.setattr(
+        RunRepository,
+        "read_working_spec",
+        legacy_spec,
+    )
+
+    plan = CompanionService(paths.jobs_root).plan_translation_reuse(
+        TranslationReuseSource(paths.root, run_id),
+        request,
+        recipe,
+    )
+
+    assert plan.reuse_digest
+    assert plan.bundle["source"]["run_id"] == run_id
 
 
 def test_reuse_reads_translation_from_newest_available_recovery_epoch(

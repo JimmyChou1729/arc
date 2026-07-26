@@ -22,6 +22,7 @@ from arc_jobs import (
 from arc_llm import LLMTaskService
 
 from .build import (
+    COMPATIBLE_COMPANION_BUILD_HANDLERS,
     COMPANION_BUILD_HANDLER,
     CompanionBuildHandler,
     validate_build_diagnostics,
@@ -47,9 +48,6 @@ from .translation_reuse import (
     read_translation_reuse_receipt,
     stage_translation_reuse_plan,
 )
-
-_LEGACY_COMPANION_BUILD_HANDLER_V3 = "arc.companion.build.v3"
-
 
 class CompanionServiceError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
@@ -155,10 +153,7 @@ class CompanionService:
         task_service: LLMTaskService | None,
         translation_adapter: CompanionTranslationAdapter | None,
     ) -> CompanionBuildHandler:
-        if spec.handler in {
-            COMPANION_BUILD_HANDLER,
-            _LEGACY_COMPANION_BUILD_HANDLER_V3,
-        }:
+        if spec.handler in COMPATIBLE_COMPANION_BUILD_HANDLERS:
             request, recipe = decode_handler_semantic_input(
                 spec.semantic_input
             )
