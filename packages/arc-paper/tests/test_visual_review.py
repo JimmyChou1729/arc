@@ -21,12 +21,14 @@ from arc_jobs import (
 from arc_llm import (
     DeliveryState,
     FailureCategory,
+    HostAuthority,
     IsolationMode,
     LLMCompleted,
     LLMFailed,
     LLMPaused,
     LLMStopped,
     LLMTaskService,
+    LLMExecutionOptions,
     ModelSelection,
     ProviderCapabilities,
     ProviderDiagnostic,
@@ -179,7 +181,7 @@ class ScriptedLLM:
         self.values = deque(values)
         self.requests: list[Any] = []
 
-    def execute_or_resume(self, context, request):
+    def execute_or_resume(self, context, request, *, options=None):
         del context
         self.requests.append(request)
         return self.values.popleft()
@@ -189,7 +191,7 @@ class NeverLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    def execute_or_resume(self, context, request):
+    def execute_or_resume(self, context, request, *, options=None):
         del context, request
         self.calls += 1
         raise AssertionError("durable page terminal should suppress LLM replay")
@@ -235,10 +237,18 @@ def test_markdown_pdf_default_reviews_every_full_page_and_replays_without_calls(
     )
 
     first = runner.execute(
-        "visual-default", markdown, pdf, model=ModelSelection("codex")
+        "visual-default",
+        markdown,
+        pdf,
+        model=ModelSelection("codex"),
+        options=LLMExecutionOptions(host_authority=HostAuthority.UNRESTRICTED),
     )
     second = runner.execute(
-        "visual-default", markdown, pdf, model=ModelSelection("codex")
+        "visual-default",
+        markdown,
+        pdf,
+        model=ModelSelection("codex"),
+        options=LLMExecutionOptions(host_authority=HostAuthority.UNRESTRICTED),
     )
 
     assert first.status is second.status is RunStatus.SUCCEEDED

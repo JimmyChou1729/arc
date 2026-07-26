@@ -34,6 +34,7 @@ from arc_llm import (
     JsonOutput,
     LLMCompleted,
     LLMFailed,
+    LLMExecutionOptions,
     LLMInputArtifact,
     LLMPaused,
     LLMRequest,
@@ -207,6 +208,7 @@ class KeywordInventoryService:
         approx_count: int = 50,
         model: ModelSelection = ModelSelection(tier="medium"),
         resume_input: Mapping[str, JsonValue] | None = None,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> KeywordResult | Paused | Failed:
         approx_count = validate_approx_count(approx_count)
         planned_count = math.ceil(1.5 * approx_count)
@@ -246,6 +248,7 @@ class KeywordInventoryService:
                 fields,
                 model=model,
                 resume_input=effective_resume,
+                options=options,
             )
             if isinstance(explicit_outcome, (Paused, Failed)):
                 return explicit_outcome
@@ -265,6 +268,7 @@ class KeywordInventoryService:
                 model=model,
                 resume_input=effective_resume,
                 existing_terms=tuple(sorted(current_unique)),
+                options=options,
             )
             if isinstance(chapter_outcome, (Paused, Failed)):
                 return chapter_outcome
@@ -299,6 +303,7 @@ class KeywordInventoryService:
         *,
         model: ModelSelection,
         resume_input: Mapping[str, JsonValue] | None,
+        options: LLMExecutionOptions,
     ) -> tuple[list[TermCandidate], str] | Paused | Failed:
         resume = _supervision_resume(resume_input, document)
         if resume == "abort":
@@ -330,6 +335,7 @@ class KeywordInventoryService:
                     context,
                     request,
                     resume_input=_llm_resume_input(resume_input),
+                    options=options,
                 )
                 if isinstance(outcome, LLMPaused):
                     return Paused(awaiting_from_pause(outcome))
@@ -375,6 +381,7 @@ class KeywordInventoryService:
         model: ModelSelection,
         resume_input: Mapping[str, JsonValue] | None,
         existing_terms: Sequence[str],
+        options: LLMExecutionOptions,
     ) -> list[TermCandidate] | Paused | Failed:
         allocations = _chapter_allocations(
             keyword_chapters(document), requested_total
@@ -398,6 +405,7 @@ class KeywordInventoryService:
                 context,
                 request,
                 resume_input=_llm_resume_input(resume_input),
+                options=options,
             )
             if isinstance(outcome, LLMPaused):
                 return Paused(awaiting_from_pause(outcome))
@@ -467,10 +475,12 @@ class KeywordExtractionHandler:
         approx_count: int = 50,
         model: ModelSelection = ModelSelection(tier="medium"),
         task_service: TaskService | None = None,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> None:
         self.document = document
         self.approx_count = validate_approx_count(approx_count)
         self.model = model
+        self.options = options
         self.service = KeywordInventoryService(
             store, task_service=task_service
         )
@@ -501,6 +511,7 @@ class KeywordExtractionHandler:
                 self.document,
                 approx_count=self.approx_count,
                 model=self.model,
+                options=self.options,
             )
         except KeywordExtractionError as exc:
             return Failed(RunError(exc.code, exc.message))
@@ -534,6 +545,7 @@ class KeywordExtractionRunner:
         model: ModelSelection = ModelSelection(tier="medium"),
         run_id: str | None = None,
         resume_input: Mapping[str, JsonValue] | None = None,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> RunSnapshot:
         handler = KeywordExtractionHandler(
             document,
@@ -541,6 +553,7 @@ class KeywordExtractionRunner:
             approx_count=approx_count,
             model=model,
             task_service=self.task_service,
+            options=options,
         )
         resolved_run_id = run_id or _run_id(handler.semantic_input())
         run_dir = self.repository.run_directory(resolved_run_id)

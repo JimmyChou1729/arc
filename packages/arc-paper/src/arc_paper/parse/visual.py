@@ -15,6 +15,7 @@ from arc_llm import (
     JsonOutput,
     LLMStopped,
     LLMCompleted,
+    LLMExecutionOptions,
     LLMFailed,
     LLMInputArtifact,
     LLMPaused,
@@ -246,6 +247,7 @@ class VisualReviewService:
         *,
         markdown_bytes: bytes,
         pdf_bytes: bytes,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> VisualReviewOutcome:
         if primary.source.source_format is not SourceFormat.MARKDOWN:
             raise ValueError("visual review requires a Markdown primary")
@@ -372,7 +374,9 @@ class VisualReviewService:
 
             if terminal_error is None and terminal_ref is None:
                 try:
-                    outcome = self.llm.execute_or_resume(context, request)
+                    outcome = self.llm.execute_or_resume(
+                        context, request, options=options
+                    )
                 except Exception as exc:  # provider boundaries must not fail the parse
                     review = None
                     warning = (

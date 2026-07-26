@@ -31,6 +31,11 @@ The result reports durable run and domain identities. Use `arc-domain --help`
 and `arc-domain build --help` for build policy, inspection, published-artifact
 queries, and run controls.
 
+`--host-authority` is an execution-only attestation for model calls. It
+defaults to `unknown`; use `unrestricted` only when the invoking host has
+explicitly granted those permissions. It is not part of the domain request or
+published artifacts, so provide the same value again when resuming such a run.
+
 ## Tests
 
 The package suite uses fake paper and model services by default:

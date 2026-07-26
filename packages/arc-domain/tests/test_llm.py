@@ -10,6 +10,7 @@ from arc_llm import (
     DeliveryState,
     FailureCategory,
     LLMFailed,
+    LLMExecutionOptions,
     LLMPaused,
     ModelSelection,
     ProviderFailure,
@@ -45,13 +46,18 @@ def test_execute_routed_only_passes_matching_resume_input(monkeypatch):
     resume_input = object()
 
     monkeypatch.setattr(_llm, "resume_input_matches", lambda _request, _resume: True)
-    assert _llm.execute_routed(service, context, request, resume_input=resume_input) == "outcome"
-    assert service.calls == [{"context": context, "request": request, "input": resume_input}]
+    options = LLMExecutionOptions()
+    assert _llm.execute_routed(
+        service, context, request, resume_input=resume_input, options=options
+    ) == "outcome"
+    assert service.calls == [{"context": context, "request": request, "input": resume_input, "options": options}]
 
     service.calls.clear()
     monkeypatch.setattr(_llm, "resume_input_matches", lambda _request, _resume: False)
-    _llm.execute_routed(service, context, request, resume_input=resume_input)
-    assert service.calls == [{"context": context, "request": request}]
+    _llm.execute_routed(
+        service, context, request, resume_input=resume_input, options=options
+    )
+    assert service.calls == [{"context": context, "request": request, "options": options}]
 
 
 def test_outer_resume_input_decodes_or_uses_caller_error_code():

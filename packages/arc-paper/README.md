@@ -18,6 +18,10 @@ Replace the quoted placeholder with an arXiv, INSPIRE, or DOI identifier.
 Use `arc-paper --help` and `arc-paper get-metadata --help` for the current
 paper, source, search, workflow, and cache commands.
 
+`arc-paper extract-keywords` accepts `--host-authority` for its LLM work. The
+default is `unknown`; `unrestricted` is an explicit host attestation and is
+runtime-only rather than part of the keyword inventory identity.
+
 ## Python API
 
 The deterministic service exposes the same operation:

@@ -31,6 +31,14 @@ def test_root_and_subcommand_help_is_human_readable(
     assert "arc.command_result.v2" not in captured.out
 
 
+def test_generation_and_resume_help_expose_explicit_host_authority(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for command in ("detect-language", "build-glossary", "translate-blocks", "resume"):
+        assert main([command, "--help"]) == 0
+        assert "--host-authority" in capsys.readouterr().out
+
+
 def test_help_has_no_obsolete_json_flag(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

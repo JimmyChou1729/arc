@@ -30,6 +30,7 @@ from arc_llm import (
     LLMStopped,
     LLMCompleted,
     LLMFailed,
+    LLMExecutionOptions,
     LLMPaused,
     LLMRequest,
     LLMTaskService,
@@ -154,6 +155,7 @@ class DomainBuildHandler:
         paper_access: DomainPaperAccess | None = None,
         task_service: LLMTaskService | None = None,
         reference_service: ReferenceInferenceService | None = None,
+        llm: LLMExecutionOptions = LLMExecutionOptions(),
         max_workers: int = 8,
     ) -> None:
         max_workers = validate_domain_build_workers(max_workers)
@@ -161,6 +163,7 @@ class DomainBuildHandler:
         self.paper = paper_access or DomainPaperAccess()
         self.task_service = task_service or LLMTaskService()
         self.reference_service = reference_service or ReferenceInferenceService(self.task_service)
+        self.llm = llm
         self.max_workers = max_workers
 
     def semantic_input(self) -> dict[str, JsonValue]:
@@ -354,7 +357,11 @@ class DomainBuildHandler:
             self.request.model,
         )
         audit_outcome = execute_routed(
-            self.task_service, context, audit_request, resume_input=resume_input
+            self.task_service,
+            context,
+            audit_request,
+            resume_input=resume_input,
+            options=self.llm,
         )
         if isinstance(audit_outcome, LLMCompleted):
             audit = normalize_candidate_audit(_mapping(audit_outcome.value, "candidate audit"))
@@ -385,6 +392,7 @@ class DomainBuildHandler:
                 metadata_lookup=self.paper.metadata,
                 model=self.request.model,
                 resume_input=resume_input,
+                options=self.llm,
             )
             if isinstance(reference_outcome, ReferenceInferenceCompleted):
                 result_document = reference_outcome.result.to_document()
@@ -449,6 +457,7 @@ class DomainBuildHandler:
             context,
             selection_request,
             resume_input=resume_input,
+            options=self.llm,
         )
         if isinstance(selection_outcome, LLMCompleted):
             selection = normalize_foundation_selection(
@@ -599,7 +608,11 @@ class DomainBuildHandler:
                 self.request.model,
             )
             ranking_outcome = execute_routed(
-                self.task_service, context, ranking_request, resume_input=resume_input
+                self.task_service,
+                context,
+                ranking_request,
+                resume_input=resume_input,
+                options=self.llm,
             )
             if isinstance(ranking_outcome, LLMCompleted):
                 ranking = normalize_intent_ranking(
@@ -896,7 +909,11 @@ class DomainBuildHandler:
             self.request.model,
         )
         outcome = execute_routed(
-            self.task_service, context, request, resume_input=resume_input
+            self.task_service,
+            context,
+            request,
+            resume_input=resume_input,
+            options=self.llm,
         )
         if isinstance(outcome, LLMCompleted):
             try:
@@ -1032,6 +1049,7 @@ class DomainBuildRunner:
         paper_access: DomainPaperAccess | None = None,
         task_service: LLMTaskService | None = None,
         reference_service: ReferenceInferenceService | None = None,
+        llm: LLMExecutionOptions = LLMExecutionOptions(),
         max_workers: int = 8,
     ) -> RunSnapshot:
         handler = DomainBuildHandler(
@@ -1039,6 +1057,7 @@ class DomainBuildRunner:
             paper_access=paper_access,
             task_service=task_service,
             reference_service=reference_service,
+            llm=llm,
             max_workers=max_workers,
         )
         resolved_run_id = run_id or domain_build_run_id(request)
@@ -1060,6 +1079,7 @@ class DomainBuildRunner:
         paper_access: DomainPaperAccess | None = None,
         task_service: LLMTaskService | None = None,
         reference_service: ReferenceInferenceService | None = None,
+        llm: LLMExecutionOptions = LLMExecutionOptions(),
         max_workers: int = 8,
     ) -> RunSnapshot:
         max_workers = validate_domain_build_workers(max_workers)
@@ -1071,6 +1091,7 @@ class DomainBuildRunner:
             paper_access=paper_access,
             task_service=task_service,
             reference_service=reference_service,
+            llm=llm,
             max_workers=max_workers,
         )
         return self.engine.resume(run_id, handler, input=input)

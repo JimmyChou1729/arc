@@ -48,6 +48,14 @@ def test_only_paper_access_commands_accept_a_paper_cache_root(
     assert "--paper-cache-root" not in capsys.readouterr().out
 
 
+def test_build_and_resume_expose_explicit_host_authority(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for command in ("build", "resume"):
+        assert main([command, "--help"]) == 0
+        assert "--host-authority" in capsys.readouterr().out
+
+
 def test_usage_error_points_to_contextual_help(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

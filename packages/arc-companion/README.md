@@ -37,6 +37,11 @@ Use `arc-companion --help` and `arc-companion build --help` for supported
 sources, optional PDF validation, durable controls, rendering, and release
 validation.
 
+Build and resume accept `--host-authority` for all model-backed lanes. It
+defaults to `unknown`; `unrestricted` is valid only as an explicit host
+attestation. This runtime setting does not change the Companion build recipe
+or release artifacts.
+
 A successful build or resume formally publishes and validates one complete
 immutable PDF/Web release. The model-free `render` command is the manual
 republication path for an already accepted book after renderer, font, style,

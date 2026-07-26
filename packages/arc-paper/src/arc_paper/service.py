@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from arc_jobs import JsonValue, RunStatus
-from arc_llm import ModelSelection
+from arc_llm import HostAuthority, LLMExecutionOptions, ModelSelection
 
 from ._cache_admin import (
     CacheAdministrator,
@@ -512,6 +512,7 @@ class ArcPaperService:
         model: ModelSelection = ModelSelection(tier="medium"),
         run_id: str | None = None,
         resume_input: Mapping[str, JsonValue] | None = None,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> KeywordResult:
         """Extract a cache-aware approximate keyword view.
 
@@ -549,6 +550,7 @@ class ArcPaperService:
             model=model,
             run_id=run_id,
             resume_input=resume_input,
+            options=options,
         )
         if snapshot.status is RunStatus.SUCCEEDED:
             result: KeywordResult = runner.read_result(snapshot)
@@ -1128,6 +1130,7 @@ def extract_keywords(
     model_tier: str = "medium",
     run_id: str | None = None,
     resume_input: Mapping[str, JsonValue] | None = None,
+    host_authority: str = HostAuthority.UNKNOWN.value,
 ) -> KeywordResult:
     service = ArcPaperService(cache_root=cache_root)
     source_text = str(source)
@@ -1148,6 +1151,7 @@ def extract_keywords(
         ),
         run_id=run_id,
         resume_input=resume_input,
+        options=LLMExecutionOptions(host_authority=HostAuthority(host_authority)),
     )
 
 

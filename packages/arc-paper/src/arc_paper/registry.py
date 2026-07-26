@@ -1071,6 +1071,9 @@ _OPERATIONS = (
                 },
                 "run_id": {"type": ["string", "null"]},
                 "resume_input": {"type": ["object", "null"]},
+                "host_authority": {
+                    "enum": ["unknown", "restricted", "unrestricted"],
+                },
             },
             required=("source", "project_dir"),
         ),

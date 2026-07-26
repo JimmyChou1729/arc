@@ -25,6 +25,11 @@ cache. Durable state is project-local under `<project-dir>/.arc/translate/`.
 Each successful step publishes the human-readable
 `<project-dir>/translation.html`; no Markdown-only output is delivered.
 
+Generation and resume commands accept `--host-authority`. It defaults to
+`unknown`; specify `unrestricted` only after the host has explicitly granted
+that authority. The setting is execution-only and is not recorded in a
+translation request or result.
+
 ## Tests
 
 The default suite uses deterministic sources and fake model services:

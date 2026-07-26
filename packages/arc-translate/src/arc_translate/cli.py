@@ -19,7 +19,7 @@ from arc_jobs import (
     command_result_json,
     snapshot_data,
 )
-from arc_llm import ModelSelection
+from arc_llm import HostAuthority, LLMExecutionOptions, ModelSelection
 from arc_paper import ArcPaperService
 
 from .contracts import (
@@ -27,6 +27,7 @@ from .contracts import (
     GenerationRecipe,
     GlossaryRequest,
     LanguageRequest,
+    ExecutionOptions,
 )
 from .delivery import (
     TranslationDeliveryError,
@@ -117,6 +118,7 @@ def _parser() -> _Parser:
     _project_argument(resume)
     resume.add_argument("--input", help="JSON object or a path to one")
     _paper_cache_argument(resume)
+    _host_authority_argument(resume)
     return parser
 
 
@@ -128,6 +130,7 @@ def _generation_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--provider", default="auto", help="LLM provider (default: auto)")
     parser.add_argument("--model", help="provider-specific model name")
     parser.add_argument("--refresh", action="store_true", help="refresh cached source data")
+    _host_authority_argument(parser)
     _paper_cache_argument(parser)
 
 
@@ -138,6 +141,21 @@ def _paper_cache_argument(parser: argparse.ArgumentParser) -> None:
             "shared arc-paper cache root; defaults to ARC_PAPER_CACHE or the "
             "global ARC paper cache"
         ),
+    )
+
+
+def _host_authority_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--host-authority",
+        choices=tuple(item.value for item in HostAuthority),
+        default=HostAuthority.UNKNOWN.value,
+        help="host permission attestation; unrestricted must be explicit",
+    )
+
+
+def _execution(args: argparse.Namespace) -> ExecutionOptions:
+    return ExecutionOptions(
+        llm=LLMExecutionOptions(host_authority=HostAuthority(args.host_authority))
     )
 
 
@@ -239,7 +257,7 @@ def _detect_language(args: argparse.Namespace) -> CommandResult:
         LanguageRequest(source, args.target_language), recipe=recipe
     )
     project.select("language", snapshot.run_id)
-    snapshot = service.execute(snapshot.run_id)
+    snapshot = service.execute(snapshot.run_id, execution=_execution(args))
     return _snapshot_result(project, service, snapshot)
 
 
@@ -273,6 +291,7 @@ def _build_glossary(args: argparse.Namespace) -> CommandResult:
     snapshot = service.execute(
         snapshot.run_id,
         keyword_provider=_keyword_provider(paper),
+        execution=_execution(args),
     )
     return _snapshot_result(project, service, snapshot)
 
@@ -306,7 +325,7 @@ def _translate_blocks(args: argparse.Namespace) -> CommandResult:
         recipe=recipe,
     )
     project.select("blocks", snapshot.run_id)
-    snapshot = service.execute(snapshot.run_id)
+    snapshot = service.execute(snapshot.run_id, execution=_execution(args))
     return _snapshot_result(project, service, snapshot)
 
 
@@ -362,6 +381,7 @@ def _resume(args: argparse.Namespace) -> CommandResult:
         run_id,
         input=_json_input(args.input) if args.input is not None else None,
         keyword_provider=keyword_provider,
+        execution=_execution(args),
     )
     return _snapshot_result(project, service, snapshot)
 

@@ -6,6 +6,7 @@ from typing import Any, Mapping, Protocol
 from arc_jobs import Awaiting, JsonValue, RunContext, RunError
 from arc_llm import (
     LLMCompleted,
+    LLMExecutionOptions,
     LLMFailed,
     LLMRequest,
     LLMTaskOutcome,
@@ -58,10 +59,13 @@ def execute_routed(
     request: LLMRequest,
     *,
     resume_input: ResumeInput | None,
+    options: LLMExecutionOptions,
 ) -> LLMTaskOutcome:
     if resume_input is not None and resume_input_matches(request, resume_input):
-        return service.execute_or_resume(context, request, input=resume_input)
-    return service.execute_or_resume(context, request)
+        return service.execute_or_resume(
+            context, request, input=resume_input, options=options
+        )
+    return service.execute_or_resume(context, request, options=options)
 
 
 def outer_resume_input(

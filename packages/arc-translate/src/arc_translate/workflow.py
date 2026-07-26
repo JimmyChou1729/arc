@@ -79,6 +79,7 @@ class KeywordProvider(Protocol):
         approx_count: int = 50,
         model: ModelSelection = ModelSelection(tier="medium"),
         resume_input: Mapping[str, JsonValue] | None = None,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> Any: ...
 
 
@@ -425,6 +426,7 @@ class TranslationWorkflowService:
                         if context.resume_input is not None
                         else None
                     ),
+                    options=execution,
                 )
                 if isinstance(keyword_outcome, Paused):
                     return keyword_outcome

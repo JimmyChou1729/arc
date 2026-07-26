@@ -16,9 +16,11 @@ from arc_paper.workflows.reference import (
 class FakeReferenceLLM:
     def __init__(self) -> None:
         self.requests = []
+        self.options = []
 
     def execute_or_resume(self, context, request, *, input=None, options=None):
         self.requests.append(request)
+        self.options.append(options)
         return LLMCompleted(
             {
                 "focus_scope": "one_domain",
@@ -68,7 +70,7 @@ def test_reference_inference_uses_parent_context_and_verifies_candidates(
     assert outcome.result.paper_ids == ("arXiv:0911.3380",)
     assert outcome.result.verified_references[0]["verified_title"] == "Verified title"
     assert outcome.result.provenance.provider == "claude"
-    assert fake.requests[0].capabilities.internet is True
+    assert fake.options[0].internet is True
     assert fake.requests[0].model.provider == "auto"
 
 

@@ -24,7 +24,13 @@ from arc_jobs import (
     run_control_main,
     snapshot_data,
 )
-from arc_llm import InvalidRequestError, ModelSelection, decode_resume_input
+from arc_llm import (
+    HostAuthority,
+    InvalidRequestError,
+    LLMExecutionOptions,
+    ModelSelection,
+    decode_resume_input,
+)
 from arc_paper import ArcPaperService
 
 from . import (
@@ -107,6 +113,7 @@ def _parser() -> _Parser:
         help="model reasoning tier (default: medium)",
     )
     build.add_argument("--workers", type=int, default=8, help="parallel workers (default: 8)")
+    _host_authority_argument(build)
     add_project_dir(build)
     build.add_argument(
         "--paper-cache-root",
@@ -122,6 +129,7 @@ def _parser() -> _Parser:
     resume.add_argument("run_id", help="durable run identifier")
     resume.add_argument("--input", help="ResumeInput JSON object")
     resume.add_argument("--workers", type=int, default=8, help="parallel workers (default: 8)")
+    _host_authority_argument(resume)
     add_project_dir(resume)
     resume.add_argument(
         "--paper-cache-root",
@@ -177,6 +185,19 @@ def _paths(project_dir: str) -> DomainPaths:
 
 def _paper_access(paper_cache_root: str | None) -> DomainPaperAccess:
     return DomainPaperAccess(ArcPaperService(cache_root=paper_cache_root))
+
+
+def _host_authority_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--host-authority",
+        choices=tuple(item.value for item in HostAuthority),
+        default=HostAuthority.UNKNOWN.value,
+        help="host permission attestation; unrestricted must be explicit",
+    )
+
+
+def _llm_options(args: argparse.Namespace) -> LLMExecutionOptions:
+    return LLMExecutionOptions(host_authority=HostAuthority(args.host_authority))
 
 
 def _repository(paths: DomainPaths) -> RunRepository:
@@ -322,6 +343,7 @@ def _build(args: argparse.Namespace) -> tuple[CommandResult, int]:
         request,
         run_id=args.run_id,
         paper_access=_paper_access(args.paper_cache_root),
+        llm=_llm_options(args),
         max_workers=max_workers,
     )
     result = _published_result(repository, paths, snapshot)
@@ -336,6 +358,7 @@ def _resume(args: argparse.Namespace) -> tuple[CommandResult, int]:
         args.run_id,
         input=_resume_input(args.input),
         paper_access=_paper_access(args.paper_cache_root),
+        llm=_llm_options(args),
         max_workers=max_workers,
     )
     result = _published_result(repository, paths, snapshot)

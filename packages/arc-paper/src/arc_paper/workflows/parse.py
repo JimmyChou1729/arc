@@ -16,7 +16,7 @@ from arc_jobs import (
     StoppedError,
     Succeeded,
 )
-from arc_llm import LLMTaskService, ModelSelection
+from arc_llm import LLMExecutionOptions, LLMTaskService, ModelSelection
 
 from ..parse import (
     PDFPageRenderer,
@@ -61,6 +61,7 @@ class MarkdownPDFVisualParseHandler:
         pdf_text_extractor: PDFTextExtractor | None = None,
         llm: LLMTaskService | None = None,
         model: ModelSelection = ModelSelection(),
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> None:
         if primary.source_format is not SourceFormat.MARKDOWN:
             raise ValueError("Markdown+PDF visual parse requires a Markdown primary")
@@ -69,6 +70,7 @@ class MarkdownPDFVisualParseHandler:
         self.primary = primary
         self.pdf_validator = pdf_validator
         self.model = model
+        self.options = options
         self.sources = sources
         self.reviewer = VisualReviewService(
             renderer or PdftoppmFullPageRenderer(),
@@ -172,6 +174,7 @@ class MarkdownPDFVisualParseHandler:
                     parsed_pdf,
                     markdown_bytes=markdown_bytes,
                     pdf_bytes=self.sources.read_bytes(self.pdf_validator),
+                    options=self.options,
                 )
             except StoppedError:
                 raise
@@ -228,8 +231,9 @@ class MarkdownPDFVisualParseRunner:
         pdf_validator: SourceArtifact,
         *,
         model: ModelSelection = ModelSelection(),
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> RunSnapshot:
-        handler = self._handler(primary, pdf_validator, model=model)
+        handler = self._handler(primary, pdf_validator, model=model, options=options)
         return self.engine.execute(
             RunSpec(run_id, handler.name, handler.semantic_input()), handler
         )
@@ -242,8 +246,9 @@ class MarkdownPDFVisualParseRunner:
         *,
         input: Mapping[str, JsonValue] | None = None,
         model: ModelSelection = ModelSelection(),
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> RunSnapshot:
-        handler = self._handler(primary, pdf_validator, model=model)
+        handler = self._handler(primary, pdf_validator, model=model, options=options)
         return self.engine.resume(run_id, handler, input=input)
 
     def _handler(
@@ -252,6 +257,7 @@ class MarkdownPDFVisualParseRunner:
         pdf_validator: SourceArtifact,
         *,
         model: ModelSelection,
+        options: LLMExecutionOptions,
     ) -> MarkdownPDFVisualParseHandler:
         return MarkdownPDFVisualParseHandler(
             self.sources,
@@ -261,6 +267,7 @@ class MarkdownPDFVisualParseRunner:
             pdf_text_extractor=self.pdf_text_extractor,
             llm=self.llm,
             model=model,
+            options=options,
         )
 
 

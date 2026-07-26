@@ -563,6 +563,13 @@ def test_delegated_run_controls_keep_arc_paper_help_and_usage_labels(
     }
 
 
+def test_keyword_cli_exposes_explicit_host_authority(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["extract-keywords", "--help"]) == 0
+    assert "--host-authority" in capsys.readouterr().out
+
+
 def test_removed_control_planes_and_duplicate_parsers_stay_absent() -> None:
     removed = (
         "broker_jobs.py",

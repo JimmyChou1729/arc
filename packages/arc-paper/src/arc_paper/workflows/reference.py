@@ -25,6 +25,7 @@ from arc_llm import (
     LLMStopped,
     LLMCompleted,
     LLMFailed,
+    LLMExecutionOptions,
     LLMPaused,
     LLMRequest,
     LLMTaskService,
@@ -146,6 +147,7 @@ class ReferenceInferenceService:
         metadata_lookup: MetadataLookup,
         model: ModelSelection = ModelSelection(tier="medium"),
         resume_input: ResumeInput | None = None,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> ReferenceInferenceOutcome:
         request_text = text.strip()
         if not request_text:
@@ -195,6 +197,7 @@ class ReferenceInferenceService:
             context,
             request,
             resume_input=resume_input,
+            options=options,
         )
         if not isinstance(outcome, LLMCompleted):
             return outcome
@@ -225,11 +228,13 @@ class ReferenceInferenceHandler:
         metadata_lookup: MetadataLookup,
         service: ReferenceInferenceService | None = None,
         model: ModelSelection = ModelSelection(tier="medium"),
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> None:
         self.text = text.strip()
         self.metadata_lookup = metadata_lookup
         self.service = service or ReferenceInferenceService()
         self.model = model
+        self.options = options
 
     def semantic_input(self) -> dict[str, JsonValue]:
         return {
@@ -258,6 +263,7 @@ class ReferenceInferenceHandler:
                 resume_input=outer_resume_input(
                     context, error_code="reference_resume_input_invalid"
                 ),
+                options=self.options,
             )
         except PaperWorkflowError as exc:
             return Failed(RunError(exc.code, str(exc)))
@@ -288,12 +294,14 @@ class ReferenceInferenceRunner:
         metadata_lookup: MetadataLookup,
         service: ReferenceInferenceService | None = None,
         model: ModelSelection = ModelSelection(tier="medium"),
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> RunSnapshot:
         handler = ReferenceInferenceHandler(
             text,
             metadata_lookup=metadata_lookup,
             service=service,
             model=model,
+            options=options,
         )
         return self.engine.execute(
             RunSpec(run_id, handler.name, handler.semantic_input()), handler
@@ -308,12 +316,14 @@ class ReferenceInferenceRunner:
         input: Mapping[str, JsonValue] | None = None,
         service: ReferenceInferenceService | None = None,
         model: ModelSelection = ModelSelection(tier="medium"),
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> RunSnapshot:
         handler = ReferenceInferenceHandler(
             text,
             metadata_lookup=metadata_lookup,
             service=service,
             model=model,
+            options=options,
         )
         return self.engine.resume(run_id, handler, input=input)
 

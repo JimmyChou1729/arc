@@ -31,6 +31,7 @@ from arc_llm import (
     LLMStopped,
     LLMCompleted,
     LLMFailed,
+    LLMExecutionOptions,
     LLMInputArtifact,
     LLMPaused,
     LLMRequest,
@@ -189,6 +190,7 @@ class PaperSummaryService:
         expected_document_digest: str,
         model: ModelSelection = ModelSelection(tier="low"),
         resume_input: ResumeInput | None = None,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> PaperSummaryOutcome:
         parsed = self._read_document(
             context, source, expected_document_digest=expected_document_digest
@@ -210,6 +212,7 @@ class PaperSummaryService:
                 context,
                 request,
                 resume_input=resume_input,
+                options=options,
             )
             if not isinstance(outcome, LLMCompleted):
                 return outcome
@@ -245,6 +248,7 @@ class PaperSummaryService:
             context,
             synthesis_request,
             resume_input=resume_input,
+            options=options,
         )
         if not isinstance(synthesis_outcome, LLMCompleted):
             return synthesis_outcome
@@ -306,6 +310,7 @@ class SummaryBatchHandler:
         model: ModelSelection = ModelSelection(tier="low"),
         max_workers: int = 1,
         failure_mode: FailureMode = FailureMode.COLLECT,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> None:
         if max_workers < 1:
             raise ValueError("max_workers must be at least one")
@@ -314,6 +319,7 @@ class SummaryBatchHandler:
         self.model = model
         self.max_workers = max_workers
         self.failure_mode = failure_mode
+        self.options = options
         self._by_unit = {
             _unit_id(item.semantic_document()): item for item in self.items
         }
@@ -357,6 +363,7 @@ class SummaryBatchHandler:
                     expected_document_digest=item.document.document_digest,
                     model=self.model,
                     resume_input=resume_input,
+                    options=self.options,
                 )
             except PaperWorkflowError as exc:
                 return UnitResult(
@@ -417,6 +424,7 @@ class SummaryBatchRunner:
         model: ModelSelection = ModelSelection(tier="low"),
         max_workers: int = 1,
         failure_mode: FailureMode = FailureMode.COLLECT,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> RunSnapshot:
         handler = SummaryBatchHandler(
             items,
@@ -424,6 +432,7 @@ class SummaryBatchRunner:
             model=model,
             max_workers=max_workers,
             failure_mode=failure_mode,
+            options=options,
         )
         return self.engine.execute(
             RunSpec(run_id, handler.name, handler.semantic_input()), handler
@@ -439,6 +448,7 @@ class SummaryBatchRunner:
         model: ModelSelection = ModelSelection(tier="low"),
         max_workers: int = 1,
         failure_mode: FailureMode = FailureMode.COLLECT,
+        options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> RunSnapshot:
         handler = SummaryBatchHandler(
             items,
@@ -446,6 +456,7 @@ class SummaryBatchRunner:
             model=model,
             max_workers=max_workers,
             failure_mode=failure_mode,
+            options=options,
         )
         return self.engine.resume(run_id, handler, input=input)
 

@@ -137,6 +137,7 @@ class FakeKeywords:
         approx_count=50,
         model=None,
         resume_input=None,
+        options=None,
     ):
         self.calls += 1
         payload = canonical_json_bytes(self.terms)

@@ -253,6 +253,12 @@ def _parser() -> _Parser:
     )
     keywords.add_argument("--run-id", help="explicit durable run identifier")
     keywords.add_argument("--resume-input", type=_json_object, help="resume response JSON object")
+    keywords.add_argument(
+        "--host-authority",
+        choices=("unknown", "restricted", "unrestricted"),
+        default="unknown",
+        help="host permission attestation; unrestricted must be explicit",
+    )
 
     cache = commands.add_parser(
         "cache",
@@ -441,6 +447,7 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "model_tier": args.model_tier,
             "run_id": args.run_id,
             "resume_input": args.resume_input,
+            "host_authority": args.host_authority,
         }
     if command == "cache":
         values: dict[str, Any] = {

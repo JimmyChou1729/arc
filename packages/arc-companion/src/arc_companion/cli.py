@@ -24,7 +24,7 @@ from arc_jobs import (
     file_lease,
     snapshot_data,
 )
-from arc_llm import ModelSelection
+from arc_llm import HostAuthority, LLMExecutionOptions, ModelSelection
 from arc_paper import (
     ArcPaperService,
     PDF_VALIDATOR_MISSING_WARNING,
@@ -109,6 +109,7 @@ def _parser() -> _Parser:
         "--approx-term-count", type=int, default=50, help="target glossary size (default: 50)"
     )
     build.add_argument("--refresh", action="store_true", help="refresh cached source data")
+    _host_authority_argument(build)
     _paper_cache_argument(build)
 
     status = commands.add_parser(
@@ -130,6 +131,7 @@ def _parser() -> _Parser:
     )
     resume.add_argument("--workers", type=int, default=4, help="parallel workers (default: 4)")
     _paper_cache_argument(resume)
+    _host_authority_argument(resume)
 
     stop = commands.add_parser(
         "stop",
@@ -181,6 +183,23 @@ def _paper_cache_argument(parser: argparse.ArgumentParser) -> None:
             "shared arc-paper cache root; defaults to ARC_PAPER_CACHE or the "
             "global ARC paper cache"
         ),
+    )
+
+
+def _host_authority_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--host-authority",
+        choices=tuple(item.value for item in HostAuthority),
+        default=HostAuthority.UNKNOWN.value,
+        help="host permission attestation; unrestricted must be explicit",
+    )
+
+
+def _execution_options(args: argparse.Namespace) -> CompanionExecutionOptions:
+    return CompanionExecutionOptions(
+        workers=args.workers,
+        paper_cache_root=args.paper_cache_root,
+        llm=LLMExecutionOptions(host_authority=HostAuthority(args.host_authority)),
     )
 
 
@@ -290,10 +309,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
         ),
         approx_term_count=args.approx_term_count,
     )
-    execution = CompanionExecutionOptions(
-        workers=args.workers,
-        paper_cache_root=args.paper_cache_root,
-    )
+    execution = _execution_options(args)
     run_id = companion_run_id(request, recipe)
     service = CompanionService(paths.jobs_root)
     prepared = service.prepare(request, recipe=recipe, run_id=run_id)
@@ -321,10 +337,7 @@ def _resume(args: argparse.Namespace) -> CommandResult:
     snapshot = CompanionService(paths.jobs_root).resume(
         run_id,
         input=value,
-        execution=CompanionExecutionOptions(
-            workers=args.workers,
-            paper_cache_root=args.paper_cache_root,
-        ),
+        execution=_execution_options(args),
     )
     return _snapshot_result(
         paths,

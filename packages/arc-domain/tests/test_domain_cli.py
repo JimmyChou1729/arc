@@ -161,10 +161,10 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def execute(self, request, *, run_id, paper_access, max_workers):
+        def execute(self, request, *, run_id, paper_access, llm, max_workers):
             assert paper_access._paper_service.cache_root == tmp_path / "paper-cache"
             type(self).request = request
-            type(self).received = (run_id, max_workers)
+            type(self).received = (run_id, max_workers, llm.host_authority.value)
             return snapshot
 
     monkeypatch.setattr(cli, "DomainBuildRunner", RecordingRunner)
@@ -193,6 +193,8 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
                 "high",
                 "--workers",
                 "2",
+                "--host-authority",
+                "unrestricted",
                 "--run-id",
                 "requested-run-id",
                 "--project-dir",
@@ -208,7 +210,7 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
     assert envelope["status"] == "completed"
     assert envelope["run"]["id"] == "build-run"
     assert envelope["data"]["domain"] == {"id": "domain-cli", "active": True}
-    assert RecordingRunner.received == ("requested-run-id", 2)
+    assert RecordingRunner.received == ("requested-run-id", 2, "unrestricted")
     assert RecordingRunner.request.policy.recent_window_days == 30
     assert RecordingRunner.request.policy.citer_pool_limit == 9
     assert RecordingRunner.request.policy.ranked_paper_limit == 3
@@ -232,7 +234,7 @@ def test_mode_flags_override_the_current_policy(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def execute(self, request, *, run_id, paper_access, max_workers):
+        def execute(self, request, *, run_id, paper_access, llm, max_workers):
             del run_id, paper_access, max_workers
             type(self).request = request
             return snapshot
@@ -274,7 +276,7 @@ def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def resume(self, run_id: str, *, input, paper_access, max_workers):
+        def resume(self, run_id: str, *, input, paper_access, llm, max_workers):
             assert paper_access._paper_service.cache_root == tmp_path / "paper-cache"
             type(self).resumed = (run_id, input, max_workers)
             return snapshot
@@ -550,7 +552,7 @@ def test_resume_requires_a_strict_resume_input_object(
         def __init__(self, _repository: RunRepository) -> None:
             pass
 
-        def resume(self, _run_id: str, *, input, paper_access, max_workers):
+        def resume(self, _run_id: str, *, input, paper_access, llm, max_workers):
             del paper_access, max_workers
             raise AssertionError(f"runner must not receive invalid input: {input!r}")
 
@@ -571,7 +573,7 @@ def test_completed_run_with_failed_publication_is_command_failure(
         def __init__(self, _repository: RunRepository) -> None:
             pass
 
-        def execute(self, _request, *, run_id, paper_access, max_workers):
+        def execute(self, _request, *, run_id, paper_access, llm, max_workers):
             del paper_access
             assert run_id is None
             assert max_workers == 8
@@ -621,7 +623,7 @@ def test_noncompleted_build_snapshots_return_success_without_publication(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def execute(self, _request, *, run_id, paper_access, max_workers):
+        def execute(self, _request, *, run_id, paper_access, llm, max_workers):
             del paper_access
             assert run_id is None
             assert max_workers == 8
