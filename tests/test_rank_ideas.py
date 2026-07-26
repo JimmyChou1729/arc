@@ -67,6 +67,20 @@ def _single_scheme() -> dict[str, Any]:
     }
 
 
+def _taste_scheme() -> dict[str, Any]:
+    path = (
+        ROOT
+        / "plugins"
+        / "arc"
+        / "skills"
+        / "arc"
+        / "workflows"
+        / "json"
+        / "ideas-domain-marking-scheme.json"
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def test_formal_normalization_rejects_missing_or_non_object_marks() -> None:
     old_dont_write_bytecode = sys.dont_write_bytecode
     old_path = list(sys.path)
@@ -196,6 +210,32 @@ def _single_marks(total: int) -> dict[str, int]:
     }
 
 
+def _taste_marks() -> dict[str, int]:
+    return {
+        "user_intent_relevance": 8,
+        "novelty": 12,
+        "confidence_of_novelty": 12,
+        "scientific_value": 13,
+        "planning": 8,
+        "problem_well_definedness": 13,
+        "simplicity": 8,
+        "generality": 8,
+        "total_score": 82,
+    }
+
+
+def _reviewer_benchmark() -> dict[str, Any]:
+    return {
+        "same_direction_alternative": (
+            "Compute the same invariant in the minimal controlled model."
+        ),
+        "preserves_proposer_direction": True,
+        "comparison": (
+            "The proposal has one coherent core and its machinery serves that claim."
+        ),
+    }
+
+
 def _single_assessment(
     *,
     feasibility_status: str = "feasible",
@@ -258,11 +298,12 @@ def _single_loop(
     *,
     max_rounds: int = 2,
     requires_assessment: bool = True,
+    scheme: Mapping[str, Any] | None = None,
 ) -> LoopSpec:
     context = {
         "user_intent": "Find a well-defined theoretical-physics research direction.",
         "variant_id": "domain",
-        "marking_scheme": _single_scheme(),
+        "marking_scheme": dict(scheme or _single_scheme()),
     }
     reviewer_schema = {
         "type": "object",
@@ -425,6 +466,7 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
                 ("idea-a", 1): {
                     "marks": _single_marks(91),
                     "idea_assessment": _single_assessment(),
+                    "reviewer_benchmark": _reviewer_benchmark(),
                 },
                 ("idea-a", 2): {
                     "marks": _single_marks(72),
@@ -436,7 +478,7 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v5"
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v6"
     assert payload["status"] == "succeeded"
     assert payload["durable_lifecycle"] == "succeeded"
     assert "run_lifecycle" not in payload
@@ -447,6 +489,7 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
     assert selected["proposer_artifact"]["artifact_id"].startswith("proposer-reviewer/")
     assert len(selected["proposer_artifact"]["sha256"]) == 64
     assert len(selected["review_artifact"]["sha256"]) == 64
+    assert selected["reviewer_benchmark"] == _reviewer_benchmark()
     rendered = json.dumps(payload)
     assert "relative_path" not in rendered
     assert str(repository.run_directory("ideas-run")) not in rendered
@@ -454,6 +497,62 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
     assert "# Ideas" in markdown
     assert "Proposer artifact:" in markdown
     assert "Review artifact:" in markdown
+    assert "#### Scientific Taste Review" in markdown
+    assert "The proposal has one coherent core" in markdown
+    assert "Compute the same invariant in the minimal controlled model." in markdown
+
+
+def test_single_report_uses_embedded_scheme_for_new_and_legacy_columns(
+    tmp_path: Path,
+) -> None:
+    ranker = _load_rank_module()
+    taste_loop = _single_loop(
+        "taste",
+        max_rounds=1,
+        scheme=_taste_scheme(),
+    )
+    taste_repository = _execute(
+        tmp_path / "taste-runs",
+        _request(taste_loop),
+        _ScriptedLLM(
+            proposals={("taste", 1): _proposal("Taste-aware idea")},
+            reviews={
+                ("taste", 1): {
+                    "marks": _taste_marks(),
+                    "idea_assessment": _single_assessment(),
+                    "reviewer_benchmark": _reviewer_benchmark(),
+                }
+            },
+        ),
+    )
+
+    taste_report = ranker.markdown_table(
+        ranker.rank_run(taste_repository.root, "ideas-run")
+    )
+    assert "SI=simplicity, GE=generality" in taste_report
+    assert "| Round | IR | N | CN | SV | PL | WD | SI | GE | T |" in taste_report
+
+    legacy_loop = _single_loop("legacy", max_rounds=1)
+    legacy_repository = _execute(
+        tmp_path / "legacy-runs",
+        _request(legacy_loop),
+        _ScriptedLLM(
+            proposals={("legacy", 1): _proposal("Legacy idea")},
+            reviews={
+                ("legacy", 1): {
+                    "marks": _single_marks(80),
+                    "idea_assessment": _single_assessment(),
+                }
+            },
+        ),
+    )
+
+    legacy_report = ranker.markdown_table(
+        ranker.rank_run(legacy_repository.root, "ideas-run")
+    )
+    assert "SI=simplicity" not in legacy_report
+    assert "GE=generality" not in legacy_report
+    assert "#### Scientific Taste Review" not in legacy_report
 
 
 def test_ranker_preserves_cross_domain_qualification_before_score(tmp_path: Path) -> None:
@@ -485,7 +584,7 @@ def test_ranker_preserves_cross_domain_qualification_before_score(tmp_path: Path
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v5"
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v6"
     assert [entry["title"] for entry in payload["ranking"]] == ["Genuine lower score"]
     assert payload["unqualified"][0]["title"] == "Decorative high score"
     assert "transfer_status_must_be_genuine" in payload["unqualified"][0][
@@ -522,7 +621,7 @@ def test_ranker_preserves_single_domain_feasibility_gate(tmp_path: Path) -> None
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v5"
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v6"
     assert payload["ranking"][0]["title"] == "Feasible lower-score idea"
     blocked = next(
         entry
@@ -591,7 +690,7 @@ def test_ranker_excludes_failed_and_incomplete_lifecycle_states(tmp_path: Path) 
     )
 
     completed_payload = ranker.rank_run(repository.root, "ideas-run")
-    assert completed_payload["schema_version"] == "arc.ideas.selected_rounds.v5"
+    assert completed_payload["schema_version"] == "arc.ideas.selected_rounds.v6"
     assert completed_payload["status"] == "degraded"
     assert completed_payload["durable_lifecycle"] == "succeeded"
     assert "run_lifecycle" not in completed_payload
@@ -652,7 +751,7 @@ def test_partial_ranker_uses_complete_rounds_from_paused_loops(
     partial = ranker.rank_run(repository.root, "ideas-run", mode="partial")
 
     assert formal["ranking"] == []
-    assert partial["schema_version"] == "arc.ideas.partial_selected_rounds.v1"
+    assert partial["schema_version"] == "arc.ideas.partial_selected_rounds.v2"
     assert partial["status"] == "provisional"
     assert partial["formal"] is False
     assert partial["provisional"] is True

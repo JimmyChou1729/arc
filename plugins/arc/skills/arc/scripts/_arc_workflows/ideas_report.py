@@ -20,6 +20,18 @@ CROSS_REPORT_COLUMNS = [
     ("T", "total_score"),
 ]
 
+SINGLE_REPORT_COLUMNS = [
+    ("IR", "user_intent_relevance", "intent relevance"),
+    ("N", "novelty", "novelty"),
+    ("CN", "confidence_of_novelty", "confidence of novelty"),
+    ("SV", "scientific_value", "scientific value"),
+    ("PL", "planning", "planning"),
+    ("WD", "problem_well_definedness", "well-definedness"),
+    ("SI", "simplicity", "simplicity"),
+    ("GE", "generality", "generality"),
+    ("T", "total_score", "total"),
+]
+
 
 def cross_diagnostics(
     run_id: str,
@@ -253,6 +265,12 @@ def markdown_table(payload: dict[str, Any]) -> str:
 def _summary_table(payload: dict[str, Any]) -> str:
     if payload.get("cross_domain"):
         return _cross_summary_table(payload)
+    representative = _representative_single_entry(payload)
+    columns = _single_report_columns(representative)
+    abbreviations = ", ".join(
+        f"{label}={description}"
+        for label, _field, description in columns
+    )
     lines = [
         (
             "## Provisional Qualified Ideas"
@@ -262,8 +280,7 @@ def _summary_table(payload: dict[str, Any]) -> str:
         "",
         "Abbreviations:",
         "",
-        "IR=intent relevance, N=novelty, CN=confidence of novelty, SV=scientific value, "
-        "PL=planning, WD=well-definedness, T=total.",
+        f"{abbreviations}.",
     ]
     for warning in payload.get("warnings", []):
         lines.extend(["", str(warning)])
@@ -287,17 +304,14 @@ def _round_marks_summary_section(entry: dict[str, Any]) -> list[str]:
 
 def _compact_round_marks_table(entry: dict[str, Any]) -> str:
     columns = [
-        ("IR", "user_intent_relevance"),
-        ("N", "novelty"),
-        ("CN", "confidence_of_novelty"),
-        ("SV", "scientific_value"),
-        ("PL", "planning"),
-        ("WD", "problem_well_definedness"),
-        ("T", "total_score"),
+        (label, field)
+        for label, field, _description in _single_report_columns(entry)
     ]
+    headers = " | ".join(label for label, _field in columns)
+    separators = "|".join("---:" for _ in columns)
     lines = [
-        "| Round | IR | N | CN | SV | PL | WD | T |",
-        "|---:|---:|---:|---:|---:|---:|---:|---:|",
+        f"| Round | {headers} |",
+        f"|---:|{separators}|",
     ]
     for round_entry in entry.get("rounds", []):
         marks = round_entry["marks"]
@@ -378,6 +392,7 @@ def _appendix_section(entry: dict[str, Any]) -> list[str]:
         "#### Referee Marks by Round",
         "",
         _round_marks_table(entry),
+        *_scientific_taste_section(entry),
         "",
         "#### Focused Novelty Audit",
         "",
@@ -398,6 +413,80 @@ def _appendix_section(entry: dict[str, Any]) -> list[str]:
         "#### Full Idea Verbatim",
         "",
         _handoff_text(entry.get("proposer_output", {})),
+    ]
+
+
+def _scientific_taste_section(entry: Mapping[str, Any]) -> list[str]:
+    benchmark = entry.get("reviewer_benchmark")
+    if not isinstance(benchmark, Mapping):
+        return []
+    comparison = str(benchmark.get("comparison", "") or "").strip()
+    alternative = str(
+        benchmark.get("same_direction_alternative", "") or ""
+    ).strip()
+    preserves_direction = benchmark.get("preserves_proposer_direction")
+    if not comparison and not alternative and not isinstance(
+        preserves_direction, bool
+    ):
+        return []
+    lines = ["", "#### Scientific Taste Review", ""]
+    if comparison:
+        lines.extend(["Overall comparison:", "", comparison, ""])
+    if alternative:
+        lines.extend(
+            [
+                "Simpler same-direction alternative:",
+                "",
+                alternative,
+                "",
+            ]
+        )
+    if isinstance(preserves_direction, bool):
+        lines.append(
+            "Preserves proposer direction: "
+            f"`{'yes' if preserves_direction else 'no'}`"
+        )
+    if lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def _representative_single_entry(
+    payload: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    for field in ("ranking", "unqualified"):
+        entries = payload.get(field)
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, Mapping):
+                    return entry
+    return None
+
+
+def _single_report_columns(
+    entry: Mapping[str, Any] | None,
+) -> list[tuple[str, str, str]]:
+    scheme = entry.get("marking_scheme") if isinstance(entry, Mapping) else None
+    configured_fields: set[str] = set()
+    if isinstance(scheme, Mapping):
+        marks = scheme.get("marks")
+        if isinstance(marks, list):
+            configured_fields.update(
+                str(item.get("field", ""))
+                for item in marks
+                if isinstance(item, Mapping)
+            )
+        total = scheme.get("total_score")
+        if isinstance(total, Mapping):
+            configured_fields.add(str(total.get("field", "")))
+    if not configured_fields:
+        configured_fields = {
+            field for _label, field, _description in SINGLE_REPORT_COLUMNS
+        }
+    return [
+        column
+        for column in SINGLE_REPORT_COLUMNS
+        if column[1] in configured_fields
     ]
 
 

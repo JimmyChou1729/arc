@@ -200,10 +200,11 @@ for each succeeded loop, rather than assuming the final round is best. It emits
 logical artifact IDs and content digests, never physical proposal or review
 paths.
 
-The JSON ranking contract is `arc.ideas.selected_rounds.v5`. Read its
-scientific `status` separately from `durable_lifecycle`: a durable batch may
-finish successfully while the scientific status is `degraded` because one or
-more loops failed. The current contract has no `run_lifecycle` alias.
+The formal JSON ranking contract is `arc.ideas.selected_rounds.v6`; partial
+rankings use `arc.ideas.partial_selected_rounds.v2`. Read scientific `status`
+separately from `durable_lifecycle`: a durable batch may finish successfully
+while the scientific status is `degraded` because one or more loops failed.
+The current contracts have no `run_lifecycle` alias.
 
 Publish the deterministic ranked report as PDF to both the per-run archive and
 the easy-to-find project root:
@@ -247,18 +248,20 @@ reason, best committed round, and qualification failures. It publishes
 The report must start with `# Ideas`, then `Abbreviations:`, then a
 blank-line-separated abbreviation line in the form `IR=intent relevance,
 N=novelty, CN=confidence of novelty, SV=scientific value, PL=planning,
-WD=well-definedness, T=total.` List each ranked idea in the same form used by
+WD=well-definedness, SI=simplicity, GE=generality, T=total.` List each ranked idea in the same form used by
 `round_marks_by_idea.md`: a loop-id heading, the selected title, and the
 compact round marks table with columns `Round`, `IR`, `N`, `CN`, `SV`, `PL`,
-`WD`, and `T`. The report must then include `# Appendix: Idea Details` with one subsection per
-ranked idea. Each subsection lists all referee marks from every round in that
-idea loop, a focused novelty audit with evidence checked, tool queries, and
+`WD`, `SI`, `GE`, and `T`. The report must then include `# Appendix: Idea
+Details` with one subsection per ranked idea. Each subsection lists all
+referee marks from every round in that idea loop, the selected reviewer's
+scientific-taste comparison and simpler same-direction alternative when
+available, a focused novelty audit with evidence checked, tool queries, and
 unresolved reviewer limitations, and only the selected proposer handoff text:
-title, idea summary, and calculation plan. The audit is explicitly
-non-exhaustive. Render the handoff text as normal Markdown paragraphs, not a
-fenced code block. Follow `rules/math_typeset.md` for math and TeX snippets.
-Use PDF-friendly wrapping for long titles and proposer text; avoid wide tables
-with long prose.
+title, idea summary, and calculation plan. Scientific taste is a soft ranking
+preference, not a qualification gate. The audit is explicitly non-exhaustive.
+Render the handoff text as normal Markdown paragraphs, not a fenced code block.
+Follow `rules/math_typeset.md` for math and TeX snippets. Use PDF-friendly
+wrapping for long titles and proposer text; avoid wide tables with long prose.
 
 For cross-domain runs, use the abbreviations and score columns declared by the
 selected cross-domain marking scheme. List qualified candidates first in

@@ -1154,14 +1154,18 @@ def test_ideas_marking_scheme_is_centralized() -> None:
         "scientific_value",
         "planning",
         "problem_well_definedness",
+        "simplicity",
+        "generality",
     ]
     assert maxima == {
-        "user_intent_relevance": 25,
+        "user_intent_relevance": 10,
         "novelty": 15,
         "confidence_of_novelty": 15,
         "scientific_value": 15,
-        "planning": 15,
+        "planning": 10,
         "problem_well_definedness": 15,
+        "simplicity": 10,
+        "generality": 10,
     }
     assert sum(maxima.values()) == scheme["total_score"]["maximum"] == 100
     assert "evidence_of_novelty" not in reviewer_schema_text
@@ -1180,9 +1184,13 @@ def test_ideas_marking_scheme_has_discriminating_score_anchors() -> None:
     assert "10: marginally publishable in a top journal" in guidance["novelty"]
     assert "5: marginally publishable in a second-tier or specialized journal" in guidance["novelty"]
     assert "0: not publishable" in guidance["novelty"]
-    assert "10: clear plan; each major step can be done by an AI agent" in guidance["planning"]
-    assert "5: has a plan, but some steps are too broad or difficult for an AI agent" in guidance["planning"]
+    assert "10: concrete, agent-executable steps" in guidance["planning"]
+    assert "4: some steps are too broad or difficult for an AI agent" in guidance["planning"]
     assert "0: most steps cannot be done by an AI agent" in guidance["planning"]
+    assert "one nontrivial idea nucleus" in guidance["simplicity"]
+    assert "Necessary technical controls" in guidance["simplicity"]
+    assert "breadth of applicability" in guidance["generality"]
+    assert "direct observability is not a separate requirement" in guidance["generality"]
 
 
 def test_ideas_reviewer_comments_turn_marks_into_scientific_guidance() -> None:
@@ -1192,6 +1200,65 @@ def test_ideas_reviewer_comments_turn_marks_into_scientific_guidance() -> None:
     assert "marking scheme" in template
     assert "technical, proposal-specific feedback" in template
     assert "score-optimization advice" in template
+    assert "one coherent idea nucleus" in template
+    assert "This comparison is advice, not a qualification gate" in template
+
+
+def test_all_ideas_workers_share_soft_scientific_taste_guidance() -> None:
+    proposer_names = (
+        "ideas-proposer.template.json",
+        "ideas-no-info-proposer.template.json",
+        "ideas-cross-domain-proposer.template.json",
+    )
+    reviewer_names = (
+        "ideas-reviewer.template.json",
+        "ideas-domain-reviewer.template.json",
+        "ideas-cross-domain-reviewer.template.json",
+    )
+
+    for name in proposer_names:
+        template = json.loads((WJ / name).read_text(encoding="utf-8"))["prompt"][
+            "template"
+        ]
+        assert "simplest" in template
+        assert "remains genuinely novel and consequential" in template
+        assert "more physically meaningful" in template
+        assert "simpler formulation is valuable only if it remains new" in template
+
+    for name in reviewer_names:
+        template = json.loads((WJ / name).read_text(encoding="utf-8"))["prompt"][
+            "template"
+        ]
+        assert "scientific taste" in template
+        assert "how broadly its core result applies" in template
+        assert "not a qualification gate" in template
+
+
+def test_cross_domain_scoring_and_qualification_marks_remain_specialized() -> None:
+    scheme = json.loads(
+        (WJ / "ideas-cross-domain-marking-scheme.json").read_text(encoding="utf-8")
+    )
+    maxima = {item["field"]: item["maximum"] for item in scheme["marks"]}
+
+    assert maxima == {
+        "user_intent_relevance": 15,
+        "cross_domain_transfer_quality": 15,
+        "substantive_target_contribution": 20,
+        "novelty": 10,
+        "confidence_of_novelty": 10,
+        "scientific_value": 10,
+        "calculation_feasibility": 10,
+        "problem_well_definedness": 10,
+    }
+    assert "simplicity" not in maxima
+    assert "generality" not in maxima
+
+    reviewer_schema = json.loads(
+        (WJ / "ideas-cross-domain-reviewer-output.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "reviewer_benchmark" in reviewer_schema["required"]
 
 
 def test_ideas_workflow_points_to_active_runner_without_global_review() -> None:
@@ -1308,18 +1375,24 @@ def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
         "scientific_value",
         "planning",
         "problem_well_definedness",
+        "simplicity",
+        "generality",
         "total_score",
     ]
     assert mark_properties["user_intent_relevance"]["minimum"] == 0
-    assert mark_properties["user_intent_relevance"]["maximum"] == 25
+    assert mark_properties["user_intent_relevance"]["maximum"] == 10
     assert mark_properties["novelty"]["maximum"] == 15
     assert mark_properties["confidence_of_novelty"]["maximum"] == 15
     assert mark_properties["scientific_value"]["minimum"] == 0
     assert mark_properties["scientific_value"]["maximum"] == 15
     assert mark_properties["planning"]["minimum"] == 0
-    assert mark_properties["planning"]["maximum"] == 15
+    assert mark_properties["planning"]["maximum"] == 10
     assert mark_properties["problem_well_definedness"]["minimum"] == 0
     assert mark_properties["problem_well_definedness"]["maximum"] == 15
+    assert mark_properties["simplicity"]["minimum"] == 0
+    assert mark_properties["simplicity"]["maximum"] == 10
+    assert mark_properties["generality"]["minimum"] == 0
+    assert mark_properties["generality"]["maximum"] == 10
     assert mark_properties["total_score"]["minimum"] == 0
     assert mark_properties["total_score"]["maximum"] == 100
     assert "marking scheme" in reviewer["prompt"]["template"]
@@ -1345,7 +1418,8 @@ def test_ideas_workflow_has_no_typed_evidence_accounting() -> None:
     assert "paper-operation allowlist" in compact
     assert "does not assume a production universal broker" in compact
     assert "generic host broker" not in compact
-    assert "`arc.ideas.selected_rounds.v5`" in ideas
+    assert "`arc.ideas.selected_rounds.v6`" in ideas
+    assert "`arc.ideas.partial_selected_rounds.v2`" in ideas
     assert "scientific `status` separately from `durable_lifecycle`" in compact
     assert "no `run_lifecycle` alias" in compact
     assert "focused novelty audit" in compact

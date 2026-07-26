@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["marks", "cross_domain_assessment", "improvement_comments", "evidence_checked", "tool_queries_used"],
+  "required": ["marks", "cross_domain_assessment", "reviewer_benchmark", "improvement_comments", "evidence_checked", "tool_queries_used"],
   "properties": {
     "marks": {
       "type": "object",
@@ -66,6 +66,16 @@
             "first_calculation": {"type": "string", "minLength": 1}
           }
         }
+      }
+    },
+    "reviewer_benchmark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["same_direction_alternative", "preserves_proposer_direction", "comparison"],
+      "properties": {
+        "same_direction_alternative": {"type": "string"},
+        "preserves_proposer_direction": {"type": "boolean"},
+        "comparison": {"type": "string"}
       }
     },
     "improvement_comments": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},

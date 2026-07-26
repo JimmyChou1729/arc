@@ -33,8 +33,8 @@ from _arc_workflows.ideas_report import (
     single_domain_diagnostics,
 )
 
-SELECTED_ROUNDS_SCHEMA = "arc.ideas.selected_rounds.v5"
-PARTIAL_SELECTED_ROUNDS_SCHEMA = "arc.ideas.partial_selected_rounds.v1"
+SELECTED_ROUNDS_SCHEMA = "arc.ideas.selected_rounds.v6"
+PARTIAL_SELECTED_ROUNDS_SCHEMA = "arc.ideas.partial_selected_rounds.v2"
 
 
 def rank_run(
@@ -430,6 +430,7 @@ def _round_entry(
         "evidence_checked": _string_list(payload.get("evidence_checked")),
         "tool_queries_used": _string_list(payload.get("tool_queries_used")),
         "reviewer_limitations": _reviewer_limitations(payload),
+        "reviewer_benchmark": _reviewer_benchmark(payload),
         "proposer_output": proposer_output,
         "proposer_id": proposer_id,
         "proposer_artifact": _safe_artifact_ref(
@@ -490,6 +491,32 @@ def _round_entry(
         else:
             entry["qualification_policy"] = "single_domain_no_assessment"
     return entry
+
+
+def _reviewer_benchmark(payload: Mapping[str, Any]) -> dict[str, Any]:
+    benchmark = payload.get("reviewer_benchmark")
+    if not isinstance(benchmark, Mapping):
+        return {}
+    comparison = benchmark.get("comparison")
+    alternative = benchmark.get("same_direction_alternative")
+    preserves_direction = benchmark.get("preserves_proposer_direction")
+    return {
+        "comparison": (
+            comparison.strip()
+            if isinstance(comparison, str)
+            else ""
+        ),
+        "same_direction_alternative": (
+            alternative.strip()
+            if isinstance(alternative, str)
+            else ""
+        ),
+        "preserves_proposer_direction": (
+            preserves_direction
+            if isinstance(preserves_direction, bool)
+            else None
+        ),
+    }
 
 
 def _batch_request(

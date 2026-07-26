@@ -1,13 +1,13 @@
 {
   "schema_version": "arc.workflow.ideas.marking_scheme.v1",
-  "calibration_guidance": "Use the full numeric range. Do not assign mid-high scores merely because an idea is plausible. A total above 85 means the idea is strong across importance, novelty, definition, and execution. Mathematical sophistication, formal elegance, or an interdisciplinary connection does not justify a high score unless it concretely solves or advances a consequential target-domain problem. Apply a functional counterfactual: removing it should remove or materially weaken a solution, constraint, prediction, capability, or executable route; a change only in terminology, representation, or perceived elegance has no substantive value. A mathematically convenient but scientifically limited exercise, an elegant reframing without substantive problem progress, or an important idea without a feasible first calculation should not receive a high total.",
+  "calibration_guidance": "Use the full numeric range. Do not assign mid-high scores merely because an idea is plausible. A total above 85 means the idea is strong across importance, novelty, definition, execution, conceptual simplicity, and breadth of applicability. Scientific taste matters: prefer one coherent idea nucleus whose technical machinery serves a single consequential claim over a bundle of independently publishable aims. Do not confuse simplicity with brevity or under-specification, and do not penalize complexity that is essential to define or validate the core result. Mathematical sophistication, formal elegance, or an interdisciplinary connection does not justify a high score unless it concretely solves or advances a consequential target-domain problem. A simple idea that is already known remains low-novelty; simplicity and generality never substitute for novelty evidence. Apply a functional counterfactual: removing it should remove or materially weaken a solution, constraint, prediction, capability, or executable route; a change only in terminology, representation, or perceived elegance has no substantive value. A mathematically convenient but scientifically limited exercise, an elegant reframing without substantive problem progress, or an important idea without a feasible first calculation should not receive a high total.",
   "marks": [
     {
       "field": "user_intent_relevance",
       "label": "Intent Relevance",
       "minimum": 0,
-      "maximum": 25,
-      "guidance": "Score alignment with the full user intent and whether the proposal addresses an important target-domain problem rather than an easy nearby exercise. 25: directly targets the full intent and a consequential domain problem. 20: mostly matches with minor drift. 15: relevant but misses an important constraint or payoff. 10: only partially relevant. 5: weak topical overlap. 0: wrong problem or domain."
+      "maximum": 10,
+      "guidance": "Score alignment with the core scientific intent and whether the proposal addresses an important target-domain problem rather than an easy nearby exercise. Do not require one idea to absorb every optional extension or requested observable. 10: directly targets the core intent and a consequential domain problem. 7: mostly matches with minor drift. 4: relevant but misses an important constraint or payoff. 2: weak topical overlap. 0: wrong problem or domain."
     },
     {
       "field": "novelty",
@@ -34,8 +34,8 @@
       "field": "planning",
       "label": "Planning",
       "minimum": 0,
-      "maximum": 15,
-      "guidance": "Score whether a systematic method gives an executable route from ready inputs to outputs, with applicability checks, a bounded first calculation, validation, and a kill criterion. 15: concrete and agent-executable. 10: clear route with named manageable risks. 5: broad or missing key prerequisites. 0: infeasible, blocked, or essentially absent."
+      "maximum": 10,
+      "guidance": "Score whether a systematic method gives an executable route from ready inputs to outputs, with applicability checks, a bounded first calculation, validation, and a kill criterion. Do not award extra planning marks for adding separable observables, formalisms, or future extensions. 10: concrete and agent-executable. 7: clear route with named manageable risks. 4: broad or missing key prerequisites. 0: infeasible, blocked, or essentially absent."
     },
     {
       "field": "problem_well_definedness",
@@ -43,6 +43,20 @@
       "minimum": 0,
       "maximum": 15,
       "guidance": "Score whether the mathematical object, assumptions and regime, relevant boundary or initial conditions, target quantity, and success criterion are specified. 15: calculation can be set up directly. 10: mostly defined with a few reasonable choices. 5: key objects, limits, or observables are under-specified. 0: no clear calculable question."
+    },
+    {
+      "field": "simplicity",
+      "label": "Simplicity",
+      "minimum": 0,
+      "maximum": 10,
+      "guidance": "Use scientific taste to score conceptual economy and unity, not prose length. 10: one nontrivial idea nucleus with minimal assumptions; every major calculation and method is essential to that core claim. 7: a clear core with limited, justified supporting machinery. 4: a worthwhile core is obscured by avoidable model choices or separable goals. 0: novelty is manufactured by stacking loosely connected ideas, observables, or methods. Necessary technical controls, validation, and mathematical detail do not reduce this score."
+    },
+    {
+      "field": "generality",
+      "label": "Generality",
+      "minimum": 0,
+      "maximum": 10,
+      "guidance": "Score breadth of applicability and robustness under relaxing special assumptions. 10: the core result applies, or has a controlled route to apply, across a broad physically meaningful class of cases with few special choices. 7: it covers a natural family beyond one benchmark. 4: it is tied to a narrow setup but reveals a principle that may transfer. 0: it is a tuning-specific or benchmark-specific artifact with no credible wider use. Do not reward vague lists of future applications, parameter scans, or extra observables. Broader applicability can make future experimental verification more likely, but direct observability is not a separate requirement."
     }
   ],
   "total_score": {
@@ -52,5 +66,5 @@
     "maximum": 100,
     "guidance": "Set total_score to the closest integer after summing all listed marks. Rank ideas on one common scale; qualification is enforced separately from this score."
   },
-  "tie_break_order": ["total_score", "user_intent_relevance", "novelty", "confidence_of_novelty", "scientific_value", "planning", "problem_well_definedness"]
+  "tie_break_order": ["total_score", "novelty", "confidence_of_novelty", "scientific_value", "simplicity", "generality", "problem_well_definedness", "user_intent_relevance", "planning"]
 }

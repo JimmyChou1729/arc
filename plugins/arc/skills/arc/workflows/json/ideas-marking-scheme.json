@@ -1,13 +1,13 @@
 {
   "schema_version": "arc.workflow.ideas.marking_scheme.v1",
-  "calibration_guidance": "Use the full numeric range. Do not assign mid-high scores by default just because an idea is plausible. A total score above 85 should mean the idea is clearly strong across most dimensions. A total score above 90 should be rare. A merely reasonable idea with unclear novelty or weak execution plan should usually fall around 55-75, not 80+.",
+  "calibration_guidance": "Use the full numeric range. Do not assign mid-high scores by default just because an idea is plausible. A total score above 85 should mean the idea is clearly strong across importance, novelty, definition, execution, conceptual simplicity, and breadth of applicability. A total score above 90 should be rare. Prefer one coherent idea nucleus whose technical machinery serves a single consequential claim over a bundle of independently publishable aims. Do not confuse simplicity with brevity or under-specification, and do not penalize complexity essential to define or validate the core result. A simple idea that is already known remains low-novelty; simplicity and generality never substitute for novelty evidence. A merely reasonable idea with unclear novelty or weak execution plan should usually fall around 55-75, not 80+.",
   "marks": [
     {
       "field": "user_intent_relevance",
       "label": "Intent Relevance",
       "minimum": 0,
-      "maximum": 25,
-      "guidance": "Score alignment with the full user intent, including the requested calculation, target domain, constraints, and practical research goal. 25: directly targets the full user intent, including domain, requested calculation, constraints, and practical goal. 20: mostly matches, with only minor drift or missing detail. 15: relevant but misses an important constraint or focuses on a nearby problem. 10: only partially relevant; could be useful but not really what was asked. 5: weak topical overlap. 0: wrong problem or domain."
+      "maximum": 10,
+      "guidance": "Score alignment with the core user intent, including the target domain, central constraint, and practical research goal. Do not require one idea to absorb every optional extension or requested observable. 10: directly targets the core scientific intent. 7: mostly matches, with only minor drift. 4: relevant but misses an important constraint or payoff. 2: weak topical overlap. 0: wrong problem or domain."
     },
     {
       "field": "novelty",
@@ -34,8 +34,8 @@
       "field": "planning",
       "label": "Planning",
       "minimum": 0,
-      "maximum": 15,
-      "guidance": "Score whether the question is broken into good-enough pieces for agent execution. 15: plan is broken into concrete, agent-executable steps with clear inputs, outputs, and validation checks. 10: clear plan; each major step can be done by an AI agent, though some details remain. 5: has a plan, but some steps are too broad or difficult for an AI agent. 0: most steps cannot be done by an AI agent or the plan is essentially absent."
+      "maximum": 10,
+      "guidance": "Score whether the question is broken into good-enough pieces for agent execution. Do not award extra marks for adding separable observables, formalisms, or future extensions. 10: concrete, agent-executable steps with clear inputs, outputs, and validation checks. 7: clear route, though some details remain. 4: some steps are too broad or difficult for an AI agent. 0: most steps cannot be done by an AI agent or the plan is essentially absent."
     },
     {
       "field": "problem_well_definedness",
@@ -43,6 +43,20 @@
       "minimum": 0,
       "maximum": 15,
       "guidance": "Score whether the question is set up sharply enough. 15: problem is sharply specified; the calculation can be set up directly from the proposal. 10: mostly well-defined, but requires a few reasonable choices or assumptions. 5: interesting direction, but key objects, setup, limits, or observables are under-specified. 0: no clear calculable question."
+    },
+    {
+      "field": "simplicity",
+      "label": "Simplicity",
+      "minimum": 0,
+      "maximum": 10,
+      "guidance": "Use scientific taste to score conceptual economy and unity, not prose length. 10: one nontrivial idea nucleus with minimal assumptions; every major calculation and method is essential to that core claim. 7: a clear core with limited, justified supporting machinery. 4: a worthwhile core is obscured by avoidable choices or separable goals. 0: novelty is manufactured by stacking loosely connected ideas, observables, or methods. Necessary technical controls, validation, and mathematical detail do not reduce this score."
+    },
+    {
+      "field": "generality",
+      "label": "Generality",
+      "minimum": 0,
+      "maximum": 10,
+      "guidance": "Score breadth of applicability and robustness under relaxing special assumptions. 10: the core result applies, or has a controlled route to apply, across a broad physically meaningful class of cases with few special choices. 7: it covers a natural family beyond one benchmark. 4: it is tied to a narrow setup but reveals a principle that may transfer. 0: it is a tuning-specific or benchmark-specific artifact with no credible wider use. Do not reward vague lists of future applications, parameter scans, or extra observables. Broader applicability can make future experimental verification more likely, but direct observability is not a separate requirement."
     }
   ],
   "total_score": {
@@ -54,11 +68,13 @@
   },
   "tie_break_order": [
     "total_score",
-    "user_intent_relevance",
     "novelty",
     "confidence_of_novelty",
     "scientific_value",
-    "planning",
-    "problem_well_definedness"
+    "simplicity",
+    "generality",
+    "problem_well_definedness",
+    "user_intent_relevance",
+    "planning"
   ]
 }
