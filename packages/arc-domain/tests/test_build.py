@@ -28,7 +28,6 @@ from arc_jobs import (
     RunStatus,
 )
 from arc_llm import (
-    DeliveryState,
     FailureCategory,
     LLMCompleted,
     LLMFailed,
@@ -174,7 +173,6 @@ class FakeTaskService:
                 ProviderFailure(
                     "summary timed out",
                     category=FailureCategory.TIMEOUT,
-                    delivery=DeliveryState.MAY_HAVE_RUN,
                 )
             )
         raise AssertionError(f"unexpected task: {request.task_id}")
@@ -197,7 +195,6 @@ class NetworkFailureTaskService(FakeTaskService):
                 ProviderFailure(
                     "network ranking failed",
                     category=self.category,
-                    delivery=DeliveryState.NOT_DELIVERED,
                 )
             )
         return super().execute_or_resume(context, request, **kwargs)

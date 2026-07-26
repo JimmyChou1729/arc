@@ -19,7 +19,6 @@ from arc_jobs import (
     StoppedError,
 )
 from arc_llm import (
-    DeliveryState,
     FailureCategory,
     HostAuthority,
     IsolationMode,
@@ -134,7 +133,6 @@ class ManifestAwareAdapter:
         del stop
         self.start_calls += 1
         self.requests.append(request)
-        observer.before_delivery()
         import json
 
         control = json.loads(
@@ -531,7 +529,6 @@ def test_provider_failure_and_invalid_output_page_terminals_replay(
             ProviderFailure(
                 "provider unavailable",
                 category=FailureCategory.UNAVAILABLE,
-                delivery=DeliveryState.NOT_DELIVERED,
             )
         ),
         LLMCompleted({"not": "the visual schema"}, "codex", "fake", None, None),

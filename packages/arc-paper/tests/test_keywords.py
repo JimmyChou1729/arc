@@ -385,7 +385,7 @@ def test_keyword_llm_resume_rejects_malformed_claimed_arc_llm_input() -> None:
     with pytest.raises(KeywordExtractionError) as exc_info:
         _llm_resume_input(
             {
-                "schema_version": "arc.llm.resume_input.v2",
+                "schema_version": "arc.llm.resume_input.v3",
                 "resume_key": "missing-action",
             }
         )

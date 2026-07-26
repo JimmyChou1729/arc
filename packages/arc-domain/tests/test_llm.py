@@ -7,7 +7,6 @@ import pytest
 from arc_domain import _llm
 from arc_jobs import ResumeReason
 from arc_llm import (
-    DeliveryState,
     FailureCategory,
     LLMFailed,
     LLMExecutionOptions,
@@ -34,7 +33,6 @@ def _failure(category: FailureCategory) -> LLMFailed:
         ProviderFailure(
             "provider failed",
             category=category,
-            delivery=DeliveryState.NOT_DELIVERED,
         )
     )
 

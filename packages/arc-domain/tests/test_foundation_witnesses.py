@@ -7,7 +7,6 @@ from arc_domain.build import DomainBuildRunner
 from arc_domain.contracts import DomainBuildPolicy, DomainBuildRequest
 from arc_jobs import ImmutableArtifactStore, RunRepository, RunStatus
 from arc_llm import (
-    DeliveryState,
     FailureCategory,
     LLMCompleted,
     LLMFailed,
@@ -121,7 +120,6 @@ class SufficientCandidateTasks:
                 ProviderFailure(
                     "summary unavailable",
                     category=FailureCategory.TIMEOUT,
-                    delivery=DeliveryState.NOT_DELIVERED,
                 )
             )
         raise AssertionError(f"unexpected task: {request.task_id}")

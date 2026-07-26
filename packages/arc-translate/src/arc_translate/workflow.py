@@ -34,6 +34,7 @@ from arc_llm import (
     decode_resume_input,
     resume_input_matches,
 )
+from arc_llm.request import RESUME_SCHEMA_VERSION
 
 from .contracts import (
     BLOCKS_RESULT_SCHEMA,
@@ -748,7 +749,7 @@ def outer_resume_input(context: RunContext) -> ResumeInput | None:
     try:
         return decode_resume_input(context.resume_input)
     except Exception as exc:
-        if context.resume_input.get("schema_version") == "arc.llm.resume_input.v2":
+        if context.resume_input.get("schema_version") == RESUME_SCHEMA_VERSION:
             raise TranslationWorkflowError(
                 "llm_resume_input_invalid", "Malformed arc-llm resume input"
             ) from exc

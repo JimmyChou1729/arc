@@ -27,12 +27,13 @@ from arc_jobs import (
     RunStatus,
 )
 from arc_llm import (
-    DeliveryState,
     FailureCategory,
+    HostAuthority,
     IsolationMode,
     JsonOutput,
     LLMStopped,
     LLMCompleted,
+    LLMExecutionOptions,
     LLMFailed,
     LLMRequest,
     LLMTaskService,
@@ -106,7 +107,6 @@ def _failure(category: FailureCategory) -> LLMFailed:
         ProviderFailure(
             "fake provider failure",
             category=category,
-            delivery=DeliveryState.NOT_DELIVERED,
         )
     )
 
@@ -303,7 +303,6 @@ class ScriptedDomainProvider:
     def start(self, request, observer, stop) -> ProviderExecution:
         del request, stop
         self.start_calls += 1
-        observer.before_delivery()
         if not self.values:
             raise AssertionError("fake provider script exhausted")
         return ProviderExecution(
@@ -468,6 +467,7 @@ def test_real_task_service_ignores_unrelated_summary_state_and_replays_parent(
         paper_access=FakePaperAccess(),
         task_service=task_service,
         reference_service=ForbiddenReferenceService(),
+        llm=LLMExecutionOptions(host_authority=HostAuthority.UNRESTRICTED),
     )
     run_id = domain_build_run_id(request)
     snapshot = repository.create(
@@ -498,6 +498,7 @@ def test_real_task_service_ignores_unrelated_summary_state_and_replays_parent(
             ),
             request.model,
         ),
+        options=LLMExecutionOptions(host_authority=HostAuthority.UNRESTRICTED),
     )
     assert isinstance(unrelated, LLMCompleted)
 
@@ -506,6 +507,7 @@ def test_real_task_service_ignores_unrelated_summary_state_and_replays_parent(
         paper_access=FakePaperAccess(),
         task_service=task_service,
         reference_service=ForbiddenReferenceService(),
+        llm=LLMExecutionOptions(host_authority=HostAuthority.UNRESTRICTED),
     )
 
     assert completed.status is RunStatus.SUCCEEDED

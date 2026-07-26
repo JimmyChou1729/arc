@@ -10,7 +10,6 @@ import pytest
 
 from arc_jobs import ResumeReason, RunContext, RunRepository, RunSpec, StoppedError
 from arc_llm import (
-    DeliveryState,
     FailureCategory,
     LLMCompleted,
     LLMFailed,
@@ -283,7 +282,6 @@ def test_terminal_failure_returns_warning_and_retains_no_partial_mapping(
                 ProviderFailure(
                     "fake transport failure",
                     category=FailureCategory.TRANSPORT,
-                    delivery=DeliveryState.NOT_DELIVERED,
                 )
             ),
         ]

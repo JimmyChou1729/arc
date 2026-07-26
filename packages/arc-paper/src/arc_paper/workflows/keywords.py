@@ -44,6 +44,7 @@ from arc_llm import (
     ResumeInput,
     decode_resume_input,
 )
+from arc_llm.request import RESUME_SCHEMA_VERSION
 
 from ..parse import ParsedDocument, parsed_document_to_document
 from ..rich_document import rich_document_to_document
@@ -908,7 +909,7 @@ def _llm_resume_input(
     # interaction responses (for example a Companion evidence response) are
     # owned by that workflow, not by arc-llm.  Only a payload that explicitly
     # claims the arc-llm resume schema belongs on this recovery path.
-    if resume_input.get("schema_version") != "arc.llm.resume_input.v2":
+    if resume_input.get("schema_version") != RESUME_SCHEMA_VERSION:
         return None
     try:
         return decode_resume_input(resume_input)
