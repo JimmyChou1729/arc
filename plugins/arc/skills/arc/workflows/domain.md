@@ -83,9 +83,13 @@ field guide, not as an unfilled request.
 arc-llm generate \
   --request <project-dir>/.arc/domain/origin-selection-<field-id>-request.json \
   --run-root <project-dir>/.arc/domain/origin-selection-llm \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --run-id <origin-selection-run-id>
 ```
+
+Choose `<host-authority>` once for each run: use `unrestricted` only when the
+host explicitly reports unrestricted authority; otherwise use `unknown`. Reuse
+the identical value for any resume of that run.
 
 Before using a response, normalize `selected_paper_id` locally and require it
 to equal one of that field's recorded candidate IDs. Also require every
@@ -129,7 +133,7 @@ arc-domain build <build-seed-paper> \
   --llm-provider <llm_provider> \
   --model <model> \
   --model-tier <model_tier> \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --workers <workers> \
   --recent-window-days <recent_window_days> \
   --foundation-mode fixed-seed \
@@ -150,7 +154,7 @@ mode flags to use `infer_from_seed` and `representative_plus_recent`.
 
 If several domain IDs are distinct, their builds may run concurrently. Record
 every returned `run_id` and `domain_id`. A paused result must be continued only
-with `arc-domain resume <run-id> --project-dir <project-dir> --host-authority unknown`. When its resume
+with `arc-domain resume <run-id> --project-dir <project-dir> --host-authority <host-authority>`. When its resume
 descriptor requires input, pass the matching document with
 `--input '<resume-input-json-document>'`. Inspect progress with
 `arc-domain status --project-dir <project-dir> --run-id <run-id>`, stop with

@@ -63,9 +63,13 @@ means install `rg` rather than searching arbitrary cache files.
 ```bash
 arc-paper extract-keywords <source> \
   --project-dir <project-dir>/keywords \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --approx-count 50
 ```
+
+Use `unrestricted` for `<host-authority>` only when the host explicitly
+reports unrestricted authority; otherwise use `unknown`. Reuse that value if
+the durable keyword run is resumed.
 
 The count is an estimate. Terms are selected chapter by chapter for relevance,
 deduplicated, and then labeled with machine-counted occurrence frequency.

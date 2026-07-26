@@ -26,7 +26,7 @@ arc-companion build note.md \
   --project-dir local/example/companion \
   --target-language zh-CN \
   --user-intent "Explain the main argument and its assumptions." \
-  --host-authority unknown
+  --host-authority <host-authority>
 ```
 
 On the first command, redirect JSON output outside the new project directory.
@@ -38,10 +38,11 @@ Use `arc-companion --help` and `arc-companion build --help` for supported
 sources, optional PDF validation, durable controls, rendering, and release
 validation.
 
-Build and resume accept `--host-authority` for all model-backed lanes. It
-defaults to `unknown`; `unrestricted` is valid only as an explicit host
-attestation. This runtime setting does not change the Companion build recipe
-or release artifacts.
+Build and resume accept `--host-authority` for all model-backed lanes. Set
+`<host-authority>` once per run: use `unrestricted` only when the host
+explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
+identical value when resuming. This runtime setting does not change the
+Companion build recipe or release artifacts.
 
 A successful build or resume formally publishes and validates one complete
 immutable PDF/Web release. The model-free `render` command is the manual

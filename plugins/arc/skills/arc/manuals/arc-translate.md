@@ -13,9 +13,13 @@ First detect whether translation is needed:
 arc-translate detect-language <source> \
   --project-dir <project-dir> \
   --paper-cache-root <shared-paper-cache> \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --target-language <language-tag>
 ```
+
+Set `<host-authority>` once per run: use `unrestricted` only when the host
+explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
+identical value for every resume of that run.
 
 If the detected source language already matches the target, stop. Otherwise
 build the glossary and translate all source blocks:
@@ -24,13 +28,13 @@ build the glossary and translate all source blocks:
 arc-translate build-glossary <source> \
   --project-dir <project-dir> \
   --paper-cache-root <shared-paper-cache> \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --approx-term-count 50
 
 arc-translate translate-blocks <source> \
   --project-dir <project-dir> \
   --paper-cache-root <shared-paper-cache> \
-  --host-authority unknown
+  --host-authority <host-authority>
 ```
 
 Each command runs only its named step and verifies its prerequisites. The term
@@ -50,7 +54,7 @@ Markdown-only result is published.
 arc-translate status --project-dir <project-dir>
 arc-translate validate --project-dir <project-dir>
 arc-translate resume --project-dir <project-dir> --input <resume-input.json> \
-  --host-authority unknown
+  --host-authority <host-authority>
 arc-translate stop --project-dir <project-dir> --reason "<reason>"
 ```
 

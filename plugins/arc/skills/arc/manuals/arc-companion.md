@@ -20,9 +20,13 @@ arc-companion build <source.md> \
   --pdf <validator.pdf> \
   --project-dir <project-dir> \
   --paper-cache-root <shared-paper-cache> \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --target-language <language-tag>
 ```
+
+Set `<host-authority>` once per run: use `unrestricted` only when the host
+explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
+identical value for every resume of that run.
 
 For the first command, redirect the JSON result outside `<project-dir>`.
 For example, use `> local/companion-build-result.json`, not
@@ -37,7 +41,7 @@ arc-companion build <arxiv-id> \
   --pdf fetch \
   --project-dir <project-dir> \
   --paper-cache-root <shared-paper-cache> \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --target-language <language-tag>
 ```
 
@@ -55,7 +59,7 @@ assets are project-local under `<project-dir>/.arc/companion/`.
 ```bash
 arc-companion status --project-dir <project-dir>
 arc-companion resume --project-dir <project-dir> --input <resume-input.json> \
-  --host-authority unknown
+  --host-authority <host-authority>
 arc-companion stop --project-dir <project-dir> --reason "<reason>"
 ```
 

@@ -42,9 +42,13 @@ arc-companion build <source-path-or-paper-id> \
   --approx-term-count <estimate> \
   --user-intent '<intent>' \
   --provider <provider> \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --workers <workers>
 ```
+
+Choose `<host-authority>` once: use `unrestricted` only when the host
+explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
+identical value when resuming this run.
 
 Add `--pdf <path>` for a local validator or `--pdf fetch` for a remote paper.
 Use `--refresh` only when fresh remote source bytes were requested.
@@ -71,7 +75,7 @@ resume key:
 ```bash
 arc-companion resume --project-dir <project-dir> \
   --input '<resume-input-json>' \
-  --host-authority unknown
+  --host-authority <host-authority>
 ```
 
 For an unsafe reviewer patch, the supervision request permits discarding that

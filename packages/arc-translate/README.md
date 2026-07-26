@@ -15,7 +15,7 @@ arc-translate detect-language note.md \
   --target-language zh-CN \
   --project-dir local/example/translation \
   --paper-cache-root <shared-paper-cache> \
-  --host-authority unknown
+  --host-authority <host-authority>
 ```
 
 Use `arc-translate --help` and `arc-translate detect-language --help` for the
@@ -26,10 +26,11 @@ cache. Durable state is project-local under `<project-dir>/.arc/translate/`.
 Each successful step publishes the human-readable
 `<project-dir>/translation.html`; no Markdown-only output is delivered.
 
-Generation and resume commands accept `--host-authority`. It defaults to
-`unknown`; specify `unrestricted` only after the host has explicitly granted
-that authority. The setting is execution-only and is not recorded in a
-translation request or result.
+Generation and resume commands accept `--host-authority`. Set
+`<host-authority>` once per run: use `unrestricted` only when the host
+explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
+identical value when resuming. The setting is execution-only and is not
+recorded in a translation request or result.
 
 ## Tests
 

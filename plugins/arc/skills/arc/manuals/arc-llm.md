@@ -45,7 +45,7 @@ Then start and inspect the durable run:
 arc-llm generate \
   --request <request.json> \
   --run-root <project-dir>/.arc/llm \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --run-id <stable-run-id>
 
 arc-llm status \
@@ -56,13 +56,17 @@ arc-llm status \
 Persist the returned run ID and read the typed result body. The run root is
 caller-owned durable state, not a temporary directory.
 
+Set `<host-authority>` once per run: use `unrestricted` only when the host
+explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
+identical value for every resume of that run.
+
 ## Resume or Stop
 
 ```bash
 arc-llm resume \
   --run-root <project-dir>/.arc/llm \
   --run-id <stable-run-id> \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --input <resume-input.json>
 
 arc-llm stop \
@@ -85,6 +89,4 @@ arc-llm <command> --help
 
 The CLI emits one typed JSON result for non-help commands. Model selection and
 input artifacts are request data; ARC copies each verified input into the
-provider workspace. `--host-authority unrestricted` is valid only when the
-invoking host has explicitly granted unrestricted authority. Otherwise use
-`unknown` (the portable default), which requests host turns when needed.
+provider workspace.

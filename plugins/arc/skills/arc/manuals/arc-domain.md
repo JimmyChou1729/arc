@@ -11,8 +11,12 @@ generation.
 ```bash
 arc-domain build <seed-paper> --intent "<scientific intent>" \
   --project-dir <project-dir> \
-  --host-authority unknown
+  --host-authority <host-authority>
 ```
+
+Set `<host-authority>` once per run: use `unrestricted` only when the host
+explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
+identical value for every resume of that run.
 
 The result reports both a durable `run_id` and a stable `domain_id`. Keep both:
 the run ID controls this attempt, while the domain ID selects the published
@@ -32,7 +36,7 @@ citer corpus rather than silently changing the canonical origin.
 ## Resume and Validate
 
 ```bash
-arc-domain resume <run-id> --project-dir <project-dir> --host-authority unknown
+arc-domain resume <run-id> --project-dir <project-dir> --host-authority <host-authority>
 arc-domain validate <run-id> --project-dir <project-dir>
 arc-domain stop <run-id> --project-dir <project-dir> --reason "<reason>"
 ```
