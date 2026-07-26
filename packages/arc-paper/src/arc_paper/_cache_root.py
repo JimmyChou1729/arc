@@ -24,10 +24,8 @@ def resolve_cache_root(
         root = Path(value).expanduser()
     elif value := os.environ.get("ARC_HOME"):
         root = Path(value).expanduser() / "cache" / "arc-paper"
-    elif value := os.environ.get("XDG_CACHE_HOME"):
-        root = Path(value).expanduser() / "arc" / "arc-paper"
     else:
-        root = Path.home() / ".cache" / "arc" / "arc-paper"
+        root = Path.home() / ".arc" / "cache" / "arc-paper"
 
     if (
         explicit is not None

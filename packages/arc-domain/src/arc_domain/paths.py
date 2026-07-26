@@ -8,8 +8,6 @@ from pathlib import Path
 from arc_jobs import InvalidRunIdError, canonical_json_bytes, validate_simple_id
 from arc_paper import normalize_paper_id
 
-from ._cache_root import resolve_cache_root
-
 
 def domain_id_for(seed_paper: str, intent: str = "") -> str:
     if not isinstance(seed_paper, str):
@@ -44,13 +42,18 @@ class DomainPaths:
     root: Path
 
     @classmethod
-    def resolve(
-        cls,
-        explicit: str | Path | None = None,
-        *,
-        repository: object | None = None,
-    ) -> "DomainPaths":
-        return cls(resolve_cache_root(explicit, repository=repository))
+    def for_project(cls, project_dir: str | Path) -> "DomainPaths":
+        """Return the project-owned durable domain state location.
+
+        Domain builds are not reusable caches.  Their durable runs and
+        unpublished generations therefore always live inside the selected
+        project rather than under a shared ARC root.
+        """
+
+        if isinstance(project_dir, str) and not project_dir.strip():
+            raise ValueError("project_dir must be a non-empty path")
+        project = Path(project_dir).expanduser().resolve(strict=False)
+        return cls(project / ".arc" / "domain")
 
     @property
     def runs(self) -> Path:

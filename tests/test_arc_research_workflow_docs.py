@@ -403,13 +403,20 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
             "arc-domain.md",
             "arc-domain build",
             "domain",
-            ["build", "arXiv:1234.5678", "--intent", "scientific intent"],
+            [
+                "build",
+                "arXiv:1234.5678",
+                "--intent",
+                "scientific intent",
+                "--project-dir",
+                "project",
+            ],
         ),
         (
             "arc-domain.md",
             "arc-domain status",
             "domain",
-            ["status", "--run-id", "domain_run"],
+            ["status", "--project-dir", "project", "--run-id", "domain_run"],
         ),
         (
             "arc-jobs.md",
@@ -1612,12 +1619,12 @@ def test_arc_runtime_and_job_docs_cover_unified_context_and_lifecycle() -> None:
 
     for value in (
         "ARC_HOME",
+        "runtimes/",
         "cache/arc-paper/",
-        "cache/arc-domain/",
-        "cache/arc-llm/",
-        "tmp/arc-llm/",
     ):
         assert value in skill
+    for removed in ("cache/arc-domain/", "cache/arc-llm/", "tmp/arc-llm/"):
+        assert removed not in skill
     assert "migration-conflicts/" not in skill
     assert "ARC_AGENT_HOST" not in skill
     assert "migration status" not in skill

@@ -38,6 +38,14 @@ POLICY = {
 }
 
 
+def _paths_for_project(project_dir: Path) -> DomainPaths:
+    return DomainPaths.for_project(project_dir)
+
+
+def _repository_for_project(project_dir: Path) -> RunRepository:
+    return RunRepository(_paths_for_project(project_dir).root)
+
+
 class _SucceededDomainHandler:
     name = "arc.domain.build.v2"
 
@@ -143,7 +151,7 @@ def _envelope(capsys) -> dict:
 def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:
-    repository = RunRepository(tmp_path)
+    repository = _repository_for_project(tmp_path)
     snapshot = _succeeded_snapshot(repository, run_id="build-run")
 
     class RecordingRunner:
@@ -153,7 +161,8 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def execute(self, request, *, run_id, max_workers):
+        def execute(self, request, *, run_id, paper_access, max_workers):
+            assert paper_access._paper_service.cache_root == tmp_path / "paper-cache"
             type(self).request = request
             type(self).received = (run_id, max_workers)
             return snapshot
@@ -186,8 +195,10 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
                 "2",
                 "--run-id",
                 "requested-run-id",
-                "--cache-root",
+                "--project-dir",
                 str(tmp_path),
+                "--paper-cache-root",
+                str(tmp_path / "paper-cache"),
             ]
         )
         == 0
@@ -204,7 +215,7 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
     assert RecordingRunner.request.policy.graph_node_limit == 7
     assert RecordingRunner.request.model.provider == "manual"
     assert RecordingRunner.request.model.tier == "high"
-    catalog = cli.read_domain_catalog(DomainPaths(tmp_path), domain_id="domain-cli")
+    catalog = cli.read_domain_catalog(_paths_for_project(tmp_path), domain_id="domain-cli")
     assert catalog is not None
     assert catalog.active == "build-run"
 
@@ -212,7 +223,7 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
 def test_mode_flags_override_the_current_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:
-    repository = RunRepository(tmp_path)
+    repository = _repository_for_project(tmp_path)
     snapshot = _succeeded_snapshot(repository, run_id="build-v2")
 
     class RecordingRunner:
@@ -221,8 +232,8 @@ def test_mode_flags_override_the_current_policy(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def execute(self, request, *, run_id, max_workers):
-            del run_id, max_workers
+        def execute(self, request, *, run_id, paper_access, max_workers):
+            del run_id, paper_access, max_workers
             type(self).request = request
             return snapshot
 
@@ -238,7 +249,7 @@ def test_mode_flags_override_the_current_policy(
                 "fixed-seed",
                 "--citer-selection-mode",
                 "strict-window",
-                "--cache-root",
+                "--project-dir",
                 str(tmp_path),
             ]
         )
@@ -254,7 +265,7 @@ def test_mode_flags_override_the_current_policy(
 def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:
-    repository = RunRepository(tmp_path)
+    repository = _repository_for_project(tmp_path)
     snapshot = _succeeded_snapshot(repository, run_id="resume-run")
 
     class RecordingRunner:
@@ -263,7 +274,8 @@ def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def resume(self, run_id: str, *, input, max_workers):
+        def resume(self, run_id: str, *, input, paper_access, max_workers):
+            assert paper_access._paper_service.cache_root == tmp_path / "paper-cache"
             type(self).resumed = (run_id, input, max_workers)
             return snapshot
 
@@ -281,8 +293,10 @@ def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
                 json.dumps(resume_input),
                 "--workers",
                 "24",
-                "--cache-root",
+                "--project-dir",
                 str(tmp_path),
+                "--paper-cache-root",
+                str(tmp_path / "paper-cache"),
             ]
         )
         == 0
@@ -297,10 +311,10 @@ def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
 @pytest.mark.parametrize(
     "argv",
     [
-        ["build", "arXiv:2401.00001", "--workers", "0"],
-        ["build", "arXiv:2401.00001", "--workers", "25"],
-        ["resume", "run-1", "--workers", "0"],
-        ["resume", "run-1", "--workers", "25"],
+        ["build", "arXiv:2401.00001", "--workers", "0", "--project-dir", "/project"],
+        ["build", "arXiv:2401.00001", "--workers", "25", "--project-dir", "/project"],
+        ["resume", "run-1", "--workers", "0", "--project-dir", "/project"],
+        ["resume", "run-1", "--workers", "25", "--project-dir", "/project"],
     ],
 )
 def test_build_and_resume_reject_workers_outside_shared_bounds_before_io(
@@ -308,7 +322,7 @@ def test_build_and_resume_reject_workers_outside_shared_bounds_before_io(
     monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
-    def paths_must_not_resolve(_cache_root):
+    def paths_must_not_resolve(_project_dir):
         raise AssertionError("invalid workers must be rejected before local I/O")
 
     monkeypatch.setattr(cli, "_paths", paths_must_not_resolve)
@@ -323,14 +337,14 @@ def test_build_and_resume_reject_workers_outside_shared_bounds_before_io(
 
 
 def test_status_uses_explicit_run_or_catalog_latest(tmp_path: Path, capsys) -> None:
-    repository = RunRepository(tmp_path)
+    repository = _repository_for_project(tmp_path)
     first = _succeeded_snapshot(repository, run_id="first")
     newest = _succeeded_snapshot(repository, run_id="newest")
-    paths = DomainPaths(tmp_path)
+    paths = _paths_for_project(tmp_path)
     publish_domain_result(repository, paths, run_id=first.run_id, result=_result(repository, first.run_id))
     publish_domain_result(repository, paths, run_id=newest.run_id, result=_result(repository, newest.run_id))
 
-    assert cli.main(["status", "--domain-id", "domain-cli", "--cache-root", str(tmp_path)]) == 0
+    assert cli.main(["status", "--domain-id", "domain-cli", "--project-dir", str(tmp_path)]) == 0
     domain_status = _envelope(capsys)
     assert domain_status["status"] == "completed"
     assert domain_status["run"]["id"] == "newest"
@@ -340,7 +354,7 @@ def test_status_uses_explicit_run_or_catalog_latest(tmp_path: Path, capsys) -> N
         "active": "newest",
     }
 
-    assert cli.main(["status", "--run-id", "first", "--cache-root", str(tmp_path)]) == 0
+    assert cli.main(["status", "--run-id", "first", "--project-dir", str(tmp_path)]) == 0
     run_status = _envelope(capsys)
     assert run_status["status"] == "completed"
     assert run_status["run"]["id"] == "first"
@@ -348,17 +362,17 @@ def test_status_uses_explicit_run_or_catalog_latest(tmp_path: Path, capsys) -> N
 
 
 def test_get_commands_read_only_the_active_export(tmp_path: Path, capsys) -> None:
-    repository = RunRepository(tmp_path)
+    repository = _repository_for_project(tmp_path)
     snapshot = _succeeded_snapshot(repository, run_id="published")
-    paths = DomainPaths(tmp_path)
+    paths = _paths_for_project(tmp_path)
     publish_domain_result(repository, paths, run_id=snapshot.run_id, result=_result(repository, snapshot.run_id))
 
-    assert cli.main(["get-summary", "--domain-id", "domain-cli", "--cache-root", str(tmp_path)]) == 0
+    assert cli.main(["get-summary", "--domain-id", "domain-cli", "--project-dir", str(tmp_path)]) == 0
     summary = _envelope(capsys)
     assert summary["data"]["domain"] == {"id": "domain-cli", "active": "published"}
     assert summary["data"]["summary"]["title"] == "Summary"
 
-    assert cli.main(["get-graph", "--domain-id", "domain-cli", "--cache-root", str(tmp_path)]) == 0
+    assert cli.main(["get-graph", "--domain-id", "domain-cli", "--project-dir", str(tmp_path)]) == 0
     graph = _envelope(capsys)
     assert graph["data"]["graph"]["schema_version"] == "arc.domain_graph.v1"
 
@@ -366,15 +380,15 @@ def test_get_commands_read_only_the_active_export(tmp_path: Path, capsys) -> Non
 def test_get_rejects_an_active_export_with_a_corrupt_digest(
     tmp_path: Path, capsys
 ) -> None:
-    repository = RunRepository(tmp_path)
+    repository = _repository_for_project(tmp_path)
     snapshot = _succeeded_snapshot(repository, run_id="published")
-    paths = DomainPaths(tmp_path)
+    paths = _paths_for_project(tmp_path)
     publish_domain_result(repository, paths, run_id=snapshot.run_id, result=_result(repository, snapshot.run_id))
     (paths.export_generation("domain-cli", "published") / "graph.json").write_text(
         '{"schema_version":"tampered"}\n', encoding="utf-8"
     )
 
-    assert cli.main(["get-graph", "--domain-id", "domain-cli", "--cache-root", str(tmp_path)]) == 1
+    assert cli.main(["get-graph", "--domain-id", "domain-cli", "--project-dir", str(tmp_path)]) == 1
     envelope = _envelope(capsys)
     assert envelope["status"] == "failed"
 
@@ -391,13 +405,13 @@ def test_stop_and_validate_delegate_to_root_run_control(
 
     monkeypatch.setattr(cli, "run_control_main", fake_run_control)
 
-    assert cli.main(["stop", "run-1", "--reason", "user", "--cache-root", str(tmp_path)]) == 0
+    assert cli.main(["stop", "run-1", "--reason", "user", "--project-dir", str(tmp_path)]) == 0
     _envelope(capsys)
-    assert cli.main(["validate", "run-2", "--cache-root", str(tmp_path)]) == 0
+    assert cli.main(["validate", "run-2", "--project-dir", str(tmp_path)]) == 0
     _envelope(capsys)
     assert calls == [
-        ["stop", "--run-root", str(tmp_path), "--run-id", "run-1", "--reason", "user"],
-        ["validate", "--run-root", str(tmp_path), "--run-id", "run-2"],
+        ["stop", "--run-root", str(_paths_for_project(tmp_path).root), "--run-id", "run-1", "--reason", "user"],
+        ["validate", "--run-root", str(_paths_for_project(tmp_path).root), "--run-id", "run-2"],
     ]
 
 
@@ -435,7 +449,12 @@ def test_invalid_requests_always_emit_shared_envelope(argv: list[str], capsys) -
     ],
 )
 def test_build_rejects_invalid_exact_model_selection(model_args: list[str], capsys) -> None:
-    assert cli.main(["build", "arXiv:2401.00001", *model_args]) == 2
+    assert (
+        cli.main(
+            ["build", "arXiv:2401.00001", *model_args, "--project-dir", "/project"]
+        )
+        == 2
+    )
     envelope = _envelope(capsys)
     assert envelope["error"]["code"] == "invalid_request"
 
@@ -456,7 +475,32 @@ def test_build_rejects_incomplete_or_unknown_policy_fields(
 ) -> None:
     assert (
         cli.main(
-            ["build", "arXiv:2401.00001", "--policy", json.dumps(policy)]
+            [
+                "build",
+                "arXiv:2401.00001",
+                "--policy",
+                json.dumps(policy),
+                "--project-dir",
+                "/project",
+            ]
+        )
+        == 2
+    )
+    envelope = _envelope(capsys)
+    assert envelope["error"]["code"] == "invalid_request"
+
+
+def test_legacy_domain_cache_root_option_is_rejected(tmp_path: Path, capsys) -> None:
+    assert (
+        cli.main(
+            [
+                "build",
+                "arXiv:2401.00001",
+                "--project-dir",
+                str(tmp_path),
+                "--cache-root",
+                str(tmp_path / "legacy-cache"),
+            ]
         )
         == 2
     )
@@ -486,7 +530,9 @@ def test_retired_stage_commands_and_llm_aliases_are_rejected(command: str, capsy
 
 
 def test_build_without_policy_freezes_a_complete_default_policy() -> None:
-    args = cli._parser().parse_args(["build", "arXiv:2401.00001"])
+    args = cli._parser().parse_args(
+        ["build", "arXiv:2401.00001", "--project-dir", "/project"]
+    )
 
     request = cli._request_from_args(args)
 
@@ -504,13 +550,13 @@ def test_resume_requires_a_strict_resume_input_object(
         def __init__(self, _repository: RunRepository) -> None:
             pass
 
-        def resume(self, _run_id: str, *, input, max_workers):
-            del max_workers
+        def resume(self, _run_id: str, *, input, paper_access, max_workers):
+            del paper_access, max_workers
             raise AssertionError(f"runner must not receive invalid input: {input!r}")
 
     monkeypatch.setattr(cli, "DomainBuildRunner", Runner)
 
-    assert cli.main(["resume", "run-1", "--input", "[]", "--cache-root", str(tmp_path)]) == 2
+    assert cli.main(["resume", "run-1", "--input", "[]", "--project-dir", str(tmp_path)]) == 2
     envelope = _envelope(capsys)
     assert envelope["error"]["code"] == "invalid_request"
 
@@ -518,14 +564,15 @@ def test_resume_requires_a_strict_resume_input_object(
 def test_completed_run_with_failed_publication_is_command_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:
-    repository = RunRepository(tmp_path)
+    repository = _repository_for_project(tmp_path)
     snapshot = _succeeded_snapshot(repository, run_id="publication-failure")
 
     class Runner:
         def __init__(self, _repository: RunRepository) -> None:
             pass
 
-        def execute(self, _request, *, run_id, max_workers):
+        def execute(self, _request, *, run_id, paper_access, max_workers):
+            del paper_access
             assert run_id is None
             assert max_workers == 8
             return snapshot
@@ -543,7 +590,7 @@ def test_completed_run_with_failed_publication_is_command_failure(
                 "arXiv:2401.00001",
                 "--policy",
                 json.dumps(POLICY),
-                "--cache-root",
+                "--project-dir",
                 str(tmp_path),
             ]
         )
@@ -567,14 +614,15 @@ def test_noncompleted_build_snapshots_return_success_without_publication(
     status: RunStatus,
     expected_command_status: str,
 ) -> None:
-    repository = RunRepository(tmp_path)
+    repository = _repository_for_project(tmp_path)
     snapshot = _snapshot_with_status(repository, run_id=f"{status.value}-run", status=status)
 
     class Runner:
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def execute(self, _request, *, run_id, max_workers):
+        def execute(self, _request, *, run_id, paper_access, max_workers):
+            del paper_access
             assert run_id is None
             assert max_workers == 8
             return snapshot
@@ -592,7 +640,7 @@ def test_noncompleted_build_snapshots_return_success_without_publication(
                 "arXiv:2401.00001",
                 "--policy",
                 json.dumps(POLICY),
-                "--cache-root",
+                "--project-dir",
                 str(tmp_path),
             ]
         )

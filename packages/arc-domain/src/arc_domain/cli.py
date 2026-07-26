@@ -25,6 +25,7 @@ from arc_jobs import (
     snapshot_data,
 )
 from arc_llm import InvalidRequestError, ModelSelection, decode_resume_input
+from arc_paper import ArcPaperService
 
 from . import (
     DOMAIN_BUILD_POLICY_SCHEMA_VERSION,
@@ -36,6 +37,7 @@ from . import (
 )
 from .build import validate_domain_build_workers
 from .catalog import DomainPublicationError, publish_domain_result, read_domain_catalog
+from .fetch import DomainPaperAccess
 from .paths import DomainPaths
 
 
@@ -66,6 +68,13 @@ def _parser() -> _Parser:
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    def add_project_dir(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--project-dir",
+            required=True,
+            help="project directory; durable domain state is stored in .arc/domain",
+        )
 
     build = commands.add_parser(
         "build",
@@ -98,7 +107,11 @@ def _parser() -> _Parser:
         help="model reasoning tier (default: medium)",
     )
     build.add_argument("--workers", type=int, default=8, help="parallel workers (default: 8)")
-    build.add_argument("--cache-root", help="override the domain cache directory")
+    add_project_dir(build)
+    build.add_argument(
+        "--paper-cache-root",
+        help="override the shared arc-paper cache directory",
+    )
     build.add_argument("--run-id", help="explicit durable run identifier")
 
     resume = commands.add_parser(
@@ -109,7 +122,11 @@ def _parser() -> _Parser:
     resume.add_argument("run_id", help="durable run identifier")
     resume.add_argument("--input", help="ResumeInput JSON object")
     resume.add_argument("--workers", type=int, default=8, help="parallel workers (default: 8)")
-    resume.add_argument("--cache-root", help="override the domain cache directory")
+    add_project_dir(resume)
+    resume.add_argument(
+        "--paper-cache-root",
+        help="override the shared arc-paper cache directory",
+    )
 
     status = commands.add_parser(
         "status",
@@ -119,7 +136,7 @@ def _parser() -> _Parser:
     selectors = status.add_mutually_exclusive_group(required=True)
     selectors.add_argument("--run-id", help="durable run identifier")
     selectors.add_argument("--domain-id", help="published domain identifier")
-    status.add_argument("--cache-root", help="override the domain cache directory")
+    add_project_dir(status)
 
     query_commands = {
         "get-summary": "read the active published domain summary",
@@ -128,7 +145,7 @@ def _parser() -> _Parser:
     for name, summary in query_commands.items():
         command = commands.add_parser(name, help=summary, description=summary.capitalize() + ".")
         command.add_argument("--domain-id", required=True, help="published domain identifier")
-        command.add_argument("--cache-root", help="override the domain cache directory")
+        add_project_dir(command)
 
     stop = commands.add_parser(
         "stop",
@@ -136,7 +153,7 @@ def _parser() -> _Parser:
         description="Request a cooperative stop for a durable domain build.",
     )
     stop.add_argument("run_id", help="durable run identifier")
-    stop.add_argument("--cache-root", help="override the domain cache directory")
+    add_project_dir(stop)
     stop.add_argument("--reason", help="human-readable stop reason")
 
     validate = commands.add_parser(
@@ -145,7 +162,7 @@ def _parser() -> _Parser:
         description="Validate the stored artifacts and state for a domain build.",
     )
     validate.add_argument("run_id", help="durable run identifier")
-    validate.add_argument("--cache-root", help="override the domain cache directory")
+    add_project_dir(validate)
     return parser
 
 
@@ -154,8 +171,12 @@ def _emit(result: CommandResult, *, exit_code: int) -> int:
     return exit_code
 
 
-def _paths(cache_root: str | None) -> DomainPaths:
-    return DomainPaths.resolve(cache_root)
+def _paths(project_dir: str) -> DomainPaths:
+    return DomainPaths.for_project(project_dir)
+
+
+def _paper_access(paper_cache_root: str | None) -> DomainPaperAccess:
+    return DomainPaperAccess(ArcPaperService(cache_root=paper_cache_root))
 
 
 def _repository(paths: DomainPaths) -> RunRepository:
@@ -295,11 +316,12 @@ def _published_result(repository: RunRepository, paths: DomainPaths, snapshot) -
 def _build(args: argparse.Namespace) -> tuple[CommandResult, int]:
     max_workers = _validated_workers(args.workers)
     request = _request_from_args(args)
-    paths = _paths(args.cache_root)
+    paths = _paths(args.project_dir)
     repository = _repository(paths)
     snapshot = DomainBuildRunner(repository).execute(
         request,
         run_id=args.run_id,
+        paper_access=_paper_access(args.paper_cache_root),
         max_workers=max_workers,
     )
     result = _published_result(repository, paths, snapshot)
@@ -308,11 +330,12 @@ def _build(args: argparse.Namespace) -> tuple[CommandResult, int]:
 
 def _resume(args: argparse.Namespace) -> tuple[CommandResult, int]:
     max_workers = _validated_workers(args.workers)
-    paths = _paths(args.cache_root)
+    paths = _paths(args.project_dir)
     repository = _repository(paths)
     snapshot = DomainBuildRunner(repository).resume(
         args.run_id,
         input=_resume_input(args.input),
+        paper_access=_paper_access(args.paper_cache_root),
         max_workers=max_workers,
     )
     result = _published_result(repository, paths, snapshot)
@@ -320,7 +343,7 @@ def _resume(args: argparse.Namespace) -> tuple[CommandResult, int]:
 
 
 def _status(args: argparse.Namespace) -> CommandResult:
-    paths = _paths(args.cache_root)
+    paths = _paths(args.project_dir)
     repository = _repository(paths)
     domain_id = args.domain_id
     if args.run_id is not None:
@@ -386,7 +409,7 @@ def _active_export(paths: DomainPaths, domain_id: str, filename: str) -> tuple[s
 
 
 def _get(args: argparse.Namespace, *, filename: str, data_name: str) -> CommandResult:
-    paths = _paths(args.cache_root)
+    paths = _paths(args.project_dir)
     run_id, document = _active_export(paths, args.domain_id, filename)
     return CommandResult(
         CommandStatus.COMPLETED,
@@ -411,7 +434,7 @@ def _resume_input(value: str | None) -> dict[str, Any] | None:
 
 
 def _run_control(args: argparse.Namespace, *, command: str) -> int:
-    paths = _paths(args.cache_root)
+    paths = _paths(args.project_dir)
     argv = [command, "--run-root", str(paths.root), "--run-id", args.run_id]
     if command == "stop" and args.reason is not None:
         argv.extend(["--reason", args.reason])

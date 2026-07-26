@@ -19,7 +19,8 @@ def test_cache_environment_precedence(
 ) -> None:
     _clear_cache_environment(monkeypatch)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    assert default_cache_root() == tmp_path / "xdg" / "arc" / "arc-paper"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    assert default_cache_root() == tmp_path / "home" / ".arc" / "cache" / "arc-paper"
 
     monkeypatch.setenv("ARC_HOME", str(tmp_path / "arc-home"))
     assert default_cache_root() == tmp_path / "arc-home" / "cache" / "arc-paper"

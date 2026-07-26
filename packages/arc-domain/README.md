@@ -18,11 +18,15 @@ contract.
 Build one domain with an explicit research intent:
 
 ```bash
-arc-domain build "<seed-paper-id>" --intent "<research-intent>"
+arc-domain build "<seed-paper-id>" \
+  --intent "<research-intent>" \
+  --project-dir "<project-dir>"
 ```
 
 Replace both quoted placeholders with the seed identifier and the scientific
-focus for the domain.
+focus for the domain. Durable state is stored in
+`<project-dir>/.arc/domain`; paper data uses the shared `arc-paper` cache
+unless `--paper-cache-root` selects another explicit cache.
 The result reports durable run and domain identities. Use `arc-domain --help`
 and `arc-domain build --help` for build policy, inspection, published-artifact
 queries, and run controls.

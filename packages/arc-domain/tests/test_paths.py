@@ -1,49 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from arc_domain._cache_root import resolve_cache_root
 from arc_domain.paths import DomainPaths, domain_id_for, safe_domain_id
 
 
-@dataclass(frozen=True)
-class _Repository:
-    root: Path
+def test_domain_paths_are_project_owned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ARC_HOME", str(tmp_path / "legacy-arc-home"))
+    paths = DomainPaths.for_project(tmp_path / "project")
+    assert paths.root == tmp_path / "project" / ".arc" / "domain"
+    assert not (tmp_path / "legacy-arc-home" / "cache" / "arc-domain").exists()
 
 
-def test_cache_root_precedence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.setenv("ARC_DOMAIN_CACHE", str(tmp_path / "domain"))
-    monkeypatch.setenv("ARC_HOME", str(tmp_path / "arc-home"))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    assert resolve_cache_root() == tmp_path / "domain"
-    assert resolve_cache_root(repository=_Repository(tmp_path / "repository")) == (
-        tmp_path / "repository"
-    )
-    assert resolve_cache_root(tmp_path / "explicit") == tmp_path / "explicit"
-
-
-def test_cache_root_fallbacks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.delenv("ARC_DOMAIN_CACHE", raising=False)
-    monkeypatch.setenv("ARC_HOME", str(tmp_path / "arc-home"))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    assert resolve_cache_root() == tmp_path / "arc-home" / "cache" / "arc-domain"
-
-    monkeypatch.delenv("ARC_HOME")
-    assert resolve_cache_root() == tmp_path / "xdg" / "arc" / "arc-domain"
-
-    monkeypatch.delenv("XDG_CACHE_HOME")
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
-    assert resolve_cache_root() == tmp_path / "home" / ".cache" / "arc" / "arc-domain"
-
-
-def test_explicit_root_must_match_injected_repository(tmp_path: Path):
-    repository = _Repository(tmp_path / "repository")
-    assert resolve_cache_root(repository.root, repository=repository) == repository.root
-    with pytest.raises(ValueError, match="must match"):
-        resolve_cache_root(tmp_path / "other", repository=repository)
+@pytest.mark.parametrize("value", ["", "   "])
+def test_domain_paths_reject_an_empty_project_directory(value: str):
+    with pytest.raises(ValueError, match="project_dir"):
+        DomainPaths.for_project(value)
 
 
 def test_domain_id_is_normalized_and_intent_sensitive():
@@ -54,12 +28,14 @@ def test_domain_id_is_normalized_and_intent_sensitive():
 
 
 def test_domain_paths_use_run_generations(tmp_path: Path):
-    paths = DomainPaths(tmp_path)
+    paths = DomainPaths.for_project(tmp_path)
     domain_id = safe_domain_id("arXiv:2401.01234 / amplitudes")
-    assert paths.runs == tmp_path / "runs"
-    assert paths.catalog(domain_id) == tmp_path / "domains" / domain_id / "catalog.json"
+    assert paths.runs == tmp_path / ".arc" / "domain" / "runs"
+    assert paths.catalog(domain_id) == (
+        tmp_path / ".arc" / "domain" / "domains" / domain_id / "catalog.json"
+    )
     assert paths.export_generation(domain_id, "run-1") == (
-        tmp_path / "domains" / domain_id / "exports" / "run-1"
+        tmp_path / ".arc" / "domain" / "domains" / domain_id / "exports" / "run-1"
     )
     for run_id in ("../escape", "/tmp/escape", "contains/slash"):
         with pytest.raises(ValueError):

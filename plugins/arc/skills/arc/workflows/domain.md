@@ -124,6 +124,7 @@ canonical origin, use fixed-seed/strict-window mode:
 ```bash
 arc-domain build <build-seed-paper> \
   --intent "<user-intent>" \
+  --project-dir <project-dir> \
   --llm-provider <llm_provider> \
   --model <model> \
   --model-tier <model_tier> \
@@ -147,10 +148,12 @@ mode flags to use `infer_from_seed` and `representative_plus_recent`.
 
 If several domain IDs are distinct, their builds may run concurrently. Record
 every returned `run_id` and `domain_id`. A paused result must be continued only
-with `arc-domain resume <run-id>`. When its resume descriptor requires input,
-pass the matching document with `--input '<resume-input-json-document>'`. Inspect progress with
-`arc-domain status --run-id <run-id>`, stop with `arc-domain stop <run-id>`,
-and validate with `arc-domain validate <run-id>`.
+with `arc-domain resume <run-id> --project-dir <project-dir>`. When its resume
+descriptor requires input, pass the matching document with
+`--input '<resume-input-json-document>'`. Inspect progress with
+`arc-domain status --project-dir <project-dir> --run-id <run-id>`, stop with
+`arc-domain stop <run-id> --project-dir <project-dir>`, and validate with
+`arc-domain validate <run-id> --project-dir <project-dir>`.
 
 Step 3: Inspect every `arc.command_result.v2` body. Do not treat an exit code
 alone as success. Continue only when every build has succeeded and published an
@@ -172,9 +175,9 @@ arc-paper safe-dir-name <build-seed-paper>
 Step 2: Read the active export generation by domain ID:
 
 ```bash
-arc-domain status --domain-id <domain-id>
-arc-domain get-summary --domain-id <domain-id>
-arc-domain get-graph --domain-id <domain-id>
+arc-domain status --project-dir <project-dir> --domain-id <domain-id>
+arc-domain get-summary --project-dir <project-dir> --domain-id <domain-id>
+arc-domain get-graph --project-dir <project-dir> --domain-id <domain-id>
 ```
 
 Step 3: Copy or write project-local files:
@@ -182,13 +185,14 @@ Step 3: Copy or write project-local files:
 ```text
 <project-dir>/domain/<seed-safe>_domain.html
 <project-dir>/domain/<seed-safe>_domain_summary.json
-<project-dir>/domain/<seed-safe>_domain_summary.md
+<project-dir>/domain/<seed-safe>_domain_summary.pdf
 <project-dir>/domain/<seed-safe>_paper_json_pack.json
 ```
 
 Use the generation's `network.html`, `summary.json`, `summary.md`, and
-`paper-pack.json` files. The generation is
-`<cache-root>/domains/<domain-id>/exports/<run-id>/`; its
+`paper-pack.json` files. Render `summary.md` to the visible PDF deliverable;
+do not publish Markdown as the only user-facing document. The generation is
+`<project-dir>/.arc/domain/domains/<domain-id>/exports/<run-id>/`; its
 `export-manifest.json` is written last and must exist before copying files.
 
 Use `summary.md` when present. If the summary is unavailable, record its
