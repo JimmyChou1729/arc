@@ -154,7 +154,11 @@ def generate_portfolio_assessment(
             user_intent=user_intent,
             candidates=compact,
         ),
-        output=JsonOutput(_load_assessment_schema()),
+        output=JsonOutput(
+            _assessment_output_schema(
+                [item["candidate_id"] for item in compact]
+            )
+        ),
         model=ModelSelection(provider="auto", tier="high"),
     )
     assessment_run_root = (
@@ -606,6 +610,35 @@ def _load_assessment_schema(
     return read_json_object(
         _workflow_json_dir(workflow_json_dir) / ASSESSMENT_SCHEMA_FILENAME
     )
+
+
+def _assessment_output_schema(candidate_ids: list[str]) -> dict[str, Any]:
+    """Bind model-visible candidate references to this exact batch."""
+
+    schema = copy.deepcopy(_load_assessment_schema())
+    properties = schema["properties"]
+    finding_ids = properties["cross_candidate_findings"]["items"][
+        "properties"
+    ]["candidate_ids"]["items"]
+    finding_ids.clear()
+    finding_ids["enum"] = list(candidate_ids)
+    notes = properties["candidate_notes"]
+    note_id = notes["items"]["properties"]["candidate_id"]
+    note_id.clear()
+    note_id["enum"] = list(candidate_ids)
+    notes["allOf"] = [
+        {
+            "contains": {
+                "type": "object",
+                "required": ["candidate_id"],
+                "properties": {"candidate_id": {"const": candidate_id}},
+            },
+            "minContains": 0,
+            "maxContains": 1,
+        }
+        for candidate_id in candidate_ids
+    ]
+    return schema
 
 
 def _load_assessment_prompt_template(

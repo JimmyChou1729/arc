@@ -11,10 +11,12 @@ from typing import Any
 
 from arc_jobs import (
     Awaiting,
+    Failed,
     ImmutableArtifactStore,
     Paused,
     ResumeReason,
     RunEngine,
+    RunError,
     RunRepository,
     RunSpec,
     canonical_json_bytes,
@@ -29,6 +31,7 @@ from arc_llm import (
 )
 from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 from arc_proposer_reviewer.protocol import decode_batch_request
+from jsonschema import Draft202012Validator
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -578,6 +581,32 @@ def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(
     assert len(portfolio.requests) == 1
     request = portfolio.requests[0]
     assert request.model.tier == "high"
+    output_properties = request.output.schema["properties"]
+    assert output_properties["cross_candidate_findings"]["items"][
+        "properties"
+    ]["candidate_ids"]["items"]["enum"] == [
+        "domain_idea_001",
+        "domain_idea_002",
+    ]
+    assert output_properties["candidate_notes"]["items"]["properties"][
+        "candidate_id"
+    ]["enum"] == ["domain_idea_001", "domain_idea_002"]
+    assert len(output_properties["candidate_notes"]["allOf"]) == 2
+    invalid_unknown = _portfolio_value()
+    invalid_unknown["candidate_notes"][0]["candidate_id"] = "unknown"
+    assert not Draft202012Validator(request.output.schema).is_valid(
+        invalid_unknown
+    )
+    invalid_duplicate = _portfolio_value()
+    invalid_duplicate["candidate_notes"].append(
+        {
+            "candidate_id": "domain_idea_001",
+            "note": "A distinct note must not bypass ID uniqueness.",
+        }
+    )
+    assert not Draft202012Validator(request.output.schema).is_valid(
+        invalid_duplicate
+    )
     assert json.dumps(config["user_intent"]) in request.prompt
     assert '"candidate_id": "domain_idea_001"' in request.prompt
     assert request.prompt.index(
@@ -763,6 +792,68 @@ def test_default_portfolio_run_resumes_paused_durable_lineage(
 
         def generate(self, *_args, **_kwargs):
             raise AssertionError("paused lineage must be resumed")
+
+        def resume(self, *, run_root, run_id, options):
+            del run_root, options
+            calls.append(("resume", run_id))
+            return SimpleNamespace(
+                outcome=LLMCompleted(
+                    _portfolio_value(),
+                    "fake",
+                    "fake-model",
+                    None,
+                    None,
+                )
+            )
+
+    monkeypatch.setattr(portfolio_module, "LLMClient", RecoveringClient)
+    outcome = portfolio_module._run_default_assessment(
+        object(),
+        assessment_run_root=run_root,
+        input_digest=digest,
+        task_service=_FakeLLM(),
+        llm_options=LLMExecutionOptions(),
+    )
+
+    assert isinstance(outcome, LLMCompleted)
+    assert calls == [("resume", durable_run_id)]
+
+
+def test_default_portfolio_run_recovers_failed_durable_lineage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    portfolio_module = sys.modules[
+        "_arc_workflows.ideas_portfolio_assessment"
+    ]
+    digest = "b" * 64
+    durable_run_id = f"portfolio-{digest[:24]}"
+    run_root = tmp_path / "portfolio-assessment-llm"
+
+    class FailureHandler:
+        name = "failure-fixture"
+
+        def execute(self, _context):
+            return Failed(
+                RunError(
+                    "transient_failure",
+                    "retry the same durable lineage",
+                )
+            )
+
+    RunEngine(RunRepository(run_root)).execute(
+        RunSpec(durable_run_id, FailureHandler.name, {}),
+        FailureHandler(),
+    )
+    calls: list[tuple[str, str]] = []
+
+    class RecoveringClient:
+        def __init__(self, *, service):
+            del service
+
+        def generate(self, *_args, **_kwargs):
+            raise AssertionError("failed lineage must be resumed")
 
         def resume(self, *, run_root, run_id, options):
             del run_root, options
