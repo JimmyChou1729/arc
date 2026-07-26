@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from arc_domain.summary import mathematical_opportunities_validation_error
-from arc_llm import CapabilityPolicy, ModelSelection
+from arc_llm import ModelSelection
 from arc_proposer_reviewer import (
     BatchFailurePolicy,
     BatchRequest,
@@ -162,11 +162,6 @@ def worker_spec(
         instructions=f"{system}\n\n{template}",
         output_schema=copy.deepcopy(dict(output_schema)),
         model=selection,
-        capabilities=CapabilityPolicy(
-            internet=internet,
-            inherit_host_config=False,
-            allowed_tools=(),
-        ),
         interaction_operations=(
             evidence_operation_contracts() if evidence_enabled else {}
         ),

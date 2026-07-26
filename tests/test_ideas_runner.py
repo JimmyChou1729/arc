@@ -338,11 +338,7 @@ def test_dry_run_materializes_public_typed_request_with_three_rounds(tmp_path: P
     assert "max_interaction_turns" not in proposer
     assert "max_interaction_turns" not in reviewer
     assert set(proposer["interaction_operations"]) == set(EVIDENCE_OPERATION_NAMES)
-    assert proposer["capabilities"] == {
-        "internet": True,
-        "inherit_host_config": False,
-        "allowed_tools": [],
-    }
+    assert "capabilities" not in proposer
     assert "review_payload" not in reviewer["output_schema"]["properties"]
     assert {"schema_version", "controller", "proposer_messages"}.isdisjoint(
         reviewer["output_schema"]["properties"]

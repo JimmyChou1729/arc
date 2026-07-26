@@ -21,7 +21,6 @@ from arc_jobs import (
     canonical_json_bytes,
 )
 from arc_llm import (
-    CapabilityPolicy,
     JsonOutput,
     LLMStopped,
     LLMCompleted,
@@ -190,7 +189,6 @@ class ReferenceInferenceService:
             _prompt(request_text, request_digest),
             JsonOutput(REFERENCE_OUTPUT_SCHEMA),
             model,
-            capabilities=CapabilityPolicy(internet=True),
         )
         outcome = execute_routed(
             self.task_service,

@@ -7,7 +7,7 @@ import hashlib
 import json
 from typing import Any, Mapping
 
-from arc_llm import CapabilityPolicy, ModelSelection
+from arc_llm import ModelSelection
 from arc_proposer_reviewer import (
     BatchFailurePolicy,
     BatchRequest,
@@ -138,7 +138,6 @@ def _proposer_worker(
         instructions=_worker_instructions(prompt, template),
         output_schema=_dict(payload.get("output_schema"), "calculate-proposer.template.output_schema"),
         model=_worker_model(config.defaults),
-        capabilities=_worker_capabilities(runtime),
     )
 
 
@@ -183,7 +182,6 @@ def _reviewer_worker(
             allow_reference_disagrees=bool(reviewer_reference_claim),
         ),
         model=_worker_model(config.defaults),
-        capabilities=_worker_capabilities(runtime),
     )
 
 
@@ -439,14 +437,6 @@ def _worker_model(defaults: Mapping[str, Any]) -> ModelSelection:
         return ModelSelection(provider=provider, model=model, tier=tier)  # type: ignore[arg-type]
     except ValueError as exc:
         raise ConfigError(f"defaults model selection: {exc}") from exc
-
-
-def _worker_capabilities(runtime: Mapping[str, Any]) -> CapabilityPolicy:
-    return CapabilityPolicy(
-        internet=_bool_default(runtime.get("allow_internet", False), False),
-        inherit_host_config=_bool_default(runtime.get("inherit_host_tools", False), False),
-        allowed_tools=(),
-    )
 
 
 def _attempt_id(step_id: str, attempt_number: int) -> str:
