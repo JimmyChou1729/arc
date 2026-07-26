@@ -24,16 +24,23 @@ arc-companion build <source.md> \
   --target-language <language-tag>
 ```
 
+Use the directory explicitly chosen by the user as `<project-dir>` itself;
+do not append `companion`, `build-v2`, `fresh`, or an attempt-specific suffix.
+Inside the ARC checkout, choose a stable ignored path below `local/`. This
+`local/` convention does not apply to an external directory supplied by the
+user.
+
 Set `<host-authority>` once per run: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
 identical value for every resume of that run. For `restricted` or `unknown`
 host requests, follow `manuals/arc-llm.md`; do not assume a universal broker.
 
-For the first command, redirect the JSON result outside `<project-dir>`.
-For example, use `> local/companion-build-result.json`, not
-`> <project-dir>/result.json`: the shell creates a redirection target before
-Companion can establish its project marker, and unknown nonempty directories
-are deliberately refused.
+The project root may already contain source material, notes, and other
+unrelated user files; Companion preserves them. On first initialization it
+claims only `.arc/companion/`, `releases/`, `companion.pdf`, and
+`companion.html`, and refuses an exact conflict at any of those paths without
+changing the directory. Command JSON may be redirected to an unrelated path
+inside the project root, but never to a managed Companion path.
 
 For a remote arXiv paper, let ARC fetch the PDF validator:
 

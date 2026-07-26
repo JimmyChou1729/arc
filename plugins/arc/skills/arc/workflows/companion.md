@@ -7,17 +7,24 @@ reading companion. Read `manuals/arc-companion.md` before the first command.
 
 ### Step 1: Choose the project directory
 
-Use a new directory for a new Companion build. Inside a Git worktree, keep
-non-development output under the ignored `local/` tree and verify it before
+Use the directory explicitly supplied by the user as `<project-dir>` itself.
+Do not append another `companion`, `build-v2`, `fresh`, or attempt-specific
+directory. If choosing the location inside this checkout, use one stable,
+descriptive directory under the ignored `local/` tree and verify it before
 running:
 
 ```bash
 git check-ignore -q --no-index <project-dir>
 ```
 
-Do not point the CLI at a nonempty directory containing unrelated project
-state. Existing files stay untouched, but runtime state requires a new or
-recognized Companion project directory.
+The `local/` rule applies only inside this checkout; respect an external
+project directory supplied by the user. A new Companion project root may
+already contain source material, notes, or other unrelated user files.
+Companion leaves them untouched and claims only `.arc/companion/`,
+`releases/`, `companion.pdf`, and `companion.html`. Before the first build,
+choose another root or resolve the conflict if any of those managed paths
+already exists. An existing recognized Companion project may contain
+additional unrelated files.
 
 Ensure the installed environment contains the complete Companion runtime,
 including the public `arc-translate` facade. Build checks this before creating
@@ -54,9 +61,9 @@ request becomes a durable manual pause.
 
 Add `--pdf <path>` for a local validator or `--pdf fetch` for a remote paper.
 Use `--refresh` only when fresh remote source bytes were requested.
-If command JSON is redirected, place the redirection target outside a new
-`<project-dir>`; the shell creates that file before Companion starts and would
-otherwise make the directory an unrecognized nonempty project.
+Command JSON may be redirected to an unrelated path inside `<project-dir>`;
+Companion does not treat unrelated files as project-state conflicts. Do not
+redirect to a managed Companion path.
 
 Companion detects source language once. It skips translation only for a known
 matching primary language; mixed or unknown source is translated. Chapters are

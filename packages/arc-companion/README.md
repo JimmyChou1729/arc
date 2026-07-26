@@ -29,10 +29,17 @@ arc-companion build note.md \
   --host-authority <host-authority>
 ```
 
-On the first command, redirect JSON output outside the new project directory.
-Shell redirection creates its target before Companion starts, so writing to
-`local/example/companion/result.json` would make that otherwise-new directory
-nonempty and correctly trigger unknown-state refusal.
+Use the explicitly selected `--project-dir` as the project root itself. Keep a
+stable name; do not append `build-v2`, `fresh`, or attempt-specific suffixes.
+Inside the ARC checkout, project output belongs under ignored `local/`.
+External user-supplied project directories do not need a `local/` component.
+
+The root may already contain source material, notes, or other unrelated user
+files. Companion preserves those files and claims only `.arc/companion/`,
+`releases/`, `companion.pdf`, and `companion.html`. First initialization
+refuses an exact conflict at one of those managed paths without modifying the
+directory. JSON output may be redirected to any unrelated path, including one
+inside the project root.
 
 Use `arc-companion --help` and `arc-companion build --help` for supported
 sources, optional PDF validation, durable controls, rendering, and release

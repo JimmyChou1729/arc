@@ -30,7 +30,7 @@ from arc_companion.contracts import (
     AcceptedChapter,
     SourceAnchor,
 )
-from arc_companion.project import CompanionProjectPaths
+from arc_companion.project import CompanionProjectError, CompanionProjectPaths
 from arc_companion.release import (
     DELIVERY_RECIPE,
     RELEASE_MANIFEST_SCHEMA,
@@ -122,41 +122,115 @@ def test_cli_exposes_exactly_six_protocol_commands() -> None:
     }
 
 
-def test_unknown_nonempty_project_is_rejected_without_modification(
-    tmp_path: Path, capsys
+def test_nonempty_explicit_project_preserves_unrelated_files_on_initialization(
+    tmp_path: Path,
 ) -> None:
-    source = tmp_path / "source.md"
+    project_root = tmp_path / "author"
+    notes = project_root / "notes"
+    notes.mkdir(parents=True)
+    source = project_root / "source.md"
     source.write_text("# Source\n\nText.", encoding="utf-8")
-    project = tmp_path / "unknown"
-    project.mkdir()
-    unknown = project / "state.json"
+    unknown = notes / "state.json"
     unknown.write_text('{"unknown":true}\n', encoding="utf-8")
+    source_before = source.read_bytes()
     before = unknown.read_bytes()
 
-    assert main(
-        ["build", str(source), "--project-dir", str(project)]
-    ) == 1
+    project = CompanionProjectPaths.open(project_root)
 
-    result = json.loads(capsys.readouterr().out)
-    assert result["schema_version"] == "arc.command_result.v2"
-    assert result["status"] == "failed"
-    assert result["error"]["code"] == "project_directory_not_empty"
+    assert project.root == project_root.resolve()
+    assert source.read_bytes() == source_before
     assert unknown.read_bytes() == before
-    assert tuple(project.iterdir()) == (unknown,)
+    assert project.marker.is_file()
+    assert {path.relative_to(project_root) for path in project_root.iterdir()} == {
+        Path(".arc"),
+        Path("notes"),
+        Path("source.md"),
+    }
 
 
-def test_project_runtime_is_hidden_and_shared_arc_project_is_accepted(
+@pytest.mark.parametrize(
+    ("relative", "kind"),
+    [
+        (".arc/companion", "directory"),
+        ("companion.pdf", "file"),
+        ("companion.html", "file"),
+        ("releases", "directory"),
+        (".arc", "file"),
+    ],
+)
+def test_initialization_rejects_unclaimed_managed_path_without_modification(
+    tmp_path: Path,
+    relative: str,
+    kind: str,
+) -> None:
+    project_root = tmp_path / "author"
+    project_root.mkdir()
+    unrelated = project_root / "source.md"
+    unrelated.write_bytes(b"source bytes")
+    conflict = project_root / relative
+    if kind == "directory":
+        conflict.mkdir(parents=True)
+        (conflict / "user-owned.txt").write_bytes(b"user bytes")
+    else:
+        conflict.parent.mkdir(parents=True, exist_ok=True)
+        conflict.write_bytes(b"user bytes")
+    before = {
+        path.relative_to(project_root): (
+            "directory" if path.is_dir() else path.read_bytes()
+        )
+        for path in project_root.rglob("*")
+    }
+
+    with pytest.raises(CompanionProjectError) as exc_info:
+        CompanionProjectPaths.open(project_root)
+
+    assert exc_info.value.code == "project_path_conflict"
+    assert str(conflict.resolve()) in str(exc_info.value)
+    after = {
+        path.relative_to(project_root): (
+            "directory" if path.is_dir() else path.read_bytes()
+        )
+        for path in project_root.rglob("*")
+    }
+    assert after == before
+    assert unrelated.read_bytes() == b"source bytes"
+
+
+def test_project_runtime_is_hidden_and_unrelated_arc_state_is_preserved(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "project"
-    (project_root / ".arc" / "domain").mkdir(parents=True)
+    domain = project_root / ".arc" / "domain"
+    domain.mkdir(parents=True)
+    domain_state = domain / "state.json"
+    domain_state.write_bytes(b'{"domain":true}\n')
 
     project = CompanionProjectPaths.open(project_root)
 
     assert project.runtime_root == project_root / ".arc" / "companion"
     assert project.marker == project.runtime_root / "project.json"
+    assert domain_state.read_bytes() == b'{"domain":true}\n'
     assert not (project_root / "companion-project.json").exists()
     assert not (project.runtime_root / "paper-cache").exists()
+
+
+def test_other_arc_state_does_not_bypass_companion_path_conflict(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    (project_root / ".arc" / "domain").mkdir(parents=True)
+    releases = project_root / "releases"
+    releases.mkdir()
+    owned = releases / "user-owned.txt"
+    owned.write_bytes(b"user bytes")
+
+    with pytest.raises(CompanionProjectError) as exc_info:
+        CompanionProjectPaths.open(project_root)
+
+    assert exc_info.value.code == "project_path_conflict"
+    assert str(releases.resolve()) in str(exc_info.value)
+    assert owned.read_bytes() == b"user bytes"
+    assert not (project_root / ".arc" / "companion").exists()
 
 
 def test_publisher_freezes_source_assets_for_later_project_rendering(

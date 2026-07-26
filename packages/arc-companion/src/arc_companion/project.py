@@ -1,4 +1,4 @@
-"""Small project layout and unknown-state refusal for Companion."""
+"""Small project layout and managed-path ownership for Companion."""
 
 from __future__ import annotations
 
@@ -30,24 +30,23 @@ class CompanionProjectPaths:
     @classmethod
     def open(cls, value: str | Path) -> "CompanionProjectPaths":
         root = Path(value)
-        marker = root / ".arc" / "companion" / "project.json"
         if root.exists():
             if not root.is_dir():
                 raise CompanionProjectError(
                     "project_path_invalid", "project path is not a directory"
                 )
-            entries = tuple(root.iterdir())
-            if entries and not marker.is_file() and not _has_arc_project_state(root):
-                raise CompanionProjectError(
-                    "project_directory_not_empty",
-                    "project directory contains unrecognized or unrelated state; "
-                    "use a new project directory",
-                )
         root.mkdir(parents=True, exist_ok=True)
         paths = cls(root.resolve())
-        if marker.exists():
+        if paths.marker.is_file():
             paths._read_project()
         else:
+            conflict = paths._initialization_conflict()
+            if conflict is not None:
+                raise CompanionProjectError(
+                    "project_path_conflict",
+                    "managed Companion path already exists: "
+                    f"{conflict}",
+                )
             paths._write_project(None)
         return paths
 
@@ -251,6 +250,22 @@ class CompanionProjectPaths:
             {"schema_version": PROJECT_SCHEMA, "current_run_id": run_id},
         )
 
+    def _initialization_conflict(self) -> Path | None:
+        """Return the first unclaimed managed path that Companion cannot use."""
+
+        arc_root = self.root / ".arc"
+        if _path_exists(arc_root) and not arc_root.is_dir():
+            return arc_root
+        for path in (
+            self.runtime_root,
+            self.delivery_pdf,
+            self.delivery_html,
+            self.releases_root,
+        ):
+            if _path_exists(path):
+                return path
+        return None
+
     def _diagnostics_path(self, run_id: str) -> Path:
         if (
             not run_id
@@ -280,16 +295,10 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     atomic_write_json(path, value)
 
 
-def _has_arc_project_state(root: Path) -> bool:
-    """Allow packages to share a project root only after ARC state exists."""
+def _path_exists(path: Path) -> bool:
+    """Treat dangling symlinks as occupied paths."""
 
-    arc_root = root / ".arc"
-    if not arc_root.is_dir():
-        return False
-    return any(
-        (arc_root / name).exists()
-        for name in ("companion", "translate", "domain", "ideas", "calculate", "llm")
-    )
+    return path.exists() or path.is_symlink()
 
 
 def _digest(payload: bytes) -> str:
