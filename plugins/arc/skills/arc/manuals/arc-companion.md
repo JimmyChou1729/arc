@@ -51,7 +51,7 @@ arc-companion build <arxiv-id> \
 
 The build reuses compatible verified source, glossary, translation, and chapter
 artifacts. After the `arc-translate` glossary barrier, translation and guide
-generation may run in parallel. The glossary size is approximate.
+generation may proceed in parallel. The glossary size is approximate.
 
 Before planning, Companion researches at least 20 candidates across named
 sources, prior history, and central later debates. This is an inspection floor,
