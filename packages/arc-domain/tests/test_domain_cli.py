@@ -161,8 +161,18 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def execute(self, request, *, run_id, paper_access, llm, max_workers):
+        def execute(
+            self,
+            request,
+            *,
+            run_id,
+            paper_access,
+            llm,
+            max_workers,
+            event_sink,
+        ):
             assert paper_access._paper_service.cache_root == tmp_path / "paper-cache"
+            assert event_sink is cli._stderr_event_sink
             type(self).request = request
             type(self).received = (run_id, max_workers, llm.host_authority.value)
             return snapshot
@@ -222,6 +232,87 @@ def test_build_decodes_full_policy_applies_only_four_overrides_and_publishes(
     assert catalog.active == "build-run"
 
 
+def test_build_streams_only_live_progress_to_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    repository = _repository_for_project(tmp_path)
+    snapshot = _succeeded_snapshot(
+        repository, run_id="live-progress-run"
+    )
+
+    class Runner:
+        def __init__(
+            self, received_repository: RunRepository
+        ) -> None:
+            assert received_repository.root == repository.root
+
+        def execute(
+            self,
+            _request,
+            *,
+            run_id,
+            paper_access,
+            llm,
+            max_workers,
+            event_sink,
+        ):
+            del run_id, paper_access, llm, max_workers
+            event_sink(
+                {
+                    "schema_version": "arc.jobs.event.v1",
+                    "run_id": snapshot.run_id,
+                    "sequence": 7,
+                    "event_id": "event-id",
+                    "emitted_at": "2026-07-26T12:00:00+00:00",
+                    "event": "llm_message",
+                    "data": {
+                        "stage": "summary",
+                        "preview": "Working on the domain summary",
+                    },
+                }
+            )
+            return snapshot
+
+    monkeypatch.setattr(cli, "DomainBuildRunner", Runner)
+
+    assert (
+        cli.main(
+            [
+                "build",
+                "arXiv:2401.00001",
+                "--policy",
+                json.dumps(POLICY),
+                "--project-dir",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    stdout_lines = captured.out.splitlines()
+    stderr_lines = captured.err.splitlines()
+    assert len(stdout_lines) == 1
+    assert json.loads(stdout_lines[0])["schema_version"] == (
+        "arc.command_result.v2"
+    )
+    assert len(stderr_lines) == 1
+    progress = json.loads(stderr_lines[0])
+    assert progress == {
+        "schema_version": "arc.progress_event.v1",
+        "run_id": "live-progress-run",
+        "sequence": 7,
+        "at": "2026-07-26T12:00:00+00:00",
+        "event": "llm_message",
+        "data": {
+            "stage": "summary",
+            "preview": "Working on the domain summary",
+        },
+    }
+
+
 def test_mode_flags_override_the_current_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:
@@ -234,8 +325,18 @@ def test_mode_flags_override_the_current_policy(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def execute(self, request, *, run_id, paper_access, llm, max_workers):
+        def execute(
+            self,
+            request,
+            *,
+            run_id,
+            paper_access,
+            llm,
+            max_workers,
+            event_sink,
+        ):
             del run_id, paper_access, max_workers
+            assert event_sink is cli._stderr_event_sink
             type(self).request = request
             return snapshot
 
@@ -276,8 +377,18 @@ def test_resume_passes_a_valid_resume_input_to_runner_and_publishes(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def resume(self, run_id: str, *, input, paper_access, llm, max_workers):
+        def resume(
+            self,
+            run_id: str,
+            *,
+            input,
+            paper_access,
+            llm,
+            max_workers,
+            event_sink,
+        ):
             assert paper_access._paper_service.cache_root == tmp_path / "paper-cache"
+            assert event_sink is cli._stderr_event_sink
             type(self).resumed = (run_id, input, max_workers)
             return snapshot
 
@@ -578,8 +689,17 @@ def test_resume_requires_a_strict_resume_input_object(
         def __init__(self, _repository: RunRepository) -> None:
             pass
 
-        def resume(self, _run_id: str, *, input, paper_access, llm, max_workers):
-            del paper_access, max_workers
+        def resume(
+            self,
+            _run_id: str,
+            *,
+            input,
+            paper_access,
+            llm,
+            max_workers,
+            event_sink,
+        ):
+            del paper_access, max_workers, event_sink
             raise AssertionError(f"runner must not receive invalid input: {input!r}")
 
     monkeypatch.setattr(cli, "DomainBuildRunner", Runner)
@@ -599,8 +719,18 @@ def test_completed_run_with_failed_publication_is_command_failure(
         def __init__(self, _repository: RunRepository) -> None:
             pass
 
-        def execute(self, _request, *, run_id, paper_access, llm, max_workers):
+        def execute(
+            self,
+            _request,
+            *,
+            run_id,
+            paper_access,
+            llm,
+            max_workers,
+            event_sink,
+        ):
             del paper_access
+            assert event_sink is cli._stderr_event_sink
             assert run_id is None
             assert max_workers == 8
             return snapshot
@@ -649,8 +779,18 @@ def test_noncompleted_build_snapshots_return_success_without_publication(
         def __init__(self, received_repository: RunRepository) -> None:
             assert received_repository.root == repository.root
 
-        def execute(self, _request, *, run_id, paper_access, llm, max_workers):
+        def execute(
+            self,
+            _request,
+            *,
+            run_id,
+            paper_access,
+            llm,
+            max_workers,
+            event_sink,
+        ):
             del paper_access
+            assert event_sink is cli._stderr_event_sink
             assert run_id is None
             assert max_workers == 8
             return snapshot

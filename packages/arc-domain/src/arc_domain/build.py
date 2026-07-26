@@ -11,6 +11,7 @@ from arc_jobs import (
     ArtifactRef,
     ArtifactSourceRef,
     Awaiting,
+    EventSink,
     Failed,
     FailureMode,
     GroupResult,
@@ -1254,6 +1255,7 @@ class DomainBuildRunner:
         reference_service: ReferenceInferenceService | None = None,
         llm: LLMExecutionOptions = LLMExecutionOptions(),
         max_workers: int = 8,
+        event_sink: EventSink | None = None,
     ) -> RunSnapshot:
         handler = DomainBuildHandler(
             request,
@@ -1272,7 +1274,11 @@ class DomainBuildRunner:
             domain_id=domain_id_for(request.seed_paper, request.intent),
             run_id=resolved_run_id,
         )
-        return self.engine.execute(spec, handler)
+        return self.engine.execute(
+            spec,
+            handler,
+            event_sink=event_sink,
+        )
 
     def resume(
         self,
@@ -1284,6 +1290,7 @@ class DomainBuildRunner:
         reference_service: ReferenceInferenceService | None = None,
         llm: LLMExecutionOptions = LLMExecutionOptions(),
         max_workers: int = 8,
+        event_sink: EventSink | None = None,
     ) -> RunSnapshot:
         max_workers = validate_domain_build_workers(max_workers)
         request = _decode_domain_build_semantic_input(
@@ -1297,7 +1304,12 @@ class DomainBuildRunner:
             llm=llm,
             max_workers=max_workers,
         )
-        return self.engine.resume(run_id, handler, input=input)
+        return self.engine.resume(
+            run_id,
+            handler,
+            input=input,
+            event_sink=event_sink,
+        )
 
 
 def domain_build_run_id(request: DomainBuildRequest) -> str:

@@ -429,15 +429,18 @@ def test_successful_summary_binds_request_intent_and_replays_without_llm(
     request = _request()
     model_payload = _summary_payload(user_intent="model-altered intent")
     service = DomainTaskService(summary_value=model_payload)
+    live_events = []
 
     snapshot = DomainBuildRunner(repository).execute(
         request,
         paper_access=FakePaperAccess(),
         task_service=service,
         reference_service=ForbiddenReferenceService(),
+        event_sink=live_events.append,
     )
 
     assert snapshot.status is RunStatus.SUCCEEDED
+    assert live_events
     summary_request = next(
         item for item in service.requests if item.task_id.startswith("domain-summary-v3-")
     )
@@ -468,14 +471,17 @@ def test_successful_summary_binds_request_intent_and_replays_without_llm(
     replay_service = DomainTaskService(
         summary_value=_summary_payload(user_intent="must not be used")
     )
+    replayed_events = []
     replayed = DomainBuildRunner(repository).execute(
         request,
         paper_access=FakePaperAccess(),
         task_service=replay_service,
         reference_service=ForbiddenReferenceService(),
+        event_sink=replayed_events.append,
     )
 
     assert replayed.status is RunStatus.SUCCEEDED
+    assert replayed_events == []
     assert replay_service.requests == []
     replayed_result, _ = _result(repository, replayed)
     assert replayed_result.summary == result.summary
@@ -488,15 +494,18 @@ def test_transient_summary_failure_pauses_then_retries_without_marker(
     repository = RunRepository(tmp_path / "runs")
     runner = DomainBuildRunner(repository)
     service = TransientSummaryOnceService()
+    initial_events = []
 
     paused = runner.execute(
         _request(),
         paper_access=FakePaperAccess(),
         task_service=service,
         reference_service=ForbiddenReferenceService(),
+        event_sink=initial_events.append,
     )
 
     assert paused.status is RunStatus.PAUSED
+    assert initial_events
     assert paused.awaiting is not None
     assert paused.awaiting.reason is ResumeReason.EXTERNAL_CONDITION
     assert paused.awaiting.input_required is False
@@ -506,14 +515,17 @@ def test_transient_summary_failure_pauses_then_retries_without_marker(
     assert store.find("summary/unavailable") is None
     assert store.find("summary/json") is None
 
+    resumed_events = []
     completed = runner.resume(
         paused.run_id,
         paper_access=FakePaperAccess(),
         task_service=service,
         reference_service=ForbiddenReferenceService(),
+        event_sink=resumed_events.append,
     )
 
     assert completed.status is RunStatus.SUCCEEDED
+    assert resumed_events
     result, store = _result(repository, completed)
     assert result.summary is not None
     assert result.summary_markdown is not None

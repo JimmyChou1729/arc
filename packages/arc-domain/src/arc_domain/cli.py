@@ -7,7 +7,7 @@ import hashlib
 import json
 import sys
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
 from arc_jobs import (
     ArcJobsError,
@@ -16,11 +16,13 @@ from arc_jobs import (
     CommandRun,
     CommandStatus,
     ImmutableArtifactStore,
+    ProgressEvent,
     RunRepository,
     RunStatus,
     command_result_from_snapshot,
     command_result_json,
     decode_artifact_ref,
+    encode_progress_event,
     run_control_main,
     snapshot_data,
 )
@@ -181,6 +183,26 @@ def _parser() -> _Parser:
 def _emit(result: CommandResult, *, exit_code: int) -> int:
     sys.stdout.write(command_result_json(result) + "\n")
     return exit_code
+
+
+def _stderr_event_sink(document: Mapping[str, Any]) -> None:
+    progress = ProgressEvent(
+        str(document["run_id"]),
+        int(document["sequence"]),
+        str(document["event"]),
+        dict(document["data"]),
+        str(document["emitted_at"]),
+    )
+    sys.stderr.write(
+        json.dumps(
+            encode_progress_event(progress),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    sys.stderr.flush()
 
 
 def _paths(project_dir: str) -> DomainPaths:
@@ -349,6 +371,7 @@ def _build(args: argparse.Namespace) -> tuple[CommandResult, int]:
         paper_access=_paper_access(args.paper_cache_root),
         llm=_llm_options(args),
         max_workers=max_workers,
+        event_sink=_stderr_event_sink,
     )
     result = _published_result(repository, paths, snapshot)
     return result, _exit_code(result)
@@ -364,6 +387,7 @@ def _resume(args: argparse.Namespace) -> tuple[CommandResult, int]:
         paper_access=_paper_access(args.paper_cache_root),
         llm=_llm_options(args),
         max_workers=max_workers,
+        event_sink=_stderr_event_sink,
     )
     result = _published_result(repository, paths, snapshot)
     return result, _exit_code(result)
