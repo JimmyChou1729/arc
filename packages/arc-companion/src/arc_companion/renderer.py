@@ -741,6 +741,7 @@ def _render_tex(
 \usepackage{{graphicx}}
 \usepackage{{longtable,booktabs,array}}
 \usepackage[breakable]{{tcolorbox}}
+\usepackage{{xurl}}
 \usepackage[colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black]{{hyperref}}
 \usepackage{{enumitem}}
 \setmainfont{{Noto Sans}}
@@ -984,7 +985,12 @@ def _render_tex_bibliography(book: AcceptedBook) -> str:
         landing_url = _paper_landing_url(item.source)
         if landing_url is not None:
             title = rf"\href{{{_tex_url(landing_url)}}}{{{title}}}"
-        rows.append(rf"\item {title} --- {_tex_escape(item.source)}")
+        source = (
+            rf"\url{{{_tex_url(item.source)}}}"
+            if _allows_pdf_line_concat(item.source)
+            else _tex_escape(item.source)
+        )
+        rows.append(rf"\item {title} --- {source}")
     return (
         r"\section{References}\begin{enumerate}"
         + "\n".join(rows)
@@ -1039,15 +1045,27 @@ def _render_tex_prose(value: Any) -> str:
 def _normalize_pdf_search_text(value: Any) -> str:
     """Normalize Unicode and whitespace while retaining lexical boundaries."""
 
-    text = unicodedata.normalize("NFKC", str(value))
+    text = _normalize_pdf_characters(value)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalize_pdf_characters(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value))
     text = text.replace("\N{SOFT HYPHEN}", "")
-    text = "".join(
+    text = text.translate(
+        str.maketrans(
+            {
+                "\N{HYPHEN}": "-",
+                "\N{NON-BREAKING HYPHEN}": "-",
+            }
+        )
+    )
+    return "".join(
         character
         for character in text
         if unicodedata.category(character) != "Cf"
     )
-    return re.sub(r"\s+", " ", text).strip()
 
 
 def _pdf_search_alternatives(
@@ -1055,14 +1073,8 @@ def _pdf_search_alternatives(
 ) -> tuple[str, ...]:
     """Return projections for explicit extractor line-wrap behaviors."""
 
-    text = unicodedata.normalize("NFKC", str(extracted))
+    text = _normalize_pdf_characters(extracted)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = text.replace("\N{SOFT HYPHEN}", "")
-    text = "".join(
-        character
-        for character in text
-        if unicodedata.category(character) != "Cf"
-    )
     line_break = r"(?:\n|\f|\v|\u2028|\u2029)"
     values = [_normalize_pdf_search_text(text)]
     hyphen_preserved = re.sub(

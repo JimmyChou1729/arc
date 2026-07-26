@@ -1043,6 +1043,7 @@ def test_pdf_validator_accepts_wrapped_searchable_prose(
         r"{\textbf{A deliberately long bibliography title"
         in tex
     )
+    assert r"\url{doi:10.1234/A\%20\_\&B}" in tex
     urls = subprocess.run(
         ["pdfinfo", "-url", str(output)],
         check=True,
@@ -1050,6 +1051,46 @@ def test_pdf_validator_accepts_wrapped_searchable_prose(
         text=True,
     ).stdout
     assert "https://doi.org/10.1234/a%20_&b" in urls
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in _PDF_TOOLS),
+    reason="offline PDF toolchain is unavailable",
+)
+def test_pdf_bibliography_wraps_long_source_urls(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    long_source = (
+        "https://www.cambridge.org/core/journals/theatre-survey/article/abs/"
+        "verfremdungseffekt-or-entfremdungseffekt-a-study-of-brechts-"
+        "manuscripts-on-chinese-theatre/FAA8D603F58D91DB3990FDE9C7889433"
+    )
+    book = replace(
+        accepted_book,
+        bibliography=(
+            replace(accepted_book.bibliography[0], source=long_source),
+            *accepted_book.bibliography[1:],
+        ),
+    )
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
+
+    output = renderer.render_pdf(book, tmp_path / "long-source.pdf")
+    extracted = subprocess.run(
+        ["pdftotext", str(output), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    assert r"\usepackage{xurl}" in tex
+    assert rf"\url{{{long_source}}}" in tex
+    assert _pdf_bibliography_text_contains(extracted, long_source)
 
 
 @pytest.mark.skipif(
