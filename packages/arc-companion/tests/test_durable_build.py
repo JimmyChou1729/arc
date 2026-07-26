@@ -154,6 +154,16 @@ class FakeTranslationAdapter:
                     "preferred_translation": "相对论",
                     "target_definition": "只在另一章出现",
                 },
+                {
+                    "term_id": "term-unanchored",
+                    "term": "unanchored concept",
+                    "aliases": [],
+                    "occurrence_count": 0,
+                    "source_refs": [],
+                    "matched_sentences": [],
+                    "preferred_translation": "无锚概念",
+                    "target_definition": "不属于源文本的补充候选。",
+                },
             ],
         }
 
@@ -254,6 +264,10 @@ def test_translation_and_guide_share_post_glossary_group(
     assert book.glossary[0].term == "quantum field"
     assert book.glossary[0].translated_term == "量子场"
     assert book.glossary[0].definition == "量子场的定义"
+    assert [item.term for item in book.glossary] == [
+        "quantum field",
+        "relativity",
+    ]
 
 
 def test_same_language_skips_all_translation_owned_steps(

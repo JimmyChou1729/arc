@@ -979,6 +979,8 @@ def _glossary_contracts(
             or term.casefold()
             in _literal_strings(block.get("payload")).casefold()
         )
+        if not anchors:
+            continue
         values.append(
             GlossaryEntry(
                 entry_id=str(item["term_id"]),
