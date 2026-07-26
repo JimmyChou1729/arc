@@ -7,9 +7,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from arc_jobs import canonical_json_bytes
+from arc_jobs import ImmutableArtifactStore, RunEngine, canonical_json_bytes
 from arc_llm import HostAuthority, LLMCompleted, LLMExecutionOptions
 from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
+from arc_proposer_reviewer.protocol import decode_batch_request
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,6 +169,27 @@ def test_dry_run_has_closed_workers_and_direct_research_policy(tmp_path: Path) -
     assert "resolver" not in worker["instructions"].lower()
 
 
+def test_dry_run_does_not_read_workspace_input_bytes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    config = _config(tmp_path)
+    source = tmp_path / "project" / ".arc" / "domain" / "packages" / "brief.md"
+    original_read_bytes = Path.read_bytes
+
+    def fail_if_workspace_source(path: Path) -> bytes:
+        if path == source:
+            raise AssertionError("dry run must not read workspace input bytes")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_if_workspace_source)
+
+    result = runner.run_ideas(config, dry_run=True)
+
+    assert result["status"] == "dry_run"
+
+
 def test_run_uses_one_explicit_runtime_carrier(tmp_path: Path) -> None:
     runner = _load_runner_module()
     fake = _FakeLLM()
@@ -181,6 +203,34 @@ def test_run_uses_one_explicit_runtime_carrier(tmp_path: Path) -> None:
     assert source.source_run_id == "ideas-test"
     assert source.source_artifact_id.endswith("domain-markdown-001")
     assert "# Brief" not in fake.requests[0].prompt
+
+
+def test_custom_executor_receives_persisted_materialized_input(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    fake = _FakeLLM()
+    captured: dict[str, object] = {}
+
+    def execute(repository, spec, handler):
+        request = decode_batch_request(spec.semantic_input)
+        captured["request"] = request
+        captured["content"] = ImmutableArtifactStore(
+            repository.run_directory(spec.run_id),
+            repository_root=repository.root,
+        ).read_source(request.inputs[0].source).content
+        return RunEngine(repository).execute(spec, handler)
+
+    result = runner.run_ideas(
+        _config(tmp_path),
+        llm_service=fake,
+        executor=execute,
+    )
+
+    request = captured["request"]
+    assert result["status"] == "succeeded"
+    assert getattr(request, "inputs")[0].source.source_run_id == "ideas-test"
+    assert captured["content"] == b"# Brief\n"
 
 
 def test_idea_cli_requires_explicit_authority_value() -> None:
