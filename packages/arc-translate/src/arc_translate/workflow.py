@@ -30,11 +30,11 @@ from arc_llm import (
     LLMStopped,
     LLMTaskService,
     ModelSelection,
+    RESUME_SCHEMA_VERSION,
     ResumeInput,
     decode_resume_input,
     resume_input_matches,
 )
-from arc_llm.request import RESUME_SCHEMA_VERSION
 
 from .contracts import (
     BLOCKS_RESULT_SCHEMA,

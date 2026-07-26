@@ -41,10 +41,10 @@ from arc_llm import (
     LLMStopped,
     LLMTaskService,
     ModelSelection,
+    RESUME_SCHEMA_VERSION,
     ResumeInput,
     decode_resume_input,
 )
-from arc_llm.request import RESUME_SCHEMA_VERSION
 
 from ..parse import ParsedDocument, parsed_document_to_document
 from ..rich_document import rich_document_to_document
