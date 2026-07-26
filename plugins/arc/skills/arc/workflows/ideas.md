@@ -149,6 +149,30 @@ searching, inspect the strongest candidates first, and record each actual
 source or query with a short result. If a host or provider cannot supply a
 capability, state the limitation once and continue from the available evidence.
 
+For each new idea nucleus, the first reviewer round performs a bounded INSPIRE
+citation-neighborhood audit. Select one canonical paper that defines the
+baseline problem plus at most two prior-art papers nearest the proposed novelty
+delta. These papers need not be domain seeds; do not scan every paper cited by
+the proposer. For each selected paper, run `arc-paper get-citer-count` first,
+then `arc-paper search-citers` with `--scan-limit 1000`, `--limit 50`, and
+specific multiword phrases and synonyms spanning the idea's background,
+mechanism, and observable.
+
+Read the returned shortlist abstracts and newest/most-cited controls before
+opening primary records or full text for suspected direct overlaps. Reuse a
+completed scan in later rounds while the idea nucleus, baseline paper, and
+novelty delta remain unchanged; otherwise update only the affected scans.
+Record the selected baseline or nearest paper, total and scanned citer counts,
+`scan_complete`, matched papers, and exclusion reasons in `evidence_checked`.
+Record the exact ARC commands and terms actually used in `tool_queries_used`.
+
+No direct match supports only “no direct precedent found in this citation
+neighborhood,” never a proof of novelty. INSPIRE unavailability, a neighborhood
+larger than 1000 citers, incomplete coverage, or missing abstracts must remain
+visible as a warning and lower novelty confidence. None of these conditions,
+nor the citation-neighborhood audit itself, automatically disqualifies an idea;
+the existing scientific qualification gates remain unchanged.
+
 Set `<host-authority>` to `unrestricted` only when the host explicitly reports
 unrestricted permissions; otherwise set it to `unknown` and reuse that value
 when resuming the same run. Under `restricted` or `unknown`, a model host
@@ -259,6 +283,9 @@ available, a focused novelty audit with evidence checked, tool queries, and
 unresolved reviewer limitations, and only the selected proposer handoff text:
 title, idea summary, and calculation plan. Scientific taste is a soft ranking
 preference, not a qualification gate. The audit is explicitly non-exhaustive.
+Preserve citation-neighborhood evidence and exact ARC command records verbatim
+inside that existing focused novelty audit; do not create a separate evidence
+ledger or qualification gate.
 Render the handoff text as normal Markdown paragraphs, not a fenced code block.
 Follow `rules/math_typeset.md` for math and TeX snippets. Use PDF-friendly
 wrapping for long titles and proposer text; avoid wide tables with long prose.

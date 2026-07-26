@@ -496,6 +496,18 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
 ) -> None:
     ranker = _load_rank_module()
     loop = _single_loop("idea-a")
+    neighborhood_evidence = (
+        "baseline arXiv:1503.08043; total_citer_count=792; "
+        "scanned_count=792; scan_complete=true; matched arXiv:2401.00001 "
+        "excluded because it studies a different observable"
+    )
+    neighborhood_queries = [
+        "arc-paper get-citer-count 1503.08043",
+        (
+            "arc-paper search-citers 1503.08043 --term 'ultra slow roll' "
+            "--term 'non-attractor' --scan-limit 1000 --limit 50"
+        ),
+    ]
     repository = _execute(
         tmp_path / "runs",
         _request(loop),
@@ -509,6 +521,8 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
                     "marks": _single_marks(91),
                     "idea_assessment": _single_assessment(),
                     "reviewer_benchmark": _reviewer_benchmark(),
+                    "evidence_checked": [neighborhood_evidence],
+                    "tool_queries_used": neighborhood_queries,
                 },
                 ("idea-a", 2): {
                     "marks": _single_marks(72),
@@ -532,6 +546,10 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
     assert len(selected["proposer_artifact"]["sha256"]) == 64
     assert len(selected["review_artifact"]["sha256"]) == 64
     assert selected["reviewer_benchmark"] == _reviewer_benchmark()
+    assert selected["rounds"][0]["evidence_checked"] == [
+        neighborhood_evidence
+    ]
+    assert selected["rounds"][0]["tool_queries_used"] == neighborhood_queries
     rendered = json.dumps(payload)
     assert "relative_path" not in rendered
     assert str(repository.run_directory("ideas-run")) not in rendered
@@ -542,6 +560,8 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
     assert "#### Scientific Taste Review" in markdown
     assert "The proposal has one coherent core" in markdown
     assert "Compute the same invariant in the minimal controlled model." in markdown
+    assert neighborhood_evidence in markdown
+    assert all(query in markdown for query in neighborhood_queries)
 
 
 def test_single_report_uses_embedded_scheme_for_new_and_legacy_columns(

@@ -1267,6 +1267,46 @@ def test_all_ideas_workers_share_soft_scientific_taste_guidance() -> None:
         assert "not a qualification gate" in template
 
 
+def test_all_ideas_reviewers_require_bounded_citation_neighborhood_audits() -> None:
+    reviewer_names = (
+        "ideas-reviewer.template.json",
+        "ideas-domain-reviewer.template.json",
+        "ideas-cross-domain-reviewer.template.json",
+    )
+
+    for name in reviewer_names:
+        template = json.loads((WJ / name).read_text(encoding="utf-8"))["prompt"][
+            "template"
+        ]
+        assert "every new idea nucleus" in template
+        assert "first reviewer round" in template
+        assert "one canonical paper" in template
+        assert "no more than two prior-art papers" in template
+        assert "outside domain seeds" in template
+        assert "do not scan every proposer citation" in template
+        assert template.index("arc-paper get-citer-count") < template.index(
+            "arc-paper search-citers"
+        )
+        assert "--scan-limit 1000 --limit 50" in template
+        assert "background, mechanism, and observable" in template
+        assert "Read shortlist abstracts" in template
+        assert "only for suspected direct overlap" in template
+        assert "Reuse completed scans in later rounds" in template
+        assert "idea nucleus, baseline paper, and novelty delta" in template
+        assert "total citer count, scanned count, completeness" in template
+        assert "matched papers" in template
+        assert "reasons for excluding matches" in template
+        assert "exact ARC commands and terms" in template
+        assert "no direct precedent found in this citation neighborhood" in template
+        assert "never treat it as proof of novelty" in template
+        assert "INSPIRE is unavailable" in template
+        assert "exceeds 1000 citers" in template
+        assert "abstracts are missing" in template
+        assert "lower novelty confidence" in template
+        assert "never automatically disqualify" in template
+        assert "not a qualification gate" in template
+
+
 def test_cross_domain_scoring_and_qualification_marks_remain_specialized() -> None:
     scheme = json.loads(
         (WJ / "ideas-cross-domain-marking-scheme.json").read_text(encoding="utf-8")
@@ -1326,6 +1366,31 @@ def test_ideas_workflow_documents_direct_tool_contract() -> None:
     assert "--run-id <run-id>" in text
     assert "status is `completed` or `degraded`" in text
     assert "lifecycle is `succeeded`" in text
+
+
+def test_ideas_workflow_documents_citation_neighborhood_default_policy() -> None:
+    text = (WF / "ideas.md").read_text(encoding="utf-8")
+    compact = " ".join(text.split())
+
+    assert "one canonical paper" in compact
+    assert "at most two prior-art papers" in compact
+    assert "need not be domain seeds" in compact
+    assert "do not scan every paper cited by the proposer" in compact
+    assert compact.index("`arc-paper get-citer-count`") < compact.index(
+        "`arc-paper search-citers`"
+    )
+    assert "`--scan-limit 1000`" in compact
+    assert "`--limit 50`" in compact
+    assert "background, mechanism, and observable" in compact
+    assert "Reuse a completed scan in later rounds" in compact
+    assert "`evidence_checked`" in compact
+    assert "`tool_queries_used`" in compact
+    assert "no direct precedent found in this citation neighborhood" in compact
+    assert "lower novelty confidence" in compact
+    assert "automatically disqualifies an idea" in compact
+    assert "existing scientific qualification gates remain unchanged" in compact
+    assert "existing focused novelty audit" in compact
+    assert "do not create a separate evidence ledger or qualification gate" in compact
 
 
 def test_ideas_workflow_requires_context_and_runner_artifacts() -> None:
