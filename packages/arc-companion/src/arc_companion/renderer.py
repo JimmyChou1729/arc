@@ -30,6 +30,8 @@ _AssetLoader = Callable[[str], bytes | None]
 class CompanionRenderError(RuntimeError):
     """A deterministic render or output validation failed."""
 
+    code = "render_failed"
+
 
 @dataclass(frozen=True)
 class RenderedCompanion:
@@ -295,7 +297,7 @@ class CompanionRenderer:
                             )
             for evidence in book.bibliography:
                 if any(
-                    not _pdf_text_contains(text, value)
+                    not _pdf_bibliography_text_contains(text, value)
                     for value in (
                         evidence.evidence_id,
                         evidence.title,
@@ -1040,6 +1042,23 @@ def _pdf_text_contains(extracted_text: str, expected: Any) -> bool:
         normalized_expected in alternative
         for alternative in _pdf_search_alternatives(
             extracted_text, normalized_expected
+        )
+    )
+
+
+def _pdf_bibliography_text_contains(
+    extracted_text: str, expected: Any
+) -> bool:
+    if _pdf_text_contains(extracted_text, expected):
+        return True
+    compact_expected = re.sub(
+        r"\s+", "", _normalize_pdf_search_text(expected)
+    )
+    return bool(compact_expected) and any(
+        compact_expected
+        in re.sub(r"\s+", "", alternative)
+        for alternative in _pdf_search_alternatives(
+            extracted_text, compact_expected
         )
     )
 

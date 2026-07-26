@@ -18,6 +18,7 @@ from arc_paper import (
 import arc_companion.cli as cli_module
 from arc_companion.cli import main
 from arc_companion.project import CompanionProjectPaths
+from arc_companion.renderer import CompanionRenderError
 from arc_companion.service import CompanionServiceError
 from arc_companion.translation_adapter import (
     CompanionTranslationRuntimeError,
@@ -269,6 +270,27 @@ def test_main_model_provider_errors_use_invalid_request_envelope(
     assert not (tmp_path / "model-project").exists()
     assert not (tmp_path / "provider-project").exists()
     assert not (tmp_path / "language-project").exists()
+
+
+def test_main_render_errors_use_typed_failure_envelope(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_dispatch",
+        lambda _args: (_ for _ in ()).throw(
+            CompanionRenderError("render validation failed")
+        ),
+    )
+
+    assert main(
+        ["status", "--project-dir", str(tmp_path / "project")]
+    ) == 1
+    result = _result(capsys)
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "render_failed"
 
 
 def test_build_preflights_translation_before_creating_project(

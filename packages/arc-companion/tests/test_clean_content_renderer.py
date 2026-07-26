@@ -36,6 +36,7 @@ from arc_companion.renderer import (
     CompanionRenderError,
     _anchor_token,
     _normalize_pdf_search_text,
+    _pdf_bibliography_text_contains,
     _pdf_text_contains,
     _render_tex,
     _render_tex_prose,
@@ -794,6 +795,20 @@ def test_pdf_search_normalization_preserves_word_and_hyphen_boundaries() -> None
     assert _pdf_text_contains("well-\ndefined", "well-defined")
     assert not _pdf_text_contains("welldefined", "well-defined")
     assert not _pdf_text_contains("well defined", "well-defined")
+
+
+def test_pdf_bibliography_search_tolerates_typesetter_spacing() -> None:
+    extracted = (
+        "Jean-Pierre Vernant, “Ambiguïté et renversement: sur la structure "
+        "énigmatique d’\n    Œdipe-Roi,”Échanges et communications II"
+    )
+    expected = (
+        "Jean-Pierre Vernant, “Ambiguïté et renversement: sur la structure "
+        "énigmatique d’Œdipe-Roi,” Échanges et communications II"
+    )
+
+    assert not _pdf_text_contains(extracted, expected)
+    assert _pdf_bibliography_text_contains(extracted, expected)
 
 
 def test_headerless_table_uses_row_width_and_omits_empty_web_header(
