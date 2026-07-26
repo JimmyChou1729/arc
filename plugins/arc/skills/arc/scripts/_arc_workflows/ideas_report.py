@@ -460,6 +460,9 @@ def _representative_single_entry(
             for entry in entries:
                 if isinstance(entry, Mapping):
                     return entry
+    scheme = payload.get("marking_scheme")
+    if isinstance(scheme, Mapping):
+        return {"marking_scheme": scheme}
     return None
 
 

@@ -102,6 +102,48 @@ def test_formal_normalization_rejects_missing_or_non_object_marks() -> None:
     )
 
 
+def test_taste_tie_breaks_prefer_novelty_then_simplicity_and_generality() -> None:
+    _load_rank_module()
+    marking_module = sys.modules["_arc_workflows.ideas_marking"]
+    scheme = _taste_scheme()
+    baseline = _taste_marks()
+
+    more_novel = {**baseline, "novelty": 13, "simplicity": 7}
+    simpler = {**baseline, "novelty": 12, "simplicity": 9}
+    assert marking_module.rank_key_from_marks(
+        more_novel,
+        scheme=scheme,
+    ) > marking_module.rank_key_from_marks(
+        simpler,
+        scheme=scheme,
+    )
+
+    simpler = {**baseline, "simplicity": 9, "generality": 7, "planning": 8}
+    more_general = {
+        **baseline,
+        "simplicity": 8,
+        "generality": 9,
+        "planning": 7,
+    }
+    assert marking_module.rank_key_from_marks(
+        simpler,
+        scheme=scheme,
+    ) > marking_module.rank_key_from_marks(
+        more_general,
+        scheme=scheme,
+    )
+
+    general = {**baseline, "generality": 9, "planning": 7}
+    narrow = {**baseline, "generality": 7, "planning": 9}
+    assert marking_module.rank_key_from_marks(
+        general,
+        scheme=scheme,
+    ) > marking_module.rank_key_from_marks(
+        narrow,
+        scheme=scheme,
+    )
+
+
 def test_report_normalizes_latex_delimiters_without_mangling_commands() -> None:
     _load_rank_module()
     report_module = sys.modules["_arc_workflows.ideas_report"]
@@ -723,6 +765,9 @@ def test_ranker_excludes_failed_and_incomplete_lifecycle_states(tmp_path: Path) 
             "reason": "loop_is_incomplete",
         }
     ]
+    pending_report = ranker.markdown_table(pending_payload)
+    assert "SI=simplicity" not in pending_report
+    assert "GE=generality" not in pending_report
 
 
 def test_partial_ranker_uses_complete_rounds_from_paused_loops(

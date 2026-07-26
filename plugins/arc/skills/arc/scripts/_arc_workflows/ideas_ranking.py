@@ -273,6 +273,7 @@ def rank_run(
         "run_revision": inspection.run_revision,
         "loop_revisions": dict(trace.loop_revisions),
         "user_intent": _run_user_intent(contexts),
+        "marking_scheme": _representative_marking_scheme(contexts),
         "ranking": ranking,
         "excluded_loops": excluded_loops,
         "warnings": warnings,
@@ -564,6 +565,16 @@ def _run_user_intent(
         if isinstance(intent, str) and intent.strip():
             return intent.strip()
     return ""
+
+
+def _representative_marking_scheme(
+    contexts: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    for context in contexts.values():
+        scheme = context.get("marking_scheme")
+        if isinstance(scheme, Mapping):
+            return dict(scheme)
+    return {}
 
 
 def _exclusion_reason(loop_inspection: Any) -> str:
