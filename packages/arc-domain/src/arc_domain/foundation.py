@@ -342,20 +342,21 @@ def normalize_candidate_audit(audit: Mapping[str, Any] | None) -> dict[str, Any]
 def audit_expansion_request(audit: Mapping[str, Any], intent: str) -> str | None:
     """Build one verifier request, or return ``None`` when expansion is unsafe.
 
-    Expansion is intentionally gated on all three conditions: an explicitly
-    insufficient candidate set, complete audit confidence, and at least one
-    complete search hint that contains no paper identifier.
+    Expansion is gated on an explicitly insufficient candidate set and at
+    least high-confidence audit and query evidence. Search hints must not
+    contain a preselected paper identifier.
     """
 
     normalized = normalize_candidate_audit(audit)
     if normalized["candidate_set_sufficient"] is not False:
         return None
-    if normalized["confidence"] != "complete":
+    if normalized["confidence"] not in {"high", "complete"}:
         return None
     hints = [
         item
         for item in normalized["search_queries"]
-        if item["confidence"] == "complete" and not extract_paper_ids(item["query"])
+        if item["confidence"] in {"high", "complete"}
+        and not extract_paper_ids(item["query"])
     ]
     if not hints:
         return None
@@ -675,6 +676,16 @@ def enforce_fixed_seed_foundation(
         for item in result.get("rejected_candidates", [])
         if isinstance(item, Mapping)
     ]
+    best_reference_id = _choice_id(result.get("best_reference_paper"))
+    best_reference = candidate_by_id.get(best_reference_id)
+    if (
+        best_reference is not None
+        and best_reference_id != normalized_seed
+        and _is_valid_parent_year(_candidate_year(best_reference), seed_year)
+    ):
+        parents.append(
+            _known_choice(result["best_reference_paper"], best_reference)
+        )
     for choice in result.get("parent_foundations", []):
         parent_id = _choice_id(choice)
         parent = candidate_by_id.get(parent_id)

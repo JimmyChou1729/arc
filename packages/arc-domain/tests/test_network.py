@@ -74,9 +74,11 @@ def test_merge_citer_pool_preserves_earliest_same_field_across_stream_order(
     )
 
     assert merged[0]["published"] == "2020-03-04"
-    assert network.first_public_date(merged[0]) == (
-        date(2020, 3, 4),
-        "published",
+    evidence = network._first_public_date_evidence(merged[0])
+    assert evidence is not None
+    assert (evidence.lower, evidence.basis) == (
+        date(2020, 3, 1),
+        "arxiv_id_month",
     )
 
 
@@ -100,7 +102,9 @@ def test_merge_citer_pool_preserves_earliest_date_and_basis_across_fields():
         strict_window=True,
     )
 
-    assert network.first_public_date(merged[0]) == (
+    evidence = network._first_public_date_evidence(merged[0])
+    assert evidence is not None
+    assert (evidence.lower, evidence.basis) == (
         date(2020, 3, 4),
         "preprint_date",
     )
@@ -237,15 +241,19 @@ def test_recent_window_uses_first_public_date_and_arxiv_month_fallback():
         now=as_of,
         window_days=365,
     )
-    assert network._paper_date_with_basis(old_revised) == (
+    evidence = network._first_public_date_evidence(old_revised)
+    assert evidence is not None
+    assert (evidence.lower, evidence.basis) == (
         date(2020, 1, 1),
         "published",
     )
-    assert network._paper_date_with_basis(
+    fallback = network._first_public_date_evidence(
         _paper("arXiv:2507.12345", updated="2026-07-20")
-    ) == (None, None)
-    assert network._arxiv_month_date(_paper("arXiv:2507.12345")) == (
-        date(2025, 7, 1)
+    )
+    assert fallback is not None
+    assert (fallback.lower, fallback.basis) == (
+        date(2025, 7, 1),
+        "arxiv_id_month",
     )
 
 
@@ -259,19 +267,23 @@ def test_first_public_date_uses_earliest_valid_field_not_field_priority():
         updated="2018-01-01",
     )
 
-    assert network.first_public_date(record) == (
+    evidence = network._first_public_date_evidence(record)
+    assert evidence is not None
+    assert (evidence.lower, evidence.basis) == (
         date(2019, 2, 3),
         "earliest_date",
     )
 
     record["published"] = "2019-02-03"
-    assert network.first_public_date(record) == (
+    evidence = network._first_public_date_evidence(record)
+    assert evidence is not None
+    assert (evidence.lower, evidence.basis) == (
         date(2019, 2, 3),
         "published",
     )
 
 
-def test_graph_v1_keeps_domain_identity_and_resolved_recency_date():
+def test_graph_v2_keeps_domain_identity_and_resolved_recency_date():
     graph = network._build_graph(
         domain_id="domain-a",
         foundation=_paper("arXiv:2301.00001"),
@@ -283,9 +295,12 @@ def test_graph_v1_keeps_domain_identity_and_resolved_recency_date():
         created_at="2026-07-24T12:00:00+00:00",
         recent_window_days=365,
         as_of_date=date(2026, 7, 24),
+        recency_stats=network.recency_candidate_stats(
+            [], as_of_date=date(2026, 7, 24), window_days=365
+        ),
     )
 
-    assert graph["schema_version"] == "arc.domain_graph.v1"
+    assert graph["schema_version"] == "arc.domain_graph.v2"
     assert graph["domain_id"] == "domain-a"
     assert graph["created_at"] == "2026-07-24T12:00:00+00:00"
     assert graph["recency"]["end_date"] == "2026-07-24"
@@ -303,10 +318,10 @@ def test_graph_v1_keeps_domain_identity_and_resolved_recency_date():
     ],
 )
 def test_public_date_parser_rejects_malformed_or_prefixed_values(value: str):
-    assert network._parse_date(value) is None
+    assert network._parse_date_evidence(value, basis="published") is None
 
 
-def test_date_evidence_preserves_precision_and_prefers_overlap_precision():
+def test_date_evidence_preserves_precision_and_uses_earliest_cross_field_lower_bound():
     year = network._parse_date_evidence("2024", basis="published")
     month = network._parse_date_evidence("2024-02", basis="published")
     day = network._parse_date_evidence("2024-02-29", basis="preprint_date")
@@ -330,7 +345,7 @@ def test_date_evidence_preserves_precision_and_prefers_overlap_precision():
             "preprint_date": "2024-02-29",
         }
     )
-    assert evidence == day
+    assert evidence == year
 
 
 def test_strict_window_uses_bounds_and_excludes_partial_overlap():

@@ -13,7 +13,7 @@ from arc_paper import normalize_paper_id
 
 DOMAIN_BUILD_POLICY_SCHEMA_VERSION = "arc.domain_build_policy.v2"
 DOMAIN_BUILD_REQUEST_SCHEMA_VERSION = "arc.domain_build_request.v2"
-DOMAIN_BUILD_RESULT_SCHEMA_VERSION = "arc.domain_build_result.v1"
+DOMAIN_BUILD_RESULT_SCHEMA_VERSION = "arc.domain_build_result.v2"
 
 FOUNDATION_MODES = ("infer_from_seed", "fixed_seed")
 CITER_SELECTION_MODES = ("representative_plus_recent", "strict_window")
@@ -123,8 +123,8 @@ class DomainBuildResult:
     network_html: ArtifactRef
     paper_json_pack: ArtifactRef
     evidence_pack: ArtifactRef
-    summary: ArtifactRef | None
-    summary_markdown: ArtifactRef | None
+    summary: ArtifactRef
+    summary_markdown: ArtifactRef
     warnings: tuple[DomainBuildWarning, ...] = ()
 
     def __post_init__(self) -> None:
@@ -135,12 +135,10 @@ class DomainBuildResult:
             "network_html",
             "paper_json_pack",
             "evidence_pack",
+            "summary",
+            "summary_markdown",
         ):
             _validate_artifact_ref(field_name, getattr(self, field_name))
-        for field_name in ("summary", "summary_markdown"):
-            value = getattr(self, field_name)
-            if value is not None:
-                _validate_artifact_ref(field_name, value)
         if isinstance(self.warnings, (str, bytes)):
             raise ValueError("warnings must be a sequence of DomainBuildWarning values.")
         try:
@@ -292,8 +290,8 @@ def encode_domain_build_result(result: DomainBuildResult) -> dict[str, Any]:
         "network_html": encode_artifact_ref(result.network_html),
         "paper_json_pack": encode_artifact_ref(result.paper_json_pack),
         "evidence_pack": encode_artifact_ref(result.evidence_pack),
-        "summary": _encode_nullable_artifact_ref(result.summary),
-        "summary_markdown": _encode_nullable_artifact_ref(result.summary_markdown),
+        "summary": encode_artifact_ref(result.summary),
+        "summary_markdown": encode_artifact_ref(result.summary_markdown),
         "warnings": [encode_domain_build_warning(item) for item in result.warnings],
     }
 
@@ -329,10 +327,8 @@ def decode_domain_build_result(document: Mapping[str, Any]) -> DomainBuildResult
         network_html=decode_artifact_ref(value["network_html"]),
         paper_json_pack=decode_artifact_ref(value["paper_json_pack"]),
         evidence_pack=decode_artifact_ref(value["evidence_pack"]),
-        summary=_decode_nullable_artifact_ref(value["summary"], "result.summary"),
-        summary_markdown=_decode_nullable_artifact_ref(
-            value["summary_markdown"], "result.summary_markdown"
-        ),
+        summary=decode_artifact_ref(value["summary"]),
+        summary_markdown=decode_artifact_ref(value["summary_markdown"]),
         warnings=tuple(
             decode_domain_build_warning(_object(item, f"result.warnings[{index}]"))
             for index, item in enumerate(raw_warnings)
@@ -381,19 +377,6 @@ def _validate_artifact_ref(field_name: str, value: object) -> None:
         raise ValueError(f"{field_name} must be an ArtifactRef.")
     try:
         encode_artifact_ref(value)
-    except ValueError as exc:
-        raise ValueError(f"{field_name} is not a valid ArtifactRef: {exc}") from exc
-
-
-def _encode_nullable_artifact_ref(value: ArtifactRef | None) -> dict[str, Any] | None:
-    return None if value is None else encode_artifact_ref(value)
-
-
-def _decode_nullable_artifact_ref(value: object, field_name: str) -> ArtifactRef | None:
-    if value is None:
-        return None
-    try:
-        return decode_artifact_ref(cast(Any, value))
     except ValueError as exc:
         raise ValueError(f"{field_name} is not a valid ArtifactRef: {exc}") from exc
 

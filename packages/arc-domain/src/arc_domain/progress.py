@@ -12,6 +12,7 @@ _ACTIVITY_EVENTS = {
     "domain_operation_started",
     "group_unit_finished",
     "llm_provider_activity",
+    "llm_message",
 }
 
 
@@ -23,6 +24,7 @@ def project_domain_progress(
 
     path = repository.run_directory(snapshot.run_id) / "events.jsonl"
     progress: dict[str, Any] = {
+        "schema_version": "arc.domain_progress.v1",
         "stage": None,
         "operation": None,
         "completed_units": 0,
@@ -30,6 +32,7 @@ def project_domain_progress(
         "failed_units": 0,
         "last_activity_at": None,
         "event_sequence": 0,
+        "latest_message_preview": None,
         "diagnostic_code": None,
     }
     if not path.exists():
@@ -74,10 +77,13 @@ def project_domain_progress(
         event = document.get("event")
         data = document.get("data")
         emitted_at = document.get("emitted_at")
-        if event not in _ACTIVITY_EVENTS or not isinstance(data, Mapping):
-            continue
         if isinstance(emitted_at, str):
             progress["last_activity_at"] = emitted_at
+        if event not in _ACTIVITY_EVENTS:
+            continue
+        if not isinstance(data, Mapping):
+            progress["diagnostic_code"] = "domain_progress_event_malformed"
+            continue
         if event == "domain_operation_started":
             stage = data.get("stage")
             operation = data.get("operation")
@@ -89,6 +95,8 @@ def project_domain_progress(
                 and total_units >= 0
             ):
                 current = data
+            else:
+                progress["diagnostic_code"] = "domain_progress_event_malformed"
             continue
         if event == "group_unit_finished":
             group_id = data.get("group_id")
@@ -100,6 +108,15 @@ def project_domain_progress(
                 and status in {"succeeded", "failed"}
             ):
                 finished[(group_id, unit_id)] = status
+            else:
+                progress["diagnostic_code"] = "domain_progress_event_malformed"
+            continue
+        if event == "llm_message":
+            preview = data.get("preview")
+            if isinstance(preview, str):
+                progress["latest_message_preview"] = preview
+            else:
+                progress["diagnostic_code"] = "domain_progress_event_malformed"
 
     if current is None:
         return progress

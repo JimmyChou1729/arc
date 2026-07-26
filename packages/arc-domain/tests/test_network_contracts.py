@@ -204,21 +204,24 @@ def test_strict_window_filters_unique_citers_before_merge_and_accepts_dated_non_
         window_days=730,
     )
 
-    assert [item["paper_id"] for item in recent] == [boundary["paper_id"], doi["paper_id"]]
+    assert [item["paper_id"] for item in recent] == [
+        doi["paper_id"],
+        missing["paper_id"],
+    ]
     assert [item["paper_id"] for item in cited] == [doi["paper_id"]]
     assert stats == {
         "unique_citers": 5,
         "eligible_citers": 2,
-        "exact_date_citers": 4,
-        "reduced_precision_date_citers": 0,
-        "excluded_missing_first_public_date": 1,
-        "excluded_ambiguous_first_public_date": 0,
+        "exact_date_citers": 2,
+        "reduced_precision_date_citers": 3,
+        "excluded_missing_first_public_date": 0,
+        "excluded_ambiguous_first_public_date": 1,
         "excluded_outside_window": 2,
     }
     merged = network.merge_citer_pool(
         FOUNDATION, most_recent=recent, most_cited=cited, limit=1
     )
-    assert merged[0]["paper_id"] == boundary["paper_id"]
+    assert merged[0]["paper_id"] == doi["paper_id"]
 
 
 def test_strict_window_uses_earliest_field_and_cross_stream_date_at_boundary() -> None:
@@ -366,6 +369,9 @@ def test_graph_role_precedence_is_defensive_and_globally_unique() -> None:
         created_at="2026-07-24T00:00:00+00:00",
         recent_window_days=365,
         as_of_date=date(2026, 7, 24),
+        recency_stats=network.recency_candidate_stats(
+            [], as_of_date=date(2026, 7, 24), window_days=365
+        ),
     )
 
     roles = {node["paper_id"]: node["role"] for node in graph["nodes"]}
@@ -410,13 +416,13 @@ def test_graph_projects_date_precision_and_complete_candidate_stats() -> None:
         intent="",
         created_at="2026-07-24T00:00:00+00:00",
         as_of_date=date(2026, 7, 24),
-        candidate_recency_stats=candidate_stats,
+        recency_stats=candidate_stats,
     )
 
     node = next(item for item in graph["nodes"] if item["paper_id"] == PAPER_A)
-    assert node["first_public_date"] == "2025-07"
+    assert node["first_public_date"] == "2025-01"
     assert node["first_public_date_precision"] == "month"
-    assert node["recency_basis"] == "published"
+    assert node["recency_basis"] == "arxiv_id_month"
     assert graph["recency"]["exact_date_count"] == 1
     assert graph["recency"]["reduced_precision_date_count"] == 3
     assert graph["recency"]["selected_exact_date_count"] == 0

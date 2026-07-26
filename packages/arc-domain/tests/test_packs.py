@@ -10,7 +10,7 @@ from arc_domain.package_view import decode_domain_paper_pack
 
 def _graph() -> dict:
     return {
-        "schema_version": "arc.domain_graph.v1",
+        "schema_version": "arc.domain_graph.v2",
         "domain_id": "scalar-domain",
         "foundation_paper": "arXiv:2301.00001",
         "created_at": "2026-07-24T12:00:00+00:00",

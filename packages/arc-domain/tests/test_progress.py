@@ -38,6 +38,14 @@ def test_progress_projects_group_units_without_snapshot_revision_changes(
     )
     writer.emit("llm_provider_activity", {"event_count": 10})
     writer.emit(
+        "llm_message",
+        {
+            "direction": "response",
+            "message_kind": "assistant",
+            "preview": "Checking the graph evidence.",
+        },
+    )
+    writer.emit(
         "group_unit_finished",
         {
             "group_id": "network-selected-references",
@@ -69,10 +77,31 @@ def test_progress_projects_group_units_without_snapshot_revision_changes(
     assert projected["completed_units"] == 2
     assert projected["failed_units"] == 1
     assert projected["total_units"] == 3
-    assert projected["event_sequence"] == 5
+    assert projected["schema_version"] == "arc.domain_progress.v1"
+    assert projected["event_sequence"] == 6
+    assert projected["latest_message_preview"] == "Checking the graph evidence."
     assert projected["last_activity_at"] is not None
     assert projected["diagnostic_code"] is None
     assert repository.inspect(snapshot.run_id).snapshot.revision == snapshot.revision
+
+
+def test_progress_uses_any_valid_event_for_activity_and_reports_bad_known_shape(
+    tmp_path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs")
+    snapshot = _pending(repository)
+    writer = EventWriter(
+        repository.run_directory(snapshot.run_id) / "events.jsonl",
+        run_id=snapshot.run_id,
+    )
+    writer.emit("run_started", {"attempt": 1})
+    projected = progress.project_domain_progress(repository, snapshot)
+    assert projected["last_activity_at"] is not None
+    assert projected["diagnostic_code"] is None
+
+    writer.emit("domain_operation_started", {"stage": "summary"})
+    malformed = progress.project_domain_progress(repository, snapshot)
+    assert malformed["diagnostic_code"] == "domain_progress_event_malformed"
 
 
 def test_progress_degrades_for_missing_and_corrupt_event_logs(tmp_path) -> None:

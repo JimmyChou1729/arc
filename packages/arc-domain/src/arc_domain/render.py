@@ -493,13 +493,13 @@ def _recency_warning(graph: Mapping[str, Any]) -> str:
         return ""
     reduced = int(recency.get("reduced_precision_date_count") or 0)
     ambiguous = int(recency.get("ambiguous_date_count") or 0)
-    if not reduced and not ambiguous:
+    if not ambiguous:
         return ""
     return (
         '<div class="warning">Date precision notice: '
-        f"{reduced} candidate paper(s) use year/month first-public dates; "
         f"{ambiguous} candidate(s) overlapped a recency-window boundary and "
-        "were treated as ambiguous.</div>"
+        f"were treated as ambiguous. {reduced} candidate paper(s) use "
+        "year/month precision.</div>"
     )
 
 

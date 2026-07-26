@@ -7,10 +7,7 @@ from arc_domain.build import DomainBuildRunner
 from arc_domain.contracts import DomainBuildPolicy, DomainBuildRequest
 from arc_jobs import ImmutableArtifactStore, RunRepository, RunStatus
 from arc_llm import (
-    FailureCategory,
     LLMCompleted,
-    LLMFailed,
-    ProviderFailure,
 )
 
 
@@ -73,7 +70,7 @@ class WitnessPaperAccess:
 
 class SufficientCandidateTasks:
     def execute_or_resume(self, context, request, **kwargs):
-        del context, kwargs
+        del kwargs
         if request.task_id.startswith("foundation-audit-"):
             return LLMCompleted(
                 {
@@ -116,11 +113,44 @@ class SufficientCandidateTasks:
                 None,
             )
         if request.task_id.startswith("domain-summary-"):
-            return LLMFailed(
-                ProviderFailure(
-                    "summary unavailable",
-                    category=FailureCategory.TIMEOUT,
-                )
+            selection_input = next(
+                item
+                for item in request.inputs
+                if item.input_id == "foundation-selection"
+            )
+            selection = json.loads(
+                context.artifacts.read_source(
+                    selection_input.source
+                ).content.decode("utf-8")
+            )
+            return LLMCompleted(
+                {
+                    "schema_version": "arc.domain_summary.v5",
+                    "domain_title": "Foundation methods",
+                    "brief_introduction": "A compact introduction.",
+                    "task_focus": {
+                        "user_intent": "foundation methods",
+                        "research_scope": "The supplied papers.",
+                        "priority_rules": ["Satisfy the user intent first."],
+                    },
+                    "foundation_paper": dict(
+                        selection["selected_foundation"]
+                    ),
+                    "best_reference_paper": dict(
+                        selection["best_reference_paper"]
+                    ),
+                    "methodology": [],
+                    "mathematical_opportunities": {
+                        "well_defined_problems": []
+                    },
+                    "known_solved_cases": [],
+                    "open_axes_for_new_work": [],
+                    "warnings": [],
+                },
+                None,
+                None,
+                None,
+                None,
             )
         raise AssertionError(f"unexpected task: {request.task_id}")
 

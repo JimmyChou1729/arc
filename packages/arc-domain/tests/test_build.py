@@ -194,11 +194,35 @@ class FakeTaskService:
                 None,
             )
         if request.task_id.startswith("domain-summary-"):
-            return LLMFailed(
-                ProviderFailure(
-                    "summary timed out",
-                    category=FailureCategory.TIMEOUT,
-                )
+            choice = {
+                "paper_id": FOUNDATION,
+                "title": "Foundation",
+                "reason": "same-scope foundation",
+            }
+            return LLMCompleted(
+                {
+                    "schema_version": "arc.domain_summary.v5",
+                    "domain_title": "Recent methods",
+                    "brief_introduction": "A compact introduction.",
+                    "task_focus": {
+                        "user_intent": "recent methods",
+                        "research_scope": "The supplied papers.",
+                        "priority_rules": ["Satisfy the user intent first."],
+                    },
+                    "foundation_paper": choice,
+                    "best_reference_paper": choice,
+                    "methodology": [],
+                    "mathematical_opportunities": {
+                        "well_defined_problems": []
+                    },
+                    "known_solved_cases": [],
+                    "open_axes_for_new_work": [],
+                    "warnings": [],
+                },
+                None,
+                None,
+                None,
+                None,
             )
         raise AssertionError(f"unexpected task: {request.task_id}")
 
@@ -276,6 +300,37 @@ class ParentPaperAccess(FakePaperAccess):
 
 class ParentSelectionTaskService(FakeTaskService):
     def execute_or_resume(self, context, request, **kwargs):
+        if request.task_id.startswith("domain-summary-"):
+            choice = {
+                "paper_id": SEED,
+                "title": "Seed",
+                "reason": "same-scope foundation",
+            }
+            return LLMCompleted(
+                {
+                    "schema_version": "arc.domain_summary.v5",
+                    "domain_title": "Recent methods",
+                    "brief_introduction": "A compact introduction.",
+                    "task_focus": {
+                        "user_intent": "recent methods",
+                        "research_scope": "The supplied papers.",
+                        "priority_rules": ["Satisfy the user intent first."],
+                    },
+                    "foundation_paper": choice,
+                    "best_reference_paper": choice,
+                    "methodology": [],
+                    "mathematical_opportunities": {
+                        "well_defined_problems": []
+                    },
+                    "known_solved_cases": [],
+                    "open_axes_for_new_work": [],
+                    "warnings": [],
+                },
+                None,
+                None,
+                None,
+                None,
+            )
         if request.task_id.startswith("foundation-select-"):
             self.task_ids.append(request.task_id)
             selected = {
@@ -417,6 +472,23 @@ def test_domain_build_semantic_input_is_closed_and_unwrapped_resume_is_rejected(
     ):
         DomainBuildRunner(repository).resume("unwrapped-request")
 
+    repository.create(
+        RunSpec(
+            "v1-request",
+            handler.name,
+            {
+                "schema_version": "arc.domain_build_semantic.v1",
+                "request": encode_domain_build_request(request),
+                "network_render_recipe": "arc.domain.network_html.v1",
+            },
+        )
+    )
+    with pytest.raises(
+        ValueError,
+        match="schema_version must be arc.domain_build_semantic.v2",
+    ):
+        DomainBuildRunner(repository).resume("v1-request")
+
 
 @pytest.mark.parametrize("value", [True, False, -1, 0, 25, 1.5, "8", None])
 def test_worker_count_validator_rejects_non_integer_or_out_of_range_values(
@@ -461,7 +533,7 @@ def _decode_result(repository: RunRepository, run_id: str):
     )
 
 
-def test_complete_build_is_durable_bounded_and_uses_optional_summary_fallback(
+def test_complete_build_is_durable_bounded_and_requires_summary(
     tmp_path: Path,
 ) -> None:
     repository = RunRepository(tmp_path / "runs-root")
@@ -481,18 +553,16 @@ def test_complete_build_is_durable_bounded_and_uses_optional_summary_fallback(
     assert snapshot.run_id == domain_build_run_id(request)
     assert "workers" not in repository.read_spec(snapshot.run_id).semantic_input
     result = _decode_result(repository, snapshot.run_id)
-    assert result.summary is None
-    assert result.summary_markdown is None
+    assert result.summary is not None
+    assert result.summary_markdown is not None
     assert {warning.code for warning in result.warnings} == {
         "conclusion_section_unavailable",
-        "domain_summary_unavailable",
-        "recency_date_precision_limited",
     }
     store = ImmutableArtifactStore(
         repository.run_directory(snapshot.run_id), repository_root=repository.root
     )
     graph = json.loads(store.read_bytes(result.graph).decode("utf-8"))
-    assert graph["schema_version"] == "arc.domain_graph.v1"
+    assert graph["schema_version"] == "arc.domain_graph.v2"
     assert len(graph["nodes"]) <= request.policy.graph_node_limit
     assert {node["role"] for node in graph["nodes"]} == {
         "selected_foundation",
@@ -551,8 +621,9 @@ def test_representative_recency_stats_cover_union_before_pool_limit(
         store.read_bytes(network_input_ref).decode("utf-8")
     )
     assert len(network_input["citer_pool"]) == 1
-    assert network_input["candidate_recency"]["unique_citers"] == 2
-    assert network_input["candidate_recency"]["exact_date_citers"] == 2
+    assert network_input["recency_stats"]["unique_citers"] == 2
+    assert network_input["recency_stats"]["exact_date_citers"] == 0
+    assert network_input["recency_stats"]["reduced_precision_date_citers"] == 2
 
 
 def test_paused_network_replays_completed_foundation_and_resumes_same_run(
@@ -663,7 +734,7 @@ def test_pack_warnings_replay_after_summary_pause(tmp_path: Path) -> None:
     assert resumed.status is RunStatus.SUCCEEDED
     codes = [warning.code for warning in _decode_result(repository, resumed.run_id).warnings]
     assert codes.count("conclusion_section_unavailable") == 2
-    assert "domain_summary_unavailable" in codes
+    assert "domain_summary_unavailable" not in codes
 
 
 def test_parent_foundations_are_truncated_to_the_graph_capacity(

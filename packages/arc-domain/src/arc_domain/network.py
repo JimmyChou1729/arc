@@ -116,20 +116,6 @@ def strict_window_citer_streams(
     )
 
 
-def first_public_date(record: dict[str, Any]) -> tuple[date | None, str | None]:
-    """Return a compatible lower-bound date and basis without considering updates.
-
-    Internal window decisions use bounded date evidence instead of this
-    compatibility projection, so a year or month is never treated as an exact
-    first day.
-    """
-
-    evidence = _first_public_date_evidence(record)
-    if evidence is None:
-        return None, None
-    return evidence.lower, evidence.basis
-
-
 def recency_candidate_stats(
     records: list[dict[str, Any]],
     *,
@@ -370,8 +356,16 @@ def _select_domain_papers(
         seen_paper_ids.add(paper_id)
         record = dict(item)
         record["paper_id"] = paper_id
-        cpy = citation_per_year(record, current_year)
-        age = max(1, current_year - int(record.get("year") or current_year) + 1)
+        evidence = _first_public_date_evidence(record)
+        scoring_year = (
+            evidence.lower.year
+            if evidence is not None
+            else int(record.get("year") or current_year)
+        )
+        scoring_record = dict(record)
+        scoring_record["year"] = scoring_year
+        cpy = citation_per_year(scoring_record, current_year)
+        age = max(1, current_year - scoring_year + 1)
         recency = 1.0 / age
         intent_overlap = token_overlap_score(f"{record.get('title', '')} {record.get('abstract', '')}", intent)
         intent_boost = 0.0
@@ -397,7 +391,6 @@ def _select_domain_papers(
         record["in_graph_citer_score"] = 0.0
         record["reference_edge_count"] = 0
         record["reference_edge_score"] = 0.0
-        evidence = _first_public_date_evidence(record)
         _apply_date_evidence(record, evidence)
         if strict_window:
             record["recent_arxiv"] = (
@@ -416,7 +409,15 @@ def _select_domain_papers(
         record["selection_reason"] = _selection_reason(record, paper_id in intent_rank)
         scored.append(record)
     scored.sort(
-        key=lambda item: (item["domain_score"], item.get("citation_count") or 0, item.get("year") or 0),
+        key=lambda item: (
+            item["domain_score"],
+            item.get("citation_count") or 0,
+            (
+                _first_public_date_evidence(item).lower.toordinal()
+                if _first_public_date_evidence(item) is not None
+                else 0
+            ),
+        ),
         reverse=True,
     )
     max_total = max(0, max_total)
@@ -673,7 +674,7 @@ def _build_graph(
     created_at: str,
     recent_window_days: int = RECENT_ARXIV_WINDOW_DAYS,
     as_of_date: date | None = None,
-    candidate_recency_stats: dict[str, int] | None = None,
+    recency_stats: dict[str, int],
 ) -> dict[str, Any]:
     nodes: dict[str, dict[str, Any]] = {}
     foundation_id = normalize_paper_id(foundation.get("paper_id") or "")
@@ -715,18 +716,11 @@ def _build_graph(
         str(item.get("first_public_date_precision") or "missing")
         for item in accepted_selected
     )
-    candidate_stats = dict(candidate_recency_stats or {})
-    candidate_exact = int(
-        candidate_stats.get("exact_date_citers", precision.get("day", 0))
-    )
-    candidate_reduced = int(
-        candidate_stats.get(
-            "reduced_precision_date_citers",
-            precision.get("month", 0) + precision.get("year", 0),
-        )
-    )
+    candidate_stats = dict(recency_stats)
+    candidate_exact = int(candidate_stats["exact_date_citers"])
+    candidate_reduced = int(candidate_stats["reduced_precision_date_citers"])
     candidate_ambiguous = int(
-        candidate_stats.get("excluded_ambiguous_first_public_date", 0)
+        candidate_stats["excluded_ambiguous_first_public_date"]
     )
     recency: dict[str, Any] = {
         "window_days": recent_window_days,
@@ -746,7 +740,7 @@ def _build_graph(
         "candidate_pool": candidate_stats,
     }
     return {
-        "schema_version": "arc.domain_graph.v1",
+        "schema_version": "arc.domain_graph.v2",
         "domain_id": domain_id,
         "intent": intent,
         "foundation_paper": foundation_id,
@@ -784,18 +778,11 @@ def _node(paper_record: dict[str, Any], *, role: str) -> dict[str, Any]:
         "selection_reason": paper_record.get("selection_reason") or paper_record.get("reason", ""),
         "support_count": paper_record.get("support_count"),
         "identifiers": paper_record.get("identifiers") or {},
-        "first_public_date": (
-            paper_record.get("first_public_date")
-            or (evidence.value if evidence is not None else None)
-        ),
+        "first_public_date": evidence.value if evidence is not None else None,
         "first_public_date_precision": (
-            paper_record.get("first_public_date_precision")
-            or (evidence.precision if evidence is not None else None)
+            evidence.precision if evidence is not None else None
         ),
-        "recency_basis": (
-            paper_record.get("recency_basis")
-            or (evidence.basis if evidence is not None else None)
-        ),
+        "recency_basis": evidence.basis if evidence is not None else None,
     }
     for field in (
         "source_role",
@@ -887,24 +874,13 @@ def _has_arxiv_id(record: dict[str, Any]) -> bool:
     return any(arxiv_path_id(str(value or "")) for value in values)
 
 
-def _paper_date(record: dict[str, Any]) -> date | None:
-    return _paper_date_with_basis(record)[0]
-
-
-def _paper_date_with_basis(record: dict[str, Any]) -> tuple[date | None, str | None]:
-    evidence = _paper_date_evidence(record)
-    if evidence is None:
-        return None, None
-    return evidence.lower, evidence.basis
-
-
 def _paper_date_evidence(record: dict[str, Any]) -> _DateEvidence | None:
     selected: _DateEvidence | None = None
     for priority, key in enumerate(_PUBLIC_DATE_FIELDS):
         value = str(record.get(key) or "").strip()
         candidate = _parse_date_evidence(value, basis=key)
         if candidate is not None:
-            selected = _prefer_date_evidence(
+            selected = _select_first_public_evidence(
                 selected,
                 candidate,
                 left_priority=(
@@ -920,10 +896,18 @@ def _paper_date_evidence(record: dict[str, Any]) -> _DateEvidence | None:
 def _first_public_date_evidence(
     record: dict[str, Any],
 ) -> _DateEvidence | None:
-    evidence = _paper_date_evidence(record)
+    evidence = _select_first_public_evidence(
+        _paper_date_evidence(record),
+        _arxiv_month_evidence(record),
+        left_priority=0,
+        right_priority=1,
+    )
     if evidence is not None:
         return evidence
-    return _arxiv_month_evidence(record)
+    return _parse_date_evidence(
+        str(record.get("year") or "").strip(),
+        basis="bibliographic_year",
+    )
 
 
 def _merge_citer_metadata(
@@ -945,20 +929,13 @@ def _merge_citer_metadata(
             incoming_evidence = _parse_date_evidence(
                 str(value).strip(), basis=key
             )
-            preferred = _prefer_date_evidence(
+            preferred = _refine_same_field_evidence(
                 current,
                 incoming_evidence,
-                left_priority=0,
-                right_priority=0,
             )
             if preferred is current:
                 continue
         target[key] = value
-
-
-def _parse_date(value: str) -> date | None:
-    evidence = _parse_date_evidence(value, basis="unknown")
-    return evidence.lower if evidence is not None else None
 
 
 def _parse_date_evidence(
@@ -1006,13 +983,34 @@ def _parse_date_evidence(
     return None
 
 
-def _prefer_date_evidence(
+def _select_first_public_evidence(
     left: _DateEvidence | None,
     right: _DateEvidence | None,
     *,
     left_priority: int,
     right_priority: int,
 ) -> _DateEvidence | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    if left.lower != right.lower:
+        return left if left.lower < right.lower else right
+    left_precision = _DATE_PRECISION_ORDER[left.precision]
+    right_precision = _DATE_PRECISION_ORDER[right.precision]
+    if left_precision != right_precision:
+        return left if left_precision > right_precision else right
+    if left_priority != right_priority:
+        return left if left_priority < right_priority else right
+    return left if left.value <= right.value else right
+
+
+def _refine_same_field_evidence(
+    left: _DateEvidence | None,
+    right: _DateEvidence | None,
+) -> _DateEvidence | None:
+    """Choose the best claim for repeated observations of one date field."""
+
     if left is None:
         return right
     if right is None:
@@ -1025,8 +1023,6 @@ def _prefer_date_evidence(
     right_precision = _DATE_PRECISION_ORDER[right.precision]
     if left_precision != right_precision:
         return left if left_precision > right_precision else right
-    if left_priority != right_priority:
-        return left if left_priority < right_priority else right
     return left if (left.lower, left.value) <= (right.lower, right.value) else right
 
 
@@ -1066,11 +1062,6 @@ def _empty_recency_stats(unique_citers: int) -> dict[str, int]:
         "excluded_ambiguous_first_public_date": 0,
         "excluded_outside_window": 0,
     }
-
-
-def _arxiv_month_date(record: dict[str, Any]) -> date | None:
-    evidence = _arxiv_month_evidence(record)
-    return evidence.lower if evidence is not None else None
 
 
 def _arxiv_month_evidence(

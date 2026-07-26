@@ -119,14 +119,16 @@ def test_audit_expansion_requires_every_gate() -> None:
     )
     assert foundation.audit_expansion_request(incomplete, "intent") is None
 
-    uncertain = foundation.normalize_candidate_audit(
+    high_confidence = foundation.normalize_candidate_audit(
         {
             "candidate_set_sufficient": False,
             "confidence": "high",
             "search_queries": [{"query": "canonical inflation foundation", "reason": "", "confidence": "complete"}],
         }
     )
-    assert foundation.audit_expansion_request(uncertain, "intent") is None
+    assert "canonical inflation foundation" in foundation.audit_expansion_request(
+        high_confidence, "intent"
+    )
 
     eligible = foundation.normalize_candidate_audit(
         {

@@ -58,7 +58,7 @@ class _SucceededDomainHandler:
             domain_id=self.domain_id,
             foundation_selection=artifacts.publish_json("foundation", {"id": "foundation"}),
             graph=artifacts.publish_json(
-                "graph", {"schema_version": "arc.domain_graph.v1", "nodes": []}
+                "graph", {"schema_version": "arc.domain_graph.v2", "nodes": []}
             ),
             network_html=artifacts.publish_bytes(
                 "network-html", b"<html>graph</html>\n", media_type="text/html"
@@ -378,7 +378,7 @@ def test_get_commands_read_only_the_active_export(tmp_path: Path, capsys) -> Non
 
     assert cli.main(["get-graph", "--domain-id", "domain-cli", "--project-dir", str(tmp_path)]) == 0
     graph = _envelope(capsys)
-    assert graph["data"]["graph"]["schema_version"] == "arc.domain_graph.v1"
+    assert graph["data"]["graph"]["schema_version"] == "arc.domain_graph.v2"
 
 
 def test_get_rejects_an_active_export_with_a_corrupt_digest(

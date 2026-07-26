@@ -8,6 +8,9 @@ from datetime import date
 from typing import Any, Callable, Mapping
 
 from arc_jobs import (
+    ArtifactRef,
+    ArtifactSourceRef,
+    Awaiting,
     Failed,
     FailureMode,
     GroupResult,
@@ -17,6 +20,7 @@ from arc_jobs import (
     RunEngine,
     RunError,
     RunRepository,
+    ResumeReason,
     RunSnapshot,
     RunSpec,
     Succeeded,
@@ -31,6 +35,7 @@ from arc_llm import (
     LLMCompleted,
     LLMFailed,
     LLMExecutionOptions,
+    LLMInputArtifact,
     LLMPaused,
     LLMRequest,
     LLMTaskService,
@@ -104,8 +109,8 @@ from .text import deterministic_sample, paper_key
 
 
 DOMAIN_BUILD_HANDLER = "arc.domain.build.v2"
-DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION = "arc.domain_build_semantic.v1"
-DOMAIN_NETWORK_RENDER_RECIPE = "arc.domain.network_html.v1"
+DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION = "arc.domain_build_semantic.v2"
+DOMAIN_NETWORK_RENDER_RECIPE = "arc.domain.network_html.v2"
 
 _FOUNDATION_SELECTION_ARTIFACT = "foundation/selection"
 _FOUNDATION_WARNINGS_ARTIFACT = "foundation/warnings"
@@ -117,12 +122,20 @@ _PACK_WARNINGS_ARTIFACT = "packs/warnings"
 _NETWORK_HTML_ARTIFACT = "render/network-html"
 _SUMMARY_ARTIFACT = "summary/json"
 _SUMMARY_MARKDOWN_ARTIFACT = "summary/markdown"
-_SUMMARY_UNAVAILABLE_ARTIFACT = "summary/unavailable"
 _RESULT_ARTIFACT = "result"
 _FOUNDATION_RECENT_CITER_WITNESS_LIMIT = 50
 _FOUNDATION_WITNESS_LIMIT = 60
 _MIN_DOMAIN_BUILD_WORKERS = 1
 _MAX_DOMAIN_BUILD_WORKERS = 24
+_RECENCY_STAT_KEYS = {
+    "unique_citers",
+    "eligible_citers",
+    "exact_date_citers",
+    "reduced_precision_date_citers",
+    "excluded_missing_first_public_date",
+    "excluded_ambiguous_first_public_date",
+    "excluded_outside_window",
+}
 
 
 class DomainBuildStageError(RuntimeError):
@@ -237,7 +250,10 @@ class DomainBuildHandler:
                 paper_pack,
                 evidence_pack,
                 selection,
-                warnings,
+                graph_ref=graph_ref,
+                paper_pack_ref=paper_pack_ref,
+                evidence_ref=evidence_pack_ref,
+                selection_ref=foundation_ref,
             )
             if isinstance(summary_outcome, (Paused, Failed)):
                 return summary_outcome
@@ -352,6 +368,7 @@ class DomainBuildHandler:
             citer_ids,
             self.paper.references,
             essential=False,
+            stage="foundation",
         )
         _append_group_warnings(
             warnings, reference_errors, code="witness_references_unavailable", stage="foundation"
@@ -377,6 +394,7 @@ class DomainBuildHandler:
             candidate_ids,
             self.paper.metadata,
             essential=False,
+            stage="foundation",
         )
         _append_group_warnings(
             warnings, metadata_errors, code="candidate_metadata_unavailable", stage="foundation"
@@ -581,7 +599,7 @@ class DomainBuildHandler:
             )
         policy = self.request.policy
         network_input_ref = context.artifacts.find("network/input")
-        strict_window_stats: dict[str, int] | None = None
+        recency_stats: dict[str, int] | None = None
         if network_input_ref is None:
             self._operation_started(
                 context,
@@ -598,7 +616,7 @@ class DomainBuildHandler:
                 foundation_id, limit=policy.citer_pool_limit, sort="mostcited"
             )
             if policy.citer_selection_mode == "strict_window":
-                most_recent, most_cited, strict_window_stats = strict_window_citer_streams(
+                most_recent, most_cited, recency_stats = strict_window_citer_streams(
                     foundation_id,
                     most_recent=most_recent,
                     most_cited=most_cited,
@@ -612,7 +630,7 @@ class DomainBuildHandler:
                     most_cited=most_cited,
                     limit=max(1, len(most_recent) + len(most_cited)),
                 )
-                strict_window_stats = recency_candidate_stats(
+                recency_stats = recency_candidate_stats(
                     complete_candidate_pool,
                     as_of_date=date.fromisoformat(policy.as_of_date),
                     window_days=policy.recent_window_days,
@@ -627,13 +645,13 @@ class DomainBuildHandler:
                 "foundation": foundation,
                 "citer_pool": citer_pool,
             }
-            if strict_window_stats is not None:
-                network_input["candidate_recency"] = strict_window_stats
-            if (
-                strict_window_stats is not None
-                and policy.citer_selection_mode == "strict_window"
-            ):
-                network_input["strict_window"] = strict_window_stats
+            if recency_stats is None:
+                raise DomainBuildStageError(
+                    "domain_recency_stats_missing",
+                    "Network construction did not produce recency statistics.",
+                    {"stage": "network"},
+                )
+            network_input["recency_stats"] = recency_stats
             context.artifacts.publish_json("network/input", network_input)
         else:
             network_input = _read_json(context, network_input_ref, "network input")
@@ -643,24 +661,34 @@ class DomainBuildHandler:
             citer_pool = _mapping_list(
                 network_input.get("citer_pool"), "citer pool"
             )
-            raw_stats = network_input.get(
-                "candidate_recency", network_input.get("strict_window")
-            )
-            if isinstance(raw_stats, Mapping):
-                strict_window_stats = {
-                    key: int(value)
-                    for key, value in raw_stats.items()
-                    if isinstance(key, str) and isinstance(value, int) and not isinstance(value, bool)
-                }
+            raw_stats = network_input.get("recency_stats")
+            if not isinstance(raw_stats, Mapping):
+                raise DomainBuildStageError(
+                    "domain_recency_stats_invalid",
+                    "Network input must contain recency_stats.",
+                    {"stage": "network"},
+                )
+            if set(raw_stats) != _RECENCY_STAT_KEYS or any(
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+                for value in raw_stats.values()
+            ):
+                raise DomainBuildStageError(
+                    "domain_recency_stats_invalid",
+                    "Network recency_stats must use the closed non-negative count shape.",
+                    {"stage": "network"},
+                )
+            recency_stats = dict(raw_stats)
 
-        if strict_window_stats is not None:
-            missing_dates = strict_window_stats.get(
+        if recency_stats is not None:
+            missing_dates = recency_stats.get(
                 "excluded_missing_first_public_date", 0
             )
-            ambiguous_dates = strict_window_stats.get(
+            ambiguous_dates = recency_stats.get(
                 "excluded_ambiguous_first_public_date", 0
             )
-            outside_window = strict_window_stats.get("excluded_outside_window", 0)
+            outside_window = recency_stats.get("excluded_outside_window", 0)
             if (
                 policy.citer_selection_mode == "strict_window"
                 and (missing_dates or ambiguous_dates or outside_window)
@@ -676,23 +704,18 @@ class DomainBuildHandler:
                         "network",
                     )
                 )
-            reduced_dates = strict_window_stats.get(
-                "reduced_precision_date_citers", 0
-            )
-            if reduced_dates or ambiguous_dates:
+            if ambiguous_dates:
                 warnings.append(
                     DomainBuildWarning(
                         "recency_date_precision_limited",
-                        f"Found {reduced_dates} citer(s) with year/month "
-                        "first-public dates and "
-                        f"{ambiguous_dates} ambiguous strict-window boundary "
-                        "classification(s).",
+                        f"Found {ambiguous_dates} citer(s) whose first-public "
+                        "date interval crosses a recency-window boundary.",
                         "network",
                     )
                 )
             if (
                 policy.citer_selection_mode == "strict_window"
-                and strict_window_stats.get("eligible_citers", 0) == 0
+                and recency_stats.get("eligible_citers", 0) == 0
             ):
                 warnings.append(
                     DomainBuildWarning(
@@ -763,7 +786,22 @@ class DomainBuildHandler:
             ],
             excluded_ids={foundation_id},
         )
-        parent_capacity = max(0, policy.graph_node_limit - 1)
+        best_reference_choice = _mapping(
+            selection.get("best_reference_paper"),
+            "best reference paper",
+        )
+        best_reference_id = normalize_paper_id(
+            str(best_reference_choice.get("paper_id") or "")
+        )
+        reserve_best_reference = bool(
+            best_reference_id
+            and best_reference_id != foundation_id
+            and best_reference_id not in set(_unique_paper_ids(parent_choices))
+        )
+        parent_capacity = max(
+            0,
+            policy.graph_node_limit - 1 - int(reserve_best_reference),
+        )
         if len(parent_choices) > parent_capacity:
             omitted = len(parent_choices) - parent_capacity
             parent_choices = parent_choices[:parent_capacity]
@@ -777,18 +815,59 @@ class DomainBuildHandler:
         parent_ids = _unique_paper_ids(parent_choices)
         parent_id_set = set(parent_ids)
         fixed_count = 1 + len(parent_ids)
+        reserved_reference: list[dict[str, Any]] = []
+        if reserve_best_reference:
+            try:
+                best_reference_metadata = self.paper.metadata(best_reference_id)
+            except Exception as exc:
+                raise DomainBuildStageError(
+                    "best_reference_metadata_unavailable",
+                    f"Best-reference metadata could not be acquired: {exc}",
+                    {
+                        "stage": "network",
+                        "paper_id": best_reference_id,
+                    },
+                ) from exc
+            best_reference_metadata["paper_id"] = best_reference_id
+            best_reference_metadata["reason"] = str(
+                best_reference_choice.get("reason") or ""
+            )
+            reserved_reference = _select_domain_papers(
+                [best_reference_metadata],
+                foundation_id=foundation_id,
+                excluded_ids=parent_id_set,
+                intent_ranking={"ranked_paper_ids": [best_reference_id]},
+                intent=self.request.intent,
+                selected_count=1,
+                max_total=1,
+                recent_window_days=policy.recent_window_days,
+                as_of_date=date.fromisoformat(policy.as_of_date),
+                strict_window=False,
+            )
+            for item in reserved_reference:
+                item["selection_reason"] = (
+                    "best reading reference retained from foundation selection"
+                )
         selected = _select_domain_papers(
             citer_pool,
             foundation_id=foundation_id,
-            excluded_ids=parent_id_set,
+            excluded_ids={*parent_id_set, best_reference_id},
             intent_ranking=ranking,
             intent=self.request.intent,
-            selected_count=policy.ranked_paper_limit,
-            max_total=max(0, policy.graph_node_limit - fixed_count),
+            selected_count=max(
+                0, policy.ranked_paper_limit - len(reserved_reference)
+            ),
+            max_total=max(
+                0,
+                policy.graph_node_limit
+                - fixed_count
+                - len(reserved_reference),
+            ),
             recent_window_days=policy.recent_window_days,
             as_of_date=date.fromisoformat(policy.as_of_date),
             strict_window=policy.citer_selection_mode == "strict_window",
         )
+        selected = [*reserved_reference, *selected]
         selected_ids = _unique_paper_ids(selected)
         refs_by_selected, selected_reference_errors = self._group_values(
             context,
@@ -796,6 +875,7 @@ class DomainBuildHandler:
             selected_ids,
             self.paper.references,
             essential=False,
+            stage="network",
         )
         _append_group_warnings(
             warnings,
@@ -828,6 +908,7 @@ class DomainBuildHandler:
             common_ids,
             self.paper.metadata,
             essential=False,
+            stage="network",
         )
         _append_group_warnings(
             warnings,
@@ -849,6 +930,7 @@ class DomainBuildHandler:
             parent_ids,
             self.paper.metadata,
             essential=False,
+            stage="network",
         )
         _append_group_warnings(
             warnings,
@@ -878,7 +960,7 @@ class DomainBuildHandler:
             created_at=created_at,
             recent_window_days=policy.recent_window_days,
             as_of_date=date.fromisoformat(policy.as_of_date),
-            candidate_recency_stats=strict_window_stats,
+            recency_stats=recency_stats,
         )
         if len(graph.get("nodes", [])) > policy.graph_node_limit:
             raise DomainBuildStageError(
@@ -927,6 +1009,7 @@ class DomainBuildHandler:
             node_ids,
             self.paper.acquire_pack_record,
             essential=False,
+            stage="paper_acquisition",
         )
         for paper_id, error in errors.items():
             warnings.append(
@@ -981,8 +1064,12 @@ class DomainBuildHandler:
         paper_pack: dict[str, Any],
         evidence: dict[str, Any],
         selection: dict[str, Any],
-        warnings: list[DomainBuildWarning],
-    ) -> tuple[Any | None, Any | None] | Paused | Failed:
+        *,
+        graph_ref: ArtifactRef,
+        paper_pack_ref: ArtifactRef,
+        evidence_ref: ArtifactRef,
+        selection_ref: ArtifactRef,
+    ) -> tuple[ArtifactRef, ArtifactRef] | Paused | Failed:
         summary_ref = context.artifacts.find(_SUMMARY_ARTIFACT)
         markdown_ref = context.artifacts.find(_SUMMARY_MARKDOWN_ARTIFACT)
         if summary_ref is not None and markdown_ref is not None:
@@ -995,32 +1082,21 @@ class DomainBuildHandler:
                 ),
             )
             return summary_ref, markdown_ref
-        unavailable = context.artifacts.find(_SUMMARY_UNAVAILABLE_ARTIFACT)
-        if unavailable is not None:
-            document = _read_json(context, unavailable, "summary warning")
-            warnings.append(
-                DomainBuildWarning(
-                    str(document["code"]),
-                    str(document["message"]),
-                    "summary",
-                )
-            )
-            return None, None
-
         request = LLMRequest(
             _task_id(
-                "domain-summary-v2",
+                "domain-summary-v3",
                 domain_id_for(self.request.seed_paper, self.request.intent),
                 self.request.intent,
             ),
-            summary_prompt(
-                graph,
-                evidence,
-                selection,
-                intent=self.request.intent,
-            ),
+            summary_prompt(intent=self.request.intent),
             JsonOutput(DOMAIN_SUMMARY_SCHEMA, repair="format"),
             self.request.model,
+            inputs=(
+                _llm_input(context, "domain-graph", graph_ref),
+                _llm_input(context, "foundation-selection", selection_ref),
+                _llm_input(context, "evidence-pack", evidence_ref),
+                _llm_input(context, "paper-pack", paper_pack_ref),
+            ),
         )
         self._operation_started(
             context,
@@ -1071,17 +1147,17 @@ class DomainBuildHandler:
         if isinstance(outcome, LLMFailed):
             if not is_transient_failure(outcome):
                 return Failed(run_error_from_failure(outcome))
-            warning = DomainBuildWarning(
-                "domain_summary_unavailable",
-                str(outcome.error),
-                "summary",
+            return Paused(
+                Awaiting(
+                    ResumeReason.EXTERNAL_CONDITION,
+                    f"{request.task_id}-retry",
+                    False,
+                    details={
+                        "code": "domain_summary_provider_unavailable",
+                        "message": str(outcome.error),
+                    },
+                )
             )
-            context.artifacts.publish_json(
-                _SUMMARY_UNAVAILABLE_ARTIFACT,
-                {"code": warning.code, "message": warning.message},
-            )
-            warnings.append(warning)
-            return None, None
         if isinstance(outcome, LLMStopped):
             raise StoppedError("domain summary stopped")
         raise RuntimeError("unknown domain-summary outcome")
@@ -1094,18 +1170,13 @@ class DomainBuildHandler:
         operation: Callable[[str], Any],
         *,
         essential: bool,
+        stage: str,
     ) -> tuple[dict[str, Any], dict[str, RunError]]:
         by_unit = {_unit_id(paper_id): paper_id for paper_id in paper_ids}
         units = tuple(
             WorkUnit(unit_id, {"paper_id": paper_id})
             for unit_id, paper_id in by_unit.items()
         )
-        if group_id.startswith("foundation-"):
-            stage = "foundation"
-        elif group_id.startswith("packs-"):
-            stage = "paper_acquisition"
-        else:
-            stage = "network"
         self._operation_started(
             context,
             stage=stage,
@@ -1301,6 +1372,18 @@ def _validate_paper_pack_artifact(
             str(exc),
             {"stage": "paper_pack"},
         ) from exc
+
+
+def _llm_input(
+    context: RunContext,
+    input_id: str,
+    ref: ArtifactRef,
+) -> LLMInputArtifact:
+    return LLMInputArtifact(
+        input_id,
+        ArtifactSourceRef(context.run_id, ref.artifact_id, ref.digest),
+        ref.media_type,
+    )
 
 
 def _validate_domain_package_artifacts(

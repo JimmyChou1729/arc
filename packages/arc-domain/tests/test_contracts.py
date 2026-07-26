@@ -288,7 +288,7 @@ def _result() -> DomainBuildResult:
         paper_json_pack=_ref("paper-json-pack"),
         evidence_pack=_ref("evidence-pack"),
         summary=_ref("summary"),
-        summary_markdown=None,
+        summary_markdown=_ref("summary-markdown"),
         warnings=(
             DomainBuildWarning(
                 code="paper_unavailable",
@@ -357,7 +357,7 @@ def test_warning_decode_is_closed(mutate) -> None:
         decode_domain_build_warning(document)
 
 
-def test_result_closed_round_trip_with_nullable_summary_refs() -> None:
+def test_result_closed_round_trip_requires_summary_refs() -> None:
     result = _result()
 
     document = encode_domain_build_result(result)
@@ -374,7 +374,7 @@ def test_result_closed_round_trip_with_nullable_summary_refs() -> None:
         "warnings",
     }
     assert document["schema_version"] == DOMAIN_BUILD_RESULT_SCHEMA_VERSION
-    assert document["summary_markdown"] is None
+    assert document["summary_markdown"]["artifact_id"] == "summary-markdown"
     assert document["summary"]["artifact_id"] == "summary"
     assert document["warnings"] == [
         encode_domain_build_warning(item) for item in result.warnings
@@ -425,11 +425,23 @@ def test_result_constructor_freezes_warnings_and_validates_artifact_refs() -> No
         network_html=result.network_html,
         paper_json_pack=result.paper_json_pack,
         evidence_pack=result.evidence_pack,
-        summary=None,
-        summary_markdown=None,
+        summary=result.summary,
+        summary_markdown=result.summary_markdown,
         warnings=[warning],
     )
     assert copied.warnings == (warning,)
+
+    with pytest.raises(ValueError, match="summary must be an ArtifactRef"):
+        DomainBuildResult(
+            domain_id=result.domain_id,
+            foundation_selection=result.foundation_selection,
+            graph=result.graph,
+            network_html=result.network_html,
+            paper_json_pack=result.paper_json_pack,
+            evidence_pack=result.evidence_pack,
+            summary=None,  # type: ignore[arg-type]
+            summary_markdown=result.summary_markdown,
+        )
 
     invalid_ref = ArtifactRef(
         "graph",
@@ -445,6 +457,6 @@ def test_result_constructor_freezes_warnings_and_validates_artifact_refs() -> No
             network_html=result.network_html,
             paper_json_pack=result.paper_json_pack,
             evidence_pack=result.evidence_pack,
-            summary=None,
-            summary_markdown=None,
+            summary=result.summary,
+            summary_markdown=result.summary_markdown,
         )

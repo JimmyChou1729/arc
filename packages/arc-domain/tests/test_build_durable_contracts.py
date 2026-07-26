@@ -21,6 +21,7 @@ from arc_domain.package_view import DomainPackageValidationError
 from arc_domain.paths import domain_id_for
 from arc_jobs import (
     ImmutableArtifactStore,
+    ResumeReason,
     RunContext,
     RunRepository,
     RunSpec,
@@ -184,7 +185,7 @@ def _request_stage(task_id: str) -> str:
         ("foundation-audit-", "audit"),
         ("foundation-select-", "selection"),
         ("network-rank-", "ranking"),
-        ("domain-summary-v2-", "summary"),
+        ("domain-summary-v3-", "summary"),
     ):
         if task_id.startswith(prefix):
             return stage
@@ -251,7 +252,7 @@ class DomainTaskService:
         self.requests = []
 
     def execute_or_resume(self, context, request, **kwargs):
-        del context, kwargs
+        del kwargs
         self.requests.append(request)
         stage = _request_stage(request.task_id)
 
@@ -272,10 +273,43 @@ class DomainTaskService:
                 }
             )
         if stage == "summary":
-            if self.summary_value is not None:
-                return _completed(self.summary_value)
-            return _failure(FailureCategory.TIMEOUT)
+            payload = (
+                self.summary_value
+                if self.summary_value is not None
+                else _summary_payload(user_intent=_request().intent)
+            )
+            if self.summary_value is None:
+                selection_input = next(
+                    item
+                    for item in request.inputs
+                    if item.input_id == "foundation-selection"
+                )
+                selection = json.loads(
+                    context.artifacts.read_source(
+                        selection_input.source
+                    ).content.decode("utf-8")
+                )
+                choice = dict(selection["selected_foundation"])
+                payload["foundation_paper"] = choice
+                payload["best_reference_paper"] = dict(
+                    selection["best_reference_paper"]
+                )
+            return _completed(payload)
         raise AssertionError(f"unhandled stage {stage}")
+
+
+class TransientSummaryOnceService(DomainTaskService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.summary_attempts = 0
+
+    def execute_or_resume(self, context, request, **kwargs):
+        if _request_stage(request.task_id) == "summary":
+            self.summary_attempts += 1
+            if self.summary_attempts == 1:
+                self.requests.append(request)
+                return _failure(FailureCategory.TIMEOUT)
+        return super().execute_or_resume(context, request, **kwargs)
 
 
 class ScriptedDomainProvider:
@@ -405,17 +439,23 @@ def test_successful_summary_binds_request_intent_and_replays_without_llm(
 
     assert snapshot.status is RunStatus.SUCCEEDED
     summary_request = next(
-        item for item in service.requests if item.task_id.startswith("domain-summary-v2-")
+        item for item in service.requests if item.task_id.startswith("domain-summary-v3-")
     )
     task_identity = domain_id_for(request.seed_paper, request.intent)
     assert summary_request.task_id == _task_id(
-        "domain-summary-v2", task_identity, request.intent
+        "domain-summary-v3", task_identity, request.intent
     )
     assert summary_request.task_id != _task_id(
         "domain-summary", task_identity, request.intent
     )
-    assert f'"user_intent": "{request.intent}"' in summary_request.prompt
+    assert request.intent in summary_request.prompt
     assert "foundation_selection.intent" not in summary_request.prompt
+    assert [item.input_id for item in summary_request.inputs] == [
+        "domain-graph",
+        "foundation-selection",
+        "evidence-pack",
+        "paper-pack",
+    ]
     result, store = _result(repository, snapshot)
     assert result.summary is not None
     assert result.summary_markdown is not None
@@ -440,6 +480,45 @@ def test_successful_summary_binds_request_intent_and_replays_without_llm(
     replayed_result, _ = _result(repository, replayed)
     assert replayed_result.summary == result.summary
     assert replayed_result.summary_markdown == result.summary_markdown
+
+
+def test_transient_summary_failure_pauses_then_retries_without_marker(
+    tmp_path: Path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs")
+    runner = DomainBuildRunner(repository)
+    service = TransientSummaryOnceService()
+
+    paused = runner.execute(
+        _request(),
+        paper_access=FakePaperAccess(),
+        task_service=service,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert paused.status is RunStatus.PAUSED
+    assert paused.awaiting is not None
+    assert paused.awaiting.reason is ResumeReason.EXTERNAL_CONDITION
+    assert paused.awaiting.input_required is False
+    store = ImmutableArtifactStore(
+        repository.run_directory(paused.run_id), repository_root=repository.root
+    )
+    assert store.find("summary/unavailable") is None
+    assert store.find("summary/json") is None
+
+    completed = runner.resume(
+        paused.run_id,
+        paper_access=FakePaperAccess(),
+        task_service=service,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    result, store = _result(repository, completed)
+    assert result.summary is not None
+    assert result.summary_markdown is not None
+    assert store.find("summary/unavailable") is None
+    assert service.summary_attempts == 2
 
 
 def test_real_task_service_ignores_unrelated_summary_state_and_replays_parent(
@@ -473,12 +552,7 @@ def test_real_task_service_ignores_unrelated_summary_state_and_replays_parent(
     snapshot = repository.create(
         RunSpec(run_id, handler.name, handler.semantic_input())
     )
-    context = RunContext(
-        repository,
-        snapshot,
-        resume_input=None,
-        execution_slice=None,
-    )
+    context = RunContext(repository, snapshot, resume_input=None)
     task_identity = domain_id_for(request.seed_paper, request.intent)
     unrelated_task_id = _task_id(
         "domain-summary", task_identity, request.intent
@@ -691,12 +765,12 @@ def test_strict_window_excludes_undated_and_old_citers_before_ranking(
     network_input_ref = store.find("network/input")
     assert network_input_ref is not None
     network_input = json.loads(store.read_bytes(network_input_ref).decode("utf-8"))
-    assert network_input["strict_window"] == {
+    assert network_input["recency_stats"] == {
         "unique_citers": 3,
-        "eligible_citers": 1,
-        "exact_date_citers": 2,
-        "reduced_precision_date_citers": 0,
-        "excluded_missing_first_public_date": 1,
+        "eligible_citers": 2,
+        "exact_date_citers": 0,
+        "reduced_precision_date_citers": 3,
+        "excluded_missing_first_public_date": 0,
         "excluded_ambiguous_first_public_date": 0,
         "excluded_outside_window": 1,
     }

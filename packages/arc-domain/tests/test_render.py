@@ -13,7 +13,7 @@ def test_role_order_matches_business_artifacts():
 
 def test_render_network_html_is_pure_and_orders_domain_before_common_reference():
     graph = {
-        "schema_version": "arc.domain_graph.v1",
+        "schema_version": "arc.domain_graph.v2",
         "foundation_paper": "arXiv:2401.00001",
         "nodes": [
             {
@@ -40,7 +40,7 @@ def test_render_network_html_is_pure_and_orders_domain_before_common_reference()
 
     assert rendered.startswith("<!doctype html>")
     assert rendered.index("Domain Paper") < rendered.index("Common Reference")
-    assert "arc.domain_graph.v1" not in rendered
+    assert "arc.domain_graph.v2" not in rendered
 
 
 def test_render_contract_does_not_claim_the_cdn_document_is_self_contained():
@@ -121,3 +121,21 @@ def test_render_shows_one_aggregate_precision_notice_and_node_date_tooltip():
     ) in rendered
     assert rendered.count("Date precision notice:") == 1
     assert "First public: 2024-01 (month precision; published)" in rendered
+
+
+def test_reduced_precision_without_boundary_ambiguity_has_no_warning_banner():
+    rendered = render_network_html(
+        {
+            "foundation_paper": "arXiv:2401.00001",
+            "recency": {
+                "exact_date_count": 0,
+                "reduced_precision_date_count": 4,
+                "ambiguous_date_count": 0,
+            },
+            "nodes": [],
+            "edges": [],
+        }
+    )
+
+    assert "4 reduced precision, 0 ambiguous" in rendered
+    assert "Date precision notice:" not in rendered

@@ -304,73 +304,15 @@ def test_normalize_summary_output_requires_authoritative_selected_titles(
         )
 
 
-def test_summary_prompt_compacts_large_evidence():
-    graph, evidence, selection = _context()
-    repeated = "source sentence " * 10_000
-    evidence["papers"] = [
-        {
-            "paper_id": f"arXiv:2401.{index:05d}",
-            "role": "domain_paper",
-            "title": f"Paper {index}",
-            "abstract": repeated,
-            "conclusion": {"text": repeated},
-            "warnings": [repeated],
-        }
-        for index in range(200)
-    ]
-    graph["nodes"] = [
-        {"paper_id": item["paper_id"], "role": item["role"], "title": item["title"]}
-        for item in evidence["papers"]
-    ]
+def test_summary_prompt_uses_complete_verified_file_inputs() -> None:
+    prompt = summary.summary_prompt(intent="用户的原始研究意图")
 
-    prompt = summary.summary_prompt(
-        graph,
-        evidence,
-        selection,
-        intent="用户的原始研究意图",
-    )
-
-    assert len(prompt) <= summary.SUMMARY_PROMPT_CHAR_LIMIT
-    assert "[truncated]" in prompt
-    assert '"paper_detail_limit": 150' in prompt
-    assert '"omitted_paper_count": 50' in prompt
-    assert '"user_intent": "用户的原始研究意图"' in prompt
-    assert "foundation_selection.intent" not in prompt
-
-
-def test_summary_prompt_fallback_compaction_preserves_authoritative_intent(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    graph, evidence, selection = _context()
-    repeated = "source sentence " * 10_000
-    evidence["papers"] = [
-        {
-            "paper_id": f"arXiv:2401.{index:05d}",
-            "role": "domain_paper",
-            "title": f"Paper {index}",
-            "abstract": repeated,
-            "conclusion": {"text": repeated},
-            "warnings": [repeated],
-        }
-        for index in range(200)
-    ]
-    graph["nodes"] = [
-        {"paper_id": item["paper_id"], "role": item["role"], "title": item["title"]}
-        for item in evidence["papers"]
-    ]
-    monkeypatch.setattr(summary, "SUMMARY_PROMPT_CHAR_LIMIT", 300_000)
-
-    prompt = summary.summary_prompt(
-        graph,
-        evidence,
-        selection,
-        intent="用户的原始研究意图",
-    )
-
-    assert len(prompt) <= 300_000
-    assert '"paper_detail_limit": 80' in prompt
-    assert '"omitted_paper_count": 120' in prompt
-    assert '"user_intent": "用户的原始研究意图"' in prompt
+    assert "domain-graph" in prompt
+    assert "foundation-selection" in prompt
+    assert "evidence-pack" in prompt
+    assert "paper-pack" in prompt
+    assert "用户的原始研究意图" in prompt
+    assert "complete verified inputs" in prompt
 
 
 def test_render_summary_markdown_renders_opportunity_without_warnings():
