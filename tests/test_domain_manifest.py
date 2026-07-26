@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from arc_domain import build_field_groups
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -789,7 +790,7 @@ def test_field_grouping_ignores_non_object_mathematical_opportunities() -> None:
         "citation_edges": [],
     }
 
-    groups = grouping._build_field_groups(
+    groups = build_field_groups(
         [package],
         [],
         intent="",

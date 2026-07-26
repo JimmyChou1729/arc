@@ -7,18 +7,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from arc_domain import (
+    HARD_SEPARATION_CONFIDENCE,
+    FieldGroupingError,
+    build_field_groups,
+    normalize_field_grouping_pairs,
+)
 from arc_jobs import FileLease, canonical_json_bytes
 
 from _arc_workflows.domain_field_grouping import (
     GROUPING_LLM_RUN_DIRNAME,
     GROUPING_SCHEMA_VERSION,
-    HARD_SEPARATION_CONFIDENCE,
     GroupingLLMRunError,
     GroupingRunner,
-    _build_field_groups,
     _default_grouping_runner,
     _llm_grouping,
-    _validate_grouping,
 )
 from _arc_workflows.domain_manifest_inputs import (
     DomainManifestInputs,
@@ -128,18 +131,20 @@ def _prepare_domain_manifest(
     try:
         if grouping_error is not None:
             raise grouping_error
-        pairs = _validate_grouping(grouping_result, domains)
+        pairs = normalize_field_grouping_pairs(
+            grouping_result, domains
+        )
         grouping_method = (
             "llm_semantic_pair_classification"
         )
-    except ManifestError as exc:
+    except (FieldGroupingError, ManifestError) as exc:
         pairs = []
         grouping_method = "conservative_fallback"
         warning = (
             f"field_grouping_degraded: {exc}; merged all domain "
             "packages into one field"
         )
-    field_groups = _build_field_groups(
+    field_groups = build_field_groups(
         domains,
         pairs,
         intent=str(context.get("user_intent", "")),

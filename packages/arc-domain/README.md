@@ -3,8 +3,11 @@
 `arc-domain` builds a reusable research-domain package from a seed paper and
 scientific intent. It owns foundation and domain-paper selection, citation
 graphs, evidence and paper packs, domain summaries, HTML rendering, and
-published domain generations. It calls `arc-paper` for paper data and
-`arc-llm` for model work.
+published domain generations. Its public API also owns deterministic semantic
+field-grouping validation and construction for consumers that combine multiple
+domain packages. It calls `arc-paper` for paper data and `arc-llm` for model
+work; agent-facing grouping prompts and manifest publication remain in the ARC
+Skill.
 
 Durable builds accept only the closed `arc.domain_build_policy.v2` and
 `arc.domain_build_request.v2` contracts. The default policy infers the
