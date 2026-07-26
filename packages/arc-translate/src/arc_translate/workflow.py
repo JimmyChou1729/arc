@@ -1175,7 +1175,13 @@ def _window_glossary(
 ) -> tuple[Mapping[str, Any], ...]:
     text = "\n".join(block_text(item) for item in blocks).casefold()
     return tuple(
-        item
+        {
+            "term_id": item["term_id"],
+            "term": item["term"],
+            "aliases": item["aliases"],
+            "preferred_translation": item["preferred_translation"],
+            "target_definition": item["target_definition"],
+        }
         for item in entries
         if isinstance(item.get("term"), str)
         and str(item["term"]).casefold() in text

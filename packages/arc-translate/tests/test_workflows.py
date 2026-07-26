@@ -60,6 +60,7 @@ class FakeTasks:
         self.invalid_review = invalid_review
         self.calls: list[str] = []
         self.translation_glossaries: list[list[str]] = []
+        self.prompt_glossary_fields: list[list[set[str]]] = []
 
     def execute_or_resume(
         self, _context, request, *, input=None, options=None
@@ -87,6 +88,9 @@ class FakeTasks:
             self.translation_glossaries.append(
                 [item["term"] for item in payload["glossary"]]
             )
+            self.prompt_glossary_fields.append(
+                [set(item) for item in payload["glossary"]]
+            )
             translations = []
             for block in payload["blocks"]:
                 identity = block["source_identity"]
@@ -111,6 +115,9 @@ class FakeTasks:
                 )
             value = {"translations": translations}
         elif contract == REVIEW_PROMPT_VERSION:
+            self.prompt_glossary_fields.append(
+                [set(item) for item in payload["glossary"]]
+            )
             patches = (
                 [{"block_id": "missing-block", "replacement": "unsafe"}]
                 if self.invalid_review
@@ -495,6 +502,26 @@ def test_block_selector_normalizes_order_and_filters_window_glossary(tmp_path):
         entropy_block["block_id"]
     ]
     assert tasks.translation_glossaries == [["Entropy"]]
+    assert tasks.prompt_glossary_fields == [
+        [
+            {
+                "term_id",
+                "term",
+                "aliases",
+                "preferred_translation",
+                "target_definition",
+            }
+        ],
+        [
+            {
+                "term_id",
+                "term",
+                "aliases",
+                "preferred_translation",
+                "target_definition",
+            }
+        ],
+    ]
 
     invalid = TranslationWorkflowService(FakeTasks()).translate_blocks(
         _context(tmp_path, "invalid-selector"),
