@@ -20,7 +20,8 @@ Build one domain with an explicit research intent:
 ```bash
 arc-domain build "<seed-paper-id>" \
   --intent "<research-intent>" \
-  --project-dir "<project-dir>"
+  --project-dir "<project-dir>" \
+  --host-authority unknown
 ```
 
 Replace both quoted placeholders with the seed identifier and the scientific

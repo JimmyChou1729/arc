@@ -13,6 +13,7 @@ First detect whether translation is needed:
 arc-translate detect-language <source> \
   --project-dir <project-dir> \
   --paper-cache-root <shared-paper-cache> \
+  --host-authority unknown \
   --target-language <language-tag>
 ```
 
@@ -23,11 +24,13 @@ build the glossary and translate all source blocks:
 arc-translate build-glossary <source> \
   --project-dir <project-dir> \
   --paper-cache-root <shared-paper-cache> \
+  --host-authority unknown \
   --approx-term-count 50
 
 arc-translate translate-blocks <source> \
   --project-dir <project-dir> \
-  --paper-cache-root <shared-paper-cache>
+  --paper-cache-root <shared-paper-cache> \
+  --host-authority unknown
 ```
 
 Each command runs only its named step and verifies its prerequisites. The term
@@ -46,7 +49,8 @@ Markdown-only result is published.
 ```bash
 arc-translate status --project-dir <project-dir>
 arc-translate validate --project-dir <project-dir>
-arc-translate resume --project-dir <project-dir> --input <resume-input.json>
+arc-translate resume --project-dir <project-dir> --input <resume-input.json> \
+  --host-authority unknown
 arc-translate stop --project-dir <project-dir> --reason "<reason>"
 ```
 

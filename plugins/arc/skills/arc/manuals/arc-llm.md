@@ -20,7 +20,7 @@ Prepare a closed request such as:
 
 ```json
 {
-  "schema_version": "arc.llm.request.v3",
+  "schema_version": "arc.llm.request.v4",
   "task_id": "bounded_assessment",
   "prompt": "Return a concise structured assessment.",
   "output": {
@@ -35,11 +35,6 @@ Prepare a closed request such as:
   },
   "model": {"provider": "auto", "model": null, "tier": "medium"},
   "session": null,
-  "capabilities": {
-    "internet": false,
-    "inherit_host_config": false,
-    "allowed_tools": []
-  },
   "inputs": []
 }
 ```
@@ -49,11 +44,12 @@ Then start and inspect the durable run:
 ```bash
 arc-llm generate \
   --request <request.json> \
-  --run-root <project-dir>/context/arc-llm \
+  --run-root <project-dir>/.arc/llm \
+  --host-authority unknown \
   --run-id <stable-run-id>
 
 arc-llm status \
-  --run-root <project-dir>/context/arc-llm \
+  --run-root <project-dir>/.arc/llm \
   --run-id <stable-run-id>
 ```
 
@@ -64,12 +60,13 @@ caller-owned durable state, not a temporary directory.
 
 ```bash
 arc-llm resume \
-  --run-root <project-dir>/context/arc-llm \
+  --run-root <project-dir>/.arc/llm \
   --run-id <stable-run-id> \
+  --host-authority unknown \
   --input <resume-input.json>
 
 arc-llm stop \
-  --run-root <project-dir>/context/arc-llm \
+  --run-root <project-dir>/.arc/llm \
   --run-id <stable-run-id> \
   --reason "<reason>"
 ```
@@ -86,6 +83,8 @@ arc-llm --help
 arc-llm <command> --help
 ```
 
-The CLI emits one typed JSON result for non-help commands. Model tiers and
-capabilities are explicit request data; keep tools, internet access, and host
-configuration disabled unless the owning workflow needs them.
+The CLI emits one typed JSON result for non-help commands. Model selection and
+input artifacts are request data; ARC copies each verified input into the
+provider workspace. `--host-authority unrestricted` is valid only when the
+invoking host has explicitly granted unrestricted authority. Otherwise use
+`unknown` (the portable default), which requests host turns when needed.

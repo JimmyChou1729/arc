@@ -10,7 +10,8 @@ generation.
 
 ```bash
 arc-domain build <seed-paper> --intent "<scientific intent>" \
-  --project-dir <project-dir>
+  --project-dir <project-dir> \
+  --host-authority unknown
 ```
 
 The result reports both a durable `run_id` and a stable `domain_id`. Keep both:
@@ -31,7 +32,7 @@ citer corpus rather than silently changing the canonical origin.
 ## Resume and Validate
 
 ```bash
-arc-domain resume <run-id> --project-dir <project-dir>
+arc-domain resume <run-id> --project-dir <project-dir> --host-authority unknown
 arc-domain validate <run-id> --project-dir <project-dir>
 arc-domain stop <run-id> --project-dir <project-dir> --reason "<reason>"
 ```

@@ -25,7 +25,8 @@ Build a companion from a rich source or paper identifier:
 arc-companion build note.md \
   --project-dir local/example/companion \
   --target-language zh-CN \
-  --user-intent "Explain the main argument and its assumptions."
+  --user-intent "Explain the main argument and its assumptions." \
+  --host-authority unknown
 ```
 
 On the first command, redirect JSON output outside the new project directory.

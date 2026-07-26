@@ -609,7 +609,7 @@ def _render_summary_prompt(compact_evidence: dict[str, Any]) -> str:
             (
                 "Mention both foundation_paper and best_reference_paper briefly. The foundation paper "
                 "is the citer-neighborhood anchor used to construct the field; the best reference paper "
-                "is the concise methodology entry point. Do not include separate single-paper summary attachments."
+                "is the concise methodology entry point. Do not include separate single-paper summaries."
             ),
             "Explain the domain, key papers, and core methodology.",
             (

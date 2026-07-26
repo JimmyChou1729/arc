@@ -498,8 +498,8 @@ def _section_request(
     prompt = "\n".join(
         (
             f"Contract: {SUMMARY_PROMPT_CONTRACT}",
-            "Summarize exactly one section of the attached ParsedDocument.",
-            "Use the attachment only. Do not add facts from memory.",
+            "Summarize exactly one section of the ParsedDocument copied into your workspace.",
+            "Use only that workspace document. Do not add facts from memory.",
             f"Document digest: {parsed.document_digest}",
             f"Source digest: {parsed.source.artifact_digest}",
             f"Section digest: {section_digest}",
@@ -539,8 +539,8 @@ def _synthesis_request(
     prompt = "\n".join(
         (
             f"Contract: {SUMMARY_PROMPT_CONTRACT}",
-            "Synthesize the attached ParsedDocument from the deterministic section summaries below.",
-            "Use the attachment and summaries only. Return concise research guidance.",
+            "Synthesize the ParsedDocument copied into your workspace from the deterministic section summaries below.",
+            "Use only that workspace document and the summaries. Return concise research guidance.",
             f"Document digest: {parsed.document_digest}",
             f"Source digest: {parsed.source.artifact_digest}",
             f"Section summaries digest: {section_digest}",

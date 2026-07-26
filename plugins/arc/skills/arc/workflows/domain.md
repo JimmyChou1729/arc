@@ -68,8 +68,8 @@ only when its field has no explicit paper anchor.
   the requested program can override either prior.
 
 Step 5: For every unresolved field, select one canonical origin with one
-durable, closed ARC-LLM task. Build a separate `arc.llm.request.v3` document
-at `<project-dir>/context/domain-origin-selection-<field-id>-request.json`.
+durable, closed ARC-LLM task. Build a separate `arc.llm.request.v4` document
+at `<project-dir>/.arc/domain/origin-selection-<field-id>-request.json`.
 Set its JSON output schema to the exact contents of
 `<skill-dir>/workflows/json/domain-origin-selection.schema.json`, set `repair`
 to `local`, and give the prompt only that field's recorded candidate evidence.
@@ -81,8 +81,9 @@ field guide, not as an unfilled request.
 
 ```bash
 arc-llm generate \
-  --request <project-dir>/context/domain-origin-selection-<field-id>-request.json \
-  --run-root <project-dir>/context/arc-llm \
+  --request <project-dir>/.arc/domain/origin-selection-<field-id>-request.json \
+  --run-root <project-dir>/.arc/domain/origin-selection-llm \
+  --host-authority unknown \
   --run-id <origin-selection-run-id>
 ```
 
@@ -128,6 +129,7 @@ arc-domain build <build-seed-paper> \
   --llm-provider <llm_provider> \
   --model <model> \
   --model-tier <model_tier> \
+  --host-authority unknown \
   --workers <workers> \
   --recent-window-days <recent_window_days> \
   --foundation-mode fixed-seed \
@@ -148,7 +150,7 @@ mode flags to use `infer_from_seed` and `representative_plus_recent`.
 
 If several domain IDs are distinct, their builds may run concurrently. Record
 every returned `run_id` and `domain_id`. A paused result must be continued only
-with `arc-domain resume <run-id> --project-dir <project-dir>`. When its resume
+with `arc-domain resume <run-id> --project-dir <project-dir> --host-authority unknown`. When its resume
 descriptor requires input, pass the matching document with
 `--input '<resume-input-json-document>'`. Inspect progress with
 `arc-domain status --project-dir <project-dir> --run-id <run-id>`, stop with

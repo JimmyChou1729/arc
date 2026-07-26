@@ -63,6 +63,7 @@ means install `rg` rather than searching arbitrary cache files.
 ```bash
 arc-paper extract-keywords <source> \
   --project-dir <project-dir>/keywords \
+  --host-authority unknown \
   --approx-count 50
 ```
 

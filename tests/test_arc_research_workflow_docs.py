@@ -1737,10 +1737,13 @@ def test_arc_llm_manual_uses_only_the_current_durable_cli() -> None:
         assert obsolete not in manual
     assert "arc-proposer-reviewer inspect" not in manual
     assert "arc-llm <command> --help" in manual
-    assert "arc.llm.request.v3" in manual
-    assert "arc.llm.request.v3" in domain
-    assert "arc.llm.request.v2" not in manual
-    assert "arc.llm.request.v2" not in domain
+    assert "arc.llm.request.v4" in manual
+    assert "arc.llm.request.v4" in domain
+    assert "arc.llm.request.v3" not in manual
+    assert "arc.llm.request.v3" not in domain
+    assert '"capabilities"' not in manual
+    assert "inherit_host_config" not in manual
+    assert "allowed_tools" not in manual
 
 
 def test_core_skill_docs_keep_arc_cli_only() -> None:

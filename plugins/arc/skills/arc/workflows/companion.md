@@ -42,6 +42,7 @@ arc-companion build <source-path-or-paper-id> \
   --approx-term-count <estimate> \
   --user-intent '<intent>' \
   --provider <provider> \
+  --host-authority unknown \
   --workers <workers>
 ```
 
@@ -69,7 +70,8 @@ resume key:
 
 ```bash
 arc-companion resume --project-dir <project-dir> \
-  --input '<resume-input-json>'
+  --input '<resume-input-json>' \
+  --host-authority unknown
 ```
 
 For an unsafe reviewer patch, the supervision request permits discarding that

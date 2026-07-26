@@ -20,6 +20,7 @@ arc-companion build <source.md> \
   --pdf <validator.pdf> \
   --project-dir <project-dir> \
   --paper-cache-root <shared-paper-cache> \
+  --host-authority unknown \
   --target-language <language-tag>
 ```
 
@@ -36,6 +37,7 @@ arc-companion build <arxiv-id> \
   --pdf fetch \
   --project-dir <project-dir> \
   --paper-cache-root <shared-paper-cache> \
+  --host-authority unknown \
   --target-language <language-tag>
 ```
 
@@ -52,7 +54,8 @@ assets are project-local under `<project-dir>/.arc/companion/`.
 
 ```bash
 arc-companion status --project-dir <project-dir>
-arc-companion resume --project-dir <project-dir> --input <resume-input.json>
+arc-companion resume --project-dir <project-dir> --input <resume-input.json> \
+  --host-authority unknown
 arc-companion stop --project-dir <project-dir> --reason "<reason>"
 ```
 

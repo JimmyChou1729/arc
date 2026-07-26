@@ -14,7 +14,8 @@ Detect whether a verified source needs translation:
 arc-translate detect-language note.md \
   --target-language zh-CN \
   --project-dir local/example/translation \
-  --paper-cache-root <shared-paper-cache>
+  --paper-cache-root <shared-paper-cache> \
+  --host-authority unknown
 ```
 
 Use `arc-translate --help` and `arc-translate detect-language --help` for the
