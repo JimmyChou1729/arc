@@ -3,10 +3,7 @@
   "max_rounds": 3,
   "early_stop": {"enabled": false},
   "caller_context": {
-    "user_intent": "<user_intent>",
-    "domain_markdown_files": [
-      {"path": "domain/<relative-path>.md", "content": "<full markdown text>"}
-    ]
+    "user_intent": "<user_intent>"
   },
   "proposers": [],
   "reviewers": []

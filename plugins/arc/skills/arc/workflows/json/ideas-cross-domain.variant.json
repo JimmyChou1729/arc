@@ -9,8 +9,8 @@
   "reviewer_output_schema": "ideas-cross-domain-reviewer-output.schema.json",
   "marking_scheme": "ideas-cross-domain-marking-scheme.json",
   "context_policy": {
-    "require_domain_markdown": false,
-    "attach_domain_markdown": false
+    "domain_markdown_workspace_input_required": false,
+    "include_domain_markdown_workspace_input": false
   },
   "proposer": {
     "model_tier": "high"

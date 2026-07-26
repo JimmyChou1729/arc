@@ -41,6 +41,7 @@ class IdeaPlan:
     loop_id: str
     variant: VariantConfig
     caller_context: dict[str, Any]
+    workspace_input_paths: tuple[Path, ...]
 
 
 def materialize_ideas(config: IdeasConfig) -> list[IdeaPlan]:
@@ -48,6 +49,12 @@ def materialize_ideas(config: IdeasConfig) -> list[IdeaPlan]:
     for variant in config.variants:
         for idea_index in range(1, config.loops_per_variant + 1):
             idea_id = f"{variant.variant_id}/idea_{idea_index:03d}"
+            context, workspace_input_paths = caller_context(
+                config,
+                variant=variant,
+                idea_id=idea_id,
+                idea_index=idea_index,
+            )
             ideas.append(
                 IdeaPlan(
                     idea_id=idea_id,
@@ -55,12 +62,8 @@ def materialize_ideas(config: IdeasConfig) -> list[IdeaPlan]:
                     idea_index=idea_index,
                     loop_id=f"{variant.variant_id}_idea_{idea_index:03d}",
                     variant=variant,
-                    caller_context=caller_context(
-                        config,
-                        variant=variant,
-                        idea_id=idea_id,
-                        idea_index=idea_index,
-                    ),
+                    caller_context=context,
+                    workspace_input_paths=workspace_input_paths,
                 )
             )
     return ideas
@@ -171,7 +174,7 @@ def caller_context(
     variant: VariantConfig,
     idea_id: str,
     idea_index: int,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], tuple[Path, ...]]:
     loop_template = read_json(variant.loop_template)
     result = copy.deepcopy(loop_template.get("caller_context", {}))
     if not isinstance(result, dict):
@@ -196,27 +199,25 @@ def caller_context(
             config,
             idea_index=idea_index,
         )
-    if variant.context_policy.attach_domain_markdown:
+    workspace_input_paths: tuple[Path, ...] = ()
+    if variant.context_policy.include_domain_markdown_workspace_input:
         domain_package_dir = (
             config.project_dir / ".arc" / "domain" / "packages"
         )
-        markdown_files = domain_markdown_files(domain_package_dir)
-        if markdown_files:
-            result["domain_markdown_files"] = markdown_files
+        markdown_paths = domain_markdown_paths(domain_package_dir)
+        if markdown_paths:
+            workspace_input_paths = markdown_paths
         else:
-            if variant.context_policy.require_domain_markdown:
+            if variant.context_policy.domain_markdown_workspace_input_required:
                 raise ConfigError(
                     f"{variant.variant_id} requires domain markdown under "
                     f"{domain_package_dir}"
                 )
-            result.pop("domain_markdown_files", None)
             result.setdefault("warnings", []).append(
                 "domain_markdown_unavailable: Domain markdown was unavailable; "
                 "continuing with user intent and ARC paper/tool context only."
             )
-    else:
-        result.pop("domain_markdown_files", None)
-    return result
+    return result, workspace_input_paths
 
 
 def caller_context_warnings(ideas: list[IdeaPlan]) -> list[str]:
@@ -348,17 +349,25 @@ def domain_summary_path(
     return path
 
 
-def domain_markdown_files(domain_dir: Path) -> list[dict[str, str]]:
+def domain_markdown_paths(domain_dir: Path) -> tuple[Path, ...]:
     if not domain_dir.exists():
-        return []
-    return [
-        {
-            "path": str(path.relative_to(domain_dir.parent)),
-            "content": path.read_text(encoding="utf-8", errors="replace"),
-        }
+        return ()
+    return tuple(
+        path
         for path in sorted(domain_dir.rglob("*.md"))
         if path.is_file()
-    ]
+    )
+
+
+def workspace_input_paths(ideas: list[IdeaPlan]) -> tuple[Path, ...]:
+    """Return deterministic local sources to materialize before batch execution."""
+
+    return tuple(
+        sorted(
+            {path.resolve() for idea in ideas for path in idea.workspace_input_paths},
+            key=str,
+        )
+    )
 
 
 def merged_worker_payload(

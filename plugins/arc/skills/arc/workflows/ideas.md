@@ -65,7 +65,7 @@ Step 1: Run:
 ```bash
 python3 <skill-dir>/scripts/run-ideas.py \
   --config <project-dir>/.arc/ideas/<run-id>.config.json \
-  --host-authority unknown \
+  --host-authority <host-authority> \
   --json
 ```
 
@@ -136,10 +136,12 @@ searching, inspect the strongest candidates first, and record each actual
 source or query with a short result. If a host or provider cannot supply a
 capability, state the limitation once and continue from the available evidence.
 
-Restricted hosts use the generic host broker; this workflow does not define a
+Set `<host-authority>` to `unrestricted` only when the host explicitly reports
+unrestricted permissions; otherwise set it to `unknown` and reuse that value
+when resuming the same run. Restricted hosts use the generic host broker; this workflow does not define a
 paper-operation allowlist, a tool ledger, or a host-specific fallback. The
-runtime holder supplies an explicit `--host-authority` attestation when known;
-otherwise it defaults to `unknown` and the LLM service selects its safe mode.
+runtime holder supplies this explicit attestation and the LLM service selects
+the corresponding safe mode.
 
 Final ranked ideas must come from `run-ideas.py`'s public committed batch data
 and the read-only ranking helper, not ad-hoc agent judgment. In cross-domain mode,

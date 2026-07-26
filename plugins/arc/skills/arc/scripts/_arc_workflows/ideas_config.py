@@ -35,8 +35,8 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class ContextPolicy:
-    require_domain_markdown: bool
-    attach_domain_markdown: bool
+    domain_markdown_workspace_input_required: bool
+    include_domain_markdown_workspace_input: bool
 
 
 @dataclass(frozen=True)
@@ -502,16 +502,22 @@ def _parse_context_policy(raw: Any, *, path: Path) -> ContextPolicy:
     data = _dict(raw, f"{path}.context_policy")
     _reject_unknown_fields(
         data,
-        {"require_domain_markdown", "attach_domain_markdown"},
+        {
+            "domain_markdown_workspace_input_required",
+            "include_domain_markdown_workspace_input",
+        },
         f"{path}.context_policy",
     )
-    attach_domain = _bool(data.get("attach_domain_markdown", False), f"{path}.context_policy.attach_domain_markdown")
+    include_domain = _bool(
+        data.get("include_domain_markdown_workspace_input", False),
+        f"{path}.context_policy.include_domain_markdown_workspace_input",
+    )
     return ContextPolicy(
-        require_domain_markdown=_bool(
-            data.get("require_domain_markdown", attach_domain),
-            f"{path}.context_policy.require_domain_markdown",
+        domain_markdown_workspace_input_required=_bool(
+            data.get("domain_markdown_workspace_input_required", include_domain),
+            f"{path}.context_policy.domain_markdown_workspace_input_required",
         ),
-        attach_domain_markdown=attach_domain,
+        include_domain_markdown_workspace_input=include_domain,
     )
 
 

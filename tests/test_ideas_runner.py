@@ -108,9 +108,11 @@ def _config(tmp_path: Path) -> dict[str, Any]:
 class _FakeLLM:
     def __init__(self) -> None:
         self.options: list[LLMExecutionOptions] = []
+        self.requests = []
 
     def execute(self, _context, request, *, options):
         self.options.append(options)
+        self.requests.append(request)
         if "one proposer" in request.prompt:
             return LLMCompleted(
                 {
@@ -155,6 +157,12 @@ def test_dry_run_has_closed_workers_and_direct_research_policy(tmp_path: Path) -
     worker = result["batch_request"]["loops"][0]["proposers"][0]
     assert result["status"] == "dry_run"
     assert result["batch_request"]["schema_version"] == BATCH_SCHEMA_VERSION
+    assert result["batch_request"]["inputs"] == []
+    assert result["workspace_inputs"] == [
+        {"input_id": "domain-markdown-001", "media_type": "text/markdown"}
+    ]
+    assert "# Brief" not in json.dumps(result["batch_request"])
+    assert not (tmp_path / "project" / ".arc" / "ideas" / "runs").exists()
     assert set(worker) == {"worker_id", "instructions", "output_schema", "model"}
     assert "shared paper cache" in worker["instructions"]
     assert "resolver" not in worker["instructions"].lower()
@@ -168,6 +176,11 @@ def test_run_uses_one_explicit_runtime_carrier(tmp_path: Path) -> None:
     assert result["status"] == "succeeded"
     assert "evidence" not in result
     assert fake.options and all(item is runtime for item in fake.options)
+    assert fake.requests and all(len(request.inputs) == 1 for request in fake.requests)
+    source = fake.requests[0].inputs[0].source
+    assert source.source_run_id == "ideas-test"
+    assert source.source_artifact_id.endswith("domain-markdown-001")
+    assert "# Brief" not in fake.requests[0].prompt
 
 
 def test_idea_cli_requires_explicit_authority_value() -> None:

@@ -14,6 +14,7 @@ bootstrap_arc_pythonpath()
 from arc_jobs import RunEngine, RunRepository, RunSnapshot, RunSpec
 from arc_llm import HostAuthority, LLMExecutionOptions, LLMTaskService
 from arc_proposer_reviewer import (
+    BatchInputPayload,
     BatchRunner,
     ProposerReviewerHandler,
     ProposerReviewerService,
@@ -21,7 +22,6 @@ from arc_proposer_reviewer import (
     inspect_batch,
     read_batch_trace,
 )
-from arc_proposer_reviewer.protocol import encode_batch_request
 
 from _arc_workflows.ideas_config import (
     IdeasConfig,
@@ -49,6 +49,7 @@ from _arc_workflows.ideas_templates import (
     caller_context_warnings,
     materialize_ideas,
     read_json,
+    workspace_input_paths,
 )
 
 
@@ -93,6 +94,8 @@ def run_ideas(
     )
     ideas = materialize_ideas(ideas_config)
     request = batch_request(ideas_config, ideas)
+    input_paths = workspace_input_paths(ideas)
+    input_metadata = _workspace_input_metadata(input_paths)
     max_concurrent = max_concurrent_loops(len(ideas))
     warnings = [
         concurrency_warning(
@@ -105,7 +108,6 @@ def run_ideas(
         *model_tier_warnings(request),
         *caller_context_warnings(ideas),
     ]
-    repository = RunRepository(ideas_config.run_dir)
     controller = stop_controller or IdeasStopController()
 
     if dry_run:
@@ -115,6 +117,7 @@ def run_ideas(
             ideas=ideas,
             warnings=warnings,
             max_concurrent=max_concurrent,
+            workspace_inputs=input_metadata,
         )
     if controller.is_requested():
         return not_started_result(
@@ -124,7 +127,10 @@ def run_ideas(
             warnings=warnings,
             max_concurrent=max_concurrent,
             status="paused",
+            workspace_inputs=input_metadata,
         )
+
+    repository = RunRepository(ideas_config.run_dir)
 
     effective_progress = combined_progress_callback(
         progress_callback,
@@ -148,18 +154,21 @@ def run_ideas(
             progress_callback=package_progress,
         ),
     )
-    spec = RunSpec(
-        ideas_config.run_id,
-        handler.name,
-        encode_batch_request(request),
-    )
     progress.emit({"event": "ideas_batch_started"})
     snapshot = None
     execution_error: Exception | None = None
     try:
-        repository.create(spec)
+        runner = BatchRunner()
+        runner.prepare(
+            request,
+            repository,
+            ideas_config.run_id,
+            input_payloads=_workspace_input_payloads(input_paths),
+        )
+        request = runner.read_request(repository, ideas_config.run_id)
+        spec = repository.read_spec(ideas_config.run_id)
         with controller.bridge(
-            lambda: BatchRunner().stop(
+            lambda: runner.stop(
                 repository,
                 ideas_config.run_id,
                 reason="run-ideas received a process signal",
@@ -322,6 +331,24 @@ def _recover_execution_failure(
 
 def _read_config_file(path: str) -> dict[str, Any]:
     return read_json(Path(path))
+
+
+def _workspace_input_metadata(paths: tuple[Path, ...]) -> list[dict[str, str]]:
+    return [
+        {"input_id": f"domain-markdown-{index:03d}", "media_type": "text/markdown"}
+        for index, _path in enumerate(paths, start=1)
+    ]
+
+
+def _workspace_input_payloads(paths: tuple[Path, ...]) -> tuple[BatchInputPayload, ...]:
+    return tuple(
+        BatchInputPayload(
+            input_id=f"domain-markdown-{index:03d}",
+            media_type="text/markdown",
+            content=path.read_bytes(),
+        )
+        for index, path in enumerate(paths, start=1)
+    )
 
 
 def _append_progress_errors(

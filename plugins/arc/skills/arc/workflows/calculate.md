@@ -99,8 +99,12 @@ Run:
 ```bash
 python3 <skill-dir>/scripts/run-calculate.py \
   --config <project-dir>/.arc/calculate/<run-id>/execute/calculate.config.json \
-  --host-authority unknown
+  --host-authority <host-authority>
 ```
+
+Set `<host-authority>` to `unrestricted` only when the host explicitly reports
+unrestricted permissions; otherwise set it to `unknown` and reuse that value
+when resuming the same calculation run.
 
 The command exits `0` for `completed`, `dry_run`, `blocked_for_user`, and
 `blocked_for_revision`. A blocked result is a normal nonterminal workflow

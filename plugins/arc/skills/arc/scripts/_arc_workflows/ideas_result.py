@@ -151,6 +151,7 @@ def dry_run_result(
     ideas: list[IdeaPlan],
     warnings: list[str],
     max_concurrent: int,
+    workspace_inputs: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": IDEAS_RESULT_SCHEMA,
@@ -166,6 +167,7 @@ def dry_run_result(
         ),
         "max_concurrent_loops": max_concurrent,
         "batch_request": encode_batch_request(request),
+        "workspace_inputs": list(workspace_inputs or ()),
         "loops": [
             {
                 "idea_id": idea.idea_id,
@@ -202,6 +204,7 @@ def not_started_result(
     warnings: list[str],
     max_concurrent: int,
     status: str,
+    workspace_inputs: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     result = dry_run_result(
         config,
@@ -209,6 +212,7 @@ def not_started_result(
         ideas=ideas,
         warnings=warnings,
         max_concurrent=max_concurrent,
+        workspace_inputs=workspace_inputs,
     )
     result["status"] = status
     result.pop("batch_request", None)

@@ -1437,7 +1437,7 @@ def test_ideas_full_info_template_includes_domain_and_direct_tool_context() -> N
 
     assert variant["loop_template"] == "ideas-loop.template.json"
     assert variant["proposer_template"] == "ideas-proposer.template.json"
-    assert "domain_markdown_files" in loop["caller_context"]
+    assert "workspace_input" not in loop["caller_context"]
     prompt = proposer["prompt"]["template"]
     assert "available web and ARC tools" in prompt
     assert "shared paper cache" in prompt
@@ -1536,13 +1536,13 @@ def test_arc_skill_preserves_seed_domain_anchor_in_user_intent() -> None:
     assert "seed_paper_list" in text
 
 
-def test_ideas_attaches_optional_domain_markdown_not_single_paper_summaries() -> None:
+def test_ideas_uses_optional_domain_markdown_workspace_inputs_not_single_paper_summaries() -> None:
     variant = json.loads((WJ / "ideas-domain.variant.json").read_text(encoding="utf-8"))
     loop = json.loads((WJ / "ideas-loop.template.json").read_text(encoding="utf-8"))
 
-    assert variant["context_policy"]["require_domain_markdown"] is False
-    assert variant["context_policy"]["attach_domain_markdown"] is True
-    assert "domain_markdown_files" in loop["caller_context"]
+    assert variant["context_policy"]["domain_markdown_workspace_input_required"] is False
+    assert variant["context_policy"]["include_domain_markdown_workspace_input"] is True
+    assert "content" not in loop["caller_context"]
     assert "best-reference paper summaries" not in json.dumps(loop)
     assert "single-paper LLM summaries" not in json.dumps(loop)
 
