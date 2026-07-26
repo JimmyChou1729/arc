@@ -149,6 +149,16 @@ searching, inspect the strongest candidates first, and record each actual
 source or query with a short result. If a host or provider cannot supply a
 capability, state the limitation once and continue from the available evidence.
 
+The broader novelty review remains the primary assessment. The
+citation-neighborhood audit below is a required supplementary signal, never a
+replacement for broader web search, INSPIRE metadata search, shared-cache
+search, scientific comparison, or other appropriate prior-art checks. Complete
+those broader checks regardless of whether the citation scan is complete or
+finds a direct hit, and base novelty and confidence on the combined evidence.
+A no-hit citation result alone must not raise either score. For cross-domain
+ideas, the broader review still requires independent source-domain,
+target-domain, and intersection checks.
+
 For each new idea nucleus, the first reviewer round performs a bounded INSPIRE
 citation-neighborhood audit. Select one canonical paper that defines the
 baseline problem plus at most two prior-art papers nearest the proposed novelty
@@ -165,13 +175,17 @@ novelty delta remain unchanged; otherwise update only the affected scans.
 Record the selected baseline or nearest paper, total and scanned citer counts,
 `scan_complete`, matched papers, and exclusion reasons in `evidence_checked`.
 Record the exact ARC commands and terms actually used in `tool_queries_used`.
+Use those same existing arrays to record the actual broader novelty sources,
+results, and queries as well as the citation-neighborhood evidence; do not
+report a citation-only audit as a completed novelty review.
 
 No direct match supports only “no direct precedent found in this citation
 neighborhood,” never a proof of novelty. INSPIRE unavailability, a neighborhood
 larger than 1000 citers, incomplete coverage, or missing abstracts must remain
-visible as a warning and lower novelty confidence. None of these conditions,
-nor the citation-neighborhood audit itself, automatically disqualifies an idea;
-the existing scientific qualification gates remain unchanged.
+visible as a warning and lower novelty confidence while the reviewer continues
+with the other available novelty checks. None of these conditions, nor the
+citation-neighborhood audit itself, automatically disqualifies an idea; the
+existing scientific qualification gates remain unchanged.
 
 Set `<host-authority>` to `unrestricted` only when the host explicitly reports
 unrestricted permissions; otherwise set it to `unknown` and reuse that value

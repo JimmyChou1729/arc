@@ -1307,6 +1307,41 @@ def test_all_ideas_reviewers_require_bounded_citation_neighborhood_audits() -> N
         assert "not a qualification gate" in template
 
 
+def test_all_ideas_reviewers_keep_broader_novelty_checks_primary() -> None:
+    reviewer_names = (
+        "ideas-reviewer.template.json",
+        "ideas-domain-reviewer.template.json",
+        "ideas-cross-domain-reviewer.template.json",
+    )
+
+    for name in reviewer_names:
+        prompt = json.loads((WJ / name).read_text(encoding="utf-8"))["prompt"]
+        system = prompt["system"]
+        instructions = f"{system}\n\n{prompt['template']}"
+
+        assert "required supplementary signal" in system
+        assert "never a replacement for the broader novelty review" in system
+        assert "web, INSPIRE metadata, shared-cache" in system
+        assert "regardless of the citation outcome" in system
+        assert "base novelty and confidence on the combined evidence" in system
+        assert "never raise either from a no-hit citation result alone" in system
+        assert "both evidence classes and their actual queries" in system
+        assert "existing evidence_checked and tool_queries_used arrays" in system
+        assert instructions.index("broader novelty review") < instructions.index(
+            "perform a citation-neighborhood audit"
+        )
+
+    cross_domain = json.loads(
+        (WJ / "ideas-cross-domain-reviewer.template.json").read_text(
+            encoding="utf-8"
+        )
+    )["prompt"]["system"]
+    assert (
+        "independent source-domain, target-domain, and intersection novelty checks"
+        in cross_domain
+    )
+
+
 def test_cross_domain_scoring_and_qualification_marks_remain_specialized() -> None:
     scheme = json.loads(
         (WJ / "ideas-cross-domain-marking-scheme.json").read_text(encoding="utf-8")
@@ -1391,6 +1426,22 @@ def test_ideas_workflow_documents_citation_neighborhood_default_policy() -> None
     assert "existing scientific qualification gates remain unchanged" in compact
     assert "existing focused novelty audit" in compact
     assert "do not create a separate evidence ledger or qualification gate" in compact
+
+
+def test_ideas_workflow_forbids_citation_only_novelty_reviews() -> None:
+    text = (WF / "ideas.md").read_text(encoding="utf-8")
+    compact = " ".join(text.split())
+
+    assert "broader novelty review remains the primary assessment" in compact
+    assert "required supplementary signal, never a replacement" in compact
+    assert "broader web search, INSPIRE metadata search, shared-cache search" in compact
+    assert "regardless of whether the citation scan is complete or finds a direct hit" in compact
+    assert "base novelty and confidence on the combined evidence" in compact
+    assert "no-hit citation result alone must not raise either score" in compact
+    assert "independent source-domain, target-domain, and intersection checks" in compact
+    assert "same existing arrays" in compact
+    assert "do not report a citation-only audit as a completed novelty review" in compact
+    assert "continues with the other available novelty checks" in compact
 
 
 def test_ideas_workflow_requires_context_and_runner_artifacts() -> None:
