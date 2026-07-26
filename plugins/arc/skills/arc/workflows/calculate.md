@@ -1,13 +1,11 @@
 # Calculate Workflow
 
-Use this workflow after `plan.md` writes
-`<project-dir>/.arc/calculate/<run-id>/work-note.md`.
+Use this workflow after `plan.md` writes `<project-dir>/.arc/calculate/<run-id>/work-note.md`.
 Execute only steps marked ready in `Detailed Steps Ready To Calculate`.
-Do not write a separate calculation report; the rendered work-note PDF is the
-human-readable result.
+Do not write a separate calculation report; the rendered work-note PDF is the human-readable result.
 
-`calculate.md owns consensus execution` and the `current-step result-status`.
-It does not change ready-step boundaries, does not change rough steps, and
+`calculate.md owns consensus execution` and the `current-step result-status`. It
+does not change ready-step boundaries, does not change rough steps, and
 does not change future plan structure. Calculate does not own note parsing. When
 a different workflow owns the needed change, refer to the owning workflow.
 
@@ -51,11 +49,7 @@ asking only when it records a concrete new hypothesis, algorithm, or recovery
 path that makes the additional attempt scientifically distinct. Do not repeat
 the same strategy or use an unbounded retry loop.
 Each ready step and attempt creates one deterministic, independent public `arc_proposer_reviewer.BatchRequest`: one loop, one committed round, the active proposers, and one reviewer. Attempts do not reuse a private workflow session or artifact layout. The runner executes that request through `arc-jobs` and `arc-proposer-reviewer`, then reads proposal and review JSON only from the public committed round. A returned attempt records its public batch run ID and loop ID; use those identities rather than constructing artifact paths.
-
 For retryable proposer disagreement statuses, use the recalculation budget before pausing for human input. A `two_agree` decision locks the two accepted proposer outputs and runs only the one selected proposer again. Other retryable outcomes restart the active proposer set within the remaining budget.
-
-Remove foundation_check mechanics. Starting points are checked by ordinary ready
-steps when they are marked not accepted in the work note.
 
 ## Phase 2: Build Step Packets
 

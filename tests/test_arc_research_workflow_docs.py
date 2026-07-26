@@ -1016,7 +1016,7 @@ def test_calculate_documents_public_batch_and_blind_reference_contract() -> None
     assert "arc_paper_access" not in text
     assert "controller arc-paper access" not in text
     assert "reference_disagrees" in text
-    assert "post-check new calculation" in text
+    assert "new derivation after a check" in text
 
 
 def test_calculate_uses_two_total_consensus_attempts() -> None:
