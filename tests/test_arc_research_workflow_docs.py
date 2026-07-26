@@ -1185,9 +1185,23 @@ def test_ideas_workflow_has_deterministic_ranked_report_deliverable() -> None:
     assert "<project-dir>/.arc/ideas/reports/<run-id>/" in text
     assert "<project-dir>/ideas/<run-id>/ranked-ideas.pdf" in text
     assert "<project-dir>/ranked-ideas.pdf" in text
+    assert "--mode partial" in text
+    assert "<project-dir>/ideas/<run-id>/partial-ideas.pdf" in text
+    assert "<project-dir>/partial-ideas.pdf" in text
+    assert "non-formal and provisional" in text
     assert "manuals/arc-jobs.md" in text
     assert "ranked_ideas.md" not in text
     assert "<project-dir>/suggested-ideas.md" not in text
+
+
+def test_single_domain_ideas_profiles_follow_verified_summary_routes() -> None:
+    text = (WF / "ideas.md").read_text(encoding="utf-8")
+
+    assert "`open_axes_for_new_work`" in text
+    assert "`mathematical_opportunities.well_defined_problems`" in text
+    assert "general theoretical-physics exploration lenses" in text
+    assert "exactly one profile object per loop" in text
+    assert "never create duplicate loops that differ only by ID" in text
 
 
 def test_ideas_reviewer_template_uses_direct_research_policy() -> None:

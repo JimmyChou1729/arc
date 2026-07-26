@@ -13,10 +13,7 @@ bootstrap_arc_pythonpath()
 
 from _arc_workflows.ideas_ranking import rank_run
 from _arc_workflows.ideas_report import markdown_table
-from _arc_workflows.report_delivery import (
-    publish_visible_copy,
-    render_markdown_pdf,
-)
+from _arc_workflows.ideas_delivery import publish_ideas_pdf
 
 
 def main() -> None:
@@ -46,6 +43,15 @@ def main() -> None:
         choices=["json", "markdown", "pdf"],
         default="markdown",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["formal", "partial"],
+        default="formal",
+        help=(
+            "formal ranks succeeded loops only; partial creates a non-formal "
+            "provisional report from complete committed rounds"
+        ),
+    )
     args = parser.parse_args()
 
     if (args.run_root is None) == (args.project_dir is None):
@@ -56,7 +62,7 @@ def main() -> None:
         if project is not None
         else args.run_root.expanduser().resolve()
     )
-    payload = rank_run(run_root, args.run_id)
+    payload = rank_run(run_root, args.run_id, mode=args.mode)
     if args.format == "json":
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     elif args.format == "markdown":
@@ -64,26 +70,14 @@ def main() -> None:
     else:
         if project is None:
             parser.error("--format pdf requires --project-dir")
-        source = project / ".arc" / "ideas" / "reports" / args.run_id / "ranked-ideas.md"
-        source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_text(markdown_table(payload), encoding="utf-8")
-        archived = render_markdown_pdf(
-            project_dir=project,
-            source=source,
-            output=project / "ideas" / args.run_id / "ranked-ideas.pdf",
-        )
-        latest = publish_visible_copy(
-            project_dir=project,
-            source=archived,
-            output=project / "ranked-ideas.pdf",
-        )
         print(
             json.dumps(
-                {
-                    "schema_version": "arc.ideas.delivery.v1",
-                    "format": "pdf",
-                    "artifacts": [str(archived), str(latest)],
-                },
+                publish_ideas_pdf(
+                    project_dir=project,
+                    run_id=args.run_id,
+                    payload=payload,
+                    mode=args.mode,
+                ),
                 ensure_ascii=False,
                 sort_keys=True,
             )

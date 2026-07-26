@@ -94,6 +94,10 @@ def _config(tmp_path: Path) -> dict[str, Any]:
         }),
         encoding="utf-8",
     )
+    (packages / "single.json").write_text(
+        json.dumps(_domain_summary(seed)),
+        encoding="utf-8",
+    )
     return {
         "schema_version": "arc.workflow.ideas.config.v2",
         "run_id": "ideas-test",
@@ -103,6 +107,43 @@ def _config(tmp_path: Path) -> dict[str, Any]:
         "variant_config_dir": str(WORKFLOW_JSON),
         "variant_glob": "ideas-domain.variant.json",
         "loops_per_variant": 1,
+    }
+
+
+def _domain_summary(seed: str) -> dict[str, Any]:
+    axes = [
+        {
+            "axis": f"Open axis {index}",
+            "guidance": f"Test route {index}.",
+            "example_variations": [f"Variation {index}"],
+            "papers": [seed],
+        }
+        for index in range(1, 7)
+    ]
+    return {
+        "schema_version": "arc.domain_summary.v5",
+        "domain_title": "Single test domain",
+        "brief_introduction": "A validated summary.",
+        "task_focus": {
+            "user_intent": "Find a controlled calculation.",
+            "research_scope": "The test domain.",
+            "priority_rules": [],
+        },
+        "foundation_paper": {
+            "paper_id": seed,
+            "title": "Foundation",
+            "reason": "Anchor",
+        },
+        "best_reference_paper": {
+            "paper_id": seed,
+            "title": "Reference",
+            "reason": "Entry point",
+        },
+        "methodology": [],
+        "mathematical_opportunities": {"well_defined_problems": []},
+        "known_solved_cases": [],
+        "open_axes_for_new_work": axes,
+        "warnings": [],
     }
 
 
@@ -167,6 +208,135 @@ def test_dry_run_has_closed_workers_and_direct_research_policy(tmp_path: Path) -
     assert set(worker) == {"worker_id", "instructions", "output_schema", "model"}
     assert "shared paper cache" in worker["instructions"]
     assert "resolver" not in worker["instructions"].lower()
+    assert result["batch_request"]["loops"][0]["context"][
+        "exploration_profile"
+    ]["profile_id"] == "domain_axis_001"
+
+
+def test_single_domain_loops_receive_distinct_stable_summary_profiles(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    config = _config(tmp_path)
+    config["loops_per_variant"] = 5
+
+    first = runner.run_ideas(config, dry_run=True)
+    second = runner.run_ideas(config, dry_run=True)
+    first_profiles = [
+        loop["context"]["exploration_profile"]
+        for loop in first["batch_request"]["loops"]
+    ]
+    second_profiles = [
+        loop["context"]["exploration_profile"]
+        for loop in second["batch_request"]["loops"]
+    ]
+
+    assert first_profiles == second_profiles
+    assert [profile["profile_id"] for profile in first_profiles] == [
+        f"domain_axis_{index:03d}" for index in range(1, 6)
+    ]
+    assert len({profile["mission"] for profile in first_profiles}) == 5
+
+
+def test_single_domain_explicit_profiles_require_exact_loop_count(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    config = _config(tmp_path)
+    config["loops_per_variant"] = 2
+    config["exploration_profiles"] = [
+        {"profile_id": "only_one", "mission": "Explore one route."}
+    ]
+
+    try:
+        runner.run_ideas(config, dry_run=True)
+    except ValueError as exc:
+        assert "exactly one profile per loop" in str(exc)
+    else:
+        raise AssertionError("mismatched single-domain profiles must fail")
+
+
+def test_single_domain_explicit_profiles_are_used_in_order(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    config = _config(tmp_path)
+    config["loops_per_variant"] = 2
+    config["exploration_profiles"] = [
+        {"profile_id": "route_a", "mission": "Explore route A."},
+        {"profile_id": "route_b", "mission": "Explore route B."},
+    ]
+
+    result = runner.run_ideas(config, dry_run=True)
+
+    assert [
+        loop["context"]["exploration_profile"]["profile_id"]
+        for loop in result["batch_request"]["loops"]
+    ] == ["route_a", "route_b"]
+
+
+def test_explicit_profiles_reject_duplicate_missions_with_distinct_ids(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    config = _config(tmp_path)
+    config["loops_per_variant"] = 2
+    config["exploration_profiles"] = [
+        {"profile_id": "route_a", "mission": "Explore a controlled limit."},
+        {
+            "profile_id": "route_b",
+            "mission": "  explore   A CONTROLLED limit. ",
+        },
+    ]
+
+    try:
+        runner.run_ideas(config, dry_run=True)
+    except ValueError as exc:
+        assert "duplicate mission text" in str(exc)
+    else:
+        raise AssertionError("duplicate explicit profile missions must fail")
+
+
+def test_single_domain_uses_general_lenses_and_rejects_excess_loops(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    config = _config(tmp_path)
+    summary_path = (
+        tmp_path
+        / "project"
+        / ".arc"
+        / "domain"
+        / "packages"
+        / "single.json"
+    )
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["open_axes_for_new_work"] = []
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    config["loops_per_variant"] = 5
+
+    result = runner.run_ideas(config, dry_run=True)
+
+    assert [
+        loop["context"]["exploration_profile"]["profile_id"]
+        for loop in result["batch_request"]["loops"]
+    ] == [
+        "general_controlled_limit",
+        "general_symmetry_consistency",
+        "general_observable_discriminator",
+        "general_approximation_boundary",
+        "general_validation_bridge",
+    ]
+
+    config["loops_per_variant"] = 6
+    try:
+        runner.run_ideas(config, dry_run=True)
+    except ValueError as exc:
+        assert "Automatic single-domain exploration profiles are insufficient" in str(
+            exc
+        )
+    else:
+        raise AssertionError("automatic profiles must not be reused by ID")
 
 
 def test_dry_run_does_not_read_workspace_input_bytes(
@@ -239,3 +409,78 @@ def test_idea_cli_requires_explicit_authority_value() -> None:
         "--config", "config.json", "--host-authority", "restricted"
     ])
     assert parsed.host_authority == "restricted"
+
+
+def test_partial_delivery_is_automatic_for_verified_committed_rounds(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    config = runner.load_ideas_config(_config(tmp_path))
+    result = {
+        "status": "paused",
+        "batch": {
+            "trace_verified": True,
+            "rankable_loop_count": 0,
+        },
+        "loops": [{"committed_rounds": 1}],
+    }
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        runner,
+        "rank_run",
+        lambda _root, _run_id, *, mode: {"mode": mode, "ranking": []},
+    )
+    monkeypatch.setattr(
+        runner,
+        "publish_ideas_pdf",
+        lambda **kwargs: {
+            "mode": kwargs["mode"],
+            "artifacts": ["archive.pdf", "latest.pdf"],
+        },
+    )
+
+    runner._maybe_publish_partial(config, result, warnings)
+
+    assert result["status"] == "paused"
+    assert result["partial_delivery"]["mode"] == "partial"
+    assert warnings == []
+
+
+def test_partial_delivery_failure_only_adds_warning(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    config = runner.load_ideas_config(_config(tmp_path))
+    result = {
+        "status": "paused",
+        "batch": {
+            "trace_verified": True,
+            "rankable_loop_count": 0,
+        },
+        "loops": [{"committed_rounds": 1}],
+    }
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        runner,
+        "rank_run",
+        lambda _root, _run_id, *, mode: {"mode": mode, "ranking": []},
+    )
+
+    def fail_publish(**_kwargs):
+        raise RuntimeError("renderer unavailable")
+
+    monkeypatch.setattr(runner, "publish_ideas_pdf", fail_publish)
+
+    runner._maybe_publish_partial(config, result, warnings)
+
+    assert result == {
+        "status": "paused",
+        "batch": {
+            "trace_verified": True,
+            "rankable_loop_count": 0,
+        },
+        "loops": [{"committed_rounds": 1}],
+    }
+    assert warnings == ["partial_ideas_delivery_failed: RuntimeError"]

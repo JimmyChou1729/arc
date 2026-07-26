@@ -139,7 +139,11 @@ def test_rank_ideas_pdf_publishes_archive_and_latest(
     _fake_pandoc(bin_dir)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     module = _load_rank_module()
-    monkeypatch.setattr(module, "rank_run", lambda _root, _run_id: {"ranking": []})
+    monkeypatch.setattr(
+        module,
+        "rank_run",
+        lambda _root, _run_id, *, mode: {"ranking": [], "mode": mode},
+    )
     monkeypatch.setattr(module, "markdown_table", lambda _payload: "# Ideas\n")
     monkeypatch.setattr(
         sys,
@@ -163,4 +167,65 @@ def test_rank_ideas_pdf_publishes_archive_and_latest(
     assert latest.read_bytes() == archived.read_bytes()
     delivery = json.loads(capsys.readouterr().out)
     assert delivery["format"] == "pdf"
+    assert "mode" not in delivery
+    assert delivery["artifacts"] == [str(archived), str(latest)]
+
+
+def test_partial_ideas_pdf_publishes_provisional_archive_and_latest(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    project = tmp_path / "project"
+    (project / ".arc" / "ideas").mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_pandoc(bin_dir)
+    monkeypatch.setenv(
+        "PATH",
+        f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+    )
+    module = _load_rank_module()
+    monkeypatch.setattr(
+        module,
+        "rank_run",
+        lambda _root, _run_id, *, mode: {
+            "ranking": [],
+            "mode": mode,
+            "notice": "NON-FORMAL PROVISIONAL REPORT",
+        },
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(RANK_SCRIPT),
+            "--project-dir",
+            str(project),
+            "--run-id",
+            "ideas-1",
+            "--mode",
+            "partial",
+            "--format",
+            "pdf",
+        ],
+    )
+
+    module.main()
+
+    archived = project / "ideas" / "ideas-1" / "partial-ideas.pdf"
+    latest = project / "partial-ideas.pdf"
+    assert archived.read_bytes().startswith(b"%PDF-")
+    assert latest.read_bytes() == archived.read_bytes()
+    hidden = (
+        project
+        / ".arc"
+        / "ideas"
+        / "reports"
+        / "ideas-1"
+        / "partial-ideas.md"
+    )
+    assert hidden.read_text(encoding="utf-8").startswith(
+        "# Partial Ideas — Non-Formal Provisional Report"
+    )
+    delivery = json.loads(capsys.readouterr().out)
+    assert delivery["mode"] == "partial"
     assert delivery["artifacts"] == [str(archived), str(latest)]

@@ -27,6 +27,7 @@ from _arc_workflows.ideas_config import (
     IdeasConfig,
     load_ideas_config,
 )
+from _arc_workflows.ideas_delivery import publish_ideas_pdf
 from _arc_workflows.ideas_policy import (
     concurrency_warning,
     max_concurrent_loops,
@@ -44,6 +45,7 @@ from _arc_workflows.ideas_result import (
     not_started_result,
     observed_result,
 )
+from _arc_workflows.ideas_ranking import rank_run
 from _arc_workflows.ideas_templates import (
     batch_request,
     caller_context_warnings,
@@ -200,6 +202,7 @@ def run_ideas(
             max_concurrent=max_concurrent,
             error=execution_error,
         )
+        _maybe_publish_partial(ideas_config, result, warnings)
         progress.emit(
             {"event": "ideas_batch_finished", "status": result["status"]}
         )
@@ -252,11 +255,52 @@ def run_ideas(
         inspection=inspection,
         trace=trace,
     )
+    _maybe_publish_partial(ideas_config, result, warnings)
     progress.emit(
         {"event": "ideas_batch_finished", "status": result["status"]}
     )
     _append_progress_errors(warnings, progress)
     return result
+
+
+def _maybe_publish_partial(
+    config: IdeasConfig,
+    result: dict[str, Any],
+    warnings: list[str],
+) -> None:
+    batch = result.get("batch")
+    loops = result.get("loops")
+    if (
+        not isinstance(batch, Mapping)
+        or batch.get("trace_verified") is not True
+        or batch.get("rankable_loop_count") != 0
+        or not isinstance(loops, list)
+        or not any(
+            isinstance(loop, Mapping)
+            and int(loop.get("committed_rounds", 0) or 0) > 0
+            for loop in loops
+        )
+    ):
+        return
+    try:
+        payload = rank_run(config.run_dir, config.run_id, mode="partial")
+        result["partial_delivery"] = publish_ideas_pdf(
+            project_dir=config.project_dir,
+            run_id=config.run_id,
+            payload=payload,
+            mode="partial",
+        )
+    except (Exception, SystemExit) as exc:
+        _append_unique_warning(
+            warnings,
+            "partial_ideas_delivery_failed: "
+            f"{type(exc).__name__}",
+        )
+
+
+def _append_unique_warning(warnings: list[str], warning: str) -> None:
+    if warning not in warnings:
+        warnings.append(warning)
 
 
 def _execute_batch(

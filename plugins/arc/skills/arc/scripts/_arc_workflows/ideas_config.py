@@ -127,9 +127,11 @@ def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
             f"No enabled {research_scope} ideas variants found in {variant_config_dir} with {variant_glob}"
         )
     exploration_profiles = _exploration_profiles(data.get("exploration_profiles"))
+    if exploration_profiles and len(exploration_profiles) != loops_per_variant:
+        raise ConfigError(
+            "exploration_profiles must contain exactly one profile per loop"
+        )
     if research_scope == "cross_domain":
-        if exploration_profiles and len(exploration_profiles) != loops_per_variant:
-            raise ConfigError("exploration_profiles must contain exactly one profile per cross-domain loop")
         if not exploration_profiles and loops_per_variant != 5:
             raise ConfigError(
                 "cross-domain ideas use five default exploration profiles; provide exactly loops_per_variant "
@@ -484,6 +486,7 @@ def _exploration_profiles(raw: Any) -> list[dict[str, str]]:
         raise ConfigError("exploration_profiles must be a non-empty array")
     profiles: list[dict[str, str]] = []
     seen: set[str] = set()
+    seen_missions: set[str] = set()
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise ConfigError(f"exploration_profiles[{index}] must be an object")
@@ -493,7 +496,13 @@ def _exploration_profiles(raw: Any) -> list[dict[str, str]]:
             raise ConfigError(f"exploration_profiles[{index}].mission is required")
         if profile_id in seen:
             raise ConfigError(f"exploration_profiles contains duplicate profile_id: {profile_id}")
+        normalized_mission = " ".join(mission.split()).casefold()
+        if normalized_mission in seen_missions:
+            raise ConfigError(
+                "exploration_profiles contains duplicate mission text"
+            )
         seen.add(profile_id)
+        seen_missions.add(normalized_mission)
         profiles.append({"profile_id": profile_id, "mission": mission})
     return profiles
 

@@ -34,10 +34,18 @@ from _arc_workflows.ideas_report import (
 )
 
 SELECTED_ROUNDS_SCHEMA = "arc.ideas.selected_rounds.v5"
+PARTIAL_SELECTED_ROUNDS_SCHEMA = "arc.ideas.partial_selected_rounds.v1"
 
 
-def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
+def rank_run(
+    run_root: Path,
+    run_id: str,
+    *,
+    mode: str = "formal",
+) -> dict[str, Any]:
     """Rank verified committed rounds without exposing run-directory layout."""
+    if mode not in {"formal", "partial"}:
+        raise ValueError("mode must be formal or partial")
     repository = RunRepository(run_root)
     request = _batch_request(repository, run_id)
     try:
@@ -88,7 +96,7 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
         loop_inspection = inspection_by_loop[loop.loop_id]
         loop_trace = trace_by_loop[loop.loop_id]
         lifecycle = loop_inspection.lifecycle
-        if lifecycle != "succeeded":
+        if mode == "formal" and lifecycle != "succeeded":
             excluded_loops.append(
                 {
                     "loop_id": loop.loop_id,
@@ -134,6 +142,11 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
                 }
             )
             continue
+        partial_metadata = (
+            _partial_loop_metadata(loop_inspection, len(loop_rounds))
+            if mode == "partial"
+            else {}
+        )
         if cross_domain or single_domain_qualification_enabled:
             qualified_rounds = [
                 entry for entry in loop_rounds if entry.get("qualified")
@@ -141,6 +154,7 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
             if not qualified_rounds:
                 best_failed = dict(max(loop_rounds, key=rank_key))
                 best_failed["rounds"] = loop_rounds
+                best_failed.update(partial_metadata)
                 unqualified.append(best_failed)
                 continue
             best = dict(max(qualified_rounds, key=rank_key))
@@ -148,8 +162,14 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
             best = dict(max(loop_rounds, key=rank_key))
         best["rounds"] = loop_rounds
         best["loop_lifecycle"] = lifecycle
+        best.update(partial_metadata)
         selected.append(best)
 
+    if mode == "partial" and not selected and not unqualified:
+        raise SystemExit(
+            "cannot create a partial ideas report because no complete "
+            "committed proposer-reviewer round is available"
+        )
     ranking = sorted(selected, key=rank_key, reverse=True)
     warnings: list[str] = []
     evidence_incomplete = [
@@ -164,7 +184,7 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
             "records are missing for: "
             + ", ".join(evidence_incomplete)
         )
-    if excluded_loops:
+    if excluded_loops and mode == "formal":
         warnings.append(
             "WARNING: EXCLUDED NON-USABLE LOOPS — failed or incomplete loops "
             "were not ranked: "
@@ -234,14 +254,21 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
         )
     for index, entry in enumerate(ranking, start=1):
         entry["rank"] = index
+        if mode == "partial":
+            entry["provisional_rank"] = index
+    formal_status = scientific_run_status(
+        inspection.durable_lifecycle,
+        (loop.lifecycle for loop in inspection.loops),
+        trace_verified=True,
+    )
     payload = {
-        "schema_version": SELECTED_ROUNDS_SCHEMA,
-        "run_id": run_id,
-        "status": scientific_run_status(
-            inspection.durable_lifecycle,
-            (loop.lifecycle for loop in inspection.loops),
-            trace_verified=True,
+        "schema_version": (
+            SELECTED_ROUNDS_SCHEMA
+            if mode == "formal"
+            else PARTIAL_SELECTED_ROUNDS_SCHEMA
         ),
+        "run_id": run_id,
+        "status": formal_status if mode == "formal" else "provisional",
         "durable_lifecycle": inspection.durable_lifecycle,
         "run_revision": inspection.run_revision,
         "loop_revisions": dict(trace.loop_revisions),
@@ -250,6 +277,21 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
         "excluded_loops": excluded_loops,
         "warnings": warnings,
     }
+    if mode == "partial":
+        payload.update(
+            {
+                "mode": "partial",
+                "formal": False,
+                "provisional": True,
+                "ranking_kind": "non_formal_provisional",
+                "formal_status": formal_status,
+                "notice": (
+                    "NON-FORMAL PROVISIONAL REPORT: this ranking uses only "
+                    "trace-verified complete committed rounds from an "
+                    "incomplete or non-rankable batch."
+                ),
+            }
+        )
     if cross_domain:
         payload.update(
             {
@@ -283,6 +325,28 @@ def rank_run(run_root: Path, run_id: str) -> dict[str, Any]:
             }
         )
     return payload
+
+
+def _partial_loop_metadata(
+    loop_inspection: Any,
+    committed_round_count: int,
+) -> dict[str, Any]:
+    pause_reasons: list[str] = []
+    if loop_inspection.pause is not None:
+        for entry in loop_inspection.pause.entries:
+            reason = (
+                f"{entry.reason}:{entry.code}"
+                if entry.code
+                else entry.reason
+            )
+            if reason not in pause_reasons:
+                pause_reasons.append(reason)
+    return {
+        "loop_lifecycle": loop_inspection.lifecycle,
+        "committed_round_count": committed_round_count,
+        "pause_reason": pause_reasons[0] if pause_reasons else None,
+        "pause_reasons": pause_reasons,
+    }
 
 
 def normalized_review_marks(

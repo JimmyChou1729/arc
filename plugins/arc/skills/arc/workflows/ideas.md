@@ -54,9 +54,16 @@ for normal idea generation unless the user requests another quality/cost tier.
 
 Step 6: Keep `loops_per_variant` at `5` unless the run should use a different
 number of concurrent instances for each setup. Cross-domain runs ship with
-five distinct exploration profiles. If a different loop count is required,
-set top-level `exploration_profiles` to the same number of profile objects so
-the runner never creates duplicate loops that differ only by ID.
+five distinct exploration profiles. Single-domain runs derive distinct routes
+in stable manifest, package, and list order: first from validated
+`open_axes_for_new_work`, then from deduplicated
+`mathematical_opportunities.well_defined_problems`, then from a finite set of
+general theoretical-physics exploration lenses. Each route is passed to the
+proposer as `exploration_profile`; the reviewer continues to use the common
+marking scheme. If an explicit set is used, top-level `exploration_profiles`
+must contain exactly one profile object per loop for either research scope.
+If the automatic single-domain sources cannot supply enough distinct routes,
+provide an explicit set; never create duplicate loops that differ only by ID.
 
 ### Phase 2: Run Ideas
 
@@ -124,8 +131,13 @@ loop and committed-round fields still report the verified durable frontier.
 Step 3: Print any returned `WARNING:` messages. Rank only loops whose public
 lifecycle is `succeeded`; failed, pending, running, paused, and
 integrity-error loops remain visible in inspection but are excluded from the
-formal ranking. For loop concurrency and durable pause/resume behavior, see
-`manuals/arc-proposer-reviewer.md`.
+formal ranking. When no loop is formally rankable but the trace is valid and
+contains at least one complete committed proposer-reviewer round,
+`run-ideas.py` automatically attempts to publish a non-formal provisional
+`partial-ideas.pdf`. Rendering failure adds a warning and never changes the
+real batch lifecycle. The partial report does not resume work, adopt
+uncommitted provider files, or relax qualification gates. For loop concurrency
+and durable pause/resume behavior, see `manuals/arc-proposer-reviewer.md`.
 
 ### Research Tools
 
@@ -206,6 +218,27 @@ This writes editable Markdown only under
 Follow the `manuals/arc-jobs.md` Markdown report export procedure: if PDF
 rendering fails, print a `WARNING:` and do not claim that a ranked-ideas
 delivery was published.
+
+For a paused or otherwise incomplete batch with trace-verified complete
+committed rounds, a diagnostic report may also be published explicitly:
+
+```bash
+python3 <skill-dir>/scripts/rank-ideas.py \
+  --project-dir <project-dir> \
+  --run-id <run-id> \
+  --mode partial \
+  --format pdf
+```
+
+`--mode formal` remains the default and continues to rank only succeeded
+loops. Partial mode uses every complete committed proposer-reviewer round
+visible in the verified trace, preserves the same qualification gates, and
+marks its title, metadata, and ordering as non-formal and provisional. Each
+candidate displays its loop lifecycle, complete-round count, safe public pause
+reason, best committed round, and qualification failures. It publishes
+`<project-dir>/ideas/<run-id>/partial-ideas.pdf` and
+`<project-dir>/partial-ideas.pdf`; it never substitutes for
+`ranked-ideas.pdf`.
 
 The report must start with `# Ideas`, then `Abbreviations:`, then a
 blank-line-separated abbreviation line in the form `IR=intent relevance,

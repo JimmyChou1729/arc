@@ -161,6 +161,20 @@ def single_domain_diagnostics(
 
 def markdown_table(payload: dict[str, Any]) -> str:
     lines: list[str] = []
+    if payload.get("mode") == "partial":
+        lines.extend(
+            [
+                "# Partial Ideas — Non-Formal Provisional Report",
+                "",
+                f"> {payload.get('notice', 'NON-FORMAL PROVISIONAL REPORT')}",
+                "",
+                (
+                    "This report does not replace a formal ranking. It uses "
+                    "only complete, trace-verified committed proposer-reviewer rounds."
+                ),
+                "",
+            ]
+        )
     if payload.get("warnings"):
         lines.extend(
             [
@@ -192,11 +206,8 @@ def markdown_table(payload: dict[str, Any]) -> str:
                     f"## `{entry['loop_id']}` — {_heading_text(entry['title'])}",
                     "",
                     f"- Best observed round: `{entry['round']}`",
-                    "- Qualification failures:",
-                    *[
-                        f"  - {reason}"
-                        for reason in entry.get("qualification_reasons", [])
-                    ],
+                    *_partial_metadata_lines(entry),
+                    *_formal_qualification_lines(entry),
                 ]
             )
         lines.extend(
@@ -215,6 +226,8 @@ def markdown_table(payload: dict[str, Any]) -> str:
                     "",
                     f"- Selected round: `{entry['round']}`",
                     f"- Exclusion: `{entry['portfolio_exclusion_reason']}`",
+                    *_partial_metadata_lines(entry),
+                    *_formal_qualification_lines(entry),
                 ]
             )
     elif payload.get("single_domain_qualification"):
@@ -230,11 +243,8 @@ def markdown_table(payload: dict[str, Any]) -> str:
                     f"## `{entry['loop_id']}` — {_heading_text(entry['title'])}",
                     "",
                     f"- Best observed round: `{entry['round']}`",
-                    "- Qualification failures:",
-                    *[
-                        f"  - {reason}"
-                        for reason in entry.get("qualification_reasons", [])
-                    ],
+                    *_partial_metadata_lines(entry),
+                    *_formal_qualification_lines(entry),
                 ]
             )
     return "\n".join(lines)
@@ -244,7 +254,11 @@ def _summary_table(payload: dict[str, Any]) -> str:
     if payload.get("cross_domain"):
         return _cross_summary_table(payload)
     lines = [
-        "# Ideas",
+        (
+            "## Provisional Qualified Ideas"
+            if payload.get("mode") == "partial"
+            else "# Ideas"
+        ),
         "",
         "Abbreviations:",
         "",
@@ -266,6 +280,7 @@ def _round_marks_summary_section(entry: dict[str, Any]) -> list[str]:
         "",
         _heading_text(entry["title"]),
         "",
+        *_partial_metadata_lines(entry),
         _compact_round_marks_table(entry),
     ]
 
@@ -295,7 +310,11 @@ def _compact_round_marks_table(entry: dict[str, Any]) -> str:
 
 def _cross_summary_table(payload: dict[str, Any]) -> str:
     lines = [
-        "# Ideas",
+        (
+            "## Provisional Qualified Ideas"
+            if payload.get("mode") == "partial"
+            else "# Ideas"
+        ),
         "",
         "Abbreviations:",
         "",
@@ -317,6 +336,7 @@ def _round_marks_summary_section_cross(
         "",
         _heading_text(entry["title"]),
         "",
+        *_partial_metadata_lines(entry),
         _compact_cross_marks_table(entry),
     ]
 
@@ -343,6 +363,7 @@ def _appendix_section(entry: dict[str, Any]) -> list[str]:
         "",
         f"- Loop: `{entry['loop_id']}`",
         f"- Selected round: `{entry['round']}`",
+        *_partial_metadata_lines(entry),
         (
             "- Proposer artifact: "
             f"`{proposer_artifact['artifact_id']}` "
@@ -377,6 +398,43 @@ def _appendix_section(entry: dict[str, Any]) -> list[str]:
         "#### Full Idea Verbatim",
         "",
         _handoff_text(entry.get("proposer_output", {})),
+    ]
+
+
+def _partial_metadata_lines(entry: Mapping[str, Any]) -> list[str]:
+    if "committed_round_count" not in entry:
+        return []
+    lines = [
+        f"- Loop lifecycle: `{entry.get('loop_lifecycle', 'unknown')}`",
+        f"- Complete committed rounds: `{entry.get('committed_round_count', 0)}`",
+    ]
+    pause_reason = entry.get("pause_reason")
+    lines.append(
+        f"- Pause reason: `{pause_reason}`"
+        if pause_reason
+        else "- Pause reason: none recorded"
+    )
+    failures = entry.get("qualification_reasons")
+    lines.append(
+        "- Qualification failures: "
+        + (
+            ", ".join(str(reason) for reason in failures)
+            if isinstance(failures, list) and failures
+            else "none"
+        )
+    )
+    return [*lines, ""]
+
+
+def _formal_qualification_lines(entry: Mapping[str, Any]) -> list[str]:
+    if "committed_round_count" in entry:
+        return []
+    return [
+        "- Qualification failures:",
+        *[
+            f"  - {reason}"
+            for reason in entry.get("qualification_reasons", [])
+        ],
     ]
 
 
@@ -449,6 +507,8 @@ def _handoff_text(value: Any) -> str:
 
 
 def _math_markdown_text(text: str) -> str:
+    text = re.sub(r"\\\((.*?)\\\)", r"$\1$", text, flags=re.DOTALL)
+    text = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", text, flags=re.DOTALL)
     text = re.sub(r"`([^`]+)`", _math_markdown_span, text)
     text = _display_math_lines(text)
     return _inline_raw_math_tokens(text)
@@ -469,12 +529,12 @@ def _inline_raw_math_tokens(text: str) -> str:
     parts = re.split(r"(\$\$.*?\$\$|\$.*?\$)", text, flags=re.DOTALL)
     for index in range(0, len(parts), 2):
         parts[index] = re.sub(
-            r"(?<![\w$])([A-Za-z]+\^[A-Za-z0-9]+_[A-Za-z0-9+-]+)(?![\w])",
+            r"(?<![\\\w$])([A-Za-z]+\^[A-Za-z0-9]+_[A-Za-z0-9+-]+)(?![\w])",
             lambda match: f"${_format_math(match.group(1))}$",
             parts[index],
         )
         parts[index] = re.sub(
-            r"(?<![\w$])([A-Za-zαβγδεηθκλρτΦΣΔπℓ]+_[A-Za-z0-9+-]+)(?![\w])",
+            r"(?<![\\\w$])([A-Za-zαβγδεηθκλρτΦΣΔπℓ]+_[A-Za-z0-9+-]+)(?![\w])",
             lambda match: f"${_format_math(match.group(1))}$",
             parts[index],
         )
@@ -506,6 +566,11 @@ def _display_math_lines(text: str) -> str:
 def _looks_like_display_equation(text: str) -> bool:
     if not text or ":" in text[:24]:
         return False
+    if "=" in text and re.match(
+        r"^(?:\\[A-Za-z]+|[A-Za-zαβγδεηθκλρτΦΣΔπℓ][A-Za-z0-9]*[_^(])",
+        text,
+    ):
+        return True
     return bool(
         re.match(
             r"^([A-Za-zαβγδεηθκλρτΦΣΔπℓ]+[A-Za-z0-9_]*\(|∫|\\int)",

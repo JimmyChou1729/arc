@@ -11,8 +11,8 @@ from typing import Any, Mapping
 
 import pytest
 
-from arc_jobs import RunEngine, RunRepository, RunSpec, RunStatus
-from arc_llm import InvalidRequestError, LLMCompleted, LLMFailed
+from arc_jobs import ResumeReason, RunEngine, RunRepository, RunSpec, RunStatus
+from arc_llm import InvalidRequestError, LLMCompleted, LLMFailed, LLMPaused
 from arc_proposer_reviewer import (
     BatchFailurePolicy,
     BatchRequest,
@@ -83,6 +83,18 @@ def test_formal_normalization_rejects_missing_or_non_object_marks() -> None:
         )
         is None
     )
+
+
+def test_report_normalizes_latex_delimiters_without_mangling_commands() -> None:
+    _load_rank_module()
+    report_module = sys.modules["_arc_workflows.ideas_report"]
+
+    rendered = report_module._math_markdown_text(
+        r"Use \(\beta<2\gamma\) and \(\dot\pi_c\)."
+    )
+
+    assert rendered == r"Use $\beta<2\gamma$ and $\dot\pi_c$."
+    assert r"\$" not in rendered
 
 
 def test_compatibility_classification_requires_current_fields() -> None:
@@ -331,6 +343,18 @@ class _ScriptedLLM:
         )
 
 
+class _PauseAfterFirstRoundLLM(_ScriptedLLM):
+    def execute(self, context, request, *, options):
+        task = _round_task(request.prompt)
+        if "one proposer" in request.prompt and task["round"] == 2:
+            return LLMPaused(
+                ResumeReason.EXTERNAL_CONDITION,
+                "provider-wait",
+                {"code": "provider_unavailable"},
+            )
+        return super().execute(context, request, options=options)
+
+
 def _round_task(prompt: str) -> dict[str, Any]:
     return json.loads(prompt.rsplit("## Round task\n", 1)[1])
 
@@ -341,13 +365,14 @@ def _execute(
     llm: _ScriptedLLM,
     *,
     run_id: str = "ideas-run",
+    expected_status: RunStatus = RunStatus.SUCCEEDED,
 ) -> RunRepository:
     repository = RunRepository(root)
     handler = ProposerReviewerHandler(ProposerReviewerService(llm))  # type: ignore[arg-type]
     snapshot = RunEngine(repository).execute(
         RunSpec(run_id, handler.name, encode_batch_request(request)), handler
     )
-    assert snapshot.status is RunStatus.SUCCEEDED
+    assert snapshot.status is expected_status
     return repository
 
 
@@ -590,6 +615,141 @@ def test_ranker_excludes_failed_and_incomplete_lifecycle_states(tmp_path: Path) 
             "reason": "loop_is_incomplete",
         }
     ]
+
+
+def test_partial_ranker_uses_complete_rounds_from_paused_loops(
+    tmp_path: Path,
+) -> None:
+    ranker = _load_rank_module()
+    qualified = _single_loop("qualified-paused")
+    repository = _execute(
+        tmp_path / "paused-runs",
+        _request(qualified),
+        _PauseAfterFirstRoundLLM(
+            proposals={
+                ("qualified-paused", 1): _proposal("Qualified partial idea"),
+            },
+            reviews={
+                ("qualified-paused", 1): {
+                    "marks": _single_marks(82),
+                    "idea_assessment": _single_assessment(),
+                },
+            },
+        ),
+        expected_status=RunStatus.PAUSED,
+    )
+
+    formal = ranker.rank_run(repository.root, "ideas-run")
+    partial = ranker.rank_run(repository.root, "ideas-run", mode="partial")
+
+    assert formal["ranking"] == []
+    assert partial["schema_version"] == "arc.ideas.partial_selected_rounds.v1"
+    assert partial["status"] == "provisional"
+    assert partial["formal"] is False
+    assert partial["provisional"] is True
+    assert partial["ranking_kind"] == "non_formal_provisional"
+    assert [entry["title"] for entry in partial["ranking"]] == [
+        "Qualified partial idea"
+    ]
+    selected = partial["ranking"][0]
+    assert selected["provisional_rank"] == 1
+    assert selected["loop_lifecycle"] == "paused"
+    assert selected["committed_round_count"] == 1
+    assert selected["pause_reason"] == (
+        "external_condition:provider_unavailable"
+    )
+
+    blocked_repository = _execute(
+        tmp_path / "blocked-paused-runs",
+        _request(_single_loop("blocked-paused")),
+        _PauseAfterFirstRoundLLM(
+            proposals={
+                ("blocked-paused", 1): _proposal("Blocked partial idea"),
+            },
+            reviews={
+                ("blocked-paused", 1): {
+                    "marks": _single_marks(94),
+                    "idea_assessment": _single_assessment(
+                        feasibility_status="infeasible",
+                        bounded_first_calculation_ready=False,
+                    ),
+                },
+            },
+        ),
+        expected_status=RunStatus.PAUSED,
+    )
+    blocked_partial = ranker.rank_run(
+        blocked_repository.root,
+        "ideas-run",
+        mode="partial",
+    )
+    assert blocked_partial["ranking"] == []
+    assert blocked_partial["unqualified"][0]["title"] == "Blocked partial idea"
+    assert "first_calculation_is_not_feasible" in blocked_partial[
+        "unqualified"
+    ][0][
+        "qualification_reasons"
+    ]
+    report = ranker.markdown_table(partial)
+    assert report.startswith(
+        "# Partial Ideas — Non-Formal Provisional Report"
+    )
+    assert "Loop lifecycle: `paused`" in report
+    assert "Complete committed rounds: `1`" in report
+
+
+def test_partial_ranker_refuses_batch_without_complete_round(
+    tmp_path: Path,
+) -> None:
+    ranker = _load_rank_module()
+    repository = RunRepository(tmp_path / "pending-partial")
+    repository.create(
+        RunSpec(
+            "pending-run",
+            ProposerReviewerHandler.name,
+            encode_batch_request(
+                _request(_single_loop("pending", max_rounds=1))
+            ),
+        )
+    )
+
+    with pytest.raises(SystemExit, match="no complete committed"):
+        ranker.rank_run(
+            repository.root,
+            "pending-run",
+            mode="partial",
+        )
+
+
+def test_partial_cross_portfolio_appendix_shows_provisional_metadata() -> None:
+    ranker = _load_rank_module()
+    report = ranker.markdown_table(
+        {
+            "mode": "partial",
+            "notice": "NON-FORMAL PROVISIONAL REPORT",
+            "warnings": [],
+            "ranking": [],
+            "cross_domain": True,
+            "unqualified": [],
+            "portfolio_excluded": [
+                {
+                    "loop_id": "portfolio-loop",
+                    "round": 2,
+                    "title": "Portfolio-limited idea",
+                    "portfolio_exclusion_reason": "mechanism_cap",
+                    "loop_lifecycle": "paused",
+                    "committed_round_count": 2,
+                    "pause_reason": "execution_interrupted",
+                    "qualification_reasons": [],
+                }
+            ],
+        }
+    )
+
+    assert "Loop lifecycle: `paused`" in report
+    assert "Complete committed rounds: `2`" in report
+    assert "Pause reason: `execution_interrupted`" in report
+    assert "Qualification failures: none" in report
 
 
 @pytest.mark.parametrize(
