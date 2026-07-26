@@ -37,7 +37,6 @@ class ConfigError(ValueError):
 class ContextPolicy:
     require_domain_markdown: bool
     attach_domain_markdown: bool
-    attach_arc_paper_tool_notes: bool
 
 
 @dataclass(frozen=True)
@@ -501,6 +500,11 @@ def _exploration_profiles(raw: Any) -> list[dict[str, str]]:
 
 def _parse_context_policy(raw: Any, *, path: Path) -> ContextPolicy:
     data = _dict(raw, f"{path}.context_policy")
+    _reject_unknown_fields(
+        data,
+        {"require_domain_markdown", "attach_domain_markdown"},
+        f"{path}.context_policy",
+    )
     attach_domain = _bool(data.get("attach_domain_markdown", False), f"{path}.context_policy.attach_domain_markdown")
     return ContextPolicy(
         require_domain_markdown=_bool(
@@ -508,10 +512,6 @@ def _parse_context_policy(raw: Any, *, path: Path) -> ContextPolicy:
             f"{path}.context_policy.require_domain_markdown",
         ),
         attach_domain_markdown=attach_domain,
-        attach_arc_paper_tool_notes=_bool(
-            data.get("attach_arc_paper_tool_notes", attach_domain),
-            f"{path}.context_policy.attach_arc_paper_tool_notes",
-        ),
     )
 
 

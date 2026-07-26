@@ -69,7 +69,13 @@ step object:
 "reviewer_reference_claim": {"claim_id": "...", "statement": "..."}
 ```
 
-The runner places this claim in reviewer instructions only. It forces blind proposers to have no internet or inherited host configuration, never puts the claim in proposer context, and redacts reviewer feedback before a blind retry. If blind proposers agree with each other but not with the reviewer reference, record `reference_disagrees`; use remaining recalculation budget with a generic independent-recomputation instruction before pausing for a human decision.
+The runner places this claim in reviewer instructions only, never puts it in
+proposer context, and redacts reviewer feedback before a blind retry. Blind
+proposers are instructed not to seek or use the reviewer-only claim; this is a
+scientific independence rule, not a host-capability sandbox. If blind proposers
+agree with each other but not with the reviewer reference, record
+`reference_disagrees`; use remaining recalculation budget with a generic
+independent-recomputation instruction before pausing for a human decision.
 
 For a post-check new calculation, place the permitted source evidence and its
 provenance in `allowed_context` before starting the batch:
@@ -80,7 +86,11 @@ provenance in `allowed_context` before starting the batch:
 }
 ```
 
-Use the public `arc-paper` operations before this step when more document evidence is needed. Do not give workers shell commands, CLI invocations, cache roots, source paths, MCP instructions, or unrestricted tool access. External sources may guide methods, but any used identity or intermediate result must be derived or already accepted in the work note. Map all notation back to work-note conventions.
+Use ARC paper tools or web research when more document evidence is needed.
+Workers may use available research tools and should record actual sources and
+results. External sources may guide methods, but any used identity or
+intermediate result must be derived or already accepted in the work note. Map
+all notation back to work-note conventions.
 
 ## Phase 3: Run Consensus
 
@@ -88,7 +98,8 @@ Run:
 
 ```bash
 python3 <skill-dir>/scripts/run-calculate.py \
-  --config <project-dir>/.arc/calculate/<run-id>/execute/calculate.config.json
+  --config <project-dir>/.arc/calculate/<run-id>/execute/calculate.config.json \
+  --host-authority unknown
 ```
 
 The command exits `0` for `completed`, `dry_run`, `blocked_for_user`, and

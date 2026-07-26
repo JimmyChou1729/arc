@@ -1,14 +1,11 @@
 {
   "loop_id": "<loop-id>",
   "max_rounds": 3,
-  "early_stop": {
-    "enabled": false
-  },
+  "early_stop": {"enabled": false},
   "caller_context": {
     "user_intent": "<user_intent>",
     "domain_cards": [],
-    "exploration_profile": {},
-    "arc_paper_tool_notes": "ARC paper evidence is available only through resolver-supplied typed operation requests and responses. Treat returned evidence as read-only. Do not invoke ARC CLIs, shell commands, or MCP tools from the worker. ARC and Web search are complementary discovery surfaces with no fixed order: use search-metadata or cached full-text search when suitable, and use Web search for open-world, uncached, recent, or non-arXiv public evidence in the source domain, target domain, and their intersection. After shortlisting an ARC-resolvable paper, deep-read it as useful through get-metadata, get-arxiv-table-of-contents, get-arxiv-section, search-arxiv-full-text, search-arxiv-equations, get-references, or get-citers. Deep-read the strongest candidates first, then request additional evidence only when its expected result can resolve a relevant uncertainty, test or rule out a live hypothesis, or validate the proposal. When no further request has a concrete expected contribution, complete the task. For cache-wide full-text checks, send one search-cached-full-text request whose terms array contains several concrete multiword synonyms; the CLI equivalent is repeated --term values in one call. Avoid broad single words. Terms are literal OR alternatives. A refinement response contains at most 50 paper titles, never summaries or abstracts. Record each check with its operation or query and short result."
+    "exploration_profile": {}
   },
   "proposers": [],
   "reviewers": []

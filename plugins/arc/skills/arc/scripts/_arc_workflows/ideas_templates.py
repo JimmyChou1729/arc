@@ -19,10 +19,6 @@ from arc_proposer_reviewer import (
 )
 from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 
-from _arc_workflows.evidence import (
-    EVIDENCE_OPERATION_NAMES,
-    evidence_operation_contracts,
-)
 from _arc_workflows.ideas_config import ConfigError, IdeasConfig, VariantConfig
 from _arc_workflows.ideas_marking import (
     load_marking_scheme,
@@ -35,11 +31,6 @@ from _arc_workflows.workflow_io import (
     read_json_object,
     require_strict_int,
 )
-
-
-ARC_PAPER_EVIDENCE_OPERATIONS = [
-    {"operation": operation} for operation in EVIDENCE_OPERATION_NAMES
-]
 
 
 @dataclass(frozen=True)
@@ -97,7 +88,6 @@ def idea_loop_spec(idea: IdeaPlan) -> LoopSpec:
         raise ConfigError(
             f"{idea.variant.loop_template}.early_stop.enabled must be a boolean"
         )
-    evidence_enabled = idea.variant.context_policy.attach_arc_paper_tool_notes
     return LoopSpec(
         loop_id=idea.loop_id,
         context=idea.caller_context,
@@ -108,13 +98,11 @@ def idea_loop_spec(idea: IdeaPlan) -> LoopSpec:
                     idea.variant.proposer_overrides,
                 ),
                 source=idea.variant.proposer_template,
-                evidence_enabled=evidence_enabled,
             ),
         ),
         reviewer=worker_spec(
             reviewer_worker_payload(idea.variant),
             source=idea.variant.reviewer_template,
-            evidence_enabled=evidence_enabled,
         ),
         max_rounds=max_rounds,
         allow_early_stop=enabled,
@@ -126,7 +114,6 @@ def worker_spec(
     payload: Mapping[str, Any],
     *,
     source: Path,
-    evidence_enabled: bool,
 ) -> WorkerSpec:
     worker_id = required_text(payload, "id", source)
     prompt = payload.get("prompt")
@@ -137,12 +124,6 @@ def worker_spec(
     output_schema = payload.get("output_schema")
     if not isinstance(output_schema, Mapping):
         raise ConfigError(f"{source}.output_schema must be an object")
-    runtime = payload.get("runtime", {})
-    if not isinstance(runtime, Mapping):
-        raise ConfigError(f"{source}.runtime must be an object")
-    internet = runtime.get("allow_internet", False)
-    if type(internet) is not bool:
-        raise ConfigError(f"{source}.runtime.allow_internet must be a boolean")
     tier = str(payload.get("model_tier", "medium") or "medium").strip().lower()
     provider = str(payload.get("provider", "auto") or "auto").strip()
     model_value = payload.get("model")
@@ -162,9 +143,6 @@ def worker_spec(
         instructions=f"{system}\n\n{template}",
         output_schema=copy.deepcopy(dict(output_schema)),
         model=selection,
-        interaction_operations=(
-            evidence_operation_contracts() if evidence_enabled else {}
-        ),
     )
 
 
@@ -238,13 +216,6 @@ def caller_context(
             )
     else:
         result.pop("domain_markdown_files", None)
-    if not variant.context_policy.attach_arc_paper_tool_notes:
-        result.pop("arc_paper_tool_notes", None)
-        result.pop("controller_evidence_operations", None)
-    else:
-        result["controller_evidence_operations"] = copy.deepcopy(
-            ARC_PAPER_EVIDENCE_OPERATIONS
-        )
     return result
 
 

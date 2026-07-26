@@ -74,8 +74,5 @@
       }
     },
     "additionalProperties": false
-  },
-  "runtime": {
-    "codex_sandbox": "read-only"
   }
 }

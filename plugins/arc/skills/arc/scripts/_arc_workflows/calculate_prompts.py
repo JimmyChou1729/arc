@@ -76,11 +76,7 @@ def _attempt_batch_request(
                 loop_id=attempt_id,
                 context=caller_context,
                 proposers=tuple(
-                    _proposer_worker(
-                        config,
-                        proposer_id,
-                        runtime=_proposer_runtime(config, step),
-                    )
+                    _proposer_worker(config, proposer_id, blind_reference=bool(step.reviewer_reference_claim))
                     for proposer_id in active_proposer_ids
                 ),
                 reviewer=_reviewer_worker(
@@ -126,12 +122,12 @@ def _caller_context(
 
 
 def _proposer_worker(
-    config: CalculateConfig, proposer_id: str, *, runtime: Mapping[str, Any]
+    config: CalculateConfig, proposer_id: str, *, blind_reference: bool
 ) -> WorkerSpec:
     payload = _read_template(config.workflow_json_dir / "calculate-proposer.template.json")
     prompt = _dict(payload.get("prompt"), "calculate-proposer.template.prompt")
     template = str(prompt.get("template", "")).replace(
-        "{source_policy}", _proposer_source_policy(runtime)
+        "{source_policy}", _proposer_source_policy(blind_reference=blind_reference)
     )
     return WorkerSpec(
         worker_id=proposer_id,
@@ -165,13 +161,6 @@ def _reviewer_worker(
     template = str(prompt.get("template", ""))
     for placeholder, value in replacements.items():
         template = template.replace(placeholder, value)
-    runtime = {
-        "allow_internet": False if reviewer_reference_claim else _bool_default(
-            config.defaults.get("reviewer_allow_internet", False), False
-        ),
-        "inherit_host_tools": False,
-        "evidence_access": "none" if reviewer_reference_claim else "context_only",
-    }
     return WorkerSpec(
         worker_id="reviewer_001",
         instructions=_worker_instructions(prompt, template),
@@ -185,57 +174,18 @@ def _reviewer_worker(
     )
 
 
-def _proposer_runtime(config: CalculateConfig, step: CalculateStep) -> dict[str, Any]:
-    if step.reviewer_reference_claim:
-        runtime = {
-            "allow_internet": False,
-            "codex_sandbox": "read-only",
-            "evidence_access": "none",
-            "inherit_host_tools": False,
-        }
-    else:
-        runtime = {
-            "allow_internet": True,
-            "codex_sandbox": "read-only",
-            "evidence_access": "context_only",
-            "inherit_host_tools": False,
-        }
-    runtime.update(_dict(config.defaults.get("proposer_runtime", {}), "defaults.proposer_runtime"))
-    runtime.update(step.proposer_runtime)
-    runtime["evidence_access"] = str(runtime.get("evidence_access", "context_only"))
-    runtime["inherit_host_tools"] = False
-    if step.reviewer_reference_claim:
-        # Blind validation is a hard isolation boundary; ordinary runtime
-        # overrides cannot expose paper or inherited host tools here.
-        runtime["evidence_access"] = "none"
-        runtime["inherit_host_tools"] = False
-        runtime["allow_internet"] = False
-    return runtime
-
-
-def _proposer_source_policy(runtime: Mapping[str, Any]) -> str:
-    allow_internet = _bool_default(runtime.get("allow_internet", False), False)
-    evidence_access = str(runtime.get("evidence_access", "context_only"))
-    if evidence_access == "none" and not allow_internet:
+def _proposer_source_policy(*, blind_reference: bool) -> str:
+    if blind_reference:
         return (
-            "Do not use internet search. Do not invoke ARC CLIs, shell commands, or MCP tools. "
-            "Do not read paper source sections, arXiv pages, INSPIRE pages, "
-            "cached paper text, or any external source. Use only the supplied "
-            "caller_context, accepted locked_outputs, and your own local algebra. "
-            "Do not use validation-only final formulas as derivation inputs."
+            "This is a blind-reference check. Do not seek, infer, or use the reviewer-only "
+            "reference claim or any source that would disclose it. Derive the result independently "
+            "from caller_context, accepted locked outputs, and your own calculation."
         )
-    parts = []
-    parts.append(
-        "Use only evidence present in caller_context and any explicitly supplied public operation result; "
-        "do not invoke ARC CLIs, shell commands, MCP tools, or nested LLM commands."
+    return (
+        "Use available web and ARC tools, including the shared paper cache, when they can "
+        "resolve a relevant question. Record actual sources and results, and do not use any "
+        "validation-only final formula as a derivation input."
     )
-    if allow_internet:
-        parts.append("Internet search is allowed only for source discovery or uncached paper access.")
-    else:
-        parts.append("Do not use internet search.")
-    parts.append("Cite any supplied public paper-operation result or internet source you use.")
-    parts.append("Do not use validation-only final formulas as derivation inputs.")
-    return " ".join(parts)
 
 
 def _reviewer_reference_instruction(
@@ -459,7 +409,6 @@ __all__ = [
     "_attempt_id",
     "_batch_run_id",
     "_caller_context",
-    "_proposer_runtime",
     "_proposer_worker",
     "_reviewer_output_schema",
     "_reviewer_worker",

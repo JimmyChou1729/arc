@@ -8,6 +8,7 @@ from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 
 bootstrap_arc_pythonpath()
 
+from arc_llm import HostAuthority, LLMExecutionOptions
 from _arc_workflows.calculate_config import ConfigError, _read_json
 from _arc_workflows.calculate_runner import run_calculation
 
@@ -18,6 +19,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--config", required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--host-authority",
+        choices=[authority.value for authority in HostAuthority],
+        default=HostAuthority.UNKNOWN.value,
+        help="explicit host authority attestation; defaults to unknown",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -25,7 +32,13 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     try:
-        result = run_calculation(payload, dry_run=args.dry_run)
+        result = run_calculation(
+            payload,
+            dry_run=args.dry_run,
+            llm_options=LLMExecutionOptions(
+                host_authority=HostAuthority(args.host_authority)
+            ),
+        )
     except ConfigError as exc:
         parser.error(str(exc))
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))

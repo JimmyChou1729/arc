@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from arc_jobs import FileLease, RunStatus, semantic_key
+from arc_llm import LLMExecutionOptions
 from arc_proposer_reviewer import (
     BatchRunner,
     BatchRequest,
     CommittedRound,
+    ExecutionOptions,
 )
 
 from _arc_workflows.calculate_config import (
@@ -57,6 +59,7 @@ def run_calculation(
     config: CalculateConfig | Mapping[str, Any],
     *,
     batch_executor: BatchExecutor | None = None,
+    llm_options: LLMExecutionOptions = LLMExecutionOptions(),
     dry_run: bool = False,
 ) -> dict[str, Any]:
     calculation = config if isinstance(config, CalculateConfig) else load_calculation_config(config)
@@ -79,6 +82,7 @@ def run_calculation(
             normalized_config=normalized_config,
             config_semantic_key_sha256=config_semantic_key_sha256,
             batch_executor=batch_executor,
+            llm_options=llm_options,
         )
 
 
@@ -89,6 +93,7 @@ def _run_calculation_locked(
     normalized_config: dict[str, Any],
     config_semantic_key_sha256: str,
     batch_executor: BatchExecutor | None,
+    llm_options: LLMExecutionOptions,
 ) -> dict[str, Any]:
     run_root.mkdir(parents=True, exist_ok=True)
     config_record = {
@@ -117,7 +122,11 @@ def _run_calculation_locked(
     if not config_path.exists():
         _write_json(config_path, config_record)
 
-    executor = batch_executor or _execute_public_batch
+    executor = batch_executor or (
+        lambda request, root, run_id: _execute_public_batch(
+            request, root, run_id, llm_options=llm_options
+        )
+    )
     step_results: list[dict[str, Any]] = []
     accepted_step_outputs: dict[str, Any] = {}
     overall_status = "completed"
@@ -407,13 +416,22 @@ def _proposer_ids(count: int) -> list[str]:
 
 
 def _execute_public_batch(
-    request: BatchRequest, run_root: Path, run_id: str
+    request: BatchRequest,
+    run_root: Path,
+    run_id: str,
+    *,
+    llm_options: LLMExecutionOptions = LLMExecutionOptions(),
 ) -> CommittedRound:
     """Execute one independent batch and expand only its committed first round."""
 
     runner = BatchRunner()
     try:
-        snapshot = runner.run(request, run_root, run_id)
+        snapshot = runner.run(
+            request,
+            run_root,
+            run_id,
+            options=ExecutionOptions(llm=llm_options),
+        )
     except Exception as exc:
         return _recover_committed_round_or_raise(
             runner,

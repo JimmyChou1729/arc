@@ -12,7 +12,7 @@ from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 bootstrap_arc_pythonpath()
 
 from arc_jobs import RunEngine, RunRepository, RunSnapshot, RunSpec
-from arc_llm import LLMTaskService
+from arc_llm import HostAuthority, LLMExecutionOptions, LLMTaskService
 from arc_proposer_reviewer import (
     BatchRunner,
     ProposerReviewerHandler,
@@ -23,10 +23,6 @@ from arc_proposer_reviewer import (
 )
 from arc_proposer_reviewer.protocol import encode_batch_request
 
-from _arc_workflows.evidence import (
-    ArcPaperEvidenceResolver,
-    IdeasEvidenceLedger,
-)
 from _arc_workflows.ideas_config import (
     IdeasConfig,
     load_ideas_config,
@@ -84,7 +80,7 @@ def run_ideas(
     *,
     executor: BatchExecutor | None = None,
     llm_service: LLMTaskService | None = None,
-    evidence_resolver: ArcPaperEvidenceResolver | None = None,
+    llm_options: LLMExecutionOptions = LLMExecutionOptions(),
     base_env: Mapping[str, str] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     stop_controller: IdeasStopController | None = None,
@@ -143,21 +139,13 @@ def run_ideas(
         if event.get("event") in _FOREGROUND_PROGRESS_EVENTS:
             progress.emit(event)
 
-    resolver = evidence_resolver or ArcPaperEvidenceResolver()
-    evidence_ledger = IdeasEvidenceLedger(
-        resolver,
-        [idea.loop_id for idea in ideas],
-    )
     handler = ProposerReviewerHandler(
         ProposerReviewerService(llm_service or LLMTaskService()),
         options=ExecutionOptions(
             max_concurrent_loops=max_concurrent,
             max_concurrent_workers=1,
+            llm=llm_options,
             progress_callback=package_progress,
-            loop_interaction_resolvers={
-                idea.loop_id: evidence_ledger.scoped(idea.loop_id)
-                for idea in ideas
-            },
         ),
     )
     spec = RunSpec(
@@ -201,7 +189,6 @@ def run_ideas(
             ideas=ideas,
             warnings=warnings,
             max_concurrent=max_concurrent,
-            evidence_ledger=evidence_ledger,
             error=execution_error,
         )
         progress.emit(
@@ -255,7 +242,6 @@ def run_ideas(
         max_concurrent=max_concurrent,
         inspection=inspection,
         trace=trace,
-        evidence_ledger=evidence_ledger,
     )
     progress.emit(
         {"event": "ideas_batch_finished", "status": result["status"]}
@@ -280,7 +266,6 @@ def _recover_execution_failure(
     ideas: list[Any],
     warnings: list[str],
     max_concurrent: int,
-    evidence_ledger: IdeasEvidenceLedger,
     error: Exception,
 ) -> dict[str, Any]:
     try:
@@ -306,7 +291,6 @@ def _recover_execution_failure(
             "exception_type": type(inspection_error).__name__,
             "message": "proposer-reviewer batch inspection failed",
         }
-        result["evidence"] = evidence_ledger.to_document()
     else:
         try:
             trace = read_batch_trace(repository, config.run_id)
@@ -325,7 +309,6 @@ def _recover_execution_failure(
             max_concurrent=max_concurrent,
             inspection=inspection,
             trace=trace,
-            evidence_ledger=evidence_ledger,
         )
         result["status"] = "failed"
         result["batch"]["durable_lifecycle"] = inspection.durable_lifecycle
@@ -356,6 +339,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", required=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--host-authority",
+        choices=[authority.value for authority in HostAuthority],
+        default=HostAuthority.UNKNOWN.value,
+        help="explicit host authority attestation; defaults to unknown",
+    )
     return parser
 
 
@@ -379,6 +368,9 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             progress_callback=foreground_progress_callback(),
             stop_controller=stop_controller,
+            llm_options=LLMExecutionOptions(
+                host_authority=HostAuthority(args.host_authority)
+            ),
         )
     finally:
         for signum, handler in installed_handlers.items():

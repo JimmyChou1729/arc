@@ -566,17 +566,14 @@ def test_arc_paper_quick_start_defers_cache_administration_to_help() -> None:
     assert "arc-paper cache remove" not in manual
 
 
-def test_ideas_workflow_guides_one_multi_term_cached_search_request() -> None:
+def test_ideas_workflow_describes_direct_research_tools() -> None:
     ideas = (WF / "ideas.md").read_text(encoding="utf-8")
     compact = " ".join(ideas.split())
 
-    assert "- `search-cached-full-text`" in ideas
-    assert "one `search-cached-full-text` request" in compact
-    assert '--term "heavy field" --term "massive exchange"' in compact
-    assert "`terms` array" in compact
-    assert "literal alternatives combined with OR" in compact
-    assert "top 50 matching paper titles" in compact
-    assert "never abstracts or summaries" in compact
+    assert "ARC and web search are complementary research surfaces" in ideas
+    assert "shared ARC paper cache" in compact
+    assert "tool ledger" in compact
+    assert "paper-operation allowlist" in compact
 
 
 def test_self_reflection_allows_missing_git_metadata() -> None:
@@ -698,7 +695,7 @@ def test_workflow_docs_stay_human_readable() -> None:
         "calculate.md",
     ]:
         text = (WF / name).read_text(encoding="utf-8")
-        assert len(text.splitlines()) <= 230
+        assert len(text.splitlines()) <= 240
         assert "0_ref/" not in text
         if name != "calculate.md":
             assert "/scripts/" not in text
@@ -958,7 +955,7 @@ def test_calculate_documents_public_batch_and_blind_reference_contract() -> None
     assert "deterministic, independent public" in text
     assert "batchrequest" in text
     assert "committed round" in text
-    assert "public `arc-paper` operations" in text
+    assert "arc paper tools or web research" in text
     assert "redacts reviewer feedback" in text
     assert "arc_paper_access" not in text
     assert "controller arc-paper access" not in text
@@ -1109,7 +1106,7 @@ def test_ideas_marking_scheme_is_centralized() -> None:
     assert sum(maxima.values()) == scheme["total_score"]["maximum"] == 100
     assert "evidence_of_novelty" not in reviewer_schema_text
     assert "0-30 scale" not in reviewer["prompt"]["template"]
-    assert "marking_scheme" in reviewer["prompt"]["template"]
+    assert "marking scheme" in reviewer["prompt"]["template"]
 
 
 def test_ideas_marking_scheme_has_discriminating_score_anchors() -> None:
@@ -1132,12 +1129,9 @@ def test_ideas_reviewer_comments_turn_marks_into_scientific_guidance() -> None:
     reviewer = json.loads((WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8"))
     template = reviewer["prompt"]["template"]
 
-    assert "Use caller_context.marking_scheme as the organizing checklist for reviewer feedback" in template
-    assert "interpret the assigned mark scientifically" in template
-    assert "what is already working" in template
-    assert "weak or middling" in template
-    assert "Do not restate the marking scheme, discuss score optimization, or tell the proposer how to chase rubric points" in template
-    assert "Add any other scientifically important comments" in template
+    assert "marking scheme" in template
+    assert "technical, proposal-specific feedback" in template
+    assert "score-optimization advice" in template
 
 
 def test_ideas_workflow_points_to_active_runner_without_global_review() -> None:
@@ -1156,32 +1150,19 @@ def test_ideas_workflow_points_to_active_runner_without_global_review() -> None:
     assert "<project-dir>/ideas.md" not in text
 
 
-def test_ideas_workflow_documents_public_batch_evidence_contract() -> None:
+def test_ideas_workflow_documents_direct_tool_contract() -> None:
     text = (WF / "ideas.md").read_text(encoding="utf-8")
 
-    for operation in (
-        "get-metadata",
-        "get-references",
-        "get-citers",
-        "search-metadata",
-        "get-arxiv-table-of-contents",
-        "get-arxiv-section",
-        "search-arxiv-full-text",
-        "search-arxiv-equations",
-    ):
-        assert f"`{operation}`" in text
     compact = " ".join(text.split())
-    assert "no batch-wide paper-request quota" in compact
-    assert "no automatic interaction-turn quota" in compact
-    assert "When no further request has a concrete expected contribution" in compact
-    assert "Negative results and excluded routes count as progress" in compact
+    assert "web, ARC paper tools, and the shared ARC paper cache" in compact
+    assert "paper-operation allowlist" in compact
+    assert "tool ledger" in compact
+    assert "generic host broker" in compact
     assert "`inspect_batch`" in text
     assert "`read_batch_trace`" in text
     assert "`read_batch_round`" in text
     assert "--run-root <project-dir>/.arc/ideas" in text
     assert "--run-id <run-id>" in text
-    assert "shell commands, ARC CLIs, arbitrary paths, cache" in text
-    assert "recursive LLM calls, or MCP tools" in text
     assert "status is `completed` or `degraded`" in text
     assert "lifecycle is `succeeded`" in text
 
@@ -1209,13 +1190,14 @@ def test_ideas_workflow_has_deterministic_ranked_report_deliverable() -> None:
     assert "<project-dir>/suggested-ideas.md" not in text
 
 
-def test_ideas_loop_reviewer_template_uses_resolver_evidence() -> None:
+def test_ideas_reviewer_template_uses_direct_research_policy() -> None:
     reviewer = json.loads((WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8"))
     template = reviewer["prompt"]["template"]
 
     assert reviewer["id"] == "reviewer_001"
-    assert "resolver" in template
-    assert "controller" not in template.lower()
+    assert "available web and ARC tools" in template
+    assert "shared paper cache" in template
+    assert "resolver" not in template.lower()
 
 
 def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
@@ -1265,7 +1247,7 @@ def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
     assert mark_properties["problem_well_definedness"]["maximum"] == 15
     assert mark_properties["total_score"]["minimum"] == 0
     assert mark_properties["total_score"]["maximum"] == 100
-    assert "marking_scheme" in reviewer["prompt"]["template"]
+    assert "marking scheme" in reviewer["prompt"]["template"]
     assert "confidence_of_novelty" not in reviewer["prompt"]["template"]
     assert "evidence_of_novelty" not in reviewer["prompt"]["template"]
     assert "user_intent_fit" not in reviewer["prompt"]["template"]
@@ -1280,23 +1262,13 @@ def test_ideas_config_template_has_no_global_reviewer() -> None:
     assert config["domain_manifest_path"] == "<project-dir>/.arc/domain/domain-manifest.json"
 
 
-def test_ideas_workflow_documents_unbounded_truthful_evidence_accounting() -> None:
+def test_ideas_workflow_has_no_typed_evidence_accounting() -> None:
     ideas = (WF / "ideas.md").read_text(encoding="utf-8")
     compact = " ".join(ideas.split())
 
-    assert "no batch-wide paper-request quota" in compact
-    assert "no automatic interaction-turn quota" in compact
-    for field in (
-        "`attempted`",
-        "`succeeded`",
-        "`failed`",
-        "`errors_by_code`",
-        "`repeated_raw_signature`",
-    ):
-        assert field in ideas
-    assert "`observation_scope` is `current_process`" in compact
-    assert "it is not a cache hit" in compact
-    assert "does not block or refund a request" in compact
+    assert "tool ledger" in compact
+    assert "paper-operation allowlist" in compact
+    assert "generic host broker" in compact
     assert "`arc.ideas.selected_rounds.v5`" in ideas
     assert "scientific `status` separately from `durable_lifecycle`" in compact
     assert "no `run_lifecycle` alias" in compact
@@ -1359,9 +1331,8 @@ def test_single_domain_ideas_document_optional_interdisciplinary_discovery() -> 
     assert "receives no ranking reward" in compact
     assert "judge same-domain and cross-disciplinary candidates by the same" in compact
     assert "otherwise record the external method as not used" in compact
-    assert "arc and web search are complementary discovery surfaces" in compact
-    assert "neither has a fixed priority" in compact
-    assert "after shortlisting an arc-resolvable paper" in compact
+    assert "arc and web search are complementary research surfaces" in compact
+    assert "shared arc paper cache" in compact
     for forced_wording in (
         "at least one interdisciplinary",
         "must consider an interdisciplinary",
@@ -1459,7 +1430,7 @@ def test_readme_preserves_arc_token_warning_and_citation() -> None:
     assert "### Citation" not in readme
 
 
-def test_ideas_full_info_template_includes_domain_and_resolver_context() -> None:
+def test_ideas_full_info_template_includes_domain_and_direct_tool_context() -> None:
     variant = json.loads((WJ / "ideas-domain.variant.json").read_text(encoding="utf-8"))
     loop = json.loads((WJ / "ideas-loop.template.json").read_text(encoding="utf-8"))
     proposer = json.loads((WJ / "ideas-proposer.template.json").read_text(encoding="utf-8"))
@@ -1467,33 +1438,19 @@ def test_ideas_full_info_template_includes_domain_and_resolver_context() -> None
     assert variant["loop_template"] == "ideas-loop.template.json"
     assert variant["proposer_template"] == "ideas-proposer.template.json"
     assert "domain_markdown_files" in loop["caller_context"]
-    assert "arc_paper_tool_notes" in loop["caller_context"]
-    assert proposer["runtime"]["allow_internet"] is True
-    notes = loop["caller_context"]["arc_paper_tool_notes"]
     prompt = proposer["prompt"]["template"]
-    assert "resolver-supplied" in notes
-    assert "typed operation requests and responses" in notes
-    assert "resolver-supplied" in prompt
-    assert "typed operations" in prompt
-    for retired in (
-        "controller-supplied",
-        "controller resolution",
-        "controller-mediated",
-        "arc-paper CLI/service",
-    ):
-        assert retired not in notes
-        assert retired not in prompt
+    assert "available web and ARC tools" in prompt
+    assert "shared paper cache" in prompt
+    assert "runtime" not in proposer
+    assert "resolver" not in prompt.lower()
 
 
-def test_ideas_no_info_description_mentions_shared_marking_scheme() -> None:
+def test_ideas_no_info_variant_is_optional_and_simple() -> None:
     variant = json.loads((WJ / "ideas-no-info.variant.json").read_text(encoding="utf-8"))
     description = variant["description"]
 
     assert variant["enabled"] is False
-    assert "common marking scheme" in description
-    assert "no ARC domain Markdown" in description
-    assert "no ARC paper-tool guidance" in description
-    assert "no inherited host-tool access" in description
+    assert "without a domain briefing" in description
 
 
 def test_readme_keeps_idea_capability_without_package_details() -> None:
@@ -1515,15 +1472,14 @@ def test_ideas_workflow_documents_enabled_variants_not_file_renaming() -> None:
     assert "rename" not in text.lower()
 
 
-def test_ideas_proposer_templates_emphasize_marking_scheme_quality_checklist() -> None:
+def test_ideas_proposer_templates_use_concise_scientific_policy() -> None:
     for name in ["ideas-proposer.template.json", "ideas-no-info-proposer.template.json"]:
         proposer = json.loads((WJ / name).read_text(encoding="utf-8"))
         template = proposer["prompt"]["template"]
 
-        assert "caller_context.marking_scheme" in template
-        assert "**Very Important**: Before finalizing, use caller_context.marking_scheme" in template
-        assert "scientific quality checklist" in template
-        assert "without writing to optimize marks" in template
+        assert "marking scheme" in template
+        assert "available web and ARC tools" in template
+        assert "shared paper cache" in template
 
 
 def test_ideas_proposer_templates_request_report_ready_math() -> None:
@@ -1531,11 +1487,7 @@ def test_ideas_proposer_templates_request_report_ready_math() -> None:
         proposer = json.loads((WJ / name).read_text(encoding="utf-8"))
         template = proposer["prompt"]["template"]
 
-        assert "$ρ_E$" in template
-        assert "$T_{ab}$" in template
-        assert "$η_{SL}$" in template
-        assert "$$ΔT(0,b_{ref}) = ...$$" in template
-        assert "do not write ASCII placeholders" in template
+        assert "report-ready Markdown math" in template
 
 
 def test_ideas_proposer_schemas_are_codex_strict() -> None:

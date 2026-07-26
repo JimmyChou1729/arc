@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping
 
@@ -15,7 +14,6 @@ from arc_proposer_reviewer import (
 )
 from arc_proposer_reviewer.protocol import encode_batch_request
 
-from _arc_workflows.evidence import IdeasEvidenceLedger
 from _arc_workflows.ideas_config import IdeasConfig
 from _arc_workflows.ideas_marking import load_marking_scheme
 from _arc_workflows.ideas_policy import scientific_run_status
@@ -39,7 +37,6 @@ def observed_result(
     max_concurrent: int,
     inspection: BatchInspection,
     trace: BatchTrace | None,
-    evidence_ledger: IdeasEvidenceLedger,
 ) -> dict[str, Any]:
     try:
         score_table = round_score_table(
@@ -117,21 +114,6 @@ def observed_result(
                 for code, count in sorted(failure_codes.items())
             ),
         )
-    evidence = copy.deepcopy(evidence_ledger.to_document())
-    if int(evidence.get("failed", 0)) > 0:
-        errors = evidence.get("errors_by_code", {})
-        detail = ", ".join(
-            f"{code}={count}"
-            for code, count in sorted(
-                errors.items() if isinstance(errors, Mapping) else ()
-            )
-        )
-        _append_warning(
-            warnings,
-            "WARNING: NOVELTY SCOUTING INCOMPLETE — "
-            f"{evidence['failed']} ARC-paper operations failed"
-            + (f" ({detail})" if detail else ""),
-        )
     reviewer_call_count = sum(committed_rounds.values())
     return {
         "schema_version": IDEAS_RESULT_SCHEMA,
@@ -157,7 +139,6 @@ def observed_result(
                 inspection.activity_integrity_error
             ),
         },
-        "evidence": evidence,
         "loops": loops,
         "round_score_table": score_table,
     }

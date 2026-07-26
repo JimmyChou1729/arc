@@ -35,7 +35,6 @@ class CalculateStep:
     prompt: str
     kind: str
     allowed_context: dict[str, Any]
-    proposer_runtime: dict[str, Any]
     reviewer_reference_claim: dict[str, Any] | None
 
 
@@ -95,8 +94,6 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
             "model",
             "model_tier",
             "integrity_reference_path",
-            "reviewer_allow_internet",
-            "proposer_runtime",
         },
         "defaults",
     )
@@ -126,10 +123,6 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
                 prompt=_required_text(step_data, "prompt"),
                 kind=kind,
                 allowed_context=allowed_context,
-                proposer_runtime=_dict(
-                    step_data.get("proposer_runtime", {}),
-                    f"{step_id}.proposer_runtime",
-                ),
                 reviewer_reference_claim=_optional_dict(
                     step_data.get("reviewer_reference_claim"),
                     f"{step_id}.reviewer_reference_claim",

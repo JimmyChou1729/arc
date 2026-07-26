@@ -612,10 +612,6 @@ def test_source_has_no_private_queue_thread_pool_or_detached_process_owner() -> 
         SOURCE_ROOT / "parse" / "parser.py",
         SOURCE_ROOT / "parse" / "visual.py",
     }
-    lock_adapters = {
-        SOURCE_ROOT / "operation_resolver.py",
-    }
-
     for path in SOURCE_ROOT.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         imported: set[str] = set()
@@ -624,12 +620,7 @@ def test_source_has_no_private_queue_thread_pool_or_detached_process_owner() -> 
                 imported.update(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported.add(node.module)
-        forbidden_for_path = (
-            forbidden_imports - {"threading"}
-            if path in lock_adapters
-            else forbidden_imports
-        )
-        assert not imported.intersection(forbidden_for_path), path
+        assert not imported.intersection(forbidden_imports), path
         if "subprocess" in imported:
             assert path in subprocess_adapters
         source = path.read_text(encoding="utf-8")

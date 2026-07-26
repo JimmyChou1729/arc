@@ -65,6 +65,7 @@ Step 1: Run:
 ```bash
 python3 <skill-dir>/scripts/run-ideas.py \
   --config <project-dir>/.arc/ideas/<run-id>.config.json \
+  --host-authority unknown \
   --json
 ```
 
@@ -85,11 +86,10 @@ snapshot:
 ```
 
 Compare snapshots rather than treating elapsed time alone as failure. Inspect
-the active worker, interaction turn, last operation names, last activity,
-pause information, and sanitized failure causes. Be patient when these show
-normal scientific progress. Stop only when snapshots show a repeated
-no-progress interaction loop, recurring errors, or a provider that is no
-longer making useful progress:
+the active worker, last activity, pause information, and sanitized failure
+causes. Be patient when these show normal scientific progress. Stop only when
+snapshots show recurring errors or a provider that is no longer making useful
+progress:
 
 ```bash
 <skill-dir>/scripts/arc-runtime arc-proposer-reviewer stop \
@@ -127,65 +127,19 @@ integrity-error loops remain visible in inspection but are excluded from the
 formal ranking. For loop concurrency and durable pause/resume behavior, see
 `manuals/arc-proposer-reviewer.md`.
 
-### Evidence Boundary
+### Research Tools
 
-When the selected variant attaches ARC-paper evidence, every proposer and
-reviewer receives the same typed interaction resolver. Its complete allowlist
-is exactly:
+ARC and web search are complementary research surfaces. Workers may use the
+web, ARC paper tools, and the shared ARC paper cache when those capabilities
+are available and useful. They should use focused checks rather than exhaustive
+searching, inspect the strongest candidates first, and record each actual
+source or query with a short result. If a host or provider cannot supply a
+capability, state the limitation once and continue from the available evidence.
 
-- `get-metadata`
-- `get-references`
-- `get-citers`
-- `search-metadata`
-- `get-arxiv-table-of-contents`
-- `get-arxiv-section`
-- `search-arxiv-full-text`
-- `search-arxiv-equations`
-- `search-cached-full-text`
-
-For a cache-wide novelty check, prefer one `search-cached-full-text` request
-with several concrete multiword synonym terms instead of separate broad
-single-word requests. The CLI equivalent repeats `--term` in one call, for
-example `--term "heavy field" --term "massive exchange"`; the typed resolver
-passes the same values in its `terms` array. Terms are literal alternatives
-combined with OR. If the result requires refinement, narrow the phrases rather
-than requesting summaries: the response contains at most the top 50 matching
-paper titles and never abstracts or summaries.
-
-ARC and Web search are complementary discovery surfaces; neither has a fixed
-priority. Use ARC `search-metadata` or cached full-text search when they are
-likely to find the literature, and use Web search for open-world discovery,
-uncached or very recent work, and non-arXiv public sources. After shortlisting
-an ARC-resolvable paper, use the typed operations to inspect its metadata and,
-as useful, its table of contents, relevant sections, full text, equations,
-references, or citers. Deep-read the strongest candidates first. Continue with
-another operation only when its expected result can resolve a relevant
-uncertainty, test or rule out a live hypothesis, validate a claim, or recover
-from a failed or ambiguous lookup. Negative results and excluded routes count
-as progress. When no further request has a concrete expected contribution,
-complete the proposal or review with an honest statement of remaining
-uncertainty. Record each query, operation, and result.
-
-There is no batch-wide paper-request quota and no automatic interaction-turn
-quota. Resolver responses still record the versioned operation ID, normalized
-parameters, canonical arXiv ID when available, source and document digests, and
-typed error provenance. The model must return a completed result when further
-interaction would not advance the task; the main agent supervises unusual
-runtime behavior through the public snapshot and cautious durable stop above.
-
-The result's `evidence` object reports `attempted`, `succeeded`, `failed`,
-`errors_by_code`, and `repeated_raw_signature` globally and per loop, together
-with records sorted by request number. `Repeated_raw_signature` is only an
-in-process diagnostic for an exactly repeated operation-and-arguments
-signature; it is not a cache hit and does not block or refund a request.
-`observation_scope` is `current_process`, so these operational counters do not
-claim to aggregate earlier processes after a durable resume. Any evidence
-operation failures produce a visible novelty-scouting warning but do not by
-themselves invalidate an otherwise supported scientific result.
-
-Workers cannot invoke shell commands, ARC CLIs, arbitrary paths, cache
-administration, recursive LLM calls, or MCP tools. Do not add a fallback for
-those capabilities. The resolver is the only dynamic evidence surface.
+Restricted hosts use the generic host broker; this workflow does not define a
+paper-operation allowlist, a tool ledger, or a host-specific fallback. The
+runtime holder supplies an explicit `--host-authority` attestation when known;
+otherwise it defaults to `unknown` and the LLM service selects its safe mode.
 
 Final ranked ideas must come from `run-ideas.py`'s public committed batch data
 and the read-only ranking helper, not ad-hoc agent judgment. In cross-domain mode,

@@ -220,7 +220,7 @@ def test_calculate_builds_public_batch_and_hides_blind_reference(tmp_path: Path)
     assert run_id == "calculate_calc_001_blind_ref_eq_001_attempt_001"
     assert "reviewer_reference_claim" not in json.dumps(loop.context)
     assert "reviewer_reference_claim" in loop.reviewer.instructions
-    assert all(worker.capabilities.internet is False for worker in loop.proposers)
+    assert all("blind-reference check" in worker.instructions for worker in loop.proposers)
     assert all("reviewer_reference_claim" not in worker.instructions for worker in loop.proposers)
     assert "review_path" not in result["steps"][0]["attempts"][0]
     assert "proposer_output_paths" not in result["steps"][0]["attempts"][0]
@@ -600,21 +600,26 @@ def test_cli_adapter_preserves_arguments_and_emits_json(
         config: dict[str, Any],
         *,
         dry_run: bool,
+        llm_options: Any,
     ) -> dict[str, Any]:
         calls["config"] = config
         calls["dry_run"] = dry_run
+        calls["authority"] = llm_options.host_authority.value
         return expected
 
     monkeypatch.setattr(modules.entry, "_read_json", fake_read)
     monkeypatch.setattr(modules.entry, "run_calculation", fake_run)
 
-    status = modules.entry.main(["--config", str(config_path), "--dry-run"])
+    status = modules.entry.main([
+        "--config", str(config_path), "--dry-run", "--host-authority", "restricted"
+    ])
 
     assert status == 0
     assert calls == {
         "path": config_path,
         "config": payload,
         "dry_run": True,
+        "authority": "restricted",
     }
     assert json.loads(capsys.readouterr().out) == expected
 
@@ -677,8 +682,10 @@ def test_default_executor_uses_public_engine_and_committed_round(
             passed_request: Any,
             run_root: Path,
             run_id: str,
+            *,
+            options: Any,
         ) -> Any:
-            calls["run"] = (passed_request, run_root, run_id)
+            calls["run"] = (passed_request, run_root, run_id, options)
             return SimpleNamespace(
                 status=modules.runner.RunStatus.SUCCEEDED,
                 error=None,
@@ -695,7 +702,7 @@ def test_default_executor_uses_public_engine_and_committed_round(
     )
 
     assert result is expected
-    assert calls["run"] == (
+    assert calls["run"][:3] == (
         request,
         tmp_path / "batches",
         "calculate_calc_001_step_001_attempt_001",
@@ -988,7 +995,7 @@ def test_cli_exit_status_contract(
     monkeypatch.setattr(
         modules.entry,
         "run_calculation",
-        lambda config, *, dry_run: {"status": result_status},
+        lambda config, *, dry_run, llm_options: {"status": result_status},
     )
 
     assert modules.entry.main(["--config", str(config_path)]) == expected_exit
@@ -1132,13 +1139,13 @@ def test_calculate_template_and_docs_do_not_offer_retired_options() -> None:
     assert "--json" not in workflow
 
 
-def test_proposer_runtime_has_no_unreachable_non_calculation_branch() -> None:
+def test_proposer_policy_has_no_retired_runtime_branch() -> None:
     source = (
         CALCULATE_MODULES / "calculate_prompts.py"
     ).read_text(encoding="utf-8")
 
     assert 'elif step.kind == "new_calculation"' not in source
-    assert "else:\n        runtime = {\n            \"allow_internet\": False" not in source
+    assert "def _proposer_runtime" not in source
 
 
 def test_outer_run_binds_config_and_state_under_project_lease(
