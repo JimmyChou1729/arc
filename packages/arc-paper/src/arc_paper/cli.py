@@ -169,6 +169,23 @@ def _parser() -> _Parser:
         ),
     )
     _cached_document_arguments(cached_toc)
+    _cached_structure_argument(cached_toc)
+
+    reconstruct_structure = commands.add_parser(
+        "reconstruct-cached-structure",
+        help="rebuild Markdown hierarchy from an independently cached PDF outline",
+        description=(
+            "Create a content-addressed structure overlay without changing "
+            "either cached document."
+        ),
+    )
+    _cached_document_arguments(reconstruct_structure)
+    reconstruct_structure.add_argument(
+        "--outline-document-ref",
+        required=True,
+        type=_json_object,
+        help="PDF CachedDocumentRef JSON object",
+    )
 
     cached_section = commands.add_parser(
         "get-cached-section",
@@ -178,6 +195,7 @@ def _parser() -> _Parser:
         ),
     )
     _cached_document_arguments(cached_section)
+    _cached_structure_argument(cached_section)
     cached_section_selector = cached_section.add_mutually_exclusive_group(
         required=True
     )
@@ -220,6 +238,61 @@ def _parser() -> _Parser:
     )
     cached_search.add_argument(
         "--case-sensitive", action="store_true", help="match letter case exactly"
+    )
+
+    lookup_reference = commands.add_parser(
+        "lookup-reference",
+        help="look up one exact reference identity in the shared cache",
+        description="Perform an exact cache-only DOI, arXiv, URL, or title lookup.",
+    )
+    _reference_identity_arguments(lookup_reference)
+    lookup_reference.add_argument(
+        "--cache-root", help="override the paper cache directory"
+    )
+
+    acquire_reference = commands.add_parser(
+        "acquire-reference",
+        help="cache-first acquisition of one exact reference",
+        description="Acquire one DOI, arXiv, or URL reference and cache it.",
+    )
+    _reference_identity_arguments(acquire_reference, allow_title=False)
+    acquire_reference.add_argument(
+        "--refresh", action="store_true", help="refresh upstream data"
+    )
+    acquire_reference.add_argument(
+        "--cache-root", help="override the paper cache directory"
+    )
+
+    admit_reference = commands.add_parser(
+        "admit-reference",
+        help="admit an already downloaded reference file into verified cache",
+        description="Cache a local file under one exact reference identity.",
+    )
+    admit_reference.add_argument("path", help="local reference file")
+    _reference_identity_arguments(admit_reference)
+    admit_reference.add_argument(
+        "--media-type", help="normalized media type override"
+    )
+    admit_reference.add_argument(
+        "--cache-root", help="override the paper cache directory"
+    )
+
+    materialize_reference = commands.add_parser(
+        "materialize-reference",
+        help="write one verified cached resource to an explicit output path",
+        description="Verify cached bytes and atomically materialize them.",
+    )
+    materialize_reference.add_argument(
+        "--resource-ref",
+        required=True,
+        type=_json_object,
+        help="CachedResourceRef JSON object",
+    )
+    materialize_reference.add_argument(
+        "--output", required=True, help="explicit output file path"
+    )
+    materialize_reference.add_argument(
+        "--cache-root", help="override the paper cache directory"
     )
 
     toc = commands.add_parser(
@@ -408,6 +481,25 @@ def _cached_document_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cache-root", help="override the paper cache directory")
 
 
+def _cached_structure_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--structure-ref",
+        type=_json_object,
+        help="optional CachedDocumentStructureRef JSON object",
+    )
+
+
+def _reference_identity_arguments(
+    parser: argparse.ArgumentParser, *, allow_title: bool = True
+) -> None:
+    identity = parser.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--doi", help="exact DOI")
+    identity.add_argument("--arxiv-id", help="exact arXiv identifier")
+    identity.add_argument("--url", help="exact HTTP(S) URL")
+    if allow_title:
+        identity.add_argument("--title", help="exact normalized title")
+
+
 def _cache_selector_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--id", dest="paper_ids", action="append", default=[], help="paper ID; repeat as needed"
@@ -497,14 +589,49 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
     if command == "get-cached-table-of-contents":
         return {
             "document": args.document_ref,
+            "structure": args.structure_ref,
+            "cache_root": args.cache_root,
+        }
+    if command == "reconstruct-cached-structure":
+        return {
+            "document": args.document_ref,
+            "outline_document": args.outline_document_ref,
             "cache_root": args.cache_root,
         }
     if command == "get-cached-section":
         return {
             "document": args.document_ref,
+            "structure": args.structure_ref,
             "selector": (
                 args.ordinal if args.ordinal is not None else args.selector
             ),
+            "cache_root": args.cache_root,
+        }
+    if command in {"lookup-reference", "acquire-reference"}:
+        values = {
+            "doi": args.doi,
+            "arxiv_id": args.arxiv_id,
+            "url": args.url,
+            "title": getattr(args, "title", None),
+            "cache_root": args.cache_root,
+        }
+        if command == "acquire-reference":
+            values["refresh"] = args.refresh
+        return values
+    if command == "admit-reference":
+        return {
+            "path": args.path,
+            "doi": args.doi,
+            "arxiv_id": args.arxiv_id,
+            "url": args.url,
+            "title": args.title,
+            "media_type": args.media_type,
+            "cache_root": args.cache_root,
+        }
+    if command == "materialize-reference":
+        return {
+            "resource": args.resource_ref,
+            "output": args.output,
             "cache_root": args.cache_root,
         }
     if command == "read-cached-source-range":

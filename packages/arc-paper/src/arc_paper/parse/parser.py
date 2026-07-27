@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 import tempfile
@@ -49,6 +50,15 @@ from .models import (
 
 class PDFTextExtractionError(RuntimeError):
     """A deterministic PDF extraction failure, distinct from a missing text layer."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class PDFOutlineExtractionError(RuntimeError):
+    """A deterministic PDF bookmark extraction failure."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -129,6 +139,68 @@ class PdftotextExtractor:
                 tuple(pages), "PDF contains no extractable text layer; partial parse retained"
             )
         return PDFTextLayer(tuple(page.strip() for page in pages))
+
+
+class QpdfOutlineExtractor:
+    """Narrow qpdf adapter returning the versioned bookmark JSON object."""
+
+    contract_id = "arc.paper.pdf_outline.qpdf_json.v1"
+
+    def __init__(self, *, executable: str = "qpdf", timeout_seconds: float = 60):
+        self.executable = executable
+        self.timeout_seconds = timeout_seconds
+
+    def extract(self, payload: bytes) -> dict[str, object]:
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="arc-paper-outline-"
+            ) as directory:
+                path = Path(directory) / "source.pdf"
+                path.write_bytes(payload)
+                completed = subprocess.run(
+                    [
+                        self.executable,
+                        "--json",
+                        "--json-key=outlines",
+                        str(path),
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=self.timeout_seconds,
+                )
+        except FileNotFoundError as exc:
+            raise PDFOutlineExtractionError(
+                "pdf_outline_extractor_unavailable",
+                "qpdf is unavailable; install it before reconstructing PDF structure",
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise PDFOutlineExtractionError(
+                "pdf_outline_extraction_timeout",
+                "qpdf timed out while extracting PDF bookmarks",
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            raise PDFOutlineExtractionError(
+                "pdf_outline_invalid", "qpdf rejected the PDF document"
+            ) from exc
+        except (subprocess.SubprocessError, OSError) as exc:
+            raise PDFOutlineExtractionError(
+                "pdf_outline_extraction_failed",
+                "qpdf could not extract PDF bookmarks",
+            ) from exc
+        try:
+            value = json.loads(completed.stdout.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise PDFOutlineExtractionError(
+                "pdf_outline_extraction_invalid",
+                "qpdf returned malformed bookmark JSON",
+            ) from exc
+        if not isinstance(value, dict):
+            raise PDFOutlineExtractionError(
+                "pdf_outline_extraction_invalid",
+                "qpdf bookmark output is not an object",
+            )
+        return value
 
 
 def parse_artifact_bytes(
@@ -1157,9 +1229,11 @@ def _pdf_printed_equation_label(value: str) -> str:
 
 
 __all__ = [
+    "PDFOutlineExtractionError",
     "PDFTextExtractor",
     "ParseError",
     "PdftotextExtractor",
+    "QpdfOutlineExtractor",
     "normalize_tex",
     "parse_artifact_bytes",
 ]

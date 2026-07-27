@@ -10,7 +10,13 @@ from .models import (
     parsed_document_from_document,
     parsed_document_to_document,
 )
-from .parser import PDFTextExtractor, ParseError, PdftotextExtractor
+from .parser import (
+    PDFOutlineExtractionError,
+    PDFTextExtractor,
+    ParseError,
+    PdftotextExtractor,
+    QpdfOutlineExtractor,
+)
 from .reconcile import build_visual_page_review_inputs
 from .service import PaperParserService
 from .visual import (
@@ -34,6 +40,7 @@ __all__ = [
     "MathSpanKind",
     "PARSED_DOCUMENT_SCHEMA",
     "PDFTextExtractor",
+    "PDFOutlineExtractionError",
     "PDFTextLayer",
     "PDFPageRenderer",
     "PDFRenderError",
@@ -44,6 +51,7 @@ __all__ = [
     "ParsedPage",
     "ParsedSection",
     "PdftotextExtractor",
+    "QpdfOutlineExtractor",
     "PdftoppmFullPageRenderer",
     "RenderedPDFPage",
     "UnexpectedPageMath",

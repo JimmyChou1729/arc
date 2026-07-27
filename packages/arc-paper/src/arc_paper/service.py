@@ -44,6 +44,13 @@ from .cached_document import (
     CachedSourceRange,
     CachedTableOfContents,
 )
+from .document_structure import (
+    CachedDocumentStructureRef,
+    DocumentStructureCache,
+    DocumentStructureError,
+    DocumentStructureOverlay,
+    reconstruct_document_structure,
+)
 from .document_search import (
     EquationSearchResult,
     FullTextSearchResult,
@@ -69,6 +76,13 @@ from .providers import (
     InspireProvider,
 )
 from .providers.base import ProviderError
+from .reference_acquisition import ReferenceAcquisitionService
+from .reference_cache import (
+    CachedReferenceMaterial,
+    CachedResourceRef,
+    ReferenceIdentity,
+    ReferenceMaterialCache,
+)
 from .source_repository import SourceRepository
 from .sources import (
     ParseOutcome,
@@ -138,6 +152,8 @@ class ArcPaperService:
             pdf_text_extractor=pdf_text_extractor,
         )
         self._cached_full_text_searcher = CachedFullTextSearcher(root)
+        self._document_structure_cache = DocumentStructureCache(root)
+        self._reference_acquisition_service: ReferenceAcquisitionService | None = None
         self._keyword_task_service = keyword_task_service
         self._term_inventory_store: Any | None = None
 
@@ -697,10 +713,55 @@ class ArcPaperService:
             )
         return self._cached_document_ref(artifact, document)
 
+    def reconstruct_cached_structure(
+        self,
+        document: CachedDocumentRef,
+        outline_document: CachedDocumentRef,
+    ) -> CachedDocumentStructureRef:
+        """Reconcile Markdown headings with an independently cached PDF outline."""
+
+        parsed, _ = self._resolve_cached_document(document)
+        outline, _ = self._resolve_cached_document(outline_document)
+        cached = self._document_structure_cache.lookup(
+            document, outline_document
+        )
+        if cached is not None:
+            return cached.reference
+        markdown_payload = self.repository.read_bytes(parsed.source)
+        pdf_payload = self.repository.read_bytes(outline.source)
+        overlay = reconstruct_document_structure(
+            document,
+            outline_document,
+            markdown_payload=markdown_payload,
+            pdf_payload=pdf_payload,
+            pdf_pages=tuple(page.text for page in outline.pages),
+        )
+        return self._document_structure_cache.store(overlay)
+
     def get_cached_table_of_contents(
-        self, document: CachedDocumentRef
+        self,
+        document: CachedDocumentRef,
+        *,
+        structure: CachedDocumentStructureRef | None = None,
     ) -> CachedTableOfContents:
         parsed, warnings = self._resolve_cached_document(document)
+        if structure is not None:
+            overlay = self._resolve_cached_structure(document, structure)
+            return CachedTableOfContents(
+                document=document,
+                entries=tuple(
+                    TableOfContentsEntry(
+                        item.section_id,
+                        item.title,
+                        item.level,
+                        item.ordinal,
+                        item.pdf_page_start,
+                        item.pdf_page_end,
+                    )
+                    for item in overlay.entries
+                ),
+                warnings=(*warnings, *overlay.warnings),
+            )
         return CachedTableOfContents(
             document=document,
             entries=_table_of_contents(parsed),
@@ -711,8 +772,27 @@ class ArcPaperService:
         self,
         document: CachedDocumentRef,
         selector: str | int,
+        *,
+        structure: CachedDocumentStructureRef | None = None,
     ) -> CachedSection:
         parsed, warnings = self._resolve_cached_document(document)
+        if structure is not None:
+            overlay = self._resolve_cached_structure(document, structure)
+            entry = _select_structure_entry(overlay.entries, selector)
+            source_range = self.read_cached_source_range(
+                document, entry.source_line_start, entry.source_line_end
+            )
+            return CachedSection(
+                document=document,
+                section_id=entry.section_id,
+                title=entry.title,
+                text=source_range.text,
+                level=entry.level,
+                ordinal=entry.ordinal,
+                page_start=entry.pdf_page_start,
+                page_end=entry.pdf_page_end,
+                warnings=(*warnings, *overlay.warnings),
+            )
         section = _select_section(parsed, selector)
         return CachedSection(
             document=document,
@@ -725,6 +805,92 @@ class ArcPaperService:
             page_end=section.page_end,
             warnings=warnings,
         )
+
+    def lookup_reference(
+        self,
+        *,
+        doi: str | None = None,
+        arxiv_id: str | None = None,
+        url: str | None = None,
+        title: str | None = None,
+    ) -> CachedReferenceMaterial | None:
+        return ReferenceMaterialCache(self.cache_root).lookup(
+            doi=doi, arxiv_id=arxiv_id, url=url, title=title
+        )
+
+    def acquire_reference(
+        self,
+        *,
+        doi: str | None = None,
+        arxiv_id: str | None = None,
+        url: str | None = None,
+        title: str | None = None,
+        refresh: bool = False,
+    ) -> CachedReferenceMaterial:
+        identity = _reference_identity(
+            doi=doi, arxiv_id=arxiv_id, url=url, title=title
+        )
+        return self._reference_acquisition().acquire_reference(
+            identity, refresh=refresh
+        )
+
+    def admit_reference(
+        self,
+        path: str | Path,
+        *,
+        doi: str | None = None,
+        arxiv_id: str | None = None,
+        url: str | None = None,
+        title: str | None = None,
+        media_type: str | None = None,
+    ) -> CachedReferenceMaterial:
+        identity = _reference_identity(
+            doi=doi, arxiv_id=arxiv_id, url=url, title=title
+        )
+        return self._reference_acquisition().admit_reference_file(
+            path, identity, media_type=media_type
+        )
+
+    def materialize_reference(
+        self,
+        resource: CachedResourceRef,
+        output: str | Path,
+    ) -> dict[str, Any]:
+        """Verify and atomically materialize one cached resource."""
+
+        from ._durable_io import atomic_write_bytes
+
+        payload = ReferenceMaterialCache(self.cache_root).read_resource(resource)
+        output_path = Path(output)
+        atomic_write_bytes(output_path, payload)
+        return {
+            "resource": resource,
+            "output": str(output_path),
+            "bytes_written": len(payload),
+        }
+
+    def _reference_acquisition(self) -> ReferenceAcquisitionService:
+        if self._reference_acquisition_service is None:
+            self._reference_acquisition_service = ReferenceAcquisitionService(
+                cache_root=self.cache_root
+            )
+        return self._reference_acquisition_service
+
+    def _resolve_cached_structure(
+        self,
+        document: CachedDocumentRef,
+        structure: CachedDocumentStructureRef,
+    ) -> DocumentStructureOverlay:
+        if not isinstance(structure, CachedDocumentStructureRef):
+            raise PaperInputError(
+                "structure must be a CachedDocumentStructureRef"
+            )
+        if structure.document != document:
+            raise DocumentStructureError(
+                "document_structure_source_mismatch",
+                "document structure overlay belongs to a different source",
+            )
+        return self._document_structure_cache.read(structure)
 
     def read_cached_source_range(
         self,
@@ -1280,6 +1446,58 @@ def _cache_error_message(exc: Exception) -> str:
     return f"{code}: {message}"[:500]
 
 
+def _reference_identity(
+    *,
+    doi: str | None,
+    arxiv_id: str | None,
+    url: str | None,
+    title: str | None,
+) -> ReferenceIdentity:
+    supplied = [value is not None for value in (doi, arxiv_id, url, title)]
+    if sum(supplied) != 1:
+        raise PaperInputError(
+            "exactly one DOI, arXiv ID, URL, or title is required"
+        )
+    try:
+        return ReferenceIdentity(
+            arxiv_id=arxiv_id or "",
+            dois=(doi,) if doi is not None else (),
+            urls=(url,) if url is not None else (),
+            title=title or "",
+        )
+    except ValueError as exc:
+        raise PaperInputError(str(exc)) from exc
+
+
+def _select_structure_entry(entries, selector: str | int):
+    if isinstance(selector, bool):
+        raise PaperInputError("section selector cannot be boolean")
+    if isinstance(selector, int):
+        if selector < 0 or selector >= len(entries):
+            raise PaperInputError(
+                "section ordinal is outside the document structure"
+            )
+        return entries[selector]
+    normalized = " ".join(str(selector).split()).casefold()
+    if not normalized:
+        raise PaperInputError("section selector is empty")
+    exact_ids = [item for item in entries if item.section_id == selector]
+    if exact_ids:
+        return exact_ids[0]
+    matches = [
+        item
+        for item in entries
+        if " ".join(item.title.split()).casefold() == normalized
+    ]
+    if not matches:
+        raise PaperInputError(f"document structure section not found: {selector}")
+    if len(matches) > 1:
+        raise PaperInputError(
+            f"document structure section title is ambiguous: {selector}"
+        )
+    return matches[0]
+
+
 def list_cache(
     *,
     paper_ids: Sequence[str] = (),
@@ -1404,13 +1622,87 @@ def cache_document(
     return ArcPaperService(cache_root=cache_root).cache_document(source)
 
 
+def reconstruct_cached_structure(
+    document: CachedDocumentRef,
+    outline_document: CachedDocumentRef,
+    *,
+    cache_root: str | Path | None = None,
+) -> CachedDocumentStructureRef:
+    return ArcPaperService(cache_root=cache_root).reconstruct_cached_structure(
+        document, outline_document
+    )
+
+
+def lookup_reference_cli(
+    *,
+    doi: str | None = None,
+    arxiv_id: str | None = None,
+    url: str | None = None,
+    title: str | None = None,
+    cache_root: str | Path | None = None,
+) -> CachedReferenceMaterial | None:
+    return ArcPaperService(cache_root=cache_root).lookup_reference(
+        doi=doi, arxiv_id=arxiv_id, url=url, title=title
+    )
+
+
+def acquire_reference_cli(
+    *,
+    doi: str | None = None,
+    arxiv_id: str | None = None,
+    url: str | None = None,
+    title: str | None = None,
+    refresh: bool = False,
+    cache_root: str | Path | None = None,
+) -> CachedReferenceMaterial:
+    return ArcPaperService(cache_root=cache_root).acquire_reference(
+        doi=doi,
+        arxiv_id=arxiv_id,
+        url=url,
+        title=title,
+        refresh=refresh,
+    )
+
+
+def admit_reference_cli(
+    path: str | Path,
+    *,
+    doi: str | None = None,
+    arxiv_id: str | None = None,
+    url: str | None = None,
+    title: str | None = None,
+    media_type: str | None = None,
+    cache_root: str | Path | None = None,
+) -> CachedReferenceMaterial:
+    return ArcPaperService(cache_root=cache_root).admit_reference(
+        path,
+        doi=doi,
+        arxiv_id=arxiv_id,
+        url=url,
+        title=title,
+        media_type=media_type,
+    )
+
+
+def materialize_reference_cli(
+    resource: CachedResourceRef,
+    output: str | Path,
+    *,
+    cache_root: str | Path | None = None,
+) -> dict[str, Any]:
+    return ArcPaperService(cache_root=cache_root).materialize_reference(
+        resource, output
+    )
+
+
 def get_cached_table_of_contents(
     document: CachedDocumentRef,
     *,
+    structure: CachedDocumentStructureRef | None = None,
     cache_root: str | Path | None = None,
 ) -> CachedTableOfContents:
     return ArcPaperService(cache_root=cache_root).get_cached_table_of_contents(
-        document
+        document, structure=structure
     )
 
 
@@ -1418,10 +1710,11 @@ def get_cached_section(
     document: CachedDocumentRef,
     selector: str | int,
     *,
+    structure: CachedDocumentStructureRef | None = None,
     cache_root: str | Path | None = None,
 ) -> CachedSection:
     return ArcPaperService(cache_root=cache_root).get_cached_section(
-        document, selector
+        document, selector, structure=structure
     )
 
 
@@ -1651,6 +1944,9 @@ __all__ = [
     "CacheUpdateRecord",
     "CacheUpdateResult",
     "PaperInputError",
+    "acquire_reference_cli",
+    "admit_reference_cli",
+    "cache_document",
     "default_cache_root",
     "extract_paper_ids",
     "extract_keywords",
@@ -1667,9 +1963,12 @@ __all__ = [
     "get_title",
     "import_source",
     "list_cache",
+    "lookup_reference_cli",
+    "materialize_reference_cli",
     "paper_ids_safe_dir_name",
     "parse_local",
     "remove_cache",
+    "reconstruct_cached_structure",
     "select_section",
     "search_equations",
     "search_arxiv_equations",

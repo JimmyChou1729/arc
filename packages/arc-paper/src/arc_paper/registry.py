@@ -12,6 +12,10 @@ from jsonschema import Draft202012Validator
 
 from . import service
 from .cached_document import cached_document_ref_from_document
+from .document_structure import (
+    cached_document_structure_ref_from_document,
+)
+from .reference_cache import cached_resource_ref_from_document
 
 
 REGISTRY_SCHEMA_VERSION = "arc.paper.operation_registry.v1"
@@ -638,6 +642,72 @@ _CACHED_DOCUMENT_INPUT = {
     "document": _CACHED_DOCUMENT_REF_SCHEMA,
     "cache_root": {"type": ["string", "null"]},
 }
+_REFERENCE_IDENTITY_INPUT = {
+    "doi": {"type": ["string", "null"], "minLength": 1},
+    "arxiv_id": {"type": ["string", "null"], "minLength": 1},
+    "url": {"type": ["string", "null"], "minLength": 1},
+    "title": {"type": ["string", "null"], "minLength": 1},
+}
+_CACHED_DOCUMENT_STRUCTURE_REF_SCHEMA = _object(
+    {
+        "document": _CACHED_DOCUMENT_REF_SCHEMA,
+        "outline_document": _CACHED_DOCUMENT_REF_SCHEMA,
+        "structure_contract": _NONEMPTY_STRING,
+        "structure_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+        },
+    },
+    required=(
+        "document",
+        "outline_document",
+        "structure_contract",
+        "structure_sha256",
+    ),
+)
+_REFERENCE_IDENTITY_RESULT_SCHEMA = _object(
+    {
+        "arxiv_id": _STRING,
+        "dois": _STRING_ARRAY,
+        "urls": _STRING_ARRAY,
+        "title": _STRING,
+        "inspire_recid": _STRING,
+    },
+    required=("arxiv_id", "dois", "urls", "title", "inspire_recid"),
+)
+_CACHED_RESOURCE_REF_SCHEMA = _object(
+    {
+        "resource_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+        },
+        "resource_size": {"type": "integer", "minimum": 0},
+        "media_type": _NONEMPTY_STRING,
+        "source_locator": _STRING,
+        "filename": _STRING,
+    },
+    required=(
+        "resource_sha256",
+        "resource_size",
+        "media_type",
+        "source_locator",
+        "filename",
+    ),
+)
+_CACHED_REFERENCE_MATERIAL_RESULT_SCHEMA = _object(
+    {
+        "identity": _REFERENCE_IDENTITY_RESULT_SCHEMA,
+        "resources": {
+            "type": "array",
+            "items": _CACHED_RESOURCE_REF_SCHEMA,
+            "minItems": 1,
+        },
+        "readable_resource": {
+            "anyOf": [_CACHED_RESOURCE_REF_SCHEMA, {"type": "null"}]
+        },
+    },
+    required=("identity", "resources", "readable_resource"),
+)
 _CACHED_DOCUMENT_TOC_SCHEMA = _object(
     {
         "document": _CACHED_DOCUMENT_REF_SCHEMA,
@@ -825,6 +895,52 @@ def _decode_cached_document_parameters(
         )
     try:
         decoded["document"] = cached_document_ref_from_document(raw_document)
+    except ValueError as exc:
+        raise OperationRequestError("invalid_parameters", str(exc)) from exc
+    raw_structure = decoded.get("structure")
+    if raw_structure is not None:
+        if not isinstance(raw_structure, Mapping):
+            raise OperationRequestError(
+                "invalid_parameters", "structure must be an object"
+            )
+        try:
+            decoded["structure"] = (
+                cached_document_structure_ref_from_document(raw_structure)
+            )
+        except ValueError as exc:
+            raise OperationRequestError("invalid_parameters", str(exc)) from exc
+    return decoded
+
+
+def _decode_structure_reconstruction_parameters(
+    value: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    decoded = _decode_cached_document_parameters(value)
+    raw_outline = decoded.pop("outline_document")
+    if not isinstance(raw_outline, Mapping):
+        raise OperationRequestError(
+            "invalid_parameters", "outline_document must be an object"
+        )
+    try:
+        decoded["outline_document"] = cached_document_ref_from_document(
+            raw_outline
+        )
+    except ValueError as exc:
+        raise OperationRequestError("invalid_parameters", str(exc)) from exc
+    return decoded
+
+
+def _decode_cached_resource_parameters(
+    value: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    decoded = dict(value)
+    raw_resource = decoded.get("resource")
+    if not isinstance(raw_resource, Mapping):
+        raise OperationRequestError(
+            "invalid_parameters", "resource must be an object"
+        )
+    try:
+        decoded["resource"] = cached_resource_ref_from_document(raw_resource)
     except ValueError as exc:
         raise OperationRequestError("invalid_parameters", str(exc)) from exc
     return decoded
@@ -1044,9 +1160,31 @@ _OPERATIONS = (
         ),
     ),
     _spec(
+        "reconstruct-cached-structure",
+        _object(
+            {
+                **_CACHED_DOCUMENT_INPUT,
+                "outline_document": _CACHED_DOCUMENT_REF_SCHEMA,
+            },
+            required=("document", "outline_document"),
+        ),
+        service.reconstruct_cached_structure,
+        output_schema=_CACHED_DOCUMENT_STRUCTURE_REF_SCHEMA,
+        effects=frozenset({OperationEffect.CACHE_WRITE}),
+        decoder=_decode_structure_reconstruction_parameters,
+    ),
+    _spec(
         "get-cached-table-of-contents",
         _object(
-            _CACHED_DOCUMENT_INPUT,
+            {
+                **_CACHED_DOCUMENT_INPUT,
+                "structure": {
+                    "anyOf": [
+                        _CACHED_DOCUMENT_STRUCTURE_REF_SCHEMA,
+                        {"type": "null"},
+                    ]
+                },
+            },
             required=("document",),
         ),
         service.get_cached_table_of_contents,
@@ -1059,6 +1197,12 @@ _OPERATIONS = (
         _object(
             {
                 **_CACHED_DOCUMENT_INPUT,
+                "structure": {
+                    "anyOf": [
+                        _CACHED_DOCUMENT_STRUCTURE_REF_SCHEMA,
+                        {"type": "null"},
+                    ]
+                },
                 "selector": {
                     "oneOf": [
                         {"type": "string", "minLength": 1},
@@ -1072,6 +1216,78 @@ _OPERATIONS = (
         output_schema=_CACHED_DOCUMENT_SECTION_SCHEMA,
         effects=frozenset({OperationEffect.CACHE_WRITE}),
         decoder=_decode_cached_document_parameters,
+    ),
+    _spec(
+        "lookup-reference",
+        _object(
+            {
+                **_REFERENCE_IDENTITY_INPUT,
+                "cache_root": {"type": ["string", "null"]},
+            }
+        ),
+        service.lookup_reference_cli,
+        output_schema={
+            "anyOf": [
+                _CACHED_REFERENCE_MATERIAL_RESULT_SCHEMA,
+                {"type": "null"},
+            ]
+        },
+    ),
+    _spec(
+        "acquire-reference",
+        _object(
+            {
+                **{
+                    key: value
+                    for key, value in _REFERENCE_IDENTITY_INPUT.items()
+                    if key != "title"
+                },
+                "refresh": {"type": "boolean", "default": False},
+                "cache_root": {"type": ["string", "null"]},
+            }
+        ),
+        service.acquire_reference_cli,
+        output_schema=_CACHED_REFERENCE_MATERIAL_RESULT_SCHEMA,
+        effects=_NETWORK_CACHE,
+    ),
+    _spec(
+        "admit-reference",
+        _object(
+            {
+                "path": _NONEMPTY_STRING,
+                **_REFERENCE_IDENTITY_INPUT,
+                "media_type": {"type": ["string", "null"]},
+                "cache_root": {"type": ["string", "null"]},
+            },
+            required=("path",),
+        ),
+        service.admit_reference_cli,
+        output_schema=_CACHED_REFERENCE_MATERIAL_RESULT_SCHEMA,
+        effects=frozenset(
+            {OperationEffect.ARBITRARY_LOCAL_PATH, OperationEffect.CACHE_WRITE}
+        ),
+    ),
+    _spec(
+        "materialize-reference",
+        _object(
+            {
+                "resource": _CACHED_RESOURCE_REF_SCHEMA,
+                "output": _NONEMPTY_STRING,
+                "cache_root": {"type": ["string", "null"]},
+            },
+            required=("resource", "output"),
+        ),
+        service.materialize_reference_cli,
+        output_schema=_object(
+            {
+                "resource": _CACHED_RESOURCE_REF_SCHEMA,
+                "output": _NONEMPTY_STRING,
+                "bytes_written": {"type": "integer", "minimum": 0},
+            },
+            required=("resource", "output", "bytes_written"),
+        ),
+        effects=frozenset({OperationEffect.ARBITRARY_LOCAL_PATH}),
+        decoder=_decode_cached_resource_parameters,
     ),
     _spec(
         "read-cached-source-range",

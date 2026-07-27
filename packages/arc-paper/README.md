@@ -18,6 +18,30 @@ Replace the quoted placeholder with an arXiv, INSPIRE, or DOI identifier.
 Use `arc-paper --help` and `arc-paper get-metadata --help` for the current
 paper, source, search, workflow, and cache commands.
 
+Cached Markdown can retain its exact source identity while adopting hierarchy
+from an independently cached PDF outline:
+
+```bash
+arc-paper reconstruct-cached-structure \
+  --document-ref '<Markdown CachedDocumentRef JSON>' \
+  --outline-document-ref '<PDF CachedDocumentRef JSON>'
+arc-paper get-cached-section \
+  --document-ref '<Markdown CachedDocumentRef JSON>' \
+  --structure-ref '<CachedDocumentStructureRef JSON>' \
+  '<section id or exact title>'
+```
+
+References use exact identities and verified shared-cache handles:
+
+```bash
+arc-paper lookup-reference --doi '10.1234/example'
+arc-paper acquire-reference --url 'https://example.org/paper'
+arc-paper admit-reference ./paper.pdf --doi '10.1234/example'
+arc-paper materialize-reference \
+  --resource-ref '<CachedResourceRef JSON>' \
+  --output ./agent-workspace/paper.pdf
+```
+
 `arc-paper extract-keywords` accepts `--host-authority` for its LLM work. Use
 `unrestricted` only when the host explicitly reports unrestricted authority;
 otherwise use `unknown`. Reuse the identical value if the durable keyword run
