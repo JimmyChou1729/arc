@@ -505,8 +505,13 @@ def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
     )
 
     assert "never manufacture a prior reader belief" in guide.casefold()
+    assert "including chapter-guide, section-guide, and local-companion titles" in guide
+    assert "not just X" in guide
+    assert "rhetorical shortcut for a definition" in guide
     assert "Translate English excerpts" in guide
     assert "Treat unsupported corrective framing as a material defect" in review
+    assert "including titles, definitions, opening sentences" in review
+    assert "do not overlook the defect merely because the contrast occurs in a" in review
     assert "Do not criticize merely to demonstrate reviewer activity" in review
     assert "accept it by choosing `stop`" in review
     assert "valuable new Companion idea" in review

@@ -7,9 +7,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v12"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v13"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v12"
+    "arc.companion.chapter-learning-review-prompt.v13"
 )
 CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v10"
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
@@ -366,9 +366,16 @@ instead of redundantly paraphrasing it. If it does not, supply the missing
 explanation. A remote, highly compressed, or differently purposed occurrence
 does not automatically make local help unnecessary.
 
-Prefer direct affirmative explanation. Use “not X but Y” or another corrective
-contrast only when the source, user intent, or an inspected reference shows
-that X is a live misconception. Never manufacture a prior reader belief.
+Prefer direct affirmative explanation. This rule applies to every generated
+field, including chapter-guide, section-guide, and local-companion titles,
+definitions, opening sentences, transitions, and body prose. Do not use a
+negative setup as a rhetorical shortcut for a definition or explanation.
+Forms such as “not X but Y”, “not just X”, “not merely X”, “does not mean X;
+instead Y”, and their target-language equivalents all count as corrective
+framing. Use one only when the source, user intent, or an inspected reference
+shows that X is a live misconception, and make that basis clear. Otherwise
+state Y directly. Ordinary factual negation is allowed when the fact itself is
+negative; never manufacture a prior reader belief.
 
 Translate English excerpts or quotations into the target language while
 preserving and citing the source's English title and URL. English Wikipedia is
@@ -462,10 +469,17 @@ revision when it merely retells the chapter or reproduces its contents
 without a concrete reading benefit.
 Require nearby positional `[@N]` citations for externally grounded claims.
 
-Treat unsupported corrective framing as a material defect. A “not X but Y”
-contrast is justified only when supplied material shows that X is a live
-misconception. Otherwise request direct affirmative prose. A prior Companion
-is optional reference material, not a template or authority.
+Treat unsupported corrective framing as a material defect. Audit every
+generated field, including titles, definitions, opening sentences,
+transitions, and body prose. “Not X but Y”, “not just X”, “not merely X”,
+“does not mean X; instead Y”, and target-language equivalents are all
+corrective framing. They are justified only when supplied material shows that
+X is a live misconception and the proposal makes that basis clear. Otherwise
+request a direct affirmative replacement even when the rest of the unit is
+strong; do not overlook the defect merely because the contrast occurs in a
+title or a technically accurate definition. Ordinary factual negation is
+allowed when the fact itself is negative. A prior Companion is optional
+reference material, not a template or authority.
 
 When `arc_commands.availability` is `exact`, run the supplied
 `complete-current-chapter` command before judging anything. Then run the exact
