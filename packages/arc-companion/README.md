@@ -109,16 +109,32 @@ The project layout is stable:
 ```
 
 Only `working/` is agent-editable recovery state. Candidate model outputs are
-written there before semantic validation, so an agent may repair a malformed
-candidate and resume without another provider call, or delete it to request
-regeneration. Immutable releases, snapshots, locks, and frozen content objects
-remain ARC-managed.
+written there before Companion's deterministic identity, reference, coverage,
+and rich-text checks. When a schema-valid output first fails one of those
+checks, Companion preserves it, gives the concrete validation feedback to one
+fresh model task, and writes that task's answer to a separate
+`*.semantic-retry.json` candidate. If the retry also fails, the build pauses
+with both paths visible instead of treating the model-correctable output as a
+terminal failure. An agent may edit the active retry candidate and resume
+without another provider call. Removing an exhausted candidate does not grant
+a third automatic generation attempt. These checks support model repair; they
+are not additional scientific-content gates.
 
-Failed Companion attempts may be explicitly resumed after inspecting or
-repairing the selected run's `working/` state. Each failed resume uses a new
-recovery epoch while preserving readable successful work. The active PDF,
-HTML, and current release pointer are not replaced until the recovered build
-fully succeeds and the replacement release validates.
+A guide draft that has already passed its own checks is not discarded because
+both review-patch attempts are invalid. Companion keeps the draft, records a
+review warning, and continues. When another chapter pauses, every chapter whose
+guide and required translation lanes already succeeded is joined and published
+as an immutable accepted chapter before control returns.
+
+Immutable releases, snapshots, locks, and frozen content objects remain
+ARC-managed.
+
+Failed Companion attempts caused by provider, state, or final accepted-book
+invariants may be explicitly resumed after inspecting or repairing the selected
+run's `working/` state. Each failed resume uses a new recovery epoch while
+preserving readable successful work. The active PDF, HTML, and current release
+pointer are not replaced until the recovered build fully succeeds and the
+replacement release validates.
 
 Guide generation is evidence-first and selective. One document-wide research
 log must inspect at least 20 distinct candidate works or substantive

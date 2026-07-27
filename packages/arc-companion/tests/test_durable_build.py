@@ -8,7 +8,12 @@ from threading import Event, Lock
 
 import pytest
 
-from arc_jobs import ResumeReason, RunRepository, RunStatus
+from arc_jobs import (
+    ImmutableArtifactStore,
+    ResumeReason,
+    RunRepository,
+    RunStatus,
+)
 from arc_llm import LLMCompleted, LLMPaused
 from arc_paper import (
     RichDocumentParserService,
@@ -29,6 +34,7 @@ from arc_companion.prompts import (
     CHAPTER_PLAN_PROMPT_VERSION,
     EVIDENCE_RESEARCH_PROMPT_VERSION,
     LITERATURE_REQUEST_PROMPT_VERSION,
+    LITERATURE_SURVEY_PROMPT_VERSION,
 )
 from arc_companion.request_contracts import (
     CompanionBuildRequest,
@@ -52,13 +58,20 @@ class FakeGuideTasks:
         translation_started: Event | None = None,
         remove_second_unit: bool = False,
         malformed_evidence: bool = False,
+        select_evidence: bool = False,
+        semantic_invalid_contract: str | None = None,
+        semantic_invalid_calls: frozenset[int] = frozenset({1}),
     ) -> None:
         self.guide_started = guide_started
         self.translation_started = translation_started
         self.remove_second_unit = remove_second_unit
         self.malformed_evidence = malformed_evidence
+        self.select_evidence = select_evidence
+        self.semantic_invalid_contract = semantic_invalid_contract
+        self.semantic_invalid_calls = semantic_invalid_calls
         self.counts: Counter[str] = Counter()
         self.guide_glossaries: dict[str, list[dict]] = {}
+        self.requests: list[tuple[str, str, str]] = []
         self._completed = {}
         self._lock = Lock()
 
@@ -70,6 +83,10 @@ class FakeGuideTasks:
         contract, payload = _request_payload(request.prompt)
         with self._lock:
             self.counts[contract] += 1
+            contract_call = self.counts[contract]
+            self.requests.append(
+                (contract, request.task_id, request.prompt)
+            )
         if contract == AUTHOR_IDENTITY_PROMPT_VERSION:
             value = {
                 "authors": [],
@@ -107,12 +124,33 @@ class FakeGuideTasks:
                                 1, 20 if self.malformed_evidence else 21
                             )
                         ],
-                        "selected_evidence_ids": [],
+                        "selected_evidence_ids": (
+                            ["candidate-1"]
+                            if self.select_evidence
+                            else []
+                        ),
                         "selection_rationale": (
                             "None adds value beyond this self-contained fixture."
                         ),
                     }
                 ]
+            }
+        elif contract == LITERATURE_SURVEY_PROMPT_VERSION:
+            block_id = payload["blocks"][0]["block_id"]
+            evidence_id = payload["selected_evidence"][0][
+                "evidence_id"
+            ]
+            value = {
+                "themes": [
+                    {
+                        "theme_id": "direct-context",
+                        "title": "Direct context",
+                        "synthesis": "One selected source adds context.",
+                        "anchor_block_ids": [block_id],
+                        "evidence_ids": [evidence_id],
+                    }
+                ],
+                "limitations": [],
             }
         elif contract == CHAPTER_PLAN_PROMPT_VERSION:
             block_id = payload["blocks"][0]["block_id"]
@@ -212,10 +250,42 @@ class FakeGuideTasks:
             }
         else:
             raise AssertionError(f"unexpected guide contract: {contract}")
+        if (
+            contract == self.semantic_invalid_contract
+            and contract_call in self.semantic_invalid_calls
+        ):
+            value = _semantically_invalid_value(contract, value)
         completed = LLMCompleted(value, "fake", "fake", None, None)
         with self._lock:
             self._completed[request.task_id] = completed
         return completed
+
+
+def _semantically_invalid_value(contract: str, value: dict) -> dict:
+    invalid = json.loads(json.dumps(value))
+    if contract == AUTHOR_IDENTITY_PROMPT_VERSION:
+        invalid.update(
+            {
+                "authors": [],
+                "confidence": "high",
+                "anchor_block_ids": [],
+            }
+        )
+    elif contract == LITERATURE_REQUEST_PROMPT_VERSION:
+        invalid["requests"][0]["anchor_block_ids"] = ["unknown-block"]
+    elif contract == EVIDENCE_RESEARCH_PROMPT_VERSION:
+        invalid["responses"][0]["candidates"].pop()
+    elif contract == LITERATURE_SURVEY_PROMPT_VERSION:
+        invalid["themes"][0]["anchor_block_ids"] = ["unknown-block"]
+    elif contract == CHAPTER_PLAN_PROMPT_VERSION:
+        invalid["reader_needs"][0]["block_id"] = "unknown-block"
+    elif contract == CHAPTER_GUIDE_PROMPT_VERSION:
+        invalid["learning_units"][0]["unit_id"] = "unknown-unit"
+    elif contract == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION:
+        invalid["decisions"] = []
+    else:
+        raise AssertionError(f"unsupported invalid contract: {contract}")
+    return invalid
 
 
 class FakeTranslationAdapter:
@@ -473,7 +543,184 @@ def test_review_remove_publishes_ordered_subset_without_retry(
     ] == [["intuition"], ["intuition"]]
 
 
-def test_malformed_evidence_candidate_reports_path_and_reuses_edit(
+@pytest.mark.parametrize(
+    ("contract", "candidate_kind", "expected_calls"),
+    [
+        (AUTHOR_IDENTITY_PROMPT_VERSION, "author", 2),
+        (LITERATURE_REQUEST_PROMPT_VERSION, "requests", 2),
+        (EVIDENCE_RESEARCH_PROMPT_VERSION, "evidence", 2),
+        (LITERATURE_SURVEY_PROMPT_VERSION, "survey", 2),
+        (CHAPTER_PLAN_PROMPT_VERSION, "plan", 3),
+        (CHAPTER_GUIDE_PROMPT_VERSION, "guide", 3),
+        (CHAPTER_GUIDE_REVIEW_PROMPT_VERSION, "review", 3),
+    ],
+)
+def test_schema_valid_semantic_error_gets_one_fresh_retry(
+    tmp_path: Path,
+    contract: str,
+    candidate_kind: str,
+    expected_calls: int,
+) -> None:
+    document = _document(tmp_path)
+    chapter_id = plan_source_chapters(document)[0].chapter_id
+    candidate_ids = {
+        "author": "identity/author.json",
+        "requests": "planning/literature-requests.json",
+        "evidence": "planning/evidence-research.json",
+        "survey": "planning/literature-survey.json",
+        "plan": f"chapters/{chapter_id}/plan.json",
+        "guide": f"chapters/{chapter_id}/guide-draft.json",
+        "review": f"chapters/{chapter_id}/guide-review.json",
+    }
+    tasks = FakeGuideTasks(
+        select_evidence=contract == LITERATURE_SURVEY_PROMPT_VERSION,
+        semantic_invalid_contract=contract,
+    )
+    service = CompanionService(tmp_path / "jobs")
+
+    completed = service.build(
+        CompanionBuildRequest(document, target_language="en"),
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert tasks.counts[contract] == expected_calls
+    candidate_id = candidate_ids[candidate_kind]
+    retry_candidate_id = candidate_id.removesuffix(
+        ".json"
+    ) + ".semantic-retry.json"
+    candidate_root = (
+        service.repository.run_directory(completed.run_id)
+        / "working/candidates"
+    )
+    first_path = candidate_root / candidate_id
+    retry_path = candidate_root / retry_candidate_id
+    assert first_path.is_file()
+    assert retry_path.is_file()
+    assert json.loads(first_path.read_text(encoding="utf-8")) != json.loads(
+        retry_path.read_text(encoding="utf-8")
+    )
+    retry_requests = [
+        (task_id_value, prompt)
+        for prompt_contract, task_id_value, prompt in tasks.requests
+        if prompt_contract == contract
+        and "-semantic-retry-" in task_id_value
+    ]
+    assert len(retry_requests) == 1
+    assert "Semantic retry feedback:" in retry_requests[0][1]
+    assert "Validation code:" in retry_requests[0][1]
+
+
+def test_invalid_review_retry_keeps_valid_draft_with_warning(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path)
+    first_chapter = plan_source_chapters(document)[0]
+    tasks = FakeGuideTasks(
+        semantic_invalid_contract=CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
+        semantic_invalid_calls=frozenset({1, 2}),
+    )
+    service = CompanionService(tmp_path / "jobs")
+
+    completed = service.build(
+        CompanionBuildRequest(document, target_language="en"),
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 3
+    book = service.accepted_book(completed.run_id)
+    assert [
+        item.unit_id for item in book.chapters[0].learning_units
+    ] == ["intuition"]
+    store = ImmutableArtifactStore(
+        service.repository.run_directory(completed.run_id),
+        repository_root=service.repository.root,
+    )
+    diagnostics_ref = store.find(
+        (
+            f"diagnostics/chapters/{first_chapter.chapter_id}"
+            "/guide-review"
+        )
+    )
+    assert diagnostics_ref is not None
+    diagnostics = json.loads(
+        store.read_bytes(diagnostics_ref).decode("utf-8")
+    )
+    assert diagnostics["status"] == "discarded_invalid_review"
+    assert len(diagnostics["candidate_paths"]) == 2
+
+
+def test_semantic_pause_publishes_completed_chapter_and_reuses_it(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path)
+    chapters = plan_source_chapters(document)
+    tasks = FakeGuideTasks(
+        semantic_invalid_contract=CHAPTER_GUIDE_PROMPT_VERSION,
+        # Chapter one succeeds. Chapter two exhausts its fixed retry.
+        semantic_invalid_calls=frozenset({2, 3}),
+    )
+    translation = FakeTranslationAdapter(mode="skipped")
+    service = CompanionService(tmp_path / "jobs")
+
+    paused = service.build(
+        CompanionBuildRequest(document, target_language="en"),
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=translation,
+    )
+
+    assert paused.status is RunStatus.PAUSED
+    assert paused.awaiting is not None
+    store = ImmutableArtifactStore(
+        service.repository.run_directory(paused.run_id),
+        repository_root=service.repository.root,
+    )
+    first_ref = store.find(
+        f"chapters/{chapters[0].chapter_id}/accepted"
+    )
+    assert first_ref is not None
+    assert store.find(
+        f"chapters/{chapters[1].chapter_id}/accepted"
+    ) is None
+    retry_path = Path(
+        str(paused.awaiting.details["active_candidate_path"])
+    )
+    repaired = json.loads(retry_path.read_text(encoding="utf-8"))
+    repaired["learning_units"][0]["unit_id"] = "intuition"
+    retry_path.write_text(json.dumps(repaired), encoding="utf-8")
+    guide_calls = tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION]
+    first_digest = first_ref.digest
+
+    recovered = service.resume(
+        paused.run_id,
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=translation,
+    )
+
+    assert recovered.status is RunStatus.SUCCEEDED
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == guide_calls
+    recovered_store = ImmutableArtifactStore(
+        service.repository.run_directory(recovered.run_id),
+        repository_root=service.repository.root,
+    )
+    recovered_first = recovered_store.find(
+        f"chapters/{chapters[0].chapter_id}/accepted"
+    )
+    assert recovered_first is not None
+    assert recovered_first.digest == first_digest
+    assert recovered_store.find(
+        f"chapters/{chapters[1].chapter_id}/accepted"
+    ) is not None
+
+
+def test_malformed_evidence_retries_once_then_pauses_for_candidate_edit(
     tmp_path: Path,
 ) -> None:
     document = _document(tmp_path)
@@ -481,22 +728,35 @@ def test_malformed_evidence_candidate_reports_path_and_reuses_edit(
     translation = FakeTranslationAdapter(mode="skipped")
     service = CompanionService(tmp_path / "jobs")
 
-    failed = service.build(
+    paused = service.build(
         CompanionBuildRequest(document, target_language="en"),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,
     )
 
-    assert failed.status is RunStatus.FAILED
-    assert failed.error is not None
-    candidate_path = Path(
-        str(failed.error.details["candidate_path"])
+    assert paused.status is RunStatus.PAUSED
+    assert paused.awaiting is not None
+    assert paused.awaiting.reason is ResumeReason.SUPERVISION_REQUIRED
+    assert paused.awaiting.input_required is False
+    assert paused.awaiting.details["automatic_retry_exhausted"] is True
+    assert paused.awaiting.details["output_attempts"] == 2
+    candidate_paths = [
+        Path(str(item))
+        for item in paused.awaiting.details["candidate_paths"]
+    ]
+    assert candidate_paths == [
+        service.repository.run_directory(paused.run_id)
+        / "working/candidates/planning/evidence-research.json",
+        service.repository.run_directory(paused.run_id)
+        / (
+            "working/candidates/planning/"
+            "evidence-research.semantic-retry.json"
+        ),
+    ]
+    first_raw = json.loads(
+        candidate_paths[0].read_text(encoding="utf-8")
     )
-    assert candidate_path == (
-        service.repository.run_directory(failed.run_id)
-        / "working/candidates/planning/evidence-research.json"
-    )
-    raw = json.loads(candidate_path.read_text(encoding="utf-8"))
+    raw = json.loads(candidate_paths[1].read_text(encoding="utf-8"))
     raw["responses"][0]["candidates"].append(
         {
             "evidence_id": "candidate-20",
@@ -505,19 +765,23 @@ def test_malformed_evidence_candidate_reports_path_and_reuses_edit(
             "source": "fixture:20",
         }
     )
-    candidate_path.write_text(
+    candidate_paths[1].write_text(
         json.dumps(raw), encoding="utf-8"
     )
     evidence_calls = tasks.counts[EVIDENCE_RESEARCH_PROMPT_VERSION]
+    assert evidence_calls == 2
 
     recovered = service.resume(
-        failed.run_id,
+        paused.run_id,
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,
     )
 
     assert recovered.status is RunStatus.SUCCEEDED
     assert tasks.counts[EVIDENCE_RESEARCH_PROMPT_VERSION] == evidence_calls
+    assert json.loads(
+        candidate_paths[0].read_text(encoding="utf-8")
+    ) == first_raw
 
 
 def test_evidence_research_propagates_native_arc_llm_host_turn_pause(

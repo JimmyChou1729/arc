@@ -20,7 +20,6 @@ from arc_jobs import (
 )
 from arc_llm import (
     JsonOutput,
-    LLMCompleted,
     LLMFailed,
     LLMPaused,
     LLMRequest,
@@ -72,9 +71,9 @@ from .generation_validation import (
 )
 from .llm_runtime import (
     CompanionLLMError,
+    SemanticTaskCompleted,
     awaiting_from_pause,
-    ensure_not_stopped,
-    execute_task,
+    execute_semantically_validated_task,
     outer_resume_input,
     run_error_from_failure,
 )
@@ -386,65 +385,56 @@ class CompanionBuildHandler:
                 else ()
             )
 
-        candidate_id = "identity/author.json"
-        candidate_path = context.working.find_candidate(candidate_id)
-        if candidate_path is None:
-            semantic = {
-                "document_digest": source.document_digest,
-                "title": title,
-                "auto_candidates": list(auto_candidates),
-                "author_basis": author_basis,
-                "prompt_contract": getattr(
-                    self.recipe,
-                    "author_identity_prompt",
-                    AUTHOR_IDENTITY_PROMPT_VERSION,
-                ),
-            }
-            request = LLMRequest(
-                task_id("author-identity", semantic),
-                author_identity_prompt(
-                    title=title,
-                    blocks=[
-                        _source_block_document(source, item)
-                        for item in source.blocks
-                    ],
-                    auto_candidates=[
-                        {
-                            "author": author,
-                            "basis": author_basis,
-                        }
-                        for author in auto_candidates
-                    ],
-                ),
-                JsonOutput(AUTHOR_IDENTITY_SCHEMA, repair="format"),
-                self.recipe.model,
-            )
-            outcome = execute_task(
-                self.task_service,
-                context,
-                request,
-                resume_input=resume_input,
-                options=self.execution.llm,
-            )
-            if isinstance(outcome, LLMPaused):
-                return Paused(awaiting_from_pause(outcome))
-            if isinstance(outcome, LLMFailed):
-                return Failed(run_error_from_failure(outcome))
-            ensure_not_stopped(outcome, "author identity")
-            assert isinstance(outcome, LLMCompleted)
-            raw = mapping(outcome.value, "author identity")
-            candidate_path = context.working.write_candidate_json(
-                candidate_id, raw
-            )
-        else:
-            raw = context.working.read_candidate_json(candidate_id)
-        try:
-            value = validate_author_identity(
+        semantic = {
+            "document_digest": source.document_digest,
+            "title": title,
+            "auto_candidates": list(auto_candidates),
+            "author_basis": author_basis,
+            "prompt_contract": getattr(
+                self.recipe,
+                "author_identity_prompt",
+                AUTHOR_IDENTITY_PROMPT_VERSION,
+            ),
+        }
+        request = LLMRequest(
+            task_id("author-identity", semantic),
+            author_identity_prompt(
+                title=title,
+                blocks=[
+                    _source_block_document(source, item)
+                    for item in source.blocks
+                ],
+                auto_candidates=[
+                    {
+                        "author": author,
+                        "basis": author_basis,
+                    }
+                    for author in auto_candidates
+                ],
+            ),
+            JsonOutput(AUTHOR_IDENTITY_SCHEMA, repair="format"),
+            self.recipe.model,
+        )
+        outcome = execute_semantically_validated_task(
+            self.task_service,
+            context,
+            request,
+            candidate_id="identity/author.json",
+            description="author identity",
+            validate=lambda raw: validate_author_identity(
                 raw,
                 block_ids=[item.block_id for item in source.blocks],
-            )
-        except CompanionContentError as exc:
-            return Failed(_candidate_error(exc, candidate_path))
+            ),
+            resume_input=resume_input,
+            options=self.execution.llm,
+        )
+        if isinstance(outcome, Paused):
+            return outcome
+        if isinstance(outcome, LLMFailed):
+            return Failed(run_error_from_failure(outcome))
+        assert isinstance(outcome, SemanticTaskCompleted)
+        value = outcome.value
+        candidate_path = outcome.candidate_paths[-1]
         context.artifacts.publish_json(_AUTHOR_IDENTITY_ARTIFACT, value)
         context.artifacts.publish_json(
             "diagnostics/author",
@@ -667,23 +657,25 @@ class CompanionBuildHandler:
             ),
             self.recipe.model,
         )
-        outcome = execute_task(
+        outcome = execute_semantically_validated_task(
             self.task_service,
             context,
             request,
+            candidate_id="planning/literature-requests.json",
+            description="literature request planning",
+            validate=lambda raw: validate_literature_request_plan(
+                raw,
+                block_ids=[item.block_id for item in source.blocks],
+            ),
             resume_input=resume_input,
             options=self.execution.llm,
         )
-        if isinstance(outcome, LLMPaused):
-            return Paused(awaiting_from_pause(outcome))
+        if isinstance(outcome, Paused):
+            return outcome
         if isinstance(outcome, LLMFailed):
             return Failed(run_error_from_failure(outcome))
-        ensure_not_stopped(outcome, "literature request planning")
-        assert isinstance(outcome, LLMCompleted)
-        value = validate_literature_request_plan(
-            outcome.value,
-            block_ids=[item.block_id for item in source.blocks],
-        )
+        assert isinstance(outcome, SemanticTaskCompleted)
+        value = outcome.value
         context.artifacts.publish_json(artifact_id, value)
         return value
 
@@ -736,26 +728,28 @@ class CompanionBuildHandler:
             JsonOutput(LITERATURE_SURVEY_SCHEMA, repair="format"),
             self.recipe.model,
         )
-        outcome = execute_task(
+        outcome = execute_semantically_validated_task(
             self.task_service,
             context,
             request,
+            candidate_id="planning/literature-survey.json",
+            description="literature survey",
+            validate=lambda raw: validate_literature_survey(
+                raw,
+                block_ids=[item.block_id for item in source.blocks],
+                evidence_ids=[
+                    str(item["evidence_id"]) for item in evidence
+                ],
+            ),
             resume_input=resume_input,
             options=self.execution.llm,
         )
-        if isinstance(outcome, LLMPaused):
-            return Paused(awaiting_from_pause(outcome))
+        if isinstance(outcome, Paused):
+            return outcome
         if isinstance(outcome, LLMFailed):
             return Failed(run_error_from_failure(outcome))
-        ensure_not_stopped(outcome, "literature survey")
-        assert isinstance(outcome, LLMCompleted)
-        value = validate_literature_survey(
-            outcome.value,
-            block_ids=[item.block_id for item in source.blocks],
-            evidence_ids=[
-                str(item["evidence_id"]) for item in evidence
-            ],
-        )
+        assert isinstance(outcome, SemanticTaskCompleted)
+        value = outcome.value
         context.artifacts.publish_json(artifact_id, value)
         return value
 
@@ -769,63 +763,55 @@ class CompanionBuildHandler:
         existing = frozen_evidence(context, request_plan)
         if existing is not None:
             return existing
-        candidate_id = "planning/evidence-research.json"
-        candidate_path = context.working.find_candidate(candidate_id)
-        if candidate_path is None:
-            prompt_contract = getattr(
-                self.recipe,
-                "evidence_research_prompt",
-                EVIDENCE_RESEARCH_PROMPT_VERSION,
-            )
-            semantic = {
-                "document_digest": source.document_digest,
-                "target_language": self.request.target_language,
-                "intent": self.request.effective_intent,
-                "request_plan_digest": hashlib.sha256(
-                    canonical_json_bytes(dict(request_plan))
-                ).hexdigest(),
-                "prompt_contract": prompt_contract,
-            }
-            request = LLMRequest(
-                task_id("evidence-research", semantic),
-                evidence_research_prompt(
-                    requests=mapping_list(
-                        request_plan.get("requests"),
-                        "literature requests",
-                    ),
-                    blocks=[
-                        _source_block_document(source, item)
-                        for item in source.blocks
-                    ],
-                    target_language=self.request.target_language,
-                    intent=self.request.effective_intent,
+        prompt_contract = getattr(
+            self.recipe,
+            "evidence_research_prompt",
+            EVIDENCE_RESEARCH_PROMPT_VERSION,
+        )
+        semantic = {
+            "document_digest": source.document_digest,
+            "target_language": self.request.target_language,
+            "intent": self.request.effective_intent,
+            "request_plan_digest": hashlib.sha256(
+                canonical_json_bytes(dict(request_plan))
+            ).hexdigest(),
+            "prompt_contract": prompt_contract,
+        }
+        request = LLMRequest(
+            task_id("evidence-research", semantic),
+            evidence_research_prompt(
+                requests=mapping_list(
+                    request_plan.get("requests"),
+                    "literature requests",
                 ),
-                JsonOutput(EVIDENCE_RESEARCH_SCHEMA, repair="format"),
-                self.recipe.model,
-            )
-            outcome = execute_task(
-                self.task_service,
-                context,
-                request,
-                resume_input=resume_input,
-                options=self.execution.llm,
-            )
-            if isinstance(outcome, LLMPaused):
-                return Paused(awaiting_from_pause(outcome))
-            if isinstance(outcome, LLMFailed):
-                return Failed(run_error_from_failure(outcome))
-            ensure_not_stopped(outcome, "evidence research")
-            assert isinstance(outcome, LLMCompleted)
-            raw = mapping(outcome.value, "evidence research")
-            candidate_path = context.working.write_candidate_json(
-                candidate_id, raw
-            )
-        else:
-            raw = context.working.read_candidate_json(candidate_id)
-        try:
-            return freeze_evidence(context, request_plan, raw)
-        except CompanionContentError as exc:
-            return Failed(_candidate_error(exc, candidate_path))
+                blocks=[
+                    _source_block_document(source, item)
+                    for item in source.blocks
+                ],
+                target_language=self.request.target_language,
+                intent=self.request.effective_intent,
+            ),
+            JsonOutput(EVIDENCE_RESEARCH_SCHEMA, repair="format"),
+            self.recipe.model,
+        )
+        outcome = execute_semantically_validated_task(
+            self.task_service,
+            context,
+            request,
+            candidate_id="planning/evidence-research.json",
+            description="evidence research",
+            validate=lambda raw: freeze_evidence(
+                context, request_plan, raw
+            ),
+            resume_input=resume_input,
+            options=self.execution.llm,
+        )
+        if isinstance(outcome, Paused):
+            return outcome
+        if isinstance(outcome, LLMFailed):
+            return Failed(run_error_from_failure(outcome))
+        assert isinstance(outcome, SemanticTaskCompleted)
+        return outcome.value
 
     def _plans(
         self,
@@ -868,76 +854,61 @@ class CompanionBuildHandler:
             existing = context.artifacts.find(artifact_id)
             if existing is not None:
                 return read_json(context, existing, "chapter plan")
-            candidate_id = f"chapters/{chapter.chapter_id}/plan.json"
-            candidate_path = context.working.find_candidate(candidate_id)
-            if candidate_path is None:
-                request = LLMRequest(
-                    task_id("plan", unit.semantic_input),
-                    chapter_plan_prompt(
-                        chapter_id=chapter.chapter_id,
-                        title=chapter.title,
-                        document_title=document_title,
-                        document_outline=[
-                            item.title for item in chapters
-                        ],
-                        blocks=[
-                            _source_block_document(source, blocks[item])
-                            for item in chapter.block_ids
-                        ],
-                        target_language=self.request.target_language,
-                        intent=self.request.effective_intent,
-                        literature_survey=literature_survey,
-                        selected_evidence=evidence,
-                        prior_companion=prior_companion,
-                    ),
-                    JsonOutput(CHAPTER_PLAN_SCHEMA, repair="format"),
-                    self.recipe.model,
-                )
-                outcome = execute_task(
-                    self.task_service,
-                    context,
-                    request,
-                    resume_input=resume_input,
-                    options=self.execution.llm,
-                )
-                if isinstance(outcome, LLMPaused):
-                    return Paused(awaiting_from_pause(outcome))
-                if isinstance(outcome, LLMFailed):
-                    return UnitResult(
-                        unit.unit_id,
-                        "failed",
-                        error=run_error_from_failure(outcome),
-                    )
-                ensure_not_stopped(
-                    outcome, f"chapter plan {chapter.chapter_id}"
-                )
-                assert isinstance(outcome, LLMCompleted)
-                raw = mapping(outcome.value, "chapter plan")
-            else:
-                raw = context.working.read_candidate_json(candidate_id)
-            # The chapter ID is caller-owned routing identity, not model
-            # semantics. Bind it before persisting or validating so a model
-            # echo cannot rename the chapter, and legacy editable candidates
-            # receive the same deterministic repair on replay.
-            raw = {**raw, "chapter_id": chapter.chapter_id}
-            candidate_path = context.working.write_candidate_json(
-                candidate_id, raw
+            request = LLMRequest(
+                task_id("plan", unit.semantic_input),
+                chapter_plan_prompt(
+                    chapter_id=chapter.chapter_id,
+                    title=chapter.title,
+                    document_title=document_title,
+                    document_outline=[
+                        item.title for item in chapters
+                    ],
+                    blocks=[
+                        _source_block_document(source, blocks[item])
+                        for item in chapter.block_ids
+                    ],
+                    target_language=self.request.target_language,
+                    intent=self.request.effective_intent,
+                    literature_survey=literature_survey,
+                    selected_evidence=evidence,
+                    prior_companion=prior_companion,
+                ),
+                JsonOutput(CHAPTER_PLAN_SCHEMA, repair="format"),
+                self.recipe.model,
             )
-            try:
-                value = validate_chapter_plan(
+            outcome = execute_semantically_validated_task(
+                self.task_service,
+                context,
+                request,
+                candidate_id=f"chapters/{chapter.chapter_id}/plan.json",
+                description=f"chapter plan {chapter.chapter_id}",
+                validate=lambda raw: validate_chapter_plan(
                     raw,
                     chapter_id=chapter.chapter_id,
                     block_ids=chapter.block_ids,
                     evidence_ids=[
                         str(item["evidence_id"]) for item in evidence
                     ],
-                )
-            except CompanionContentError as exc:
+                ),
+                # Caller-owned routing identity is a deterministic repair, not
+                # model-authored scientific content.
+                normalize=lambda raw: {
+                    **raw,
+                    "chapter_id": chapter.chapter_id,
+                },
+                resume_input=resume_input,
+                options=self.execution.llm,
+            )
+            if isinstance(outcome, Paused):
+                return outcome
+            if isinstance(outcome, LLMFailed):
                 return UnitResult(
                     unit.unit_id,
                     "failed",
-                    error=_candidate_error(exc, candidate_path),
+                    error=run_error_from_failure(outcome),
                 )
+            assert isinstance(outcome, SemanticTaskCompleted)
+            value = outcome.value
             context.artifacts.publish_json(artifact_id, value)
             return value
 
@@ -1123,16 +1094,49 @@ class CompanionBuildHandler:
                 prior_companion,
             )
 
+        group_id = "post-glossary-chapter-lanes"
         result = context.run_group(
-            "post-glossary-chapter-lanes",
+            group_id,
             tuple(units),
             worker,
             max_workers=self.execution.workers,
             failure_mode=FailureMode.FAIL_FAST,
         )
         if isinstance(result, Paused):
+            completed_results = {
+                item.unit_id: mapping(
+                    item.value, "chapter lane result"
+                )
+                for item in context.inspect_group(group_id).units
+                if item.status == "succeeded"
+            }
+            joined = self._publish_completed_chapters(
+                context,
+                chapters,
+                completed_results,
+                blocks,
+                source=source,
+                translation_required=translation_required,
+            )
+            if isinstance(joined, Failed):
+                return joined
             return result
         assert isinstance(result, GroupResult)
+        completed_results = {
+            item.unit_id: mapping(item.value, "chapter lane result")
+            for item in result.units
+            if item.status == "succeeded"
+        }
+        joined = self._publish_completed_chapters(
+            context,
+            chapters,
+            completed_results,
+            blocks,
+            source=source,
+            translation_required=translation_required,
+        )
+        if isinstance(joined, Failed):
+            return joined
         failure = next(
             (item for item in result.units if item.status != "succeeded"),
             None,
@@ -1142,22 +1146,43 @@ class CompanionBuildHandler:
                 failure.error
                 or RunError("chapter_lane_failed", "chapter lane failed")
             )
-        results = {
-            item.unit_id: mapping(item.value, "chapter lane result")
-            for item in result.units
-        }
+        if len(joined) != len(chapters):
+            return Failed(
+                RunError(
+                    "chapter_join_incomplete",
+                    "completed chapter lanes did not cover every chapter",
+                )
+            )
+        return joined
+
+    def _publish_completed_chapters(
+        self,
+        context: RunContext,
+        chapters: Sequence[SourceChapter],
+        results: Mapping[str, Mapping[str, Any]],
+        blocks: Mapping[str, Any],
+        *,
+        source: RichDocument,
+        translation_required: bool,
+    ) -> tuple[AcceptedChapter, ...] | Failed:
+        """Publish every chapter whose independent lanes already succeeded."""
+
         accepted: list[AcceptedChapter] = []
         page_by_block = {
             item.block_id: item.page_number
             for item in source.page_map
         }
         for chapter in chapters:
-            guide = results[f"guide-{chapter.chapter_id}"]
+            guide_key = f"guide-{chapter.chapter_id}"
+            translation_key = f"translation-{chapter.chapter_id}"
+            if guide_key not in results or (
+                translation_required and translation_key not in results
+            ):
+                continue
+            guide = results[guide_key]
             translations = (
                 mapping_list(
-                    results[f"translation-{chapter.chapter_id}"][
-                        "translations"
-                    ],
+                    results[translation_key]["translations"],
                     "translations",
                 )
                 if translation_required
@@ -1252,155 +1277,143 @@ class CompanionBuildHandler:
         planned_documents = planned_source_documents(
             plan, source_documents
         )
-        draft_candidate_id = (
-            f"chapters/{chapter.chapter_id}/guide-draft.json"
+        draft_request = LLMRequest(
+            task_id("guide", unit.semantic_input),
+            chapter_guide_prompt(
+                plan=plan,
+                blocks=planned_documents,
+                glossary=glossary,
+                target_language=self.request.target_language,
+                language_result=language,
+                evidence=evidence,
+                prior_companion=prior_companion,
+            ),
+            JsonOutput(CHAPTER_GUIDE_SCHEMA, repair="format"),
+            self.recipe.model,
         )
-        draft_candidate_path = context.working.find_candidate(
-            draft_candidate_id
-        )
-        if draft_candidate_path is None:
-            draft_request = LLMRequest(
-                task_id("guide", unit.semantic_input),
-                chapter_guide_prompt(
-                    plan=plan,
-                    blocks=planned_documents,
-                    glossary=glossary,
-                    target_language=self.request.target_language,
-                    language_result=language,
-                    evidence=evidence,
-                    prior_companion=prior_companion,
-                ),
-                JsonOutput(CHAPTER_GUIDE_SCHEMA, repair="format"),
-                self.recipe.model,
-            )
-            outcome = execute_task(
-                self.task_service,
-                context,
-                draft_request,
-                resume_input=resume_input,
-                options=self.execution.llm,
-            )
-            if isinstance(outcome, LLMPaused):
-                return Paused(awaiting_from_pause(outcome))
-            if isinstance(outcome, LLMFailed):
-                return UnitResult(
-                    unit.unit_id,
-                    "failed",
-                    error=run_error_from_failure(outcome),
-                )
-            ensure_not_stopped(
-                outcome, f"chapter guide {chapter.chapter_id}"
-            )
-            assert isinstance(outcome, LLMCompleted)
-            raw_draft = mapping(
-                outcome.value, "chapter guide draft"
-            )
-            draft_candidate_path = (
-                context.working.write_candidate_json(
-                    draft_candidate_id, raw_draft
-                )
-            )
-        else:
-            raw_draft = context.working.read_candidate_json(
-                draft_candidate_id
-            )
-        try:
-            draft = validate_chapter_guide(
-                raw_draft,
+        draft_outcome = execute_semantically_validated_task(
+            self.task_service,
+            context,
+            draft_request,
+            candidate_id=(
+                f"chapters/{chapter.chapter_id}/guide-draft.json"
+            ),
+            description=f"chapter guide {chapter.chapter_id}",
+            validate=lambda raw: validate_chapter_guide(
+                raw,
                 plan=plan,
                 evidence_ids=[
                     str(item["evidence_id"]) for item in evidence
                 ],
-            )
-        except CompanionContentError as exc:
+            ),
+            resume_input=resume_input,
+            options=self.execution.llm,
+        )
+        if isinstance(draft_outcome, Paused):
+            return draft_outcome
+        if isinstance(draft_outcome, LLMFailed):
             return UnitResult(
                 unit.unit_id,
                 "failed",
-                error=_candidate_error(exc, draft_candidate_path),
+                error=run_error_from_failure(draft_outcome),
             )
+        assert isinstance(draft_outcome, SemanticTaskCompleted)
+        draft = draft_outcome.value
 
-        review_candidate_id = (
-            f"chapters/{chapter.chapter_id}/guide-review.json"
+        review_request = LLMRequest(
+            task_id(
+                "guide-review",
+                {
+                    **dict(unit.semantic_input),
+                    "guide_digest": hashlib.sha256(
+                        canonical_json_bytes(draft)
+                    ).hexdigest(),
+                },
+            ),
+            chapter_guide_review_prompt(
+                plan=plan,
+                draft=draft,
+                blocks=planned_documents,
+                glossary=glossary,
+                evidence=evidence,
+                prior_companion=prior_companion,
+            ),
+            JsonOutput(
+                CHAPTER_GUIDE_REVIEW_SCHEMA, repair="format"
+            ),
+            self.recipe.model,
         )
-        review_candidate_path = context.working.find_candidate(
-            review_candidate_id
-        )
-        if review_candidate_path is None:
-            review_request = LLMRequest(
-                task_id(
-                    "guide-review",
-                    {
-                        **dict(unit.semantic_input),
-                        "guide_digest": hashlib.sha256(
-                            canonical_json_bytes(draft)
-                        ).hexdigest(),
-                    },
-                ),
-                chapter_guide_review_prompt(
-                    plan=plan,
-                    draft=draft,
-                    blocks=planned_documents,
-                    glossary=glossary,
-                    evidence=evidence,
-                    prior_companion=prior_companion,
-                ),
-                JsonOutput(
-                    CHAPTER_GUIDE_REVIEW_SCHEMA, repair="format"
-                ),
-                self.recipe.model,
-            )
-            reviewed_outcome = execute_task(
-                self.task_service,
-                context,
-                review_request,
-                resume_input=resume_input,
-                options=self.execution.llm,
-            )
-            if isinstance(reviewed_outcome, LLMPaused):
-                return Paused(awaiting_from_pause(reviewed_outcome))
-            if isinstance(reviewed_outcome, LLMFailed):
-                return UnitResult(
-                    unit.unit_id,
-                    "failed",
-                    error=run_error_from_failure(reviewed_outcome),
-                )
-            ensure_not_stopped(
-                reviewed_outcome,
-                f"chapter guide review {chapter.chapter_id}",
-            )
-            assert isinstance(reviewed_outcome, LLMCompleted)
-            raw_review = mapping(
-                reviewed_outcome.value, "chapter guide review"
-            )
-            review_candidate_path = (
-                context.working.write_candidate_json(
-                    review_candidate_id, raw_review
-                )
-            )
-        else:
-            raw_review = context.working.read_candidate_json(
-                review_candidate_id
-            )
-        try:
-            reviewed, _decisions = apply_safe_guide_review(
-                draft, raw_review
-            )
-            reviewed = validate_chapter_guide(
-                reviewed,
+        review_outcome = execute_semantically_validated_task(
+            self.task_service,
+            context,
+            review_request,
+            candidate_id=(
+                f"chapters/{chapter.chapter_id}/guide-review.json"
+            ),
+            description=f"chapter guide review {chapter.chapter_id}",
+            validate=lambda raw: _validated_guide_review(
+                draft,
+                raw,
                 plan=plan,
                 evidence_ids=[
                     str(item["evidence_id"]) for item in evidence
                 ],
-                allow_removed=True,
-            )
-        except CompanionContentError as exc:
+            ),
+            resume_input=resume_input,
+            options=self.execution.llm,
+            # The draft already passed every guide invariant. A broken review
+            # patch may be discarded without discarding that usable chapter.
+            fallback=draft,
+        )
+        if isinstance(review_outcome, Paused):
+            return review_outcome
+        if isinstance(review_outcome, LLMFailed):
             return UnitResult(
                 unit.unit_id,
                 "failed",
-                error=_candidate_error(exc, review_candidate_path),
+                error=run_error_from_failure(review_outcome),
+            )
+        assert isinstance(review_outcome, SemanticTaskCompleted)
+        reviewed = review_outcome.value
+        if review_outcome.validation_warning is not None:
+            context.artifacts.publish_json(
+                (
+                    f"diagnostics/chapters/{chapter.chapter_id}"
+                    "/guide-review"
+                ),
+                {
+                    "schema_version": (
+                        "arc.companion.guide_review_diagnostics.v1"
+                    ),
+                    "status": "discarded_invalid_review",
+                    "code": review_outcome.validation_warning.code,
+                    "message": str(
+                        review_outcome.validation_warning
+                    ),
+                    "candidate_paths": [
+                        str(path)
+                        for path in review_outcome.candidate_paths
+                    ],
+                },
             )
         context.artifacts.publish_json(artifact_id, reviewed)
         return reviewed
+
+
+def _validated_guide_review(
+    draft: Mapping[str, Any],
+    review: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+    evidence_ids: Sequence[str],
+) -> dict[str, Any]:
+    reviewed, _decisions = apply_safe_guide_review(draft, review)
+    return validate_chapter_guide(
+        reviewed,
+        plan=plan,
+        evidence_ids=evidence_ids,
+        allow_removed=True,
+    )
 
 
 def _validated_translations(
@@ -1574,17 +1587,6 @@ def _optional_document_digest(
         hashlib.sha256(canonical_json_bytes(dict(value))).hexdigest()
         if value is not None
         else None
-    )
-
-
-def _candidate_error(
-    exc: CompanionContentError, path: Any
-) -> RunError:
-    candidate_path = str(path)
-    return RunError(
-        exc.code,
-        f"{exc} Candidate file: {candidate_path}",
-        {"candidate_path": candidate_path},
     )
 
 
