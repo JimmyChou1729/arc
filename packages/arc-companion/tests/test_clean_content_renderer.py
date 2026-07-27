@@ -551,7 +551,7 @@ def test_accepted_book_v4_drops_legacy_source_page_label(
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
-    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v8"
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v9"
     assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v7"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
@@ -897,7 +897,7 @@ def test_code_and_equation_anchor_translations_exclude_glossary_matching(
     any(shutil.which(item) is None for item in _PDF_TOOLS + ("qpdf",)),
     reason="offline PDF validation toolchain is unavailable",
 )
-def test_pdf_glossary_terms_are_blue_unicode_tooltip_annotations(
+def test_pdf_glossary_terms_use_subtle_underlines_without_tooltips(
     accepted_book: AcceptedBook, tmp_path: Path
 ) -> None:
     from pypdf import PdfReader
@@ -932,22 +932,16 @@ def test_pdf_glossary_terms_are_blue_unicode_tooltip_annotations(
         if annotation.get("/TU")
     ]
 
-    assert r"\usepackage{pdfcomment}" in tex
-    assert r"\definecolor{GlossaryBlue}" in tex
-    assert r"\pdftooltip{\textcolor{GlossaryBlue}" in tex
+    assert r"\usepackage{pdfcomment}" not in tex
+    assert "GlossaryBlue" not in tex
+    assert r"\pdftooltip" not in tex
+    assert r"\definecolor{GlossaryUnderline}{HTML}{A5A9AE}" in tex
+    assert r"\newcommand{\GlossaryTerm}" in tex
+    assert r"\smash{\rlap{" in tex
+    assert r"\GlossaryTerm{entropy}" in tex
+    assert not tooltips
     assert "`熵`" in tex
     assert r"\$熵\$" in tex
-    assert any(
-        "原文术语: entropy" in tooltip
-        and "译名: 熵" in tooltip
-        and "释义:" in tooltip
-        for tooltip in tooltips
-    )
-    assert any(
-        "原文术语: uncertainty" in tooltip
-        and "原文术语: entropy" in tooltip
-        for tooltip in tooltips
-    )
     assert "entropy" in extracted
     assert "熵" in extracted
     assert "Source page" not in extracted

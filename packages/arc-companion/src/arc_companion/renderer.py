@@ -27,7 +27,7 @@ from .validation import require_valid_accepted_book
 
 
 WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v7"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v8"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v9"
 _SOURCE_DATE_EPOCH = "946684800"
 _GLOSSARY_PROTECTED_TEXT = re.compile(
     r"(?:https?://|mailto:)[^\s<>{}\[\]]+"
@@ -976,7 +976,6 @@ def _render_tex(
 \usepackage[breakable]{{tcolorbox}}
 \usepackage{{xurl}}
 \usepackage[colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black]{{hyperref}}
-\usepackage{{pdfcomment}}
 \usepackage{{enumitem}}
 \setmainfont{{Noto Sans}}
 \setsansfont{{Noto Sans}}
@@ -985,7 +984,20 @@ def _render_tex(
 \setCJKsansfont{{Noto Sans CJK SC}}
 \definecolor{{TranslationBg}}{{HTML}}{{EFF6FF}}
 \definecolor{{LearningBg}}{{HTML}}{{FFF7E6}}
-\definecolor{{GlossaryBlue}}{{HTML}}{{1469B8}}
+\definecolor{{GlossaryUnderline}}{{HTML}}{{A5A9AE}}
+\newsavebox{{\GlossaryTermBox}}
+\newcommand{{\GlossaryTerm}}[1]{{%
+  \leavevmode
+  \begingroup
+  \sbox{{\GlossaryTermBox}}{{#1}}%
+  \smash{{\rlap{{\raisebox{{-0.42ex}}{{%
+    \textcolor{{GlossaryUnderline}}{{%
+      \rule{{\wd\GlossaryTermBox}}{{0.25pt}}%
+    }}%
+  }}}}}}%
+  \usebox{{\GlossaryTermBox}}
+  \endgroup
+}}
 \setlength{{\parindent}}{{0pt}}
 \setlength{{\parskip}}{{5pt}}
 \hypersetup{{pdftitle={{{_tex_escape(book.title)}}},pdfauthor={{{_tex_escape(authors)}}}}}
@@ -1468,27 +1480,6 @@ def _compile_tex(tex_path: Path, content_digest: str) -> Path:
     latexmk = shutil.which("latexmk")
     if latexmk is None:
         raise CompanionRenderError("latexmk is required to render a companion PDF")
-    kpsewhich = shutil.which("kpsewhich")
-    if kpsewhich is None:
-        raise CompanionRenderError(
-            "kpsewhich is required to verify Companion PDF packages"
-        )
-    try:
-        pdfcomment = subprocess.run(
-            [kpsewhich, "pdfcomment.sty"],
-            text=True,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise CompanionRenderError(
-            f"kpsewhich could not verify Companion PDF packages: {exc}"
-        ) from exc
-    if pdfcomment.returncode != 0 or not pdfcomment.stdout.strip():
-        raise CompanionRenderError(
-            "the TeX pdfcomment package is required for glossary tooltips"
-        )
     jobname = f"arc-companion-{content_digest[:16]}"
     command = [
         latexmk,
@@ -1722,7 +1713,7 @@ def _tex_escape(value: Any) -> str:
 def _tex_glossary_text(
     value: str,
     matcher: GlossaryMatcher,
-    labels: Mapping[str, str],
+    _labels: Mapping[str, str],
 ) -> str:
     values: list[str] = []
     for text, entries in _glossary_segments(str(value), matcher):
@@ -1730,19 +1721,7 @@ def _tex_glossary_text(
         if not entries:
             values.append(visible)
             continue
-        tooltip = glossary_tooltip(
-            entries,
-            labels=labels,
-            separator=" | ",
-        )
-        tooltip = re.sub(r"\s+", " ", tooltip).strip()
-        values.append(
-            r"\pdftooltip{\textcolor{GlossaryBlue}{"
-            + visible
-            + "}}{"
-            + _tex_escape(tooltip)
-            + "}"
-        )
+        values.append(r"\GlossaryTerm{" + visible + "}")
     return "".join(values)
 
 
