@@ -78,6 +78,51 @@ Broad results return `refinement_required` with exact counts and up to 50
 paper titles, not abstracts. The command requires ripgrep; `rg_unavailable`
 means install `rg` rather than searching arbitrary cache files.
 
+## Read One Cached Document
+
+Workflows that already froze a local source should pass models a
+`CachedDocumentRef` instead of a physical cache path or a copy of the complete
+body in prompt JSON. The immutable reference contains:
+
+- `source_format`, `source_sha256`, `source_size`, and `media_type`;
+- `parser_contract`; and
+- `parsed_document_sha256`.
+
+Python callers obtain it with `ArcPaperService.cache_document(source)`, where
+`source` is a repository `SourceArtifact` or its verified `ParsedDocument`.
+The following commands accept its JSON encoding:
+
+```bash
+arc-paper get-cached-table-of-contents \
+  --document-ref '<CachedDocumentRef JSON>' \
+  --cache-root <cache-root>
+
+arc-paper get-cached-section \
+  --document-ref '<CachedDocumentRef JSON>' \
+  --cache-root <cache-root> \
+  "<section title or id>"
+
+arc-paper read-cached-source-range \
+  --document-ref '<CachedDocumentRef JSON>' \
+  --cache-root <cache-root> \
+  <start-line> <end-line>
+
+arc-paper search-cached-document \
+  --document-ref '<CachedDocumentRef JSON>' \
+  --cache-root <cache-root> \
+  "<query>"
+```
+
+These operations are cache-only: they do not discover other documents and
+never contact a provider. They revalidate the source identity, parser
+contract, and parsed-document digest on every call. A missing or corrupt
+derived parse may be rebuilt deterministically from verified source bytes;
+missing or corrupt source bytes cause a typed failure. Raw source ranges are
+one-based, inclusive, UTF-8, and unavailable for PDF sources.
+
+Keep `CachedDocumentRef` as the logical interface. Physical cache paths are
+private implementation details and are neither stable nor part of provenance.
+
 ## Build an Approximate Keyword Inventory
 
 ```bash

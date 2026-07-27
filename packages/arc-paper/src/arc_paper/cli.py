@@ -161,6 +161,67 @@ def _parser() -> _Parser:
         "--case-sensitive", action="store_true", help="match letter case exactly"
     )
 
+    cached_toc = commands.add_parser(
+        "get-cached-table-of-contents",
+        help="read one verified cached document table of contents",
+        description=(
+            "Read a content-addressed document without fetching any provider."
+        ),
+    )
+    _cached_document_arguments(cached_toc)
+
+    cached_section = commands.add_parser(
+        "get-cached-section",
+        help="read one section from a verified cached document",
+        description=(
+            "Read a cached section by exact ID, title selector, or zero-based ordinal."
+        ),
+    )
+    _cached_document_arguments(cached_section)
+    cached_section_selector = cached_section.add_mutually_exclusive_group(
+        required=True
+    )
+    cached_section_selector.add_argument(
+        "selector", nargs="?", help="section ID or title selector"
+    )
+    cached_section_selector.add_argument(
+        "--ordinal", type=_section_ordinal, help="zero-based section ordinal"
+    )
+
+    cached_range = commands.add_parser(
+        "read-cached-source-range",
+        help="read a verified line range from one cached text source",
+        description=(
+            "Read one-based inclusive source lines without fetching any provider."
+        ),
+    )
+    _cached_document_arguments(cached_range)
+    cached_range.add_argument("start_line", type=int, help="first one-based line")
+    cached_range.add_argument("end_line", type=int, help="last one-based line")
+
+    cached_search = commands.add_parser(
+        "search-cached-document",
+        help="search one verified cached document",
+        description=(
+            "Search only the document named by --document-ref; no other cache "
+            "entry or provider is consulted."
+        ),
+    )
+    _cached_document_arguments(cached_search)
+    cached_search.add_argument("query", nargs="+", help="full-text search query")
+    cached_search.add_argument(
+        "--limit", type=int, default=20, help="maximum matches (default: 20)"
+    )
+    cached_search.add_argument(
+        "--context-lines",
+        type=int,
+        default=1,
+        help="context lines around each match",
+    )
+    cached_search.add_argument(
+        "--case-sensitive", action="store_true", help="match letter case exactly"
+    )
+
     toc = commands.add_parser(
         "get-arxiv-table-of-contents",
         help="read an arXiv paper table of contents",
@@ -337,6 +398,16 @@ def _arxiv_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--refresh", action="store_true", help="refresh cached arXiv data")
 
 
+def _cached_document_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--document-ref",
+        required=True,
+        type=_json_object,
+        help="CachedDocumentRef JSON object",
+    )
+    parser.add_argument("--cache-root", help="override the paper cache directory")
+
+
 def _cache_selector_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--id", dest="paper_ids", action="append", default=[], help="paper ID; repeat as needed"
@@ -422,6 +493,35 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "limit": args.limit,
             "context_lines": args.context_lines,
             "case_sensitive": args.case_sensitive,
+        }
+    if command == "get-cached-table-of-contents":
+        return {
+            "document": args.document_ref,
+            "cache_root": args.cache_root,
+        }
+    if command == "get-cached-section":
+        return {
+            "document": args.document_ref,
+            "selector": (
+                args.ordinal if args.ordinal is not None else args.selector
+            ),
+            "cache_root": args.cache_root,
+        }
+    if command == "read-cached-source-range":
+        return {
+            "document": args.document_ref,
+            "start_line": args.start_line,
+            "end_line": args.end_line,
+            "cache_root": args.cache_root,
+        }
+    if command == "search-cached-document":
+        return {
+            "document": args.document_ref,
+            "query": " ".join(args.query),
+            "limit": args.limit,
+            "context_lines": args.context_lines,
+            "case_sensitive": args.case_sensitive,
+            "cache_root": args.cache_root,
         }
     if command == "get-arxiv-table-of-contents":
         return {"arxiv_id": args.arxiv_id, "refresh": args.refresh}

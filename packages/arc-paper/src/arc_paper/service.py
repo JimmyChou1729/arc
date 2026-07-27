@@ -36,6 +36,14 @@ from .cached_full_text_search import (
     CachedFullTextSearchResult,
     CachedFullTextSearcher,
 )
+from .cached_document import (
+    CachedDocumentError,
+    CachedDocumentRef,
+    CachedDocumentSearch,
+    CachedSection,
+    CachedSourceRange,
+    CachedTableOfContents,
+)
 from .document_search import (
     EquationSearchResult,
     FullTextSearchResult,
@@ -658,6 +666,189 @@ class ArcPaperService:
             case_sensitive=case_sensitive,
         )
 
+    def cache_document(
+        self, source: SourceArtifact | ParsedDocument
+    ) -> CachedDocumentRef:
+        """Return a logical handle for one verified cached document.
+
+        This operation may populate or repair deterministic derived parse data,
+        but it never fetches a provider.  The source bytes must already belong
+        to this service's content-addressed repository.
+        """
+
+        expected_digest: str | None = None
+        if isinstance(source, ParsedDocument):
+            artifact = source.source
+            expected_digest = source.document_digest
+        elif isinstance(source, SourceArtifact):
+            artifact = source
+        else:
+            raise PaperInputError(
+                "cached document source must be a SourceArtifact or ParsedDocument"
+            )
+        document, _ = self.parser.materialize_source(artifact)
+        if (
+            expected_digest is not None
+            and document.document_digest != expected_digest
+        ):
+            raise CachedDocumentError(
+                "cached_document_digest_mismatch",
+                "parsed document does not match the verified cached projection",
+            )
+        return self._cached_document_ref(artifact, document)
+
+    def get_cached_table_of_contents(
+        self, document: CachedDocumentRef
+    ) -> CachedTableOfContents:
+        parsed, warnings = self._resolve_cached_document(document)
+        return CachedTableOfContents(
+            document=document,
+            entries=_table_of_contents(parsed),
+            warnings=warnings,
+        )
+
+    def get_cached_section(
+        self,
+        document: CachedDocumentRef,
+        selector: str | int,
+    ) -> CachedSection:
+        parsed, warnings = self._resolve_cached_document(document)
+        section = _select_section(parsed, selector)
+        return CachedSection(
+            document=document,
+            section_id=section.section_id,
+            title=section.title,
+            text=section.text,
+            level=section.level,
+            ordinal=section.ordinal,
+            page_start=section.page_start,
+            page_end=section.page_end,
+            warnings=warnings,
+        )
+
+    def read_cached_source_range(
+        self,
+        document: CachedDocumentRef,
+        start_line: int,
+        end_line: int,
+    ) -> CachedSourceRange:
+        parsed, _ = self._resolve_cached_document(document)
+        if (
+            isinstance(start_line, bool)
+            or not isinstance(start_line, int)
+            or isinstance(end_line, bool)
+            or not isinstance(end_line, int)
+            or start_line < 1
+            or end_line < start_line
+        ):
+            raise CachedDocumentError(
+                "invalid_source_range",
+                "source range requires one-based start_line <= end_line",
+            )
+        if parsed.source.source_format is SourceFormat.PDF:
+            raise CachedDocumentError(
+                "cached_source_not_text",
+                "raw source ranges are unavailable for PDF sources",
+            )
+        payload = self.repository.read_bytes(parsed.source)
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise CachedDocumentError(
+                "cached_source_not_utf8",
+                "cached source is not valid UTF-8 text",
+            ) from exc
+        lines = text.splitlines()
+        total_lines = len(lines)
+        if end_line > total_lines:
+            raise CachedDocumentError(
+                "source_range_out_of_bounds",
+                f"source range ends at {end_line}, but source has {total_lines} lines",
+            )
+        return CachedSourceRange(
+            document=document,
+            start_line=start_line,
+            end_line=end_line,
+            total_lines=total_lines,
+            text="\n".join(lines[start_line - 1 : end_line]),
+        )
+
+    def search_cached_document(
+        self,
+        document: CachedDocumentRef,
+        query: str,
+        *,
+        limit: int = 20,
+        context_lines: int = 1,
+        case_sensitive: bool = False,
+    ) -> CachedDocumentSearch:
+        parsed, warnings = self._resolve_cached_document(document)
+        result = _search_full_text(
+            parsed,
+            query,
+            limit=limit,
+            context_lines=context_lines,
+            case_sensitive=case_sensitive,
+        )
+        return CachedDocumentSearch(
+            document=document,
+            query=result.query,
+            matches=result.matches,
+            limit=result.limit,
+            context_lines=result.context_lines,
+            case_sensitive=result.case_sensitive,
+            truncated=result.truncated,
+            warnings=warnings,
+        )
+
+    def _resolve_cached_document(
+        self, reference: CachedDocumentRef
+    ) -> tuple[ParsedDocument, tuple[str, ...]]:
+        if not isinstance(reference, CachedDocumentRef):
+            raise CachedDocumentError(
+                "invalid_cached_document_ref",
+                "document must be a CachedDocumentRef",
+            )
+        source = self.repository.get(
+            reference.source_format,
+            reference.source_sha256,
+        )
+        if (
+            source.size != reference.source_size
+            or source.media_type != reference.media_type
+        ):
+            raise CachedDocumentError(
+                "cached_document_source_mismatch",
+                "cached source metadata does not match the document reference",
+            )
+        parser_contract = self.parser.parser_contract_for(source)
+        if parser_contract != reference.parser_contract:
+            raise CachedDocumentError(
+                "cached_document_parser_contract_mismatch",
+                "current parser contract does not match the document reference",
+            )
+        parsed, warnings = self.parser.materialize_source(source)
+        if parsed.document_digest != reference.parsed_document_sha256:
+            raise CachedDocumentError(
+                "cached_document_digest_mismatch",
+                "cached parsed document does not match the document reference",
+            )
+        return parsed, warnings
+
+    def _cached_document_ref(
+        self,
+        source: SourceArtifact,
+        document: ParsedDocument,
+    ) -> CachedDocumentRef:
+        return CachedDocumentRef(
+            source_format=source.source_format,
+            source_sha256=source.artifact_digest,
+            source_size=source.size,
+            media_type=source.media_type,
+            parser_contract=self.parser.parser_contract_for(source),
+            parsed_document_sha256=document.document_digest,
+        )
+
     def search_full_text(
         self,
         documents: ParsedDocument | Iterable[ParsedDocument],
@@ -1199,6 +1390,65 @@ def search_cached_full_text(
 ) -> CachedFullTextSearchResult:
     return ArcPaperService().search_cached_full_text(
         terms,
+        limit=limit,
+        context_lines=context_lines,
+        case_sensitive=case_sensitive,
+    )
+
+
+def cache_document(
+    source: SourceArtifact | ParsedDocument,
+    *,
+    cache_root: str | Path | None = None,
+) -> CachedDocumentRef:
+    return ArcPaperService(cache_root=cache_root).cache_document(source)
+
+
+def get_cached_table_of_contents(
+    document: CachedDocumentRef,
+    *,
+    cache_root: str | Path | None = None,
+) -> CachedTableOfContents:
+    return ArcPaperService(cache_root=cache_root).get_cached_table_of_contents(
+        document
+    )
+
+
+def get_cached_section(
+    document: CachedDocumentRef,
+    selector: str | int,
+    *,
+    cache_root: str | Path | None = None,
+) -> CachedSection:
+    return ArcPaperService(cache_root=cache_root).get_cached_section(
+        document, selector
+    )
+
+
+def read_cached_source_range(
+    document: CachedDocumentRef,
+    start_line: int,
+    end_line: int,
+    *,
+    cache_root: str | Path | None = None,
+) -> CachedSourceRange:
+    return ArcPaperService(cache_root=cache_root).read_cached_source_range(
+        document, start_line, end_line
+    )
+
+
+def search_cached_document(
+    document: CachedDocumentRef,
+    query: str,
+    *,
+    limit: int = 20,
+    context_lines: int = 1,
+    case_sensitive: bool = False,
+    cache_root: str | Path | None = None,
+) -> CachedDocumentSearch:
+    return ArcPaperService(cache_root=cache_root).search_cached_document(
+        document,
+        query,
         limit=limit,
         context_lines=context_lines,
         case_sensitive=case_sensitive,

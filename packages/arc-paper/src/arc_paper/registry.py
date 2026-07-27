@@ -11,6 +11,7 @@ from typing import Any, Generic, TypeVar
 from jsonschema import Draft202012Validator
 
 from . import service
+from .cached_document import cached_document_ref_from_document
 
 
 REGISTRY_SCHEMA_VERSION = "arc.paper.operation_registry.v1"
@@ -153,12 +154,16 @@ def _object(
 
 
 def _codec(
-    name: str, schema: Mapping[str, Any], *, version: int
+    name: str,
+    schema: Mapping[str, Any],
+    *,
+    version: int,
+    decoder: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> JsonCodec[Mapping[str, Any]]:
     return JsonCodec(
         f"arc.paper.{name}.parameters.v{version}",
         schema,
-        lambda value: dict(value),
+        decoder or (lambda value: dict(value)),
         to_json_value,
     )
 
@@ -171,12 +176,13 @@ def _spec(
     output_schema: Mapping[str, Any],
     effects: frozenset[OperationEffect] = frozenset(),
     version: int = 1,
+    decoder: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> OperationSpec[Any]:
     return OperationSpec(
         operation_id=f"arc-paper.{name}.v{version}",
         version=version,
         name=name,
-        input_codec=_codec(name, schema, version=version),
+        input_codec=_codec(name, schema, version=version, decoder=decoder),
         output_codec=JsonOutputCodec(
             f"arc.paper.{name}.result.v{version}", output_schema, to_json_value
         ),
@@ -601,6 +607,86 @@ _FULL_TEXT_MATCH_SCHEMA = _object(
         "snippet",
     ),
 )
+_CACHED_DOCUMENT_REF_SCHEMA = _object(
+    {
+        "source_format": {"enum": ["html", "markdown", "tex", "pdf"]},
+        "source_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+        },
+        "source_size": {"type": "integer", "minimum": 0},
+        "media_type": _NONEMPTY_STRING,
+        "parser_contract": _NONEMPTY_STRING,
+        "parsed_document_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+        },
+    },
+    required=(
+        "source_format",
+        "source_sha256",
+        "source_size",
+        "media_type",
+        "parser_contract",
+        "parsed_document_sha256",
+    ),
+)
+_CACHED_DOCUMENT_INPUT = {
+    "document": _CACHED_DOCUMENT_REF_SCHEMA,
+    "cache_root": {"type": ["string", "null"]},
+}
+_CACHED_DOCUMENT_TOC_SCHEMA = _object(
+    {
+        "document": _CACHED_DOCUMENT_REF_SCHEMA,
+        "entries": {"type": "array", "items": _TOC_ENTRY_SCHEMA},
+        "warnings": _STRING_ARRAY,
+    },
+    required=("document", "entries", "warnings"),
+)
+_CACHED_DOCUMENT_SECTION_SCHEMA = _object(
+    {
+        "document": _CACHED_DOCUMENT_REF_SCHEMA,
+        **_SECTION_SCHEMA["properties"],
+        "warnings": _STRING_ARRAY,
+    },
+    required=(
+        "document",
+        *tuple(_SECTION_SCHEMA["required"]),
+        "warnings",
+    ),
+)
+_CACHED_SOURCE_RANGE_SCHEMA = _object(
+    {
+        "document": _CACHED_DOCUMENT_REF_SCHEMA,
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "total_lines": {"type": "integer", "minimum": 0},
+        "text": _STRING,
+    },
+    required=("document", "start_line", "end_line", "total_lines", "text"),
+)
+_CACHED_DOCUMENT_SEARCH_SCHEMA = _object(
+    {
+        "document": _CACHED_DOCUMENT_REF_SCHEMA,
+        "query": _NONEMPTY_STRING,
+        "matches": {"type": "array", "items": _FULL_TEXT_MATCH_SCHEMA},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
+        "case_sensitive": {"type": "boolean"},
+        "truncated": {"type": "boolean"},
+        "warnings": _STRING_ARRAY,
+    },
+    required=(
+        "document",
+        "query",
+        "matches",
+        "limit",
+        "context_lines",
+        "case_sensitive",
+        "truncated",
+        "warnings",
+    ),
+)
 _CACHED_FULL_TEXT_OCCURRENCE_SCHEMA = _object(
     {
         "source_kind": {"enum": ["arxiv", "local"]},
@@ -723,6 +809,23 @@ _CACHE_FILTER_INPUT = _object(
         "cache_root": {"type": ["string", "null"]},
     }
 )
+
+
+def _decode_cached_document_parameters(
+    value: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    decoded = dict(value)
+    raw_document = decoded.get("document")
+    if not isinstance(raw_document, Mapping):
+        raise OperationRequestError(
+            "invalid_parameters", "document must be an object"
+        )
+    try:
+        decoded["document"] = cached_document_ref_from_document(raw_document)
+    except ValueError as exc:
+        raise OperationRequestError("invalid_parameters", str(exc)) from exc
+    return decoded
+
 
 _OPERATIONS = (
     _spec(
@@ -936,6 +1039,72 @@ _OPERATIONS = (
                 "warnings",
             ),
         ),
+    ),
+    _spec(
+        "get-cached-table-of-contents",
+        _object(
+            _CACHED_DOCUMENT_INPUT,
+            required=("document",),
+        ),
+        service.get_cached_table_of_contents,
+        output_schema=_CACHED_DOCUMENT_TOC_SCHEMA,
+        effects=frozenset({OperationEffect.CACHE_WRITE}),
+        decoder=_decode_cached_document_parameters,
+    ),
+    _spec(
+        "get-cached-section",
+        _object(
+            {
+                **_CACHED_DOCUMENT_INPUT,
+                "selector": {
+                    "oneOf": [
+                        {"type": "string", "minLength": 1},
+                        {"type": "integer", "minimum": 0},
+                    ]
+                },
+            },
+            required=("document", "selector"),
+        ),
+        service.get_cached_section,
+        output_schema=_CACHED_DOCUMENT_SECTION_SCHEMA,
+        effects=frozenset({OperationEffect.CACHE_WRITE}),
+        decoder=_decode_cached_document_parameters,
+    ),
+    _spec(
+        "read-cached-source-range",
+        _object(
+            {
+                **_CACHED_DOCUMENT_INPUT,
+                "start_line": {"type": "integer", "minimum": 1},
+                "end_line": {"type": "integer", "minimum": 1},
+            },
+            required=("document", "start_line", "end_line"),
+        ),
+        service.read_cached_source_range,
+        output_schema=_CACHED_SOURCE_RANGE_SCHEMA,
+        effects=frozenset({OperationEffect.CACHE_WRITE}),
+        decoder=_decode_cached_document_parameters,
+    ),
+    _spec(
+        "search-cached-document",
+        _object(
+            {
+                **_CACHED_DOCUMENT_INPUT,
+                "query": _NONEMPTY_STRING,
+                "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+                "context_lines": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5,
+                },
+                "case_sensitive": {"type": "boolean", "default": False},
+            },
+            required=("document", "query"),
+        ),
+        service.search_cached_document,
+        output_schema=_CACHED_DOCUMENT_SEARCH_SCHEMA,
+        effects=frozenset({OperationEffect.CACHE_WRITE}),
+        decoder=_decode_cached_document_parameters,
     ),
     _spec(
         "get-arxiv-table-of-contents",
