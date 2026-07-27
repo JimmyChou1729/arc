@@ -178,18 +178,30 @@ arc-companion status --project-dir <project-dir>
 arc-companion validate --project-dir <project-dir>
 ```
 
-The current release changes only after both PDF and Web validate. Technical
-diagnostics remain in command results and run events, never in reader content.
-Successful build and resume commands perform this formal publication
-automatically.
+The current release changes only after its Web reader validates. Companion
+also renders and validates PDF when the local toolchain permits it. A PDF
+render or validation failure does not change the successful AcceptedBook or
+build status: publication completes with the valid Web reader and a
+`pdf_render_failed` command warning. The immutable release manifest and command
+data list `available_formats`; CLI artifacts and delivery paths never advertise
+a format that was not published.
 
-Deliver `<project-dir>/companion.pdf` and
-`<project-dir>/companion.html` to the user. They are managed root projections
-of the active immutable release. The PDF is an exact physical copy; the HTML
-uses a base pointing to
-`releases/<release-id>/reader/index.html` so canonical reader assets and links
-remain valid. CLI artifacts and the release manifest continue to identify the
-canonical files under `releases/`.
+Deliver `<project-dir>/companion.html` from every published release. It is a
+managed root projection whose base points to
+`releases/<release-id>/reader/index.html`, so canonical reader assets and links
+remain valid. Deliver `<project-dir>/companion.pdf` only when `pdf` appears in
+`available_formats`; it is then an exact physical copy of the canonical release
+PDF. Publishing a Web-only release removes a stale managed root PDF rather than
+leaving it associated with the new current release. A later successful render
+publishes a new complete immutable release and restores the root PDF without
+rewriting the earlier Web-only release.
+
+If Web rendering itself fails after the AcceptedBook succeeds, the build
+remains successful and the command reports `web_render_failed` without
+publishing or advertising a new release. Repair the renderer or missing Web
+asset and rerun `render`. Technical diagnostics remain in command results and
+run events, never in reader content. Successful build and resume commands
+attempt formal publication automatically.
 
 ### Step 2: Render without model calls
 
@@ -200,7 +212,10 @@ arc-companion render --project-dir <project-dir> \
   --format all
 ```
 
-`--format pdf` and `--format web` limit returned delivery artifacts; publication
-still validates one complete immutable release from the same `AcceptedBook`.
-This is the manual model-free republication path, not an additional generation
-stage.
+`--format pdf` and `--format web` limit returned delivery artifacts, not the
+formats ARC attempts. If PDF still fails, the command completes with the Web
+release and a warning. `--format web` or `--format all` reports the Web
+artifact; `--format pdf` returns no nonexistent delivery artifact. Repeating
+the command after the PDF toolchain is repaired publishes the complete release
+from the same `AcceptedBook` without model calls. This is the manual model-free
+republication path, not an additional generation stage.

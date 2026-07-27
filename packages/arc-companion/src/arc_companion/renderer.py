@@ -51,6 +51,7 @@ class RenderedCompanion:
     accepted_book_digest: str
     web_index: Path | None = None
     pdf_path: Path | None = None
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -244,7 +245,18 @@ class CompanionRenderer:
         self, book: AcceptedBook, *, web_dir: Path, pdf_path: Path
     ) -> RenderedCompanion:
         web_index = self.render_web(book, web_dir)
-        rendered_pdf = self.render_pdf(book, pdf_path)
+        try:
+            rendered_pdf = self.render_pdf(book, pdf_path)
+        except (CompanionRenderError, subprocess.SubprocessError) as exc:
+            # A valid Web reader remains useful when the optional physical
+            # rendering toolchain is unavailable or its output fails
+            # validation. Never leave an invalid PDF looking publishable.
+            pdf_path.unlink(missing_ok=True)
+            return RenderedCompanion(
+                accepted_book_digest=book.content_digest,
+                web_index=web_index,
+                warnings=(str(exc),),
+            )
         return RenderedCompanion(
             accepted_book_digest=book.content_digest,
             web_index=web_index,
@@ -1461,13 +1473,18 @@ def _compile_tex(tex_path: Path, content_digest: str) -> Path:
         raise CompanionRenderError(
             "kpsewhich is required to verify Companion PDF packages"
         )
-    pdfcomment = subprocess.run(
-        [kpsewhich, "pdfcomment.sty"],
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
+    try:
+        pdfcomment = subprocess.run(
+            [kpsewhich, "pdfcomment.sty"],
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CompanionRenderError(
+            f"kpsewhich could not verify Companion PDF packages: {exc}"
+        ) from exc
     if pdfcomment.returncode != 0 or not pdfcomment.stdout.strip():
         raise CompanionRenderError(
             "the TeX pdfcomment package is required for glossary tooltips"
@@ -1483,15 +1500,20 @@ def _compile_tex(tex_path: Path, content_digest: str) -> Path:
     ]
     environment = dict(os.environ)
     environment["SOURCE_DATE_EPOCH"] = _SOURCE_DATE_EPOCH
-    completed = subprocess.run(
-        command,
-        cwd=tex_path.parent,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=180,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=tex_path.parent,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=180,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CompanionRenderError(
+            f"XeLaTeX compilation could not complete: {exc}"
+        ) from exc
     built = tex_path.parent / f"{jobname}.pdf"
     if completed.returncode != 0 or not built.is_file():
         tail = "\n".join((completed.stdout + completed.stderr).splitlines()[-30:])
@@ -1500,9 +1522,18 @@ def _compile_tex(tex_path: Path, content_digest: str) -> Path:
 
 
 def _run(command: list[str]) -> str:
-    completed = subprocess.run(
-        command, text=True, capture_output=True, timeout=120, check=False
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CompanionRenderError(
+            f"{Path(command[0]).name} could not complete: {exc}"
+        ) from exc
     if completed.returncode != 0:
         raise CompanionRenderError(
             f"{Path(command[0]).name} failed: {completed.stderr[-1200:]}"

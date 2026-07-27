@@ -67,22 +67,27 @@ explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
 identical value when resuming. This runtime setting does not change the
 Companion build recipe or release artifacts.
 
-A successful build or resume formally publishes and validates one complete
-immutable PDF/Web release. The model-free `render` command is the manual
-republication path for an already accepted book after renderer, font, style,
-or validation changes; its `--format` option only filters reported artifacts.
-Every successful publication also refreshes the managed project-root
-`companion.pdf` and `companion.html` delivery copies. The PDF is byte-for-byte
-the canonical release PDF. The HTML contains a base link to the canonical
+A successful build or resume formally publishes and validates an immutable
+Web release and attempts the optional PDF rendering. A PDF rendering or
+validation failure is reported as `pdf_render_failed`; it does not change the
+successful build status or prevent publication of the Web reader. The
+model-free `render` command is the manual republication path for an already
+accepted book after renderer, font, style, or validation changes; its
+`--format` option only filters reported artifacts.
+
+Every successful publication refreshes the managed project-root
+`companion.html` delivery copy. When PDF rendering succeeds it also refreshes
+`companion.pdf`, which is byte-for-byte the canonical release PDF. A Web-only
+publication removes any stale managed PDF so it cannot be mistaken for part of
+the current release. The HTML contains a base link to the canonical
 `releases/<release-id>/reader/index.html`, so reader assets and fragment links
-continue to resolve inside the immutable release. Command artifacts still
-identify the project-root PDF and HTML delivery files; command data reports
-the two delivery paths. Durable runs, diagnostics, and frozen source assets
-are stored under `<project-dir>/.arc/companion/`. Paper data remains in ARC's
-shared reusable paper cache unless `--paper-cache-root` selects another shared
-cache. Figure assets needed by a completed release are frozen into the project
-before publication completes, so later rendering does not depend on cache
-retention.
+continue to resolve inside the immutable release. Command artifacts and data
+report only the formats and delivery paths that were actually published.
+Durable runs, diagnostics, and frozen source assets are stored under
+`<project-dir>/.arc/companion/`. Paper data remains in ARC's shared reusable
+paper cache unless `--paper-cache-root` selects another shared cache. Figure
+assets needed by a completed release are frozen into the project before
+publication completes, so later rendering does not depend on cache retention.
 
 The project layout is stable:
 

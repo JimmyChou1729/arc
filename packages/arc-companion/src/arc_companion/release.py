@@ -1,4 +1,4 @@
-"""Immutable PDF/Web release publication from an accepted book."""
+"""Immutable release publication from an accepted book."""
 
 from __future__ import annotations
 
@@ -24,9 +24,13 @@ from .renderer import (
 )
 
 
-RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v1"
-DELIVERY_RECIPE = "arc.companion.delivery.v1"
+_LEGACY_RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v1"
+RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v2"
+_LEGACY_DELIVERY_RECIPE = "arc.companion.delivery.v1"
+DELIVERY_RECIPE = "arc.companion.delivery.v2"
 RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v4"
+_FULL_FORMATS = ("pdf", "web")
+_WEB_ONLY_FORMATS = ("web",)
 _WINDOWS = os.name == "nt"
 
 
@@ -40,10 +44,12 @@ class CompanionReleaseError(RuntimeError):
 class CompanionRelease:
     release_id: str
     directory: Path
-    pdf: Path
+    available_formats: tuple[str, ...]
+    pdf: Path | None
     web_index: Path
     manifest: Path
     reused: bool
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,19 +85,25 @@ class CompanionReleasePublisher:
         *,
         run_id: str,
     ) -> CompanionRelease:
-        release_id = release_id_for(book)
-        target = self.project.releases_root / release_id
-        expected_identity = _release_identity(book)
-        if target.exists():
+        full_release_id = release_id_for(book)
+        full_target = self.project.releases_root / full_release_id
+        if full_target.exists():
             release = self._verify_existing(
-                target, release_id=release_id, identity=expected_identity
+                full_target,
+                release_id=full_release_id,
+                book=book,
             )
+            if release.available_formats != _FULL_FORMATS:
+                raise CompanionReleaseError(
+                    "release_conflict",
+                    "complete release path does not contain both PDF and Web",
+                )
             self._publish_delivery(release, run_id=run_id)
             return release
         self.project.releases_root.mkdir(parents=True, exist_ok=True)
         staging = Path(
             tempfile.mkdtemp(
-                prefix=f".{release_id}.",
+                prefix=".release.",
                 dir=self.project.releases_root,
             )
         )
@@ -99,16 +111,42 @@ class CompanionReleasePublisher:
         try:
             pdf = staging / "companion.pdf"
             web_dir = staging / "reader"
-            self.renderer.render_all(book, web_dir=web_dir, pdf_path=pdf)
+            rendered = self.renderer.render_all(
+                book, web_dir=web_dir, pdf_path=pdf
+            )
+            if (
+                rendered.accepted_book_digest != book.content_digest
+                or rendered.web_index is None
+            ):
+                raise CompanionReleaseError(
+                    "release_invalid",
+                    "renderer did not return a Web reader for the accepted book",
+                )
+            available_formats = (
+                _FULL_FORMATS
+                if rendered.pdf_path is not None
+                else _WEB_ONLY_FORMATS
+            )
+            expected_identity = _release_identity(
+                book, available_formats=available_formats
+            )
+            release_id = _release_id(expected_identity)
+            target = self.project.releases_root / release_id
             files = _file_records(staging)
             document = {
                 "schema_version": RELEASE_MANIFEST_SCHEMA,
                 "release_id": release_id,
                 "identity": expected_identity,
+                "available_formats": list(available_formats),
                 "files": files,
             }
             manifest = staging / "manifest.json"
             manifest.write_bytes(canonical_json_bytes(document) + b"\n")
+            self._verify_existing(
+                staging,
+                release_id=release_id,
+                book=book,
+            )
             _fsync_tree(staging)
             try:
                 os.rename(staging, target)
@@ -124,15 +162,19 @@ class CompanionReleasePublisher:
             else:
                 _fsync_directory(self.project.releases_root)
             release = self._verify_existing(
-                target, release_id=release_id, identity=expected_identity
+                target,
+                release_id=release_id,
+                book=book,
             )
             published = CompanionRelease(
                 release.release_id,
                 release.directory,
+                release.available_formats,
                 release.pdf,
                 release.web_index,
                 release.manifest,
                 reused,
+                tuple(rendered.warnings),
             )
             self._publish_delivery(published, run_id=run_id)
             return published
@@ -146,10 +188,11 @@ class CompanionReleasePublisher:
         release = self._verify_existing(
             target,
             release_id=release_id,
-            identity=_release_identity(book),
+            book=book,
         )
-        self.renderer.validate_pdf(book, release.pdf)
         self.renderer.validate_web(book, release.web_index)
+        if release.pdf is not None:
+            self.renderer.validate_pdf(book, release.pdf)
         return release
 
     def validate_current(
@@ -192,18 +235,23 @@ class CompanionReleasePublisher:
             )
         )
         try:
-            staged_pdf = staging / "companion.pdf"
             staged_html = staging / "companion.html"
-            shutil.copyfile(release.pdf, staged_pdf)
+            staged_pdf: Path | None = None
+            if release.pdf is not None:
+                staged_pdf = staging / "companion.pdf"
+                shutil.copyfile(release.pdf, staged_pdf)
             staged_html.write_bytes(
                 _delivery_html_bytes(release.web_index, release.release_id)
             )
             previous = self._snapshot_delivery()
             try:
-                self._replace_delivery_file(
-                    staged_pdf,
-                    self.project.delivery_pdf,
-                )
+                if staged_pdf is None:
+                    self.project.delivery_pdf.unlink(missing_ok=True)
+                else:
+                    self._replace_delivery_file(
+                        staged_pdf,
+                        self.project.delivery_pdf,
+                    )
                 self._replace_delivery_file(
                     staged_html,
                     self.project.delivery_html,
@@ -225,7 +273,11 @@ class CompanionReleasePublisher:
         atomic_write_bytes(target, staged.read_bytes())
 
     def _verify_delivery(self, release: CompanionRelease) -> None:
-        _verify_delivery_files(self.project, release.release_id)
+        _verify_delivery_files(
+            self.project,
+            release.release_id,
+            release.available_formats,
+        )
 
     def _snapshot_delivery(self) -> _DeliverySnapshot:
         return _DeliverySnapshot(
@@ -312,7 +364,7 @@ class CompanionReleasePublisher:
         target: Path,
         *,
         release_id: str,
-        identity: dict[str, str],
+        book: AcceptedBook,
     ) -> CompanionRelease:
         manifest = target / "manifest.json"
         try:
@@ -321,19 +373,49 @@ class CompanionReleasePublisher:
             raise CompanionReleaseError(
                 "release_invalid", "release manifest is unreadable"
             ) from exc
-        if not isinstance(value, dict) or set(value) != {
-            "schema_version",
-            "release_id",
-            "identity",
-            "files",
-        }:
+        if not isinstance(value, dict):
+            raise CompanionReleaseError(
+                "release_invalid", "release manifest has invalid fields"
+            )
+        schema = value.get("schema_version")
+        if schema == _LEGACY_RELEASE_MANIFEST_SCHEMA:
+            expected_fields = {
+                "schema_version",
+                "release_id",
+                "identity",
+                "files",
+            }
+            available_formats = _FULL_FORMATS
+            expected_identity = _legacy_release_identity(book)
+        elif schema == RELEASE_MANIFEST_SCHEMA:
+            expected_fields = {
+                "schema_version",
+                "release_id",
+                "identity",
+                "available_formats",
+                "files",
+            }
+            available_formats = _normalize_available_formats(
+                value.get("available_formats"),
+                code="release_invalid",
+            )
+            expected_identity = _release_identity(
+                book,
+                available_formats=available_formats,
+            )
+        else:
+            raise CompanionReleaseError(
+                "release_invalid",
+                "release manifest uses an unsupported schema",
+            )
+        if set(value) != expected_fields:
             raise CompanionReleaseError(
                 "release_invalid", "release manifest has invalid fields"
             )
         if (
-            value["schema_version"] != RELEASE_MANIFEST_SCHEMA
-            or value["release_id"] != release_id
-            or value["identity"] != identity
+            value["release_id"] != release_id
+            or value["identity"] != expected_identity
+            or release_id != _release_id(expected_identity)
         ):
             raise CompanionReleaseError(
                 "release_conflict", "release identity conflicts with its path"
@@ -361,15 +443,20 @@ class CompanionReleasePublisher:
                 "release_invalid",
                 "release file set does not exactly match its manifest",
             )
-        pdf = target / "companion.pdf"
+        pdf_path = target / "companion.pdf"
         web_index = target / "reader" / "index.html"
-        if not pdf.is_file() or not web_index.is_file():
+        if not web_index.is_file() or (
+            ("pdf" in available_formats) != pdf_path.is_file()
+        ):
             raise CompanionReleaseError(
-                "release_invalid", "release is missing PDF or Web output"
+                "release_invalid",
+                "release files do not match its available formats",
             )
+        pdf = pdf_path if "pdf" in available_formats else None
         return CompanionRelease(
             release_id,
             target,
+            available_formats,
             pdf,
             web_index,
             manifest,
@@ -378,13 +465,21 @@ class CompanionReleasePublisher:
 
 
 def release_id_for(book: AcceptedBook) -> str:
-    digest = hashlib.sha256(
-        canonical_json_bytes(_release_identity(book))
-    ).hexdigest()
+    return _release_id(
+        _release_identity(book, available_formats=_FULL_FORMATS)
+    )
+
+
+def _release_id(identity: dict[str, Any]) -> str:
+    digest = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
     return f"release-{digest[:24]}"
 
 
-def _release_identity(book: AcceptedBook) -> dict[str, str]:
+def _release_identity(
+    book: AcceptedBook,
+    *,
+    available_formats: tuple[str, ...],
+) -> dict[str, Any]:
     return {
         "accepted_book_digest": book.content_digest,
         "pdf_render_recipe": PDF_RENDER_RECIPE,
@@ -392,13 +487,25 @@ def _release_identity(book: AcceptedBook) -> dict[str, str]:
         "validator_version": RENDER_VALIDATOR_VERSION,
         "delivery_recipe": DELIVERY_RECIPE,
         "manifest_schema": RELEASE_MANIFEST_SCHEMA,
+        "available_formats": list(available_formats),
+    }
+
+
+def _legacy_release_identity(book: AcceptedBook) -> dict[str, str]:
+    return {
+        "accepted_book_digest": book.content_digest,
+        "pdf_render_recipe": PDF_RENDER_RECIPE,
+        "web_render_recipe": WEB_RENDER_RECIPE,
+        "validator_version": RENDER_VALIDATOR_VERSION,
+        "delivery_recipe": _LEGACY_DELIVERY_RECIPE,
+        "manifest_schema": _LEGACY_RELEASE_MANIFEST_SCHEMA,
     }
 
 
 def validate_current_delivery(
     project: CompanionProjectPaths,
     pointer: dict[str, Any],
-) -> None:
+) -> tuple[str, ...]:
     """Read-only validation of root projections for the pointed release."""
 
     release_id = pointer.get("release_id")
@@ -407,28 +514,65 @@ def validate_current_delivery(
             "delivery_invalid",
             "current release has no usable delivery identity",
         )
-    _verify_delivery_files(project, release_id)
+    manifest = project.releases_root / release_id / "manifest.json"
+    try:
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CompanionReleaseError(
+            "delivery_invalid",
+            "current release manifest is unreadable",
+        ) from exc
+    if not isinstance(value, dict):
+        raise CompanionReleaseError(
+            "delivery_invalid",
+            "current release manifest is invalid",
+        )
+    schema = value.get("schema_version")
+    if schema == _LEGACY_RELEASE_MANIFEST_SCHEMA:
+        available_formats = _FULL_FORMATS
+    elif schema == RELEASE_MANIFEST_SCHEMA:
+        available_formats = _normalize_available_formats(
+            value.get("available_formats"),
+            code="delivery_invalid",
+        )
+    else:
+        raise CompanionReleaseError(
+            "delivery_invalid",
+            "current release manifest uses an unsupported schema",
+        )
+    _verify_delivery_files(project, release_id, available_formats)
+    return available_formats
 
 
 def _verify_delivery_files(
     project: CompanionProjectPaths,
     release_id: str,
+    available_formats: tuple[str, ...],
 ) -> None:
     release = project.releases_root / release_id
     canonical_pdf = release / "companion.pdf"
     canonical_html = release / "reader" / "index.html"
     try:
-        expected_pdf = canonical_pdf.read_bytes()
         expected_html = _delivery_html_bytes(canonical_html, release_id)
     except OSError as exc:
         raise CompanionReleaseError(
             "delivery_invalid",
             "current release delivery sources are unavailable",
         ) from exc
-    expected = {
-        project.delivery_pdf: expected_pdf,
-        project.delivery_html: expected_html,
-    }
+    expected = {project.delivery_html: expected_html}
+    if "pdf" in available_formats:
+        try:
+            expected[project.delivery_pdf] = canonical_pdf.read_bytes()
+        except OSError as exc:
+            raise CompanionReleaseError(
+                "delivery_invalid",
+                "current release PDF source is unavailable",
+            ) from exc
+    elif project.delivery_pdf.exists():
+        raise CompanionReleaseError(
+            "delivery_invalid",
+            "project delivery contains a PDF not available in the current release",
+        )
     for path, payload in expected.items():
         try:
             actual = path.read_bytes()
@@ -442,6 +586,25 @@ def _verify_delivery_files(
                 "delivery_invalid",
                 f"project delivery does not match the current release: {path.name}",
             )
+
+
+def _normalize_available_formats(
+    value: Any,
+    *,
+    code: str,
+) -> tuple[str, ...]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) for item in value
+    ):
+        raise CompanionReleaseError(
+            code, "release available formats are invalid"
+        )
+    formats = tuple(value)
+    if formats not in {_WEB_ONLY_FORMATS, _FULL_FORMATS}:
+        raise CompanionReleaseError(
+            code, "release available formats are invalid"
+        )
+    return formats
 
 
 def _snapshot_file(path: Path) -> _FileSnapshot:

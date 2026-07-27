@@ -5,7 +5,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from arc_jobs import CommandResult, CommandStatus, RunStatus
+from arc_jobs import (
+    CommandResult,
+    CommandStatus,
+    RunSnapshot,
+    RunStatus,
+)
 from arc_paper import (
     RichDocumentParserService,
     RichDocumentValidationError,
@@ -98,8 +103,16 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
             return SimpleNamespace(
                 release_id="release-fake",
                 reused=False,
-                manifest=project / "releases" / "release-fake" / "manifest.json",
-                pdf=project / "releases" / "release-fake" / "companion.pdf",
+                available_formats=("pdf", "web"),
+                warnings=(),
+                manifest=project
+                / "releases"
+                / "release-fake"
+                / "manifest.json",
+                pdf=project
+                / "releases"
+                / "release-fake"
+                / "companion.pdf",
                 web_index=(
                     project
                     / "releases"
@@ -178,9 +191,10 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
     assert rendered["data"] == {
         "release_id": "release-fake",
         "reused": False,
+        "available_formats": ["pdf", "web"],
         "delivery": {
-            "pdf": str(project / "companion.pdf"),
             "html": str(project / "companion.html"),
+            "pdf": str(project / "companion.pdf"),
         },
     }
     assert {item["role"] for item in rendered["artifacts"]} == {
@@ -206,9 +220,10 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
     assert validated["data"] == {
         "release_id": "release-fake",
         "valid": True,
+        "available_formats": ["pdf", "web"],
         "delivery": {
-            "pdf": str(project / "companion.pdf"),
             "html": str(project / "companion.html"),
+            "pdf": str(project / "companion.pdf"),
         },
     }
     assert {item["role"] for item in validated["artifacts"]} == {
@@ -216,6 +231,139 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
         "pdf",
         "web",
     }
+
+
+def test_render_reports_web_only_release_without_a_pdf_path(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    project.select_run("companion-web-only")
+
+    class FakeService:
+        def __init__(self, _repository) -> None:
+            pass
+
+        def inspect(self, _run_id):
+            return SimpleNamespace(
+                snapshot=SimpleNamespace(status=RunStatus.SUCCEEDED)
+            )
+
+        def accepted_book(self, _run_id):
+            return object()
+
+    class FakePublisher:
+        def publish(self, _book, *, run_id):
+            assert run_id == "companion-web-only"
+            return SimpleNamespace(
+                release_id="release-web-only",
+                reused=False,
+                available_formats=("web",),
+                warnings=("XeLaTeX compilation failed",),
+                manifest=(
+                    project.releases_root
+                    / "release-web-only"
+                    / "manifest.json"
+                ),
+                pdf=None,
+                web_index=(
+                    project.releases_root
+                    / "release-web-only"
+                    / "reader"
+                    / "index.html"
+                ),
+            )
+
+    monkeypatch.setattr(cli_module, "CompanionService", FakeService)
+    monkeypatch.setattr(
+        cli_module,
+        "_publisher",
+        lambda _paths, **_kwargs: FakePublisher(),
+    )
+
+    assert main(
+        ["render", "--project-dir", str(project.root), "--format", "all"]
+    ) == 0
+    result = _result(capsys)
+
+    assert result["status"] == "completed"
+    assert result["data"]["available_formats"] == ["web"]
+    assert result["data"]["delivery"] == {
+        "html": str(project.delivery_html)
+    }
+    assert {item["role"] for item in result["artifacts"]} == {
+        "manifest",
+        "web",
+    }
+    assert result["warnings"] == [
+        {
+            "code": "pdf_render_failed",
+            "message": "XeLaTeX compilation failed",
+            "details": {
+                "format": "pdf",
+                "available_formats": ["web"],
+            },
+        }
+    ]
+
+
+def test_web_render_failure_does_not_change_successful_build_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    snapshot = RunSnapshot(
+        run_id="companion-accepted",
+        revision=3,
+        status=RunStatus.SUCCEEDED,
+        attempt=1,
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:01Z",
+    )
+
+    class FakeService:
+        def __init__(self, _repository) -> None:
+            pass
+
+        def accepted_book(self, run_id):
+            assert run_id == snapshot.run_id
+            return object()
+
+        def translation_reuse_receipt(self, run_id):
+            assert run_id == snapshot.run_id
+            return None
+
+        def build_diagnostics(self, run_id):
+            assert run_id == snapshot.run_id
+            return None
+
+    class FailingPublisher:
+        def publish(self, _book, *, run_id):
+            assert run_id == snapshot.run_id
+            raise CompanionRenderError("Web reader validation failed")
+
+    monkeypatch.setattr(cli_module, "CompanionService", FakeService)
+    monkeypatch.setattr(
+        cli_module,
+        "_publisher",
+        lambda _paths, **_kwargs: FailingPublisher(),
+    )
+
+    result = cli_module._snapshot_result(project, snapshot)
+
+    assert result.status is CommandStatus.COMPLETED
+    assert result.data["run"]["status"] == "succeeded"
+    assert result.data["published"] is False
+    assert result.data["available_formats"] == []
+    assert result.artifacts == ()
+    assert result.warnings == (
+        cli_module.CommandWarning(
+            "web_render_failed",
+            "Web reader validation failed",
+            {"format": "web", "available_formats": []},
+        ),
+    )
 
 
 def test_main_model_provider_errors_use_invalid_request_envelope(

@@ -38,6 +38,7 @@ from arc_companion.release import (
     CompanionReleasePublisher,
     release_id_for,
 )
+from arc_companion.renderer import RenderedCompanion
 
 
 class _FakeRenderer:
@@ -56,6 +57,11 @@ class _FakeRenderer:
             encoding="utf-8",
         )
         pdf_path.write_bytes(b"%PDF-1.4\n% deterministic fixture\n")
+        return RenderedCompanion(
+            accepted_book_digest=book.content_digest,
+            web_index=web_dir / "index.html",
+            pdf_path=pdf_path,
+        )
 
     def validate_pdf(self, book, path: Path) -> None:
         assert path.read_bytes().startswith(b"%PDF")
@@ -67,6 +73,19 @@ class _FakeRenderer:
 class _FailingRenderer:
     def render_all(self, book, *, web_dir: Path, pdf_path: Path):
         raise RuntimeError("renderer failed")
+
+
+class _WebOnlyRenderer(_FakeRenderer):
+    def render_all(self, book, *, web_dir: Path, pdf_path: Path):
+        rendered = super().render_all(
+            book, web_dir=web_dir, pdf_path=pdf_path
+        )
+        pdf_path.unlink()
+        return RenderedCompanion(
+            accepted_book_digest=rendered.accepted_book_digest,
+            web_index=rendered.web_index,
+            warnings=("latexmk is unavailable",),
+        )
 
 
 def _book() -> AcceptedBook:
@@ -496,10 +515,13 @@ def test_status_waits_for_delivery_publication_before_reading_current(
 
     class DistinctPdfRenderer(_FakeRenderer):
         def render_all(self, book, *, web_dir: Path, pdf_path: Path):
-            super().render_all(book, web_dir=web_dir, pdf_path=pdf_path)
+            rendered = super().render_all(
+                book, web_dir=web_dir, pdf_path=pdf_path
+            )
             pdf_path.write_bytes(
                 b"%PDF-1.4\n% " + book.title.encode("utf-8") + b"\n"
             )
+            return rendered
 
     RunEngine(repository).execute(
         RunSpec(run_id, PausingHandler.name, {}),
@@ -528,9 +550,9 @@ def test_status_waits_for_delivery_publication_before_reading_current(
         status_lease_requested.set()
         return file_lease(path, blocking=blocking)
 
-    def observed_validate(paths, pointer) -> None:
+    def observed_validate(paths, pointer):
         status_validating.set()
-        original_validate(paths, pointer)
+        return original_validate(paths, pointer)
 
     def render() -> None:
         try:
@@ -587,6 +609,47 @@ def test_status_waits_for_delivery_publication_before_reading_current(
         render_results[0].release_id
     )
     assert result.warnings == ()
+
+
+def test_status_reports_web_only_current_release_without_pdf_artifact(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    run_id = "companion-web-only-status"
+    project.select_run(run_id)
+    repository = RunRepository(project.jobs_root)
+
+    class PausingHandler:
+        name = "arc.companion.build.v2"
+
+        def execute(self, _context):
+            return Paused(
+                Awaiting(ResumeReason.EXTERNAL_CONDITION, "resume", False)
+            )
+
+    RunEngine(repository).execute(
+        RunSpec(run_id, PausingHandler.name, {}),
+        PausingHandler(),
+    )
+    release = CompanionReleasePublisher(  # type: ignore[arg-type]
+        project,
+        _WebOnlyRenderer(),
+    ).publish(_book(), run_id=run_id)
+
+    assert main(["status", "--project-dir", str(project.root)]) == 2
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["data"]["active_release"]["release_id"] == (
+        release.release_id
+    )
+    assert result["data"]["active_release"]["available_formats"] == ["web"]
+    assert {item["role"] for item in result["artifacts"]} == {
+        "manifest",
+        "web",
+    }
+    assert result["warnings"] == []
+    assert not project.delivery_pdf.exists()
 
 
 def test_stop_acknowledges_a_running_attempt_before_it_pauses(
@@ -678,6 +741,7 @@ def test_release_is_immutable_reused_and_current_updates_last(
     assert project.delivery_html.read_bytes() != first.web_index.read_bytes()
     manifest = json.loads(first.manifest.read_text(encoding="utf-8"))
     assert manifest["identity"]["accepted_book_digest"] == book.content_digest
+    assert manifest["available_formats"] == ["pdf", "web"]
     assert {item["path"] for item in manifest["files"]} >= {
         "companion.pdf",
         "reader/index.html",
@@ -699,6 +763,112 @@ def test_release_is_immutable_reused_and_current_updates_last(
     assert all(event[2] for event in current_parent_syncs)
     assert events.index(release_parent_syncs[-1]) < events.index(
         current_parent_syncs[0]
+    )
+
+
+def test_pdf_failure_publishes_web_only_and_later_retry_publishes_full_release(
+    tmp_path: Path,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    initial = CompanionReleasePublisher(project, _FakeRenderer()).publish(  # type: ignore[arg-type]
+        _book(),
+        run_id="initial-run",
+    )
+    assert project.delivery_pdf.is_file()
+    retry_book = replace(_book(), title="Retry fixture")
+
+    web_only = CompanionReleasePublisher(  # type: ignore[arg-type]
+        project,
+        _WebOnlyRenderer(),
+    ).publish(retry_book, run_id="web-only-run")
+
+    assert web_only.available_formats == ("web",)
+    assert web_only.pdf is None
+    assert web_only.warnings == ("latexmk is unavailable",)
+    assert web_only.release_id != initial.release_id
+    assert not (web_only.directory / "companion.pdf").exists()
+    web_manifest = json.loads(
+        web_only.manifest.read_text(encoding="utf-8")
+    )
+    assert web_manifest["available_formats"] == ["web"]
+    assert "companion.pdf" not in {
+        item["path"] for item in web_manifest["files"]
+    }
+    assert not project.delivery_pdf.exists()
+    assert web_only.release_id in project.delivery_html.read_text(
+        encoding="utf-8"
+    )
+    current = project.current_release()
+    assert current is not None
+    assert current["release_id"] == web_only.release_id
+    validated_web = CompanionReleasePublisher(  # type: ignore[arg-type]
+        project,
+        _FakeRenderer(),
+    ).validate_current(current, retry_book)
+    assert validated_web.available_formats == ("web",)
+    assert validated_web.pdf is None
+
+    full = CompanionReleasePublisher(project, _FakeRenderer()).publish(  # type: ignore[arg-type]
+        retry_book,
+        run_id="full-retry-run",
+    )
+
+    assert full.available_formats == ("pdf", "web")
+    assert full.pdf is not None
+    assert full.release_id != web_only.release_id
+    assert web_only.directory.is_dir()
+    assert not (web_only.directory / "companion.pdf").exists()
+    assert project.delivery_pdf.read_bytes() == full.pdf.read_bytes()
+    assert project.current_release()["release_id"] == full.release_id  # type: ignore[index]
+
+
+def test_legacy_release_manifest_and_current_pointer_remain_readable(
+    tmp_path: Path,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    book = _book()
+    current_release = publisher.publish(book, run_id="new-run")
+    current_manifest = json.loads(
+        current_release.manifest.read_text(encoding="utf-8")
+    )
+    legacy_identity = release_module._legacy_release_identity(book)
+    legacy_id = release_module._release_id(legacy_identity)
+    legacy_directory = project.releases_root / legacy_id
+    shutil.copytree(current_release.directory, legacy_directory)
+    legacy_manifest = legacy_directory / "manifest.json"
+    legacy_manifest.write_bytes(
+        release_module.canonical_json_bytes(
+            {
+                "schema_version": "arc.companion.release_manifest.v1",
+                "release_id": legacy_id,
+                "identity": legacy_identity,
+                "files": current_manifest["files"],
+            }
+        )
+        + b"\n"
+    )
+    legacy_pdf = legacy_directory / "companion.pdf"
+    legacy_web = legacy_directory / "reader" / "index.html"
+    project.delivery_pdf.write_bytes(legacy_pdf.read_bytes())
+    project.delivery_html.write_bytes(
+        release_module._delivery_html_bytes(legacy_web, legacy_id)
+    )
+    project.publish_current(
+        release_id=legacy_id,
+        manifest=legacy_manifest,
+        run_id="legacy-run",
+    )
+
+    pointer = project.current_release()
+    assert pointer is not None
+    validated = publisher.validate_current(pointer, book)
+
+    assert validated.release_id == legacy_id
+    assert validated.available_formats == ("pdf", "web")
+    assert release_module.validate_current_delivery(project, pointer) == (
+        "pdf",
+        "web",
     )
 
 
@@ -919,6 +1089,44 @@ def test_current_publish_failure_restores_prior_pair_and_pointer(
     with pytest.raises(OSError, match="current pointer interruption"):
         publisher.publish(
             replace(_book(), title="Second fixture"),
+            run_id="run-two",
+        )
+
+    assert project.delivery_pdf.read_bytes() == old_pdf == first.pdf.read_bytes()
+    assert project.delivery_html.read_bytes() == old_html
+    assert project.current.read_bytes() == old_current
+
+
+def test_web_only_current_publish_failure_restores_prior_pdf_and_pointer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    first = CompanionReleasePublisher(project, _FakeRenderer()).publish(  # type: ignore[arg-type]
+        _book(),
+        run_id="run-one",
+    )
+    old_pdf = project.delivery_pdf.read_bytes()
+    old_html = project.delivery_html.read_bytes()
+    old_current = project.current.read_bytes()
+    original_publish_current = CompanionProjectPaths.publish_current
+
+    def fail_after_publish(self, **kwargs) -> None:
+        original_publish_current(self, **kwargs)
+        raise OSError("current pointer interruption")
+
+    monkeypatch.setattr(
+        CompanionProjectPaths,
+        "publish_current",
+        fail_after_publish,
+    )
+
+    with pytest.raises(OSError, match="current pointer interruption"):
+        CompanionReleasePublisher(  # type: ignore[arg-type]
+            project,
+            _WebOnlyRenderer(),
+        ).publish(
+            replace(_book(), title="Web-only fixture"),
             run_id="run-two",
         )
 

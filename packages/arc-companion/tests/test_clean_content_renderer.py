@@ -430,6 +430,49 @@ def _book_with_glossary_highlights(
     )
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        CompanionRenderError("PDF validation failed"),
+        subprocess.TimeoutExpired(["latexmk"], 180),
+    ],
+    ids=("validation", "timeout"),
+)
+def test_render_all_keeps_valid_web_when_pdf_render_fails(
+    accepted_book: AcceptedBook,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+) -> None:
+    renderer = CompanionRenderer()
+    web_index = tmp_path / "reader" / "index.html"
+    pdf_path = tmp_path / "companion.pdf"
+
+    def render_web(_book: AcceptedBook, output_dir: Path) -> Path:
+        output_dir.mkdir(parents=True)
+        web_index.write_text("<html>valid reader</html>", encoding="utf-8")
+        return web_index
+
+    def fail_pdf(_book: AcceptedBook, output_path: Path) -> Path:
+        output_path.write_bytes(b"invalid partial PDF")
+        raise failure
+
+    monkeypatch.setattr(renderer, "render_web", render_web)
+    monkeypatch.setattr(renderer, "render_pdf", fail_pdf)
+
+    rendered = renderer.render_all(
+        accepted_book,
+        web_dir=web_index.parent,
+        pdf_path=pdf_path,
+    )
+
+    assert rendered.web_index == web_index
+    assert rendered.pdf_path is None
+    assert rendered.warnings == (str(failure),)
+    assert web_index.is_file()
+    assert not pdf_path.exists()
+
+
 def test_accepted_book_codec_is_canonical_strict_and_immutable(
     accepted_book: AcceptedBook,
 ) -> None:
