@@ -59,6 +59,7 @@ class FakeGuideTasks:
         remove_second_unit: bool = False,
         malformed_evidence: bool = False,
         select_evidence: bool = False,
+        reviewer_stop_round: int | None = None,
         semantic_invalid_contract: str | None = None,
         semantic_invalid_calls: frozenset[int] = frozenset({1}),
     ) -> None:
@@ -67,6 +68,7 @@ class FakeGuideTasks:
         self.remove_second_unit = remove_second_unit
         self.malformed_evidence = malformed_evidence
         self.select_evidence = select_evidence
+        self.reviewer_stop_round = reviewer_stop_round
         self.semantic_invalid_contract = semantic_invalid_contract
         self.semantic_invalid_calls = semantic_invalid_calls
         self.counts: Counter[str] = Counter()
@@ -206,9 +208,10 @@ class FakeGuideTasks:
             if self.guide_started is not None:
                 self.guide_started.set()
             if self.translation_started is not None:
-                assert self.translation_started.wait(timeout=5)
+                assert self.translation_started.is_set()
+            round_task = payload["_round_task"]
+            revised = round_task["kind"] == "revised_proposal"
             value = {
-                "chapter_id": payload["plan"]["chapter_id"],
                 "learning_units": [
                     {
                         "unit_id": item["unit_id"],
@@ -224,29 +227,45 @@ class FakeGuideTasks:
                         ),
                     }
                     for item in payload["plan"]["learning_units"]
+                    if not (
+                        revised
+                        and self.remove_second_unit
+                        and item["unit_id"] == "redundant"
+                    )
                 ],
             }
         elif contract == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION:
             assert "translations" not in payload["draft"]
+            round_number = payload["_round_task"]["round"]
+            action = (
+                "stop"
+                if self.reviewer_stop_round is not None
+                and round_number >= self.reviewer_stop_round
+                else "continue"
+            )
             value = {
-                "decisions": [
-                    {
-                        "unit_id": item["unit_id"],
-                        "decision": (
-                            "remove"
-                            if item["unit_id"] == "redundant"
-                            else "keep"
-                        ),
-                        "replacement_title": None,
-                        "replacement_markdown": None,
-                        "reason": (
-                            "It merely restates the source."
-                            if item["unit_id"] == "redundant"
-                            else "It adds a focused explanation."
-                        ),
-                    }
-                    for item in payload["draft"]["learning_units"]
-                ],
+                "schema_version": "arc.proposer_reviewer.review.v1",
+                "action": action,
+                "reason": (
+                    "The proposal satisfies the reader needs."
+                    if action == "stop"
+                    else "One concrete revision remains."
+                ),
+                "feedback": {
+                    "guide-proposer": (
+                        "Preserve the grounded explanation and remove the "
+                        "redundant unit; keep the same source anchor."
+                    )
+                },
+                "payload": {
+                    "reader_needs_satisfied": action == "stop",
+                    "grounding_sufficient": True,
+                    "remaining_issues": (
+                        []
+                        if action == "stop"
+                        else ["Remove any redundant restatement."]
+                    ),
+                },
             }
         else:
             raise AssertionError(f"unexpected guide contract: {contract}")
@@ -259,6 +278,9 @@ class FakeGuideTasks:
         with self._lock:
             self._completed[request.task_id] = completed
         return completed
+
+    def execute(self, context, request, **kwargs):
+        return self.execute_or_resume(context, request, **kwargs)
 
 
 def _semantically_invalid_value(contract: str, value: dict) -> dict:
@@ -281,8 +303,6 @@ def _semantically_invalid_value(contract: str, value: dict) -> dict:
         invalid["reader_needs"][0]["block_id"] = "unknown-block"
     elif contract == CHAPTER_GUIDE_PROMPT_VERSION:
         invalid["learning_units"][0]["unit_id"] = "unknown-unit"
-    elif contract == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION:
-        invalid["decisions"] = []
     else:
         raise AssertionError(f"unsupported invalid contract: {contract}")
     return invalid
@@ -362,8 +382,6 @@ class FakeTranslationAdapter:
         self.calls.append(f"translation:{kwargs['artifact_prefix']}")
         if self.translation_started is not None:
             self.translation_started.set()
-        if self.guide_started is not None:
-            assert self.guide_started.wait(timeout=5)
         by_id = {item.block_id: item for item in source.blocks}
         return {
             "schema_version": "arc.translate.blocks_result.v1",
@@ -418,13 +436,30 @@ def _document(tmp_path: Path):
 
 
 def _request_payload(prompt: str) -> tuple[str, dict]:
+    if prompt.startswith("## Package protocol\n"):
+        sections: dict[str, str] = {}
+        for raw_section in prompt.removeprefix("## ").split("\n\n## "):
+            heading, separator, body = raw_section.partition("\n")
+            assert separator
+            sections[heading] = body
+        instructions = sections["Worker instructions"]
+        contract_line = instructions.splitlines()[0]
+        assert contract_line.startswith("Contract: ")
+        payload = json.loads(sections["Caller context"])
+        round_task = json.loads(sections["Round task"])
+        payload["_round_task"] = round_task
+        if round_task["kind"] == "independent_review":
+            payload["draft"] = round_task["current_proposals"][
+                "guide-proposer"
+            ]
+        return contract_line.removeprefix("Contract: "), payload
     first, _blank, rest = prompt.partition("\n\n")
     _instruction, marker, payload = rest.partition("\n\nInput JSON:\n")
     assert marker
     return first.removeprefix("Contract: "), json.loads(payload)
 
 
-def test_translation_and_guide_share_post_glossary_group(
+def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     tmp_path: Path,
 ) -> None:
     document = _document(tmp_path)
@@ -457,9 +492,10 @@ def test_translation_and_guide_share_post_glossary_group(
     assert translation.calls[0:2] == ["language", "glossary"]
     assert translation.approx_counts == [73]
     assert tasks.counts[CHAPTER_PLAN_PROMPT_VERSION] == 2
-    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
-    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 2
-    for chapter in plan_source_chapters(document):
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 6
+    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 4
+    planned_chapters = plan_source_chapters(document)
+    for chapter in planned_chapters:
         candidate = json.loads(
             (
                 service.repository.run_directory(completed.run_id)
@@ -469,10 +505,22 @@ def test_translation_and_guide_share_post_glossary_group(
             ).read_text(encoding="utf-8")
         )
         assert candidate["chapter_id"] == chapter.chapter_id
-    assert [
-        item["term"]
-        for item in next(iter(tasks.guide_glossaries.values()))
-    ] == ["quantum field"]
+        final_guide = json.loads(
+            (
+                service.repository.run_directory(completed.run_id)
+                / "working/candidates/chapters"
+                / chapter.chapter_id
+                / "guide-final.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert final_guide["chapter_id"] == chapter.chapter_id
+    assert {
+        chapter_id: [item["term"] for item in values]
+        for chapter_id, values in tasks.guide_glossaries.items()
+    } == {
+        planned_chapters[0].chapter_id: ["quantum field"],
+        planned_chapters[1].chapter_id: ["relativity"],
+    }
 
     book = service.accepted_book(completed.run_id)
     assert book.translation_mode == "enabled"
@@ -514,7 +562,8 @@ def test_same_language_skips_all_translation_owned_steps(
     )
     assert completed.status is RunStatus.SUCCEEDED
     assert translation.calls == ["language"]
-    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 6
+    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 4
     book = service.accepted_book(completed.run_id)
     assert book.translation_mode == "skipped"
     assert book.glossary == ()
@@ -535,8 +584,8 @@ def test_review_remove_publishes_ordered_subset_without_retry(
         translation_adapter=translation,
     )
     assert completed.status is RunStatus.SUCCEEDED
-    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
-    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 2
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 6
+    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 4
     assert [
         [unit.unit_id for unit in chapter.learning_units]
         for chapter in service.accepted_book(completed.run_id).chapters
@@ -551,8 +600,6 @@ def test_review_remove_publishes_ordered_subset_without_retry(
         (EVIDENCE_RESEARCH_PROMPT_VERSION, "evidence", 2),
         (LITERATURE_SURVEY_PROMPT_VERSION, "survey", 2),
         (CHAPTER_PLAN_PROMPT_VERSION, "plan", 3),
-        (CHAPTER_GUIDE_PROMPT_VERSION, "guide", 3),
-        (CHAPTER_GUIDE_REVIEW_PROMPT_VERSION, "review", 3),
     ],
 )
 def test_schema_valid_semantic_error_gets_one_fresh_retry(
@@ -569,8 +616,6 @@ def test_schema_valid_semantic_error_gets_one_fresh_retry(
         "evidence": "planning/evidence-research.json",
         "survey": "planning/literature-survey.json",
         "plan": f"chapters/{chapter_id}/plan.json",
-        "guide": f"chapters/{chapter_id}/guide-draft.json",
-        "review": f"chapters/{chapter_id}/guide-review.json",
     }
     tasks = FakeGuideTasks(
         select_evidence=contract == LITERATURE_SURVEY_PROMPT_VERSION,
@@ -613,15 +658,12 @@ def test_schema_valid_semantic_error_gets_one_fresh_retry(
     assert "Validation code:" in retry_requests[0][1]
 
 
-def test_invalid_review_retry_keeps_valid_draft_with_warning(
+def test_reviewer_can_accept_without_forcing_an_extra_revision(
     tmp_path: Path,
 ) -> None:
     document = _document(tmp_path)
-    first_chapter = plan_source_chapters(document)[0]
-    tasks = FakeGuideTasks(
-        semantic_invalid_contract=CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
-        semantic_invalid_calls=frozenset({1, 2}),
-    )
+    chapters = plan_source_chapters(document)
+    tasks = FakeGuideTasks(reviewer_stop_round=1)
     service = CompanionService(tmp_path / "jobs")
 
     completed = service.build(
@@ -632,92 +674,80 @@ def test_invalid_review_retry_keeps_valid_draft_with_warning(
     )
 
     assert completed.status is RunStatus.SUCCEEDED
-    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 3
-    book = service.accepted_book(completed.run_id)
-    assert [
-        item.unit_id for item in book.chapters[0].learning_units
-    ] == ["intuition"]
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
+    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 2
     store = ImmutableArtifactStore(
         service.repository.run_directory(completed.run_id),
         repository_root=service.repository.root,
     )
-    diagnostics_ref = store.find(
-        (
-            f"diagnostics/chapters/{first_chapter.chapter_id}"
-            "/guide-review"
-        )
-    )
-    assert diagnostics_ref is not None
-    diagnostics = json.loads(
-        store.read_bytes(diagnostics_ref).decode("utf-8")
-    )
-    assert diagnostics["status"] == "discarded_invalid_review"
-    assert len(diagnostics["candidate_paths"]) == 2
+    for chapter in chapters:
+        assert store.find(
+            "proposer-reviewer/loops/"
+            f"{chapter.chapter_id}/rounds/001/reviews/guide-reviewer"
+        ) is not None
+        assert store.find(
+            "proposer-reviewer/loops/"
+            f"{chapter.chapter_id}/rounds/002/proposals/guide-proposer"
+        ) is None
 
 
-def test_semantic_pause_publishes_completed_chapter_and_reuses_it(
+def test_invalid_terminal_revision_reports_program_owned_candidate(
     tmp_path: Path,
 ) -> None:
     document = _document(tmp_path)
     chapters = plan_source_chapters(document)
     tasks = FakeGuideTasks(
         semantic_invalid_contract=CHAPTER_GUIDE_PROMPT_VERSION,
-        # Chapter one succeeds. Chapter two exhausts its fixed retry.
-        semantic_invalid_calls=frozenset({2, 3}),
+        # Each chapter receives P-R-P-R-P; corrupt only chapter two's
+        # terminal proposal so final deterministic validation owns the error.
+        semantic_invalid_calls=frozenset({6}),
     )
-    translation = FakeTranslationAdapter(mode="skipped")
     service = CompanionService(tmp_path / "jobs")
 
-    paused = service.build(
+    failed = service.build(
         CompanionBuildRequest(document, target_language="en"),
         execution=CompanionExecutionOptions(workers=1),
         task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=translation,
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
     )
 
-    assert paused.status is RunStatus.PAUSED
-    assert paused.awaiting is not None
+    assert failed.status is RunStatus.FAILED
+    assert failed.error is not None
+    candidate_path = (
+        service.repository.run_directory(failed.run_id)
+        / "working/candidates/chapters"
+        / chapters[1].chapter_id
+        / "guide-final.json"
+    )
+    assert failed.error.details["candidate_path"] == str(candidate_path)
+    assert failed.error.details["chapter_id"] == chapters[1].chapter_id
+    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+    assert candidate["chapter_id"] == chapters[1].chapter_id
+    assert candidate["learning_units"][0]["unit_id"] == "unknown-unit"
     store = ImmutableArtifactStore(
-        service.repository.run_directory(paused.run_id),
+        service.repository.run_directory(failed.run_id),
         repository_root=service.repository.root,
     )
-    first_ref = store.find(
-        f"chapters/{chapters[0].chapter_id}/accepted"
-    )
-    assert first_ref is not None
     assert store.find(
-        f"chapters/{chapters[1].chapter_id}/accepted"
+        f"chapters/{chapters[0].chapter_id}/guide-accepted"
+    ) is not None
+    assert store.find(
+        f"chapters/{chapters[1].chapter_id}/guide-accepted"
     ) is None
-    retry_path = Path(
-        str(paused.awaiting.details["active_candidate_path"])
-    )
-    repaired = json.loads(retry_path.read_text(encoding="utf-8"))
-    repaired["learning_units"][0]["unit_id"] = "intuition"
-    retry_path.write_text(json.dumps(repaired), encoding="utf-8")
+
+    candidate["learning_units"][0]["unit_id"] = "intuition"
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
     guide_calls = tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION]
-    first_digest = first_ref.digest
 
     recovered = service.resume(
-        paused.run_id,
+        failed.run_id,
         execution=CompanionExecutionOptions(workers=1),
         task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=translation,
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
     )
 
     assert recovered.status is RunStatus.SUCCEEDED
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == guide_calls
-    recovered_store = ImmutableArtifactStore(
-        service.repository.run_directory(recovered.run_id),
-        repository_root=service.repository.root,
-    )
-    recovered_first = recovered_store.find(
-        f"chapters/{chapters[0].chapter_id}/accepted"
-    )
-    assert recovered_first is not None
-    assert recovered_first.digest == first_digest
-    assert recovered_store.find(
-        f"chapters/{chapters[1].chapter_id}/accepted"
-    ) is not None
 
 
 def test_malformed_evidence_retries_once_then_pauses_for_candidate_edit(

@@ -169,7 +169,6 @@ class _EvidenceResumeTasks:
             value = {"translation_patches": [], "summary": "No changes."}
         elif contract == CHAPTER_GUIDE_PROMPT_VERSION:
             value = {
-                "chapter_id": payload["plan"]["chapter_id"],
                 "learning_units": [
                     {
                         "unit_id": "reading",
@@ -182,22 +181,45 @@ class _EvidenceResumeTasks:
             }
         elif contract == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION:
             value = {
-                "decisions": [
-                    {
-                        "unit_id": "reading",
-                        "decision": "keep",
-                        "replacement_title": None,
-                        "replacement_markdown": None,
-                        "reason": "The unit is directly grounded.",
-                    }
-                ],
+                "schema_version": "arc.proposer_reviewer.review.v1",
+                "action": "stop",
+                "reason": "The unit is directly grounded.",
+                "feedback": {
+                    "guide-proposer": (
+                        "Preserve the anchored, cited explanation."
+                    )
+                },
+                "payload": {
+                    "reader_needs_satisfied": True,
+                    "grounding_sufficient": True,
+                    "remaining_issues": [],
+                },
             }
         else:  # pragma: no cover - contract drift guard
             raise AssertionError(contract)
         return LLMCompleted(value, "fake", "fake", None, None)
 
+    def execute(self, context, request, **kwargs):
+        return self.execute_or_resume(context, request, **kwargs)
+
 
 def _prompt(prompt: str) -> tuple[str, dict[str, Any]]:
+    if prompt.startswith("## Package protocol\n"):
+        sections: dict[str, str] = {}
+        for raw_section in prompt.removeprefix("## ").split("\n\n## "):
+            heading, separator, body = raw_section.partition("\n")
+            assert separator
+            sections[heading] = body
+        contract = sections["Worker instructions"].splitlines()[
+            0
+        ].removeprefix("Contract: ")
+        payload = json.loads(sections["Caller context"])
+        round_task = json.loads(sections["Round task"])
+        if round_task["kind"] == "independent_review":
+            payload["draft"] = round_task["current_proposals"][
+                "guide-proposer"
+            ]
+        return contract, payload
     contract = prompt.splitlines()[0].removeprefix("Contract: ")
     if "\nInput JSON:\n" not in prompt:
         return contract, {}

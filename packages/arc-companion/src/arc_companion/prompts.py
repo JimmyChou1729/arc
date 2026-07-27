@@ -16,11 +16,11 @@ EVIDENCE_RESEARCH_PROMPT_VERSION = (
 LITERATURE_SURVEY_PROMPT_VERSION = (
     "arc.companion.literature-survey-prompt.v2"
 )
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v5"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v6"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v5"
+    "arc.companion.chapter-learning-review-prompt.v6"
 )
-CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v6"
+CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v7"
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v1"
 
 
@@ -215,6 +215,12 @@ CHAPTER_GUIDE_SCHEMA = _closed(
     },
     ("chapter_id", "learning_units"),
 )
+CHAPTER_GUIDE_PROPOSAL_SCHEMA = _closed(
+    {
+        "learning_units": {"type": "array", "items": _LEARNING_UNIT},
+    },
+    ("learning_units",),
+)
 _REVIEW_DECISION = _closed(
     {
         "unit_id": _NONEMPTY,
@@ -254,6 +260,22 @@ CHAPTER_GUIDE_REVIEW_SCHEMA = _closed(
         },
     },
     ("decisions",),
+)
+CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA = _closed(
+    {
+        "reader_needs_satisfied": {"type": "boolean"},
+        "grounding_sufficient": {"type": "boolean"},
+        "remaining_issues": {
+            "type": "array",
+            "items": _NONEMPTY,
+            "uniqueItems": True,
+        },
+    },
+    (
+        "reader_needs_satisfied",
+        "grounding_sufficient",
+        "remaining_issues",
+    ),
 )
 
 
@@ -432,11 +454,27 @@ def chapter_plan_prompt(
         are non-exhaustive signals of reader need, not required categories or
         content quotas.
 
+        Give first priority to additions that make genuinely difficult or
+        compressed material understandable for the resolved reader: supply the
+        missing context behind an isolated quotation or named work, make
+        skipped derivation steps explicit, bridge a real logical gap, or
+        explain prerequisite knowledge that this reader profile should not be
+        assumed to command confidently. Also look for evidence-grounded value
+        that became visible after the source was written: later corrections,
+        doubts, disputes, unexpectedly important developments, and the
+        historical significance of a passage or work. These priorities do not
+        remove any other useful explanatory form and do not impose a category
+        or quantity quota.
+
         Prefer direct affirmative explanation. Use corrective contrasts such
         as “not X but Y” only when the source, user intent, or selected evidence
         establishes that the misconception actually exists. Never invent a
-        belief for the reader merely to create an explanatory effect. Write the
-        reader profile, audit reasons, and purposes in the target language.
+        belief for the reader merely to create an explanatory effect. In
+        particular, do not write “the author is not denying X, but asking Y”
+        unless some supplied material actually advances the denial claim; state
+        affirmatively that the author uses X to ask Y and spend the saved
+        attention on missing context. Write the reader profile, audit reasons,
+        and purposes in the target language.
         """,
         {
             "chapter_id": chapter_id,
@@ -460,6 +498,104 @@ def chapter_plan_prompt(
     )
 
 
+_CHAPTER_GUIDE_INSTRUCTION = """
+Write only the planned learning units. ARC supplies source context,
+evidence, anchors, and recoverable work state; it does not constrain
+your creative form. Preserve planned unit IDs and ground every unit in
+its planned anchors and evidence. Use only planned unit IDs and keep
+their order. A revision may omit a unit only when reviewer feedback
+identifies it as redundant and the remaining units still cover every
+required reader need. Choose the form that makes its
+particular increment clearest: questions, close reading, distinctions,
+argument maps, history, counterexamples, objections, connections, and
+reading paths are non-exhaustive inspirations, not a taxonomy or quota.
+Do not turn a planned increment into paraphrase, same-meaning rewrite,
+repeated reasoning, or generic summary. Inline and chapter units, and
+paragraph-local and cross-paragraph units, are equally important with no
+quota. Write title and Markdown in the target language. Cite every
+evidence-grounded claim near the claim as `[@evidence-id]`; use only
+selected evidence IDs assigned to that unit. A translation lane runs
+independently; use the supplied chapter glossary consistently. A prior
+Companion may be supplied as optional reference material. Improve,
+extend, recombine, or discard it freely. It is neither a template nor an
+accepted source of current citations; use only the current selected
+evidence IDs in new output.
+
+Write for the plan's resolved reader profile and satisfy every mapped
+reader need. Concentrate first on making difficult or compressed source
+material understandable: give the necessary background for an isolated
+quotation or named work, supply skipped derivation steps, bridge a real
+logical gap, and explain prerequisite material the resolved reader should
+not be assumed to command confidently. When selected evidence supports
+it, add later corrections, disputes, doubts, unexpectedly important
+developments, or the historical significance of the passage or work.
+These are priorities, not a required taxonomy, form, or quantity quota.
+
+Prefer direct affirmative explanation. Use “not X but Y” or another
+corrective contrast only when the source, user intent, or selected
+evidence establishes that the misconception actually exists; do not
+manufacture a prior reader belief to make prose sound explanatory. Never
+write “the author is not denying X, but asking Y” merely as a transition;
+state what the author uses X to investigate and devote attention to the
+missing context. Translate English excerpts or quotations into the target
+language while citing their assigned English source identity nearby.
+"""
+
+
+_CHAPTER_GUIDE_REVIEW_INSTRUCTION = """
+Review every proposed learning unit against its planned purpose, source
+anchors, selected evidence, reader profile, and reader-needs audit. ARC
+provides context and recovery, not a prescribed creative form. Judge
+inline/chapter and paragraph-local/cross-paragraph work by the same value
+standard. Questions, close reading, distinctions, argument maps, history,
+counterexamples, objections, connections, reading paths, and other forms
+are non-exhaustive possibilities, never a quota.
+
+Do not criticize merely to demonstrate reviewer activity, and do not
+present a stylistic preference as a defect. If the proposal already
+satisfies its reader needs, is well grounded, and has no concrete path to
+meaningful improvement, accept it by choosing `stop`. Choose `continue`
+only when the targeted feedback identifies a specific, achievable gain.
+Feedback must be constructive rather than merely negative: explain what
+to preserve, what to change, and how. When you discover a valuable new
+Companion idea, include it in the proposer feedback with the relevant
+source anchor and selected evidence identity so the next proposal can add
+it within an existing planned unit whose anchors and assigned evidence
+support it. Never invent a unit, source, or evidence identifier or ask the
+proposer to change the frozen plan.
+
+Prioritize missing background for isolated quotations or named works,
+skipped derivation steps, logical gaps, prerequisite knowledge the
+resolved reader may not command, and evidence-grounded later corrections,
+disputes, doubts, unexpected developments, or historical significance.
+Remove or replace paraphrase, repeated reasoning, generic summary, and
+unsupported claims. Require nearby `[@evidence-id]` citations for
+evidence-grounded claims. Never recommend removing the final useful unit
+covering a block that needs help.
+
+Treat unsupported corrective framing as a material defect. A “not X but
+Y” contrast is justified only when the source, user intent, or selected
+evidence shows that X is a live misconception. Otherwise tell the
+proposer to state Y affirmatively and use the space for the missing
+context, reasoning, or later development. A prior Companion is optional
+reference material, not a template or authority.
+"""
+
+
+def chapter_guide_proposer_instructions() -> str:
+    return _instruction_contract(
+        CHAPTER_GUIDE_PROMPT_VERSION,
+        _CHAPTER_GUIDE_INSTRUCTION,
+    )
+
+
+def chapter_guide_reviewer_instructions() -> str:
+    return _instruction_contract(
+        CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
+        _CHAPTER_GUIDE_REVIEW_INSTRUCTION,
+    )
+
+
 def chapter_guide_prompt(
     *,
     plan: Mapping[str, Any],
@@ -472,34 +608,7 @@ def chapter_guide_prompt(
 ) -> str:
     return _prompt(
         CHAPTER_GUIDE_PROMPT_VERSION,
-        """
-        Write only the planned learning units. ARC supplies source context,
-        evidence, anchors, and recoverable work state; it does not constrain
-        your creative form. Preserve planned unit IDs and ground every unit in
-        its planned anchors and evidence. Choose the form that makes its
-        particular increment clearest: questions, close reading, distinctions,
-        argument maps, history, counterexamples, objections, connections, and
-        reading paths are non-exhaustive inspirations, not a taxonomy or quota.
-        Do not turn a planned increment into paraphrase, same-meaning rewrite,
-        repeated reasoning, or generic summary. Inline and chapter units, and
-        paragraph-local and cross-paragraph units, are equally important with no
-        quota. Write title and Markdown in the target language. Cite every
-        evidence-grounded claim near the claim as `[@evidence-id]`; use only
-        selected evidence IDs assigned to that unit. A translation lane runs
-        independently; use the supplied chapter glossary consistently.
-        A prior Companion may be supplied as optional reference material.
-        Improve, extend, recombine, or discard it freely. It is neither a
-        template nor an accepted source of current citations; use only the
-        current selected evidence IDs in new output.
-
-        Write for the plan's resolved reader profile and satisfy every mapped
-        reader need. Prefer direct affirmative explanation. Use “not X but Y”
-        or another corrective contrast only when the source, user intent, or
-        selected evidence establishes that the misconception actually exists;
-        do not manufacture a prior reader belief to make prose sound
-        explanatory. Translate English excerpts or quotations into the target
-        language while citing their assigned English source identity nearby.
-        """,
+        _CHAPTER_GUIDE_INSTRUCTION,
         {
             "target_language": target_language,
             "language_result": dict(language_result),
@@ -527,32 +636,7 @@ def chapter_guide_review_prompt(
 ) -> str:
     return _prompt(
         CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
-        """
-        Review every proposed learning unit against its planned purpose, source
-        anchors, and selected evidence. ARC provides context and recovery, not
-        a prescribed creative form. Return exactly one keep, replace, or remove
-        decision for every draft unit in draft order. A replacement may change
-        both title and Markdown, but may not change the unit identity, source
-        anchors, placement, purpose, or evidence IDs. Remove units that are
-        paraphrase, same-meaning rewrite, repeated reasoning, or generic
-        summary. Questions, close reading, distinctions, argument maps,
-        history, counterexamples, objections, connections, and reading paths
-        are non-exhaustive inspirations, never a quota. Judge inline/chapter
-        and paragraph-local/cross-paragraph work by the same value standard.
-        Require nearby `[@evidence-id]` citations for evidence-grounded claims.
-        Use null replacement fields for keep and remove. Do not add units or
-        write a summary. A prior Companion, when supplied, is optional reference
-        material rather than a template or an authority; judge the current
-        draft against the current source, intent, and evidence.
-
-        Check the draft against the plan's reader profile and reader-needs
-        audit. Never remove the final unit covering a block that needs help;
-        keep it or replace it with a useful explanation under the same anchors.
-        Replace unsupported corrective framing such as an invented “not X but
-        Y” misconception with a direct affirmative explanation. A corrective
-        contrast is justified only when the source, user intent, or selected
-        evidence shows that the misconception actually exists.
-        """,
+        _CHAPTER_GUIDE_REVIEW_INSTRUCTION,
         {
             "plan": dict(plan),
             "draft": dict(draft),
@@ -612,10 +696,19 @@ def _prompt(
     )
 
 
+def _instruction_contract(version: str, instruction: str) -> str:
+    return (
+        f"Contract: {version}\n\n"
+        + " ".join(line.strip() for line in instruction.strip().splitlines())
+    )
+
+
 __all__ = [
     "AUTHOR_IDENTITY_PROMPT_VERSION",
     "AUTHOR_IDENTITY_SCHEMA",
     "CHAPTER_GUIDE_PROMPT_VERSION",
+    "CHAPTER_GUIDE_PROPOSAL_SCHEMA",
+    "CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA",
     "CHAPTER_GUIDE_REVIEW_PROMPT_VERSION",
     "CHAPTER_GUIDE_REVIEW_SCHEMA",
     "CHAPTER_GUIDE_SCHEMA",
@@ -629,7 +722,9 @@ __all__ = [
     "LITERATURE_SURVEY_SCHEMA",
     "author_identity_prompt",
     "chapter_guide_prompt",
+    "chapter_guide_proposer_instructions",
     "chapter_guide_review_prompt",
+    "chapter_guide_reviewer_instructions",
     "chapter_plan_prompt",
     "evidence_research_prompt",
     "literature_request_prompt",

@@ -266,13 +266,18 @@ def test_recipe_identity_reserves_author_prompt_and_decodes_v5(
         key: value
         for key, value in encoded.items()
         if key
-        not in {"author_identity_prompt", "evidence_research_prompt"}
+        not in {
+            "author_identity_prompt",
+            "evidence_research_prompt",
+            "chapter_guide_max_rounds",
+            "chapter_guide_review_final_round",
+        }
     }
     legacy["schema_version"] = "arc.companion.generation_recipe.v5"
 
     decoded = decode_generation_recipe(legacy)
 
-    assert encoded["schema_version"] == "arc.companion.generation_recipe.v7"
+    assert encoded["schema_version"] == "arc.companion.generation_recipe.v8"
     assert encoded["author_identity_prompt"] == recipe.author_identity_prompt
     assert decoded.author_identity_prompt == recipe.author_identity_prompt
 
@@ -282,13 +287,37 @@ def test_recipe_identity_decodes_v6_without_evidence_prompt() -> None:
     legacy = {
         key: value
         for key, value in encode_generation_recipe(recipe).items()
-        if key != "evidence_research_prompt"
+        if key
+        not in {
+            "evidence_research_prompt",
+            "chapter_guide_max_rounds",
+            "chapter_guide_review_final_round",
+        }
     }
     legacy["schema_version"] = "arc.companion.generation_recipe.v6"
 
     decoded = decode_generation_recipe(legacy)
 
     assert decoded.evidence_research_prompt == recipe.evidence_research_prompt
+
+
+def test_recipe_identity_decodes_v7_with_terminal_revision_defaults() -> None:
+    recipe = CompanionGenerationRecipe()
+    legacy = {
+        key: value
+        for key, value in encode_generation_recipe(recipe).items()
+        if key
+        not in {
+            "chapter_guide_max_rounds",
+            "chapter_guide_review_final_round",
+        }
+    }
+    legacy["schema_version"] = "arc.companion.generation_recipe.v7"
+
+    decoded = decode_generation_recipe(legacy)
+
+    assert decoded.chapter_guide_max_rounds == 3
+    assert decoded.chapter_guide_review_final_round is False
 
 
 def test_cli_parses_repeatable_authors_and_strict_reader_label_file(

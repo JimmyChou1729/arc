@@ -11,7 +11,8 @@ uses the `arc.companion.accepted_book.v5` delivery contract and embeds the
 current RichDocument v2 inline-span payloads directly.
 
 A build or resume requires the complete installed runtime, including the
-public `arc-translate`, `arc-paper`, `arc-llm`, and `arc-jobs` packages.
+public `arc-translate`, `arc-paper`, `arc-llm`, `arc-jobs`, and
+`arc-proposer-reviewer` packages.
 Companion checks the translation facade before creating a new project or
 mutating a resumed run and reports `runtime_dependency_missing` when that
 installation is incomplete. Explicitly injected translation adapters remain
@@ -79,10 +80,13 @@ Every successful publication refreshes the managed project-root
 `companion.html` delivery copy. When PDF rendering succeeds it also refreshes
 `companion.pdf`, which is byte-for-byte the canonical release PDF. A Web-only
 publication removes any stale managed PDF so it cannot be mistaken for part of
-the current release. The HTML contains a base link to the canonical
-`releases/<release-id>/reader/index.html`, so reader assets and fragment links
-continue to resolve inside the immutable release. Command artifacts and data
-report only the formats and delivery paths that were actually published.
+the current release. The HTML is a standalone offline file: its local styles,
+scripts, fonts, and frozen source assets are embedded as data URIs, so it may
+be copied outside the project without breaking reader behavior. External
+source and bibliography links remain ordinary navigation links. Use
+`arc-standalone-html INPUT.html OUTPUT.html` to create the same deterministic
+offline representation for another local HTML bundle. Command artifacts and
+data report only the formats and delivery paths that were actually published.
 Durable runs, diagnostics, and frozen source assets are stored under
 `<project-dir>/.arc/companion/`. Paper data remains in ARC's shared reusable
 paper cache unless `--paper-cache-root` selects another shared cache. Figure
@@ -120,11 +124,15 @@ without another provider call. Removing an exhausted candidate does not grant
 a third automatic generation attempt. These checks support model repair; they
 are not additional scientific-content gates.
 
-A guide draft that has already passed its own checks is not discarded because
-both review-patch attempts are invalid. Companion keeps the draft, records a
-review warning, and continues. When another chapter pauses, every chapter whose
-guide and required translation lanes already succeeded is joined and published
-as an immutable accepted chapter before control returns.
+Guide writing uses `arc-proposer-reviewer`, not a Companion-specific patch
+loop. A chapter starts with a complete proposal. A reviewer may accept it
+immediately when there is no concrete improvement to make; otherwise it gives
+constructive, actionable feedback for at most two complete revisions. The
+maximum sequence is proposer-reviewer-proposer-reviewer-proposer. The final
+revision goes directly to deterministic anchor, evidence, coverage, and
+rich-text validation, so no unused final review is generated. Companion writes
+the caller-owned chapter ID into the final candidate rather than asking the
+model to generate routing identity.
 
 Immutable releases, snapshots, locks, and frozen content objects remain
 ARC-managed.
@@ -155,11 +163,13 @@ has completed the standard prerequisites, without assuming that difficult
 prerequisite material is already mastered. Explicit reader background in the
 user intent overrides these defaults.
 
-Reader HTML and PDF render glossary terms in blue in the source, translation,
-and guide layers. HTML terms expose hover and keyboard-focus tooltips; PDF
-terms carry tooltip annotations through the TeX `pdfcomment` package. Source
-page numbers remain available as internal provenance but are not printed in
-reader-facing output.
+Reader HTML marks glossary terms with a quiet gray underline in the source,
+translation, guide titles, and guide prose; hover and keyboard focus expose
+the glossary explanation. Ordinary HTML links use the same low-emphasis
+underline treatment. PDF glossary terms use a subtle gray underline with no
+tooltip annotation or blue text, preserving line height and text extraction.
+Source page numbers remain available as internal provenance but are not
+printed in reader-facing output.
 
 ## Tests
 

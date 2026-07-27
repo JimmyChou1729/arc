@@ -37,6 +37,17 @@ from arc_paper import (
     rich_document_from_document,
     rich_document_to_document,
 )
+from arc_proposer_reviewer import (
+    BatchFailurePolicy,
+    BatchRequest,
+    ExecutionOptions as ProposerReviewerExecutionOptions,
+    LoopSpec,
+    ProposerFailurePolicy,
+    ProposerReviewerService,
+    WorkerSpec,
+)
+from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
+from arc_proposer_reviewer.protocol import decode_batch_result
 
 from ._build_support import (
     accepted_chapter_document,
@@ -62,7 +73,6 @@ from .contracts import (
 )
 from .generation_validation import (
     CompanionContentError,
-    apply_safe_guide_review,
     validate_author_identity,
     validate_chapter_guide,
     validate_chapter_plan,
@@ -80,8 +90,8 @@ from .llm_runtime import (
 from .prompts import (
     AUTHOR_IDENTITY_PROMPT_VERSION,
     AUTHOR_IDENTITY_SCHEMA,
-    CHAPTER_GUIDE_REVIEW_SCHEMA,
-    CHAPTER_GUIDE_SCHEMA,
+    CHAPTER_GUIDE_PROPOSAL_SCHEMA,
+    CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA,
     CHAPTER_PLAN_SCHEMA,
     EVIDENCE_RESEARCH_PROMPT_VERSION,
     EVIDENCE_RESEARCH_SCHEMA,
@@ -90,8 +100,8 @@ from .prompts import (
     LITERATURE_SURVEY_PROMPT_VERSION,
     LITERATURE_SURVEY_SCHEMA,
     author_identity_prompt,
-    chapter_guide_prompt,
-    chapter_guide_review_prompt,
+    chapter_guide_proposer_instructions,
+    chapter_guide_reviewer_instructions,
     chapter_plan_prompt,
     evidence_research_prompt,
     literature_request_prompt,
@@ -120,10 +130,11 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v4"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v5"
 COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
     {
         COMPANION_BUILD_HANDLER,
+        "arc.companion.build.v4",
         "arc.companion.build.v3",
     }
 )
@@ -137,7 +148,7 @@ _RESULT_ARTIFACT = "result"
 
 
 class CompanionBuildHandler:
-    """Coordinate arc-translate and guide generation without shared review."""
+    """Coordinate arc-translate and reviewed Companion guide generation."""
 
     name = COMPANION_BUILD_HANDLER
 
@@ -1001,62 +1012,30 @@ class CompanionBuildHandler:
         glossary_digest = hashlib.sha256(
             canonical_json_bytes(dict(glossary))
         ).hexdigest()
-        units: list[WorkUnit] = []
-        for chapter in chapters:
-            common = {
-                "chapter_id": chapter.chapter_id,
-                "block_ids": list(chapter.block_ids),
-                "target_language": self.request.target_language,
-                "language": language_identity,
-                "glossary_digest": glossary_digest,
-                "content_contract": self.request.content_contract,
-                "prior_companion_digest": _optional_document_digest(
-                    prior_companion
-                ),
-            }
-            if translation_required:
-                units.append(
-                    WorkUnit(
-                        f"translation-{chapter.chapter_id}",
-                        {
-                            **common,
-                            "lane": "translation",
-                            "lane_id": (
-                                f"translation:{chapter.chapter_id}"
-                            ),
-                        },
-                    )
-                )
-            units.append(
+        completed_results: dict[str, Mapping[str, Any]] = {}
+        if translation_required:
+            translation_units = tuple(
                 WorkUnit(
-                    f"guide-{chapter.chapter_id}",
+                    f"translation-{chapter.chapter_id}",
                     {
-                        **common,
-                        "lane": "guide",
-                        "lane_id": f"guide:{chapter.chapter_id}",
-                        "intent": self.request.effective_intent,
-                        "evidence_digest": evidence_digest(
-                            evidence_by_chapter[chapter.chapter_id]
+                        "chapter_id": chapter.chapter_id,
+                        "block_ids": list(chapter.block_ids),
+                        "lane": "translation",
+                        "target_language": self.request.target_language,
+                        "language": language_identity,
+                        "glossary_digest": glossary_digest,
+                        "content_contract": self.request.content_contract,
+                        "prior_companion_digest": (
+                            _optional_document_digest(prior_companion)
                         ),
-                        "guide_prompt_contract": (
-                            self.recipe.chapter_guide_prompt
-                        ),
-                        "review_prompt_contract": (
-                            self.recipe.chapter_guide_review_prompt
-                        ),
-                        "plan_digest": hashlib.sha256(
-                            canonical_json_bytes(
-                                dict(by_plan[chapter.chapter_id])
-                            )
-                        ).hexdigest(),
                     },
                 )
+                for chapter in chapters
             )
 
-        def worker(unit: WorkUnit):
-            lane, chapter_id = unit.unit_id.split("-", 1)
-            chapter = by_chapter[chapter_id]
-            if lane == "translation":
+            def translation_worker(unit: WorkUnit):
+                chapter_id = unit.unit_id.removeprefix("translation-")
+                chapter = by_chapter[chapter_id]
                 outcome = self.translation_adapter.translate_blocks(
                     context,
                     source,
@@ -1067,66 +1046,236 @@ class CompanionBuildHandler:
                     model=self.recipe.model,
                     execution=self.execution.llm,
                     resume_input=resume_input,
-                    artifact_prefix=(
-                        f"chapters/{chapter_id}/translation"
-                    ),
+                    artifact_prefix=f"chapters/{chapter_id}/translation",
                 )
                 if isinstance(outcome, Paused):
                     return outcome
                 if isinstance(outcome, RunError):
-                    return UnitResult(
-                        unit.unit_id, "failed", error=outcome
-                    )
+                    return UnitResult(unit.unit_id, "failed", error=outcome)
                 return _validated_translations(
                     outcome, block_ids=chapter.block_ids
                 )
-            return self._guide_lane(
-                context,
-                resume_input,
-                unit,
-                chapter,
-                by_plan[chapter_id],
-                evidence_by_chapter[chapter_id],
-                chapter_entries[chapter_id],
-                blocks,
-                language,
-                source,
-                prior_companion,
+
+            translations = context.run_group(
+                "chapter-translations-v2",
+                translation_units,
+                translation_worker,
+                max_workers=self.execution.workers,
+                failure_mode=FailureMode.FAIL_FAST,
+            )
+            if isinstance(translations, Paused):
+                return translations
+            assert isinstance(translations, GroupResult)
+            translation_failure = next(
+                (
+                    item
+                    for item in translations.units
+                    if item.status != "succeeded"
+                ),
+                None,
+            )
+            if translation_failure is not None:
+                return Failed(
+                    translation_failure.error
+                    or RunError(
+                        "chapter_translation_failed",
+                        "chapter translation failed",
+                    )
+                )
+            completed_results.update(
+                {
+                    item.unit_id: mapping(
+                        item.value, "chapter translation result"
+                    )
+                    for item in translations.units
+                }
             )
 
-        group_id = "post-glossary-chapter-lanes"
-        result = context.run_group(
-            group_id,
-            tuple(units),
-            worker,
-            max_workers=self.execution.workers,
-            failure_mode=FailureMode.FAIL_FAST,
+        guide_loops: list[LoopSpec] = []
+        guide_contexts: dict[str, Mapping[str, Any]] = {}
+        replay_guide_batch = (
+            context.artifacts.find("proposer-reviewer/request") is not None
         )
-        if isinstance(result, Paused):
-            completed_results = {
-                item.unit_id: mapping(
-                    item.value, "chapter lane result"
+        for chapter in chapters:
+            artifact_id = f"chapters/{chapter.chapter_id}/guide-accepted"
+            existing = context.artifacts.find(artifact_id)
+            if existing is not None and not replay_guide_batch:
+                completed_results[f"guide-{chapter.chapter_id}"] = read_json(
+                    context, existing, "accepted chapter guide"
                 )
-                for item in context.inspect_group(group_id).units
-                if item.status == "succeeded"
+                continue
+            plan = by_plan[chapter.chapter_id]
+            if not mapping_list(
+                plan.get("learning_units"), "planned learning units"
+            ):
+                empty = {
+                    "chapter_id": chapter.chapter_id,
+                    "learning_units": [],
+                }
+                context.artifacts.publish_json(artifact_id, empty)
+                completed_results[f"guide-{chapter.chapter_id}"] = empty
+                continue
+            if existing is not None:
+                completed_results[f"guide-{chapter.chapter_id}"] = read_json(
+                    context, existing, "accepted chapter guide"
+                )
+            source_documents = [
+                _source_block_document(source, blocks[item])
+                for item in chapter.block_ids
+            ]
+            guide_context = {
+                "target_language": self.request.target_language,
+                "language_result": language_identity,
+                "plan": dict(plan),
+                "blocks": planned_source_documents(plan, source_documents),
+                "glossary": list(chapter_entries[chapter.chapter_id]),
+                "selected_evidence": list(
+                    evidence_by_chapter[chapter.chapter_id]
+                ),
+                "prior_companion": (
+                    dict(prior_companion)
+                    if prior_companion is not None
+                    else None
+                ),
             }
-            joined = self._publish_completed_chapters(
-                context,
-                chapters,
-                completed_results,
-                blocks,
-                source=source,
-                translation_required=translation_required,
+            guide_contexts[chapter.chapter_id] = guide_context
+            guide_loops.append(
+                LoopSpec(
+                    loop_id=chapter.chapter_id,
+                    context=guide_context,
+                    proposers=(
+                        WorkerSpec(
+                            "guide-proposer",
+                            chapter_guide_proposer_instructions(),
+                            CHAPTER_GUIDE_PROPOSAL_SCHEMA,
+                            self.recipe.model,
+                        ),
+                    ),
+                    reviewer=WorkerSpec(
+                        "guide-reviewer",
+                        chapter_guide_reviewer_instructions(),
+                        CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA,
+                        self.recipe.model,
+                    ),
+                    max_rounds=self.recipe.chapter_guide_max_rounds,
+                    allow_early_stop=True,
+                    on_proposer_failure=(
+                        ProposerFailurePolicy.FAIL_LOOP
+                    ),
+                    review_final_round=(
+                        self.recipe.chapter_guide_review_final_round
+                    ),
+                )
             )
-            if isinstance(joined, Failed):
-                return joined
-            return result
-        assert isinstance(result, GroupResult)
-        completed_results = {
-            item.unit_id: mapping(item.value, "chapter lane result")
-            for item in result.units
-            if item.status == "succeeded"
-        }
+
+        if guide_loops:
+            guide_outcome = ProposerReviewerService(
+                self.task_service
+            ).execute(
+                context,
+                BatchRequest(
+                    BATCH_SCHEMA_VERSION,
+                    "companion-chapter-guides",
+                    tuple(guide_loops),
+                    BatchFailurePolicy.FAIL_FAST,
+                ),
+                options=ProposerReviewerExecutionOptions(
+                    max_concurrent_loops=self.execution.workers,
+                    max_concurrent_workers=1,
+                    llm=self.execution.llm,
+                ),
+            )
+            if isinstance(guide_outcome, Paused):
+                return guide_outcome
+            if isinstance(guide_outcome, Failed):
+                return guide_outcome
+            assert isinstance(guide_outcome, Succeeded)
+            if guide_outcome.result_ref is None:
+                return Failed(
+                    RunError(
+                        "chapter_guide_batch_invalid",
+                        "proposer-reviewer returned no batch result",
+                    )
+                )
+            guide_batch = decode_batch_result(
+                read_json(
+                    context,
+                    guide_outcome.result_ref,
+                    "chapter guide proposer-reviewer result",
+                )
+            )
+            loop_results = {
+                item.loop_id: item for item in guide_batch.loops
+            }
+            for chapter_id, guide_context in guide_contexts.items():
+                loop_result = loop_results.get(chapter_id)
+                if loop_result is None:
+                    return Failed(
+                        RunError(
+                            "chapter_guide_batch_incomplete",
+                            f"missing guide result for {chapter_id}",
+                        )
+                    )
+                if loop_result.error is not None:
+                    return Failed(loop_result.error)
+                proposal = mapping(
+                    loop_result.final_proposals.get("guide-proposer"),
+                    f"final guide proposal for {chapter_id}",
+                )
+                candidate_id = f"chapters/{chapter_id}/guide-final.json"
+                candidate_path = context.working.find_candidate(candidate_id)
+                if candidate_path is None:
+                    candidate = {
+                        **proposal,
+                        # Routing identity is deterministic caller data, not
+                        # model-authored semantic content.
+                        "chapter_id": chapter_id,
+                    }
+                    candidate_path = context.working.write_candidate_json(
+                        candidate_id, candidate
+                    )
+                else:
+                    stored_candidate = context.working.read_candidate_json(
+                        candidate_id
+                    )
+                    candidate = {
+                        **stored_candidate,
+                        "chapter_id": chapter_id,
+                    }
+                    if candidate != stored_candidate:
+                        candidate_path = (
+                            context.working.write_candidate_json(
+                                candidate_id, candidate
+                            )
+                        )
+                try:
+                    accepted_guide = validate_chapter_guide(
+                        candidate,
+                        plan=mapping(guide_context["plan"], "chapter plan"),
+                        evidence_ids=[
+                            str(item["evidence_id"])
+                            for item in mapping_list(
+                                guide_context["selected_evidence"],
+                                "selected evidence",
+                            )
+                        ],
+                        allow_removed=True,
+                    )
+                except CompanionContentError as exc:
+                    return Failed(
+                        RunError(
+                            exc.code,
+                            str(exc),
+                            {
+                                "candidate_path": str(candidate_path),
+                                "chapter_id": chapter_id,
+                            },
+                        )
+                    )
+                artifact_id = f"chapters/{chapter_id}/guide-accepted"
+                context.artifacts.publish_json(artifact_id, accepted_guide)
+                completed_results[f"guide-{chapter_id}"] = accepted_guide
+
         joined = self._publish_completed_chapters(
             context,
             chapters,
@@ -1137,15 +1286,6 @@ class CompanionBuildHandler:
         )
         if isinstance(joined, Failed):
             return joined
-        failure = next(
-            (item for item in result.units if item.status != "succeeded"),
-            None,
-        )
-        if failure is not None:
-            return Failed(
-                failure.error
-                or RunError("chapter_lane_failed", "chapter lane failed")
-            )
         if len(joined) != len(chapters):
             return Failed(
                 RunError(
@@ -1242,179 +1382,6 @@ class CompanionBuildHandler:
                     )
             accepted.append(chapter_value)
         return tuple(accepted)
-
-    def _guide_lane(
-        self,
-        context: RunContext,
-        resume_input: Any,
-        unit: WorkUnit,
-        chapter: SourceChapter,
-        plan: Mapping[str, Any],
-        evidence: Sequence[Mapping[str, Any]],
-        glossary: Sequence[Mapping[str, Any]],
-        blocks: Mapping[str, Any],
-        language: Mapping[str, Any],
-        source: RichDocument,
-        prior_companion: Mapping[str, Any] | None,
-    ) -> Mapping[str, Any] | Paused | UnitResult:
-        artifact_id = f"chapters/{chapter.chapter_id}/guide-accepted"
-        existing = context.artifacts.find(artifact_id)
-        if existing is not None:
-            return read_json(context, existing, "accepted chapter guide")
-        if not mapping_list(
-            plan.get("learning_units"), "planned learning units"
-        ):
-            empty = {
-                "chapter_id": chapter.chapter_id,
-                "learning_units": [],
-            }
-            context.artifacts.publish_json(artifact_id, empty)
-            return empty
-        source_documents = [
-            _source_block_document(source, blocks[item])
-            for item in chapter.block_ids
-        ]
-        planned_documents = planned_source_documents(
-            plan, source_documents
-        )
-        draft_request = LLMRequest(
-            task_id("guide", unit.semantic_input),
-            chapter_guide_prompt(
-                plan=plan,
-                blocks=planned_documents,
-                glossary=glossary,
-                target_language=self.request.target_language,
-                language_result=language,
-                evidence=evidence,
-                prior_companion=prior_companion,
-            ),
-            JsonOutput(CHAPTER_GUIDE_SCHEMA, repair="format"),
-            self.recipe.model,
-        )
-        draft_outcome = execute_semantically_validated_task(
-            self.task_service,
-            context,
-            draft_request,
-            candidate_id=(
-                f"chapters/{chapter.chapter_id}/guide-draft.json"
-            ),
-            description=f"chapter guide {chapter.chapter_id}",
-            validate=lambda raw: validate_chapter_guide(
-                raw,
-                plan=plan,
-                evidence_ids=[
-                    str(item["evidence_id"]) for item in evidence
-                ],
-            ),
-            resume_input=resume_input,
-            options=self.execution.llm,
-        )
-        if isinstance(draft_outcome, Paused):
-            return draft_outcome
-        if isinstance(draft_outcome, LLMFailed):
-            return UnitResult(
-                unit.unit_id,
-                "failed",
-                error=run_error_from_failure(draft_outcome),
-            )
-        assert isinstance(draft_outcome, SemanticTaskCompleted)
-        draft = draft_outcome.value
-
-        review_request = LLMRequest(
-            task_id(
-                "guide-review",
-                {
-                    **dict(unit.semantic_input),
-                    "guide_digest": hashlib.sha256(
-                        canonical_json_bytes(draft)
-                    ).hexdigest(),
-                },
-            ),
-            chapter_guide_review_prompt(
-                plan=plan,
-                draft=draft,
-                blocks=planned_documents,
-                glossary=glossary,
-                evidence=evidence,
-                prior_companion=prior_companion,
-            ),
-            JsonOutput(
-                CHAPTER_GUIDE_REVIEW_SCHEMA, repair="format"
-            ),
-            self.recipe.model,
-        )
-        review_outcome = execute_semantically_validated_task(
-            self.task_service,
-            context,
-            review_request,
-            candidate_id=(
-                f"chapters/{chapter.chapter_id}/guide-review.json"
-            ),
-            description=f"chapter guide review {chapter.chapter_id}",
-            validate=lambda raw: _validated_guide_review(
-                draft,
-                raw,
-                plan=plan,
-                evidence_ids=[
-                    str(item["evidence_id"]) for item in evidence
-                ],
-            ),
-            resume_input=resume_input,
-            options=self.execution.llm,
-            # The draft already passed every guide invariant. A broken review
-            # patch may be discarded without discarding that usable chapter.
-            fallback=draft,
-        )
-        if isinstance(review_outcome, Paused):
-            return review_outcome
-        if isinstance(review_outcome, LLMFailed):
-            return UnitResult(
-                unit.unit_id,
-                "failed",
-                error=run_error_from_failure(review_outcome),
-            )
-        assert isinstance(review_outcome, SemanticTaskCompleted)
-        reviewed = review_outcome.value
-        if review_outcome.validation_warning is not None:
-            context.artifacts.publish_json(
-                (
-                    f"diagnostics/chapters/{chapter.chapter_id}"
-                    "/guide-review"
-                ),
-                {
-                    "schema_version": (
-                        "arc.companion.guide_review_diagnostics.v1"
-                    ),
-                    "status": "discarded_invalid_review",
-                    "code": review_outcome.validation_warning.code,
-                    "message": str(
-                        review_outcome.validation_warning
-                    ),
-                    "candidate_paths": [
-                        str(path)
-                        for path in review_outcome.candidate_paths
-                    ],
-                },
-            )
-        context.artifacts.publish_json(artifact_id, reviewed)
-        return reviewed
-
-
-def _validated_guide_review(
-    draft: Mapping[str, Any],
-    review: Mapping[str, Any],
-    *,
-    plan: Mapping[str, Any],
-    evidence_ids: Sequence[str],
-) -> dict[str, Any]:
-    reviewed, _decisions = apply_safe_guide_review(draft, review)
-    return validate_chapter_guide(
-        reviewed,
-        plan=plan,
-        evidence_ids=evidence_ids,
-        allow_removed=True,
-    )
-
 
 def _validated_translations(
     value: Mapping[str, Any], *, block_ids: Sequence[str]

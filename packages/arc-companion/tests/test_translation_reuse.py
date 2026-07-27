@@ -475,6 +475,8 @@ def test_legacy_v4_recipe_can_supply_exact_translation_identity(
             "evidence_research_prompt",
             "literature_request_prompt",
             "literature_survey_prompt",
+            "chapter_guide_max_rounds",
+            "chapter_guide_review_final_round",
         }
     }
     legacy["schema_version"] = "arc.companion.generation_recipe.v4"

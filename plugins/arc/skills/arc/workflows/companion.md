@@ -140,9 +140,19 @@ checks source anchoring, citation identity, coverage, and renderability while
 leaving explanatory form and chapter composition to the model.
 
 When translation is enabled, `arc-translate` builds the bilingual glossary
-after chapter planning and evidence. The glossary is a barrier; translation
-and guide generation then run in parallel for each chapter using only locally
-occurring glossary entries.
+after chapter planning and evidence. Translation completes before reviewed
+guide generation. Deterministic matching supplies each chapter guide only the
+glossary entries that occur in that chapter; translation windows likewise
+receive only entries matched to their source window.
+
+Guide improvement is owned by `arc-proposer-reviewer`. The reviewer must not
+criticize merely to fill a round: it stops immediately when the proposal
+satisfies the reader needs and has no concrete improvement path. Otherwise it
+gives constructive feedback, including good new anchored and evidence-backed
+ideas, for up to two complete revisions. The maximum sequence is
+proposer-reviewer-proposer-reviewer-proposer; the last proposal is validated
+directly, without an unused final review. Companion injects `chapter_id` into
+the final candidate as caller-owned routing data.
 
 ### Step 2: Resolve a pause
 
@@ -157,15 +167,13 @@ arc-companion resume --project-dir <project-dir> \
   --host-authority <host-authority>
 ```
 
-For an unsafe reviewer patch, the supervision request permits discarding that
-review while retaining the locally validated draft. There is no review
-arbitration or conflict graph.
-
 For a failed build, inspect
 `<project-dir>/.arc/companion/jobs/<run-id>/working/`. Candidate files are
 written before semantic validation and errors report their exact paths. Edit a
-candidate to adopt the repaired content on resume, or delete it to regenerate
-that step. Keep visual QA under
+candidate to adopt repaired content on a supported recovery path. A final guide
+candidate is backed by the durable proposer-reviewer transcript; deleting it
+re-materializes that frozen proposal rather than creating an extra model round.
+Keep visual QA under
 `.arc/companion/diagnostics/visual/<run-id>/`; do not create attempt-named
 project roots or loose project-level QA directories.
 

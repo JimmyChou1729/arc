@@ -34,7 +34,10 @@ _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4 = (
 )
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3 = "arc.companion.build_request.v3"
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2 = "arc.companion.build_request.v2"
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v7"
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v8"
+_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7 = (
+    "arc.companion.generation_recipe.v7"
+)
 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V6 = (
     "arc.companion.generation_recipe.v6"
 )
@@ -164,6 +167,8 @@ class CompanionGenerationRecipe:
     chapter_guide_review_prompt: str = (
         CHAPTER_GUIDE_REVIEW_PROMPT_VERSION
     )
+    chapter_guide_max_rounds: int = 3
+    chapter_guide_review_final_round: bool = False
     equation_label_visual_prompt: str = (
         EQUATION_LABEL_VISUAL_PROMPT_VERSION
     )
@@ -178,6 +183,17 @@ class CompanionGenerationRecipe:
         ):
             raise ValueError(
                 "approx_term_count must be between 1 and 200"
+            )
+        if (
+            isinstance(self.chapter_guide_max_rounds, bool)
+            or self.chapter_guide_max_rounds != 3
+        ):
+            raise ValueError(
+                "chapter_guide_max_rounds must be 3"
+            )
+        if self.chapter_guide_review_final_round is not False:
+            raise ValueError(
+                "chapter_guide_review_final_round must be false"
             )
         expected = {
             "literature_request_prompt": LITERATURE_REQUEST_PROMPT_VERSION,
@@ -260,6 +276,10 @@ def encode_generation_recipe(
         "chapter_guide_prompt": recipe.chapter_guide_prompt,
         "chapter_guide_review_prompt": (
             recipe.chapter_guide_review_prompt
+        ),
+        "chapter_guide_max_rounds": recipe.chapter_guide_max_rounds,
+        "chapter_guide_review_final_round": (
+            recipe.chapter_guide_review_final_round
         ),
         "equation_label_visual_prompt": (
             recipe.equation_label_visual_prompt
@@ -377,6 +397,15 @@ def decode_generation_recipe(
             "evidence_research_prompt",
             "literature_survey_prompt",
             "author_identity_prompt",
+            "chapter_guide_max_rounds",
+            "chapter_guide_review_final_round",
+        }
+    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7:
+        fields = common_fields | {
+            "literature_request_prompt",
+            "evidence_research_prompt",
+            "literature_survey_prompt",
+            "author_identity_prompt",
         }
     elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V6:
         fields = common_fields | {
@@ -411,7 +440,10 @@ def decode_generation_recipe(
     if schema_version != _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V4:
         _string(raw_recipe, "literature_request_prompt")
         _string(raw_recipe, "literature_survey_prompt")
-    if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA:
+    if schema_version in {
+        COMPANION_GENERATION_RECIPE_SCHEMA,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7,
+    }:
         _string(raw_recipe, "evidence_research_prompt")
         _string(raw_recipe, "author_identity_prompt")
     legacy_recipe = schema_version != COMPANION_GENERATION_RECIPE_SCHEMA
@@ -456,6 +488,19 @@ def decode_generation_recipe(
             CHAPTER_GUIDE_REVIEW_PROMPT_VERSION
             if legacy_recipe
             else _string(raw_recipe, "chapter_guide_review_prompt")
+        ),
+        chapter_guide_max_rounds=(
+            _integer(raw_recipe, "chapter_guide_max_rounds")
+            if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA
+            else 3
+        ),
+        chapter_guide_review_final_round=(
+            _strict_bool(
+                raw_recipe,
+                "chapter_guide_review_final_round",
+            )
+            if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA
+            else False
         ),
         equation_label_visual_prompt=(
             EQUATION_LABEL_VISUAL_PROMPT_VERSION
@@ -506,6 +551,13 @@ def _integer(value: Mapping[str, Any], key: str) -> int:
     item = value.get(key)
     if isinstance(item, bool) or not isinstance(item, int):
         raise ValueError(f"{key} must be an integer")
+    return item
+
+
+def _strict_bool(value: Mapping[str, Any], key: str) -> bool:
+    item = value.get(key)
+    if type(item) is not bool:
+        raise ValueError(f"{key} must be a boolean")
     return item
 
 

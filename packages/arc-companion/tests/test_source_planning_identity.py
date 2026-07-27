@@ -60,7 +60,7 @@ from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
-    assert CompanionBuildHandler.name == "arc.companion.build.v4"
+    assert CompanionBuildHandler.name == "arc.companion.build.v5"
     assert not any(name.startswith("Legacy") for name in public_names)
     for module_name in (
         "arc_companion.build_v2",
@@ -159,6 +159,12 @@ def test_evidence_first_prompts_encode_selective_value_contract() -> None:
         "Audit every supplied source block exactly once",
         "Zero units are valid only when every block",
         "plot, narrative levels, or mistaken-identity context",
+        "missing context behind an isolated quotation or named work",
+        "make skipped derivation steps explicit",
+        "bridge a real logical gap",
+        "later corrections",
+        "unexpectedly important developments",
+        "historical significance",
         "Never invent a belief for the reader",
     ):
         assert phrase in plan
@@ -583,8 +589,13 @@ def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
 
     assert "do not manufacture a prior reader belief" in guide
     assert "Translate English excerpts" in guide
-    assert "Never remove the final unit" in review
-    assert "Replace unsupported corrective framing" in review
+    assert "Never recommend removing the final useful unit" in review
+    assert "Treat unsupported corrective framing as a material defect" in review
+    assert "Do not criticize merely to demonstrate reviewer activity" in review
+    assert "accept it by choosing `stop`" in review
+    assert "valuable new Companion idea" in review
+    assert "within an existing planned unit" in review
+    assert "Never invent a unit, source, or evidence identifier" in review
 
 
 def test_literature_plan_rejects_empty_research_log() -> None:
@@ -889,8 +900,10 @@ def test_provider_model_and_prompt_contract_change_run_identity(
     recipe_input = semantic_input["generation_recipe"]
     assert (
         recipe_input["schema_version"]
-        == "arc.companion.generation_recipe.v7"
+        == "arc.companion.generation_recipe.v8"
     )
+    assert recipe_input["chapter_guide_max_rounds"] == 3
+    assert recipe_input["chapter_guide_review_final_round"] is False
     assert (
         recipe_input["author_identity_prompt"]
         == auto.author_identity_prompt

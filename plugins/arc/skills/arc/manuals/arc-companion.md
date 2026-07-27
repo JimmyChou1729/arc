@@ -3,7 +3,9 @@
 `arc-companion` builds a source-anchored reading companion with translation,
 guides, searchable PDF, and Web reader. Use this manual for package commands.
 
-Build and resume require public `arc-translate`, paper, LLM, and jobs dependencies; an incomplete runtime returns `runtime_dependency_missing`.
+Build and resume require public `arc-translate`, proposer-reviewer, paper, LLM,
+and jobs dependencies; an incomplete runtime returns
+`runtime_dependency_missing`.
 
 ## Build from a Local Rich Source
 
@@ -50,8 +52,9 @@ arc-companion build <arxiv-id> \
 ```
 
 The build reuses compatible verified source, glossary, translation, and chapter
-artifacts. After the `arc-translate` glossary barrier, translation and guide
-generation may proceed in parallel. The glossary size is approximate.
+artifacts. After the `arc-translate` glossary barrier, translation completes
+before reviewed guide generation. Each guide receives only glossary entries
+deterministically matched to its chapter. The glossary size is approximate.
 
 Before planning, Companion researches at least 20 candidates across named
 sources, prior history, and central later debates. This is an inspection floor,
@@ -70,6 +73,13 @@ targets a non-specialist adult, research targets students with foundations, and
 textbooks target students with prerequisites without presuming hard topics are
 mastered. Required needs remain covered; no count quota applies. Corrective
 contrast requires a misconception established by source or evidence.
+
+Guide writing uses `arc-proposer-reviewer`: a reviewer accepts immediately when
+there is no concrete improvement, or gives constructive feedback for at most
+two complete revisions. It may suggest worthwhile new anchored,
+evidence-backed companion ideas. The maximum sequence is
+proposer-reviewer-proposer-reviewer-proposer; no unused final review follows
+the last revision. Companion injects the chapter ID deterministically.
 
 Without `--paper-cache-root`, Companion uses ARC's shared paper cache. Durable
 project state remains under `<project-dir>/.arc/companion/`.
@@ -99,8 +109,9 @@ release. Use `render` after renderer, font, style, or validator changes;
 `--format` filters reported artifacts, not what is validated and published.
 
 Open `<project-dir>/companion.pdf` or `companion.html` after publication. The
-PDF is an exact copy; HTML points to the immutable release so assets and links
-remain valid. The release manifest and CLI artifacts are authoritative. Do not
+PDF is an exact copy; HTML is a standalone offline copy with local reader
+assets embedded, while external source and bibliography links remain navigation
+links. The release manifest and CLI artifacts are authoritative. Do not
 place unrelated files at either managed root path.
 
 Companion freezes every source figure asset needed for its accepted release in
