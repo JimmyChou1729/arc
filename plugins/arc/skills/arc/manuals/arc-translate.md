@@ -63,6 +63,17 @@ Use the same project directory for every step. Resume input must match the
 current typed pause descriptor; completed and verified work is reused in the
 same run lineage.
 
+For model-correctable machine output failures, such as changed term or block
+identities, missing coverage, or damaged formula/link identity, ARC retries the
+complete language, glossary, draft, or review output once with validation
+feedback. If the fresh result is still unusable, the step pauses and exposes an
+editable candidate; it never makes a third automatic attempt. Already completed
+windows are reused, and an invalid review cannot overwrite its valid
+pre-review translation. Provider/authority failures, prerequisite binding
+errors, input-budget limits, and corrupt durable artifacts follow their
+existing typed paths and do not consume this retry. Do not classify scientific
+quality, style, or debatable translation choices as machine-invalid output.
+
 ## Help
 
 ```bash

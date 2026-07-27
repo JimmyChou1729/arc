@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeAlias
@@ -69,6 +69,7 @@ from .source import (
 
 
 REVIEW_SUPERVISION_SCHEMA = "arc.translate.review_supervision.v1"
+OUTPUT_SUPERVISION_SCHEMA = "arc.translate.output_supervision.v1"
 
 
 class KeywordProvider(Protocol):
@@ -348,21 +349,27 @@ class TranslationWorkflowService:
             JsonOutput(LANGUAGE_SCHEMA, repair="format"),
             model,
         )
-        outcome = _execute(
+        generated = _validated_generation(
             self.task_service,
             context,
             request,
+            validator=_validate_language_output,
+            candidate_id=f"language/{artifact_prefix}/result.json",
             resume_input=resume_input,
             options=execution,
+            stopped_message="language detection stopped",
         )
-        if isinstance(outcome, LLMPaused):
-            return Paused(_awaiting(outcome))
-        if isinstance(outcome, LLMFailed):
-            return _run_error(outcome)
-        if isinstance(outcome, LLMStopped):
-            raise StoppedError("language detection stopped")
-        assert isinstance(outcome, LLMCompleted)
-        value = _validate_language_output(outcome.value)
+        if isinstance(generated, (Paused, RunError)):
+            return generated
+        if isinstance(generated, _InvalidGeneratedOutput):
+            return _output_supervision(
+                context,
+                artifact_prefix=artifact_prefix,
+                stage="language",
+                error=generated.error,
+                candidate_path=generated.candidate_path,
+            )
+        value = generated
         classification = str(value["classification"])
         language_tag = str(value["language_tag"])
         mode = (
@@ -468,9 +475,7 @@ class TranslationWorkflowService:
             candidate_id = f"glossary/{window_id}.json"
             candidate_path = context.working.find_candidate(candidate_id)
             window_ref = context.artifacts.find(window_id)
-            if candidate_path is not None:
-                window_output = context.working.read_candidate_json(candidate_id)
-            elif window_ref is not None:
+            if candidate_path is None and window_ref is not None:
                 window_output = _read_json_artifact(
                     context, window_ref, "glossary window"
                 )
@@ -495,30 +500,29 @@ class TranslationWorkflowService:
                     JsonOutput(GLOSSARY_SCHEMA, repair="format"),
                     model,
                 )
-                outcome = _execute(
+                generated = _validated_generation(
                     self.task_service,
                     context,
                     request,
+                    validator=lambda value: _validated_glossary_document(
+                        value, window
+                    ),
+                    candidate_id=candidate_id,
                     resume_input=resume_input,
                     options=execution,
+                    stopped_message="glossary generation stopped",
                 )
-                if isinstance(outcome, LLMPaused):
-                    return Paused(_awaiting(outcome))
-                if isinstance(outcome, LLMFailed):
-                    return _run_error(outcome)
-                if isinstance(outcome, LLMStopped):
-                    raise StoppedError("glossary generation stopped")
-                assert isinstance(outcome, LLMCompleted)
-                window_output = _object(
-                    outcome.value, "glossary window"
-                )
-                candidate_path = context.working.write_candidate_json(
-                    candidate_id, window_output
-                )
-                try:
-                    _validate_glossary_window(window_output, window)
-                except TranslationWorkflowError as exc:
-                    return _candidate_run_error(exc, candidate_path)
+                if isinstance(generated, (Paused, RunError)):
+                    return generated
+                if isinstance(generated, _InvalidGeneratedOutput):
+                    return _output_supervision(
+                        context,
+                        artifact_prefix=artifact_prefix,
+                        stage=f"glossary-{ordinal:04d}",
+                        error=generated.error,
+                        candidate_path=generated.candidate_path,
+                    )
+                window_output = generated
                 context.artifacts.publish_json(window_id, window_output)
             try:
                 entries.extend(
@@ -611,9 +615,7 @@ class TranslationWorkflowService:
             candidate_id = f"translation/{draft_id}.json"
             candidate_path = context.working.find_candidate(candidate_id)
             draft_ref = context.artifacts.find(draft_id)
-            if candidate_path is not None:
-                draft_doc = context.working.read_candidate_json(candidate_id)
-            elif draft_ref is not None:
+            if candidate_path is None and draft_ref is not None:
                 draft_doc = _read_json_artifact(
                     context, draft_ref, "translation draft"
                 )
@@ -643,28 +645,29 @@ class TranslationWorkflowService:
                     JsonOutput(TRANSLATION_SCHEMA, repair="format"),
                     model,
                 )
-                outcome = _execute(
+                generated = _validated_generation(
                     self.task_service,
                     context,
                     request,
+                    validator=lambda value: _validated_draft_document(
+                        value, window
+                    ),
+                    candidate_id=candidate_id,
                     resume_input=resume_input,
                     options=execution,
+                    stopped_message="block translation stopped",
                 )
-                if isinstance(outcome, LLMPaused):
-                    return Paused(_awaiting(outcome))
-                if isinstance(outcome, LLMFailed):
-                    return _run_error(outcome)
-                if isinstance(outcome, LLMStopped):
-                    raise StoppedError("block translation stopped")
-                assert isinstance(outcome, LLMCompleted)
-                draft_doc = _object(outcome.value, "translation draft")
-                candidate_path = context.working.write_candidate_json(
-                    candidate_id, draft_doc
-                )
-                try:
-                    _validate_draft_window(draft_doc, window)
-                except TranslationWorkflowError as exc:
-                    return _candidate_run_error(exc, candidate_path)
+                if isinstance(generated, (Paused, RunError)):
+                    return generated
+                if isinstance(generated, _InvalidGeneratedOutput):
+                    return _output_supervision(
+                        context,
+                        artifact_prefix=artifact_prefix,
+                        stage=f"draft-{ordinal:04d}",
+                        error=generated.error,
+                        candidate_path=generated.candidate_path,
+                    )
+                draft_doc = generated
                 context.artifacts.publish_json(draft_id, draft_doc)
             try:
                 draft = _validate_draft_window(draft_doc, window)
@@ -702,32 +705,35 @@ class TranslationWorkflowService:
                 JsonOutput(REVIEW_SCHEMA, repair="format"),
                 model,
             )
-            review_outcome = _execute(
+            review_generated = _validated_generation(
                 self.task_service,
                 context,
                 review_request,
+                validator=lambda value: _apply_review(value, draft, window),
+                candidate_id=(
+                    f"translation/{artifact_prefix}/windows/"
+                    f"{ordinal:04d}/review.json"
+                ),
                 resume_input=resume_input,
                 options=execution,
+                stopped_message="translation review stopped",
             )
-            if isinstance(review_outcome, LLMPaused):
-                return Paused(_awaiting(review_outcome))
-            if isinstance(review_outcome, LLMStopped):
-                raise StoppedError("translation review stopped")
+            if isinstance(review_generated, Paused):
+                return review_generated
             review_error: tuple[str, str] | None = None
             reviewed: list[dict[str, str]] | None = None
-            if isinstance(review_outcome, LLMFailed):
+            if isinstance(review_generated, RunError):
                 review_error = (
-                    review_outcome.error.code.value,
-                    str(review_outcome.error),
+                    review_generated.code,
+                    review_generated.message,
+                )
+            elif isinstance(review_generated, _InvalidGeneratedOutput):
+                review_error = (
+                    review_generated.error.code,
+                    str(review_generated.error),
                 )
             else:
-                assert isinstance(review_outcome, LLMCompleted)
-                try:
-                    reviewed = _apply_review(
-                        review_outcome.value, draft, window
-                    )
-                except TranslationWorkflowError as exc:
-                    review_error = (exc.code, str(exc))
+                reviewed = review_generated
             if review_error is not None:
                 supervision = _review_supervision(
                     context,
@@ -763,6 +769,12 @@ class TranslationWorkflowError(RuntimeError):
         self.code = code
 
 
+@dataclass(frozen=True)
+class _InvalidGeneratedOutput:
+    error: TranslationWorkflowError
+    candidate_path: Path
+
+
 def _candidate_run_error(
     error: TranslationWorkflowError, path: Path
 ) -> RunError:
@@ -770,6 +782,187 @@ def _candidate_run_error(
         error.code,
         f"{error}; editable candidate: {path}",
         {"candidate_path": str(path)},
+    )
+
+
+def _validated_generation(
+    service: Any,
+    context: RunContext,
+    request: LLMRequest,
+    *,
+    validator: Callable[[Any], Any],
+    candidate_id: str,
+    resume_input: ResumeInput | None,
+    options: LLMExecutionOptions,
+    stopped_message: str,
+) -> Any | Paused | RunError | _InvalidGeneratedOutput:
+    """Retry one model-correctable identity/coverage failure, then pause."""
+
+    candidate_path = context.working.find_candidate(candidate_id)
+    if candidate_path is not None:
+        candidate = context.working.read_candidate_json(candidate_id)
+        try:
+            return validator(candidate)
+        except TranslationWorkflowError as exc:
+            return _InvalidGeneratedOutput(exc, candidate_path)
+
+    first_candidate_id = _attempt_candidate_id(candidate_id)
+    first_candidate_path = context.working.find_candidate(first_candidate_id)
+    feedback: TranslationWorkflowError | None = None
+    if first_candidate_path is not None:
+        first_candidate = context.working.read_candidate_json(first_candidate_id)
+        try:
+            validated = validator(first_candidate)
+            context.working.write_candidate_json(
+                candidate_id, first_candidate
+            )
+            return validated
+        except TranslationWorkflowError as exc:
+            feedback = exc
+
+    attempt = 2 if feedback is not None else 1
+    current_request = (
+        _semantic_retry_request(request, feedback)
+        if feedback is not None
+        else request
+    )
+    while True:
+        outcome = _execute(
+            service,
+            context,
+            current_request,
+            resume_input=resume_input,
+            options=options,
+        )
+        if isinstance(outcome, LLMPaused):
+            return Paused(_awaiting(outcome))
+        if isinstance(outcome, LLMFailed):
+            return _run_error(outcome)
+        if isinstance(outcome, LLMStopped):
+            raise StoppedError(stopped_message)
+        assert isinstance(outcome, LLMCompleted)
+        try:
+            validated = validator(outcome.value)
+        except TranslationWorkflowError as exc:
+            document = _generated_candidate_document(outcome.value)
+            if attempt == 1:
+                context.working.write_candidate_json(
+                    first_candidate_id, document
+                )
+                feedback = exc
+                attempt = 2
+                current_request = _semantic_retry_request(request, exc)
+                continue
+            path = context.working.write_candidate_json(
+                candidate_id, document
+            )
+            return _InvalidGeneratedOutput(exc, path)
+        context.working.write_candidate_json(
+            candidate_id, _generated_candidate_document(outcome.value)
+        )
+        return validated
+
+
+def _attempt_candidate_id(candidate_id: str) -> str:
+    if candidate_id.endswith(".json"):
+        return f"{candidate_id[:-5]}-attempt-1.json"
+    return f"{candidate_id}-attempt-1"
+
+
+def _semantic_retry_request(
+    request: LLMRequest, error: TranslationWorkflowError
+) -> LLMRequest:
+    message = str(error)
+    bounded_message = message[:500]
+    error_digest = hashlib.sha256(message.encode("utf-8")).hexdigest()
+    prompt = request.prompt
+    marker = "\n\nInput JSON:\n"
+    if marker in prompt:
+        prefix, payload = prompt.split(marker, 1)
+        prompt = (
+            f"{prefix}\n\nRetry after a machine-checkable output-contract "
+            f"failure ({error.code}): {bounded_message}. Generate the "
+            "complete output "
+            "again; do not narrow or change the scientific content."
+            f"{marker}{payload}"
+        )
+    else:
+        prompt = (
+            f"{prompt}\n\nRetry after a machine-checkable output-contract "
+            f"failure ({error.code}): {bounded_message}. Generate the "
+            "complete output "
+            "again; do not narrow or change the scientific content."
+        )
+    return LLMRequest(
+        _task_id(
+            "semantic-retry",
+            {
+                "task_id": request.task_id,
+                "error_code": error.code,
+                "error_message": bounded_message,
+                "error_digest": error_digest,
+            },
+        ),
+        prompt,
+        request.output,
+        request.model,
+        request.session,
+        request.inputs,
+    )
+
+
+def _generated_candidate_document(value: Any) -> dict[str, JsonValue]:
+    public = _public_value(value)
+    if isinstance(public, Mapping):
+        return dict(public)
+    return {"generated_value": public}
+
+
+def _output_supervision(
+    context: RunContext,
+    *,
+    artifact_prefix: str,
+    stage: str,
+    error: TranslationWorkflowError,
+    candidate_path: Path,
+) -> Paused:
+    digest = _digest(
+        {
+            "stage": stage,
+            "candidate_path": str(candidate_path),
+        }
+    )[:24]
+    resume_key = f"output-{digest}"
+    request_id = f"{artifact_prefix}/output-supervision/{stage}"
+    request_ref = context.artifacts.find(request_id)
+    if request_ref is None:
+        request_ref = context.artifacts.publish_json(
+            request_id,
+            {
+                "schema_version": OUTPUT_SUPERVISION_SCHEMA,
+                "resume_key": resume_key,
+                "reason": error.code,
+                "message": str(error),
+                "candidate_path": str(candidate_path),
+                "automatic_retry_exhausted": True,
+                "output_attempts": 2,
+            },
+        )
+    return Paused(
+        Awaiting(
+            ResumeReason.SUPERVISION_REQUIRED,
+            resume_key,
+            False,
+            request_ref,
+            None,
+            {
+                "stage": stage,
+                "code": error.code,
+                "candidate_path": str(candidate_path),
+                "automatic_retry_exhausted": True,
+                "output_attempts": 2,
+            },
+        )
     )
 
 
@@ -1065,6 +1258,14 @@ def _validate_glossary_window(
     return output
 
 
+def _validated_glossary_document(
+    value: Any, terms: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    document = _object(value, "glossary window")
+    _validate_glossary_window(document, terms)
+    return document
+
+
 def _validate_glossary_entries(
     entries: Sequence[Mapping[str, Any]],
 ) -> None:
@@ -1273,6 +1474,14 @@ def _validate_draft_window(
             raise TranslationWorkflowError(exc.code, str(exc)) from exc
         output.append({"block_id": str(translated["block_id"]), "text": text})
     return output
+
+
+def _validated_draft_document(
+    value: Any, blocks: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    document = _object(value, "translation draft")
+    _validate_draft_window(document, blocks)
+    return document
 
 
 def _validate_accepted_window(

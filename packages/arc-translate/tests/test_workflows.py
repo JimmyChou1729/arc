@@ -157,6 +157,39 @@ class InvalidGlossaryTasks:
         )
 
 
+class InvalidOnceTasks(FakeTasks):
+    def __init__(self, invalid_contract: str):
+        super().__init__()
+        self.invalid_contract = invalid_contract
+        self.invalid_attempts = 0
+        self.task_ids: list[str] = []
+
+    def execute_or_resume(self, context, request, *, input=None, options=None):
+        contract, _payload = _prompt(request.prompt)
+        self.task_ids.append(request.task_id)
+        if contract == self.invalid_contract and self.invalid_attempts == 0:
+            self.invalid_attempts += 1
+            self.calls.append(contract)
+            if contract == LANGUAGE_PROMPT_VERSION:
+                value = {
+                    "language_tag": " ",
+                    "classification": "known",
+                    "confidence": 0.9,
+                }
+            elif contract == TRANSLATION_PROMPT_VERSION:
+                value = {
+                    "translations": [
+                        {"block_id": "wrong-block", "text": "translated"}
+                    ]
+                }
+            else:  # pragma: no cover - guards fixture scope
+                raise AssertionError(contract)
+            return LLMCompleted(value, "fake", "fake", None, None)
+        return super().execute_or_resume(
+            context, request, input=input, options=options
+        )
+
+
 @dataclass
 class FakeKeywords:
     terms: list[dict[str, Any]]
@@ -395,7 +428,7 @@ def test_glossary_windows_preserve_every_term_identity_and_order(tmp_path):
     assert tasks.calls.count(GLOSSARY_PROMPT_VERSION) >= 2
 
 
-def test_invalid_glossary_candidate_is_editable_and_reused_without_provider(
+def test_invalid_glossary_retries_once_then_pauses_with_editable_candidate(
     tmp_path,
 ):
     source = _source(tmp_path)
@@ -413,7 +446,7 @@ def test_invalid_glossary_candidate_is_editable_and_reused_without_provider(
         "enabled",
     )
 
-    failed = workflow.build_glossary(
+    paused = workflow.build_glossary(
         context,
         source,
         language=language,
@@ -421,9 +454,12 @@ def test_invalid_glossary_candidate_is_editable_and_reused_without_provider(
         approx_count=1,
     )
 
-    assert isinstance(failed, RunError)
-    candidate_path = Path(str(failed.details["candidate_path"]))
+    assert isinstance(paused, Paused)
+    assert paused.awaiting.details["automatic_retry_exhausted"] is True
+    assert paused.awaiting.details["output_attempts"] == 2
+    candidate_path = Path(str(paused.awaiting.details["candidate_path"]))
     assert candidate_path.is_file()
+    assert tasks.calls == 2
     candidate_path.write_text(
         json.dumps(
             {
@@ -447,9 +483,100 @@ def test_invalid_glossary_candidate_is_editable_and_reused_without_provider(
     )
 
     assert isinstance(recovered, GlossaryResult)
-    assert tasks.calls == 1
+    assert tasks.calls == 2
     assert recovered.entries[0]["term"] == term["term"]
     assert recovered.entries[0]["matched_sentences"] == term["matched_sentences"]
+
+
+def test_invalid_language_output_gets_one_fresh_retry(tmp_path):
+    source = _source(tmp_path)
+    tasks = InvalidOnceTasks(LANGUAGE_PROMPT_VERSION)
+    context = _context(tmp_path, "language-retry")
+
+    result = TranslationWorkflowService(tasks).detect_language(
+        context,
+        source,
+        target_language="fr",
+    )
+
+    assert isinstance(result, LanguageResult)
+    assert tasks.calls == [
+        LANGUAGE_PROMPT_VERSION,
+        LANGUAGE_PROMPT_VERSION,
+    ]
+    assert context.working.find_candidate(
+        "language/language/result.json"
+    ) is not None
+    assert len(set(tasks.task_ids)) == 2
+
+
+def test_language_second_invalid_output_pauses_and_resumes_without_third_call(
+    tmp_path,
+):
+    source = _source(tmp_path)
+    service = TranslationService(tmp_path / "language-recovery-jobs")
+    tasks = FakeTasks(language=" ")
+    snapshot = service.prepare_language(
+        LanguageRequest(source, "fr"),
+        run_id="language-output-recovery",
+    )
+
+    paused = service.execute(snapshot.run_id, task_service=tasks)
+
+    assert paused.status is RunStatus.PAUSED
+    assert paused.awaiting is not None
+    assert paused.awaiting.input_required is False
+    assert paused.awaiting.details["output_attempts"] == 2
+    candidate_path = Path(
+        str(paused.awaiting.details["candidate_path"])
+    )
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "language_tag": "en",
+                "classification": "known",
+                "confidence": 0.9,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resumed = service.resume(snapshot.run_id, task_service=tasks)
+
+    assert resumed.status is RunStatus.SUCCEEDED
+    assert tasks.calls.count(LANGUAGE_PROMPT_VERSION) == 2
+    assert service.result(snapshot.run_id).language_tag == "en"
+
+
+def test_invalid_translation_draft_gets_one_fresh_retry(tmp_path):
+    source = _source(tmp_path)
+    tasks = InvalidOnceTasks(TRANSLATION_PROMPT_VERSION)
+
+    result = TranslationWorkflowService(tasks).translate_blocks(
+        _context(tmp_path, "draft-retry"),
+        source,
+        language=LanguageResult(
+            source.document_digest,
+            source.source_digest,
+            "en",
+            "known",
+            1,
+            "fr",
+            "enabled",
+        ),
+        glossary=GlossaryResult(
+            source.document_digest,
+            source.source_digest,
+            "fr",
+            1,
+            "d" * 64,
+            (),
+        ),
+        target_language="fr",
+    )
+
+    assert isinstance(result, BlocksResult)
+    assert tasks.calls.count(TRANSLATION_PROMPT_VERSION) == 2
 
 
 def test_block_selector_normalizes_order_and_filters_window_glossary(tmp_path):
@@ -574,6 +701,7 @@ def test_failed_review_can_accept_validated_pre_review_translation(tmp_path):
     )
     assert isinstance(first, Paused)
     assert first.awaiting.response_contract == REVIEW_SUPERVISION_SCHEMA
+    assert tasks.calls.count(REVIEW_PROMPT_VERSION) == 2
 
     resumed_context = RunContext(
         first_context.repository,
@@ -593,6 +721,7 @@ def test_failed_review_can_accept_validated_pre_review_translation(tmp_path):
     )
     assert isinstance(resumed, BlocksResult)
     assert len(resumed.translations) == len(source_blocks(source))
+    assert tasks.calls.count(REVIEW_PROMPT_VERSION) == 2
 
 
 def test_review_prompt_obeys_the_same_complete_input_budget(tmp_path):

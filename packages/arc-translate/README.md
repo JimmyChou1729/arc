@@ -39,6 +39,15 @@ translation candidates contain only block IDs plus translated text; source
 identity is attached locally. An agent may correct a candidate and resume
 without another provider call, or delete it to regenerate it.
 
+When a model response is structurally valid JSON but violates a
+machine-checkable language, term, block, formula, link, or review identity or
+coverage contract, ARC makes one fresh full-generation attempt with validation
+feedback. A second unusable response pauses with both attempts and an editable
+candidate preserved. Completed windows and a valid pre-review translation stay
+available. Provider, authority, binding, input-budget, and corrupt-artifact
+failures are not semantic-output retries. Translation quality and scientific
+judgment are reviewer concerns, not program-invalid output.
+
 ## Tests
 
 The default suite uses deterministic sources and fake model services:
