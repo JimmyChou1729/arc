@@ -1,9 +1,8 @@
 """Typed, package-owned views of exported ARC domain artifacts.
 
 This module validates one domain summary together with its paper JSON pack.
-Project-level seed coverage and ideas routing deliberately remain outside the
-package boundary. Reusable field-grouping primitives live in
-``arc_domain.field_grouping``.
+Project-level seed coverage, advisory package relationships, and ideas
+routing deliberately remain outside the package boundary.
 """
 
 from __future__ import annotations

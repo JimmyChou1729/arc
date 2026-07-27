@@ -7,21 +7,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from arc_domain import (
-    HARD_SEPARATION_CONFIDENCE,
-    FieldGroupingError,
-    build_field_groups,
-    normalize_field_grouping_pairs,
-)
 from arc_jobs import FileLease, canonical_json_bytes
 
-from _arc_workflows.domain_field_grouping import (
-    GROUPING_LLM_RUN_DIRNAME,
-    GROUPING_SCHEMA_VERSION,
-    GroupingLLMRunError,
-    GroupingRunner,
-    _default_grouping_runner,
-    _llm_grouping,
+from _arc_workflows.domain_relationships import (
+    RELATIONSHIP_LLM_RUN_DIRNAME,
+    DomainRelationshipError,
+    RelationshipRunner,
+    _default_relationship_runner,
+    _llm_relationships,
+    normalize_domain_relationship_pairs,
 )
 from _arc_workflows.domain_manifest_inputs import (
     DomainManifestInputs,
@@ -36,16 +30,13 @@ from _arc_workflows.domain_seed_provenance import (
 from _arc_workflows.workflow_io import write_json_object
 
 
-SCHEMA_VERSION = "arc.workflow.domain_manifest.v3"
-GROUPING_DIRECTORY = "field-groupings"
+SCHEMA_VERSION = "arc.workflow.domain_manifest.v4"
 SEED_PROVENANCE_DIRECTORY = "seed-provenance"
 
 
 @dataclass(frozen=True)
 class PreparedDomainManifest:
     manifest: dict[str, Any]
-    grouping: dict[str, Any]
-    grouping_path: Path
     seed_provenance: dict[str, Any]
     seed_provenance_path: Path
     project_dir: Path
@@ -55,14 +46,14 @@ class PreparedDomainManifest:
 def build_domain_manifest(
     project_dir: Path,
     *,
-    grouping_result: dict[str, Any] | None = None,
+    relationship_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build and validate a manifest without publishing any artifact."""
 
     inputs = collect_domain_manifest_inputs(project_dir)
     return _prepare_domain_manifest(
         inputs,
-        grouping_result=grouping_result,
+        relationship_result=relationship_result,
     ).manifest
 
 
@@ -70,7 +61,7 @@ def write_domain_manifest(
     project_dir: Path,
     output: Path | None = None,
     *,
-    grouping_runner: GroupingRunner | None = None,
+    relationship_runner: RelationshipRunner | None = None,
 ) -> Path:
     project_dir = project_dir.expanduser().resolve()
     destination = (
@@ -83,35 +74,33 @@ def write_domain_manifest(
     ).acquire(blocking=True)
     try:
         inputs = collect_domain_manifest_inputs(project_dir)
-        grouping_result: dict[str, Any] | None
-        grouping_error: ManifestError | None = None
+        relationship_result: dict[str, Any] | None
+        relationship_warning = ""
         if len(inputs.domains) == 1:
-            grouping_result = {"pairs": []}
+            relationship_result = {"pairs": []}
         else:
             try:
-                grouping_result = _llm_grouping(
+                relationship_result = _llm_relationships(
                     inputs.domains,
                     str(
                         inputs.context.get("user_intent", "")
                     ).strip(),
                     run_root=(
                         inputs.state_dir
-                        / GROUPING_LLM_RUN_DIRNAME
+                        / RELATIONSHIP_LLM_RUN_DIRNAME
                     ),
                     runner=(
-                        grouping_runner
-                        or _default_grouping_runner
+                        relationship_runner
+                        or _default_relationship_runner
                     ),
                 )
-            except GroupingLLMRunError:
-                raise
-            except ManifestError as exc:
-                grouping_result = None
-                grouping_error = exc
+            except Exception as exc:
+                relationship_result = None
+                relationship_warning = str(exc)
         prepared = _prepare_domain_manifest(
             inputs,
-            grouping_result=grouping_result,
-            grouping_error=grouping_error,
+            relationship_result=relationship_result,
+            relationship_warning=relationship_warning,
         )
         _publish_prepared(prepared, destination=destination)
         return destination
@@ -122,63 +111,15 @@ def write_domain_manifest(
 def _prepare_domain_manifest(
     inputs: DomainManifestInputs,
     *,
-    grouping_result: dict[str, Any] | None,
-    grouping_error: ManifestError | None = None,
+    relationship_result: dict[str, Any] | None,
+    relationship_warning: str = "",
 ) -> PreparedDomainManifest:
     context = inputs.context
     domains = inputs.domains
-    warning = ""
-    try:
-        if grouping_error is not None:
-            raise grouping_error
-        pairs = normalize_field_grouping_pairs(
-            grouping_result, domains
-        )
-        grouping_method = (
-            "llm_semantic_pair_classification"
-        )
-    except (FieldGroupingError, ManifestError) as exc:
-        pairs = []
-        grouping_method = "conservative_fallback"
-        warning = (
-            f"field_grouping_degraded: {exc}; merged all domain "
-            "packages into one field"
-        )
-    field_groups = build_field_groups(
+    domain_relationships = _domain_relationships(
         domains,
-        pairs,
-        intent=str(context.get("user_intent", "")),
-        force_single=bool(warning),
-    )
-    grouping_payload = {
-        "schema_version": GROUPING_SCHEMA_VERSION,
-        "grouping_method": grouping_method,
-        "hard_separation_confidence": (
-            HARD_SEPARATION_CONFIDENCE
-        ),
-        "pair_classifications": pairs,
-        "field_groups": [
-            {
-                key: item[key]
-                for key in (
-                    "field_id",
-                    "domain_package_ids",
-                    "confidence",
-                    "reason",
-                    "evidence",
-                )
-            }
-            for item in field_groups
-        ],
-        "warnings": [warning] if warning else [],
-    }
-    grouping_digest = hashlib.sha256(
-        canonical_json_bytes(grouping_payload)
-    ).hexdigest()[:24]
-    grouping_path = (
-        inputs.state_dir
-        / GROUPING_DIRECTORY
-        / f"field-grouping-{grouping_digest}.json"
+        relationship_result=relationship_result,
+        relationship_warning=relationship_warning,
     )
     seed_provenance_digest = hashlib.sha256(
         canonical_json_bytes(inputs.seed_provenance)
@@ -193,11 +134,6 @@ def _prepare_domain_manifest(
         "user_intent": str(
             context.get("user_intent", "")
         ).strip(),
-        "research_scope": (
-            "single_domain"
-            if len(field_groups) == 1
-            else "cross_domain"
-        ),
         "requested_seed_papers": (
             inputs.requested_seed_papers
         ),
@@ -210,20 +146,12 @@ def _prepare_domain_manifest(
         },
         "package_count": len(domains),
         "domain_packages": domains,
-        "field_count": len(field_groups),
-        "field_groups": field_groups,
-        "grouping_method": grouping_method,
-        "grouping_artifact": _relative(
-            inputs.project_dir, grouping_path
-        ),
-        "grouping_warnings": grouping_payload["warnings"],
+        "domain_relationships": domain_relationships,
         "duplicates": inputs.duplicates,
     }
     canonical_json_bytes(manifest)
     return PreparedDomainManifest(
         manifest=manifest,
-        grouping=grouping_payload,
-        grouping_path=grouping_path,
         seed_provenance=inputs.seed_provenance,
         seed_provenance_path=seed_provenance_path,
         project_dir=inputs.project_dir,
@@ -240,24 +168,16 @@ def _publish_prepared(
         prepared,
         destination=destination,
     )
-    grouping_path = prepared.grouping_path
     seed_provenance_path = prepared.seed_provenance_path
     provenance_exists = _preflight_immutable_artifact(
         seed_provenance_path,
         prepared.seed_provenance,
         label="seed provenance",
     )
-    grouping_exists = _preflight_immutable_artifact(
-        grouping_path,
-        prepared.grouping,
-        label="field grouping",
-    )
     if not provenance_exists:
         write_json_object(
             seed_provenance_path, prepared.seed_provenance
         )
-    if not grouping_exists:
-        write_json_object(grouping_path, prepared.grouping)
     write_json_object(destination, prepared.manifest)
 
 
@@ -307,24 +227,14 @@ def _validate_publication_paths(
     destination: Path,
 ) -> None:
     destination = destination.resolve()
-    grouping_path = prepared.grouping_path.resolve()
     seed_provenance_path = (
         prepared.seed_provenance_path.resolve()
     )
     project_dir = prepared.project_dir.resolve()
-    if destination == grouping_path:
-        raise ManifestError(
-            "manifest output must not be the immutable grouping "
-            f"artifact: {destination}"
-        )
     if destination == seed_provenance_path:
         raise ManifestError(
             "manifest output must not be the immutable seed "
             f"provenance artifact: {destination}"
-        )
-    if grouping_path == seed_provenance_path:
-        raise ManifestError(
-            "immutable supporting artifact paths must be distinct"
         )
     try:
         destination.relative_to(project_dir)
@@ -336,7 +246,6 @@ def _validate_publication_paths(
     protected = set(prepared.protected_input_paths)
     for label, path in (
         ("manifest output", destination),
-        ("immutable grouping artifact", grouping_path),
         ("immutable seed provenance artifact", seed_provenance_path),
     ):
         if path in protected:
@@ -346,8 +255,45 @@ def _validate_publication_paths(
             )
 
 
+def _domain_relationships(
+    domains: list[dict[str, Any]],
+    *,
+    relationship_result: dict[str, Any] | None,
+    relationship_warning: str,
+) -> dict[str, Any]:
+    if len(domains) == 1:
+        return {
+            "status": "not_applicable",
+            "method": "not_applicable",
+            "pair_classifications": [],
+            "warnings": [],
+        }
+    try:
+        if relationship_warning:
+            raise DomainRelationshipError(relationship_warning)
+        pairs = normalize_domain_relationship_pairs(
+            relationship_result, domains
+        )
+    except (DomainRelationshipError, ManifestError) as exc:
+        return {
+            "status": "unavailable",
+            "method": "llm_semantic_pair_classification",
+            "pair_classifications": [],
+            "warnings": [
+                "domain_relationships_unavailable: "
+                f"{exc}; package cards remain usable and scientific "
+                "route selection remains model-led"
+            ],
+        }
+    return {
+        "status": "available",
+        "method": "llm_semantic_pair_classification",
+        "pair_classifications": pairs,
+        "warnings": [],
+    }
+
+
 __all__ = [
-    "GROUPING_DIRECTORY",
     "SEED_PROVENANCE_DIRECTORY",
     "PreparedDomainManifest",
     "SCHEMA_VERSION",

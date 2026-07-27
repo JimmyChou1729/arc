@@ -56,9 +56,13 @@ The reusable `arc-paper` cache remains shared and can be overridden only with
 `--paper-cache-root` on build and resume.
 
 The managed domain workflow records visible summary warnings and publishes
-`arc.workflow.domain_manifest.v3` only after verified exports. That manifest
+`arc.workflow.domain_manifest.v4` only after verified exports. That manifest
 references the content-addressed `arc.workflow.domain_seed_provenance.v1`
-artifact before an ideas workflow starts.
+artifact and preserves every domain package before an ideas workflow starts.
+Its pairwise `domain_relationships` are advisory evidence with confidence and
+warnings; they never choose an Ideas route. If relationship analysis is
+unavailable, the manifest remains usable and Ideas proceeds from the package
+cards with a visible warning.
 
 ## Help
 

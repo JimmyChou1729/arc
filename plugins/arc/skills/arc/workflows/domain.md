@@ -349,37 +349,35 @@ python3 <skill-dir>/scripts/write-domain-manifest.py \
 ```
 
 The command must complete successfully before a requested ideas workflow
-starts. It writes `arc.workflow.domain_manifest.v3`, preserving each
-seed-specific package while semantically grouping packages into stable field
-cards. It first publishes a content-addressed
+starts. It writes `arc.workflow.domain_manifest.v4`, preserving every
+seed-specific domain package as its own evidence card. It first publishes a
+content-addressed
 `arc.workflow.domain_seed_provenance.v1` artifact and records that artifact's
-project-relative path and SHA-256 digest in the manifest. Only
-`distinct_field` with confidence at least `0.80` creates hard separation;
-uncertain, low-confidence, or invalid completed grouping conservatively merges
-packages with a warning. Ideas routing uses `field_count` and `field_id`, never
-package count. Print a `WARNING:` and stop before ideas if the manifest cannot
-be written or any referenced artifact is missing.
+project-relative path and SHA-256 digest in the manifest. The manifest does not
+select a single-domain or cross-domain research scope and does not merge
+packages into field groups. Later models receive every package and decide the
+scientific route for each idea.
 
-For one domain package, the helper writes the single field without an LLM call.
-For two or more packages, it makes one typed `LLMClient.generate` request with
-a deterministic field-grouping task ID, the complete pair-classification schema,
-and an isolated `<project-dir>/.arc/domain/field-grouping-llm` run root. It does not
-accept an agent-provided runner, cache root, or artifact path. The generated
-manifest records a content-addressed immutable grouping under
-`.arc/domain/field-groupings/` as its grouping artifact.
+For one domain package, `domain_relationships.status` is `not_applicable` and
+the helper makes no relationship-model call. For two or more packages, it makes
+one typed `LLMClient.generate` request with a deterministic relationship task
+ID, the complete pair-classification schema, and an isolated
+`<project-dir>/.arc/domain/domain-relationships-llm` run root. Pair
+classifications, confidence, reasons, and evidence are embedded under
+`domain_relationships` as advisory context only. They do not route, rank,
+merge, delete, or disqualify ideas.
 
-An invalid grouping payload or inconsistent pair classification is a
-conservative single-field fallback with a warning. A typed LLM pause, failure,
-or stop is not a fallback: print `WARNING:` and stop before ideas so
-the caller can resolve the provider state or rerun the manifest helper. Do not
-invent a grouping result or inspect private LLM artifacts. The helper holds one
-project lease while it validates inputs, runs grouping, and prepares
-publication. It verifies or writes the immutable grouping first and publishes
-`.arc/domain/domain-manifest.json` last. The manifest output must remain inside
-the project and cannot replace the grouping artifact, `context.json`, or a
-referenced hidden summary, Markdown report, or paper pack. Input/package
-validation errors and incomplete typed LLM outcomes publish no new grouping or
-manifest and leave existing published artifacts unchanged.
+An invalid relationship payload, runner exception, typed pause, failure, or
+stop sets `domain_relationships.status` to `unavailable`, records a visible
+warning, and still publishes the package-complete manifest. Do not invent a
+relationship result or inspect private LLM artifacts. The helper holds one
+project lease while it validates inputs, requests optional relationship
+context, and prepares publication. It verifies or writes immutable seed
+provenance first and publishes `.arc/domain/domain-manifest.json` last. The
+manifest output must remain inside the project and cannot replace
+`context.json` or a referenced hidden summary, Markdown report, paper pack, or
+seed-provenance artifact. Input/package validation and publication-integrity
+errors remain hard failures because no usable manifest can be established.
 
 ### Phase 4: Scope Boundary and Interactive Review
 

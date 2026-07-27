@@ -25,14 +25,6 @@ from .contracts import (
     encode_domain_build_result,
     encode_domain_build_warning,
 )
-from .field_grouping import (
-    HARD_SEPARATION_CONFIDENCE,
-    FieldGroupingConstraintError,
-    FieldGroupingError,
-    build_field_groups,
-    normalize_field_grouping_pairs,
-    validate_field_grouping_constraints,
-)
 from .paths import domain_id_for
 from .package_view import (
     DomainPackageValidationError,
@@ -59,9 +51,6 @@ __all__ = [
     "DomainBuildResult",
     "DomainBuildRunner",
     "DomainBuildWarning",
-    "FieldGroupingConstraintError",
-    "FieldGroupingError",
-    "HARD_SEPARATION_CONFIDENCE",
     "DomainPackageValidationError",
     "DomainPackageView",
     "DomainPaperPackView",
@@ -75,13 +64,10 @@ __all__ = [
     "decode_domain_summary",
     "domain_build_run_id",
     "domain_id_for",
-    "build_field_groups",
     "encode_domain_build_policy",
     "encode_domain_build_request",
     "encode_domain_build_result",
     "encode_domain_build_warning",
     "mathematical_opportunities_validation_error",
-    "normalize_field_grouping_pairs",
     "render_network_html",
-    "validate_field_grouping_constraints",
 ]

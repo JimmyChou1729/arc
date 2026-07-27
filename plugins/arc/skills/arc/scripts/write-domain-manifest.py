@@ -45,7 +45,9 @@ def main(argv: list[str] | None = None) -> int:
             "status": "completed",
             "manifest_path": str(destination),
             "package_count": payload["package_count"],
-            "field_count": payload["field_count"],
+            "domain_relationships_status": payload[
+                "domain_relationships"
+            ]["status"],
             "duplicate_count": len(payload["duplicates"]),
         }
         print(

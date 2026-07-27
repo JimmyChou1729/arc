@@ -8,19 +8,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from arc_domain import build_field_groups
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "plugins/arc/skills/arc/scripts/write-domain-manifest.py"
 SCRIPTS = SCRIPT.parent
-GROUPING_MODULE = (
-    SCRIPTS / "_arc_workflows/domain_field_grouping.py"
+RELATIONSHIPS_MODULE = (
+    SCRIPTS / "_arc_workflows/domain_relationships.py"
 )
-GROUPING_SCHEMA = (
+RELATIONSHIPS_SCHEMA = (
     ROOT
     / "plugins/arc/skills/arc/workflows/json"
-    / "domain-field-grouping.schema.json"
+    / "domain-relationships.schema.json"
 )
 DOMAIN_STATE = Path(".arc") / "domain"
 DOMAIN_PACKAGES = DOMAIN_STATE / "packages"
@@ -30,7 +29,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(SCRIPTS))
 try:
     from _arc_workflows import (
-        domain_field_grouping as grouping,
+        domain_relationships as relationships,
         domain_manifest_inputs as inputs,
         domain_manifest_publish as publish,
     )
@@ -185,15 +184,17 @@ def _write_orphan_pack(
 
 def test_manifest_helper_uses_source_bootstrap_and_typed_llm_contract() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
-    grouping_source = GROUPING_MODULE.read_text(encoding="utf-8")
+    relationships_source = RELATIONSHIPS_MODULE.read_text(
+        encoding="utf-8"
+    )
 
     assert "bootstrap_arc_pythonpath()" in source
-    assert "LLMClient().generate" in grouping_source
-    assert "run_json" not in source + grouping_source
-    assert "LLMAbortScope" not in source + grouping_source
+    assert "LLMClient().generate" in relationships_source
+    assert "run_json" not in source + relationships_source
+    assert "LLMAbortScope" not in source + relationships_source
 
 
-def test_field_grouping_request_materialization_golden() -> None:
+def test_domain_relationship_request_materialization_golden() -> None:
     packages = [
         {
             "domain_package_id": "domain-b",
@@ -227,10 +228,10 @@ def test_field_grouping_request_materialization_golden() -> None:
         return SimpleNamespace(outcome=None)
 
     with pytest.raises(
-        grouping.GroupingLLMRunError,
+        relationships.RelationshipLLMOutcomeError,
         match="returned no typed outcome",
     ):
-        grouping._llm_grouping(
+        relationships._llm_relationships(
             packages,
             "桥接 intent",
             run_root=Path("/tmp/run"),
@@ -240,11 +241,13 @@ def test_field_grouping_request_materialization_golden() -> None:
     assert len(calls) == 1
     request, run_root = calls[0]
     assert request.task_id == (
-        "domain-field-grouping-4a42a2e27bb159f6e3b22489"
+        "domain-relationships-4a42a2e27bb159f6e3b22489"
     )
     assert request.prompt == (
-        "Classify every unordered package pair as same_field, "
-        "distinct_field, or uncertain. Exact intent: 桥接 intent\n"
+        "Assess every unordered pair of domain packages as same_field, "
+        "distinct_field, or uncertain. These classifications are advisory "
+        "scientific context only: do not choose, constrain, or rank a later "
+        "research route. Exact intent: 桥接 intent\n"
         'Packages: [{"domain_package_id": "domain-b", '
         '"seed_paper": "seed:b", "foundation_paper_ids": '
         '["seed:b"], "title": "Beta", "overview": "Second", '
@@ -257,7 +260,7 @@ def test_field_grouping_request_materialization_golden() -> None:
         '["p1"], "citation_edges": []}]'
     )
     expected_schema = json.loads(
-        GROUPING_SCHEMA.read_text(encoding="utf-8")
+        RELATIONSHIPS_SCHEMA.read_text(encoding="utf-8")
     )
     canonical_schema = json.dumps(
         expected_schema,
@@ -298,10 +301,12 @@ def test_manifest_uses_distinct_domain_ids_and_relative_paths(tmp_path: Path) ->
 
     payload = publish.build_domain_manifest(project)
 
-    assert payload["schema_version"] == "arc.workflow.domain_manifest.v3"
+    assert payload["schema_version"] == "arc.workflow.domain_manifest.v4"
     assert payload["package_count"] == 2
-    assert payload["field_count"] == 1
-    assert payload["research_scope"] == "single_domain"
+    assert payload["domain_relationships"]["status"] == "unavailable"
+    assert "research_scope" not in payload
+    assert "field_count" not in payload
+    assert "field_groups" not in payload
     assert [item["domain_package_id"] for item in payload["domain_packages"]] == ["domain-a", "domain-b"]
     assert payload["domain_packages"][0]["summary_json_path"] == ".arc/domain/packages/a_domain_summary.json"
     assert payload["domain_packages"][0]["seed_paper"] == "seed:a"
@@ -403,7 +408,7 @@ def test_manifest_publishes_normalized_closed_seed_provenance(
 
     from arc_llm import LLMCompleted
 
-    def grouping_runner(_request, _run_root):
+    def relationship_runner(_request, _run_root):
         return SimpleNamespace(
             outcome=LLMCompleted(
                 value={
@@ -413,7 +418,7 @@ def test_manifest_publishes_normalized_closed_seed_provenance(
                             "package_b": "domain-b",
                             "classification": "same_field",
                             "confidence": 0.9,
-                            "reason": "fixture grouping",
+                            "reason": "fixture relationship",
                             "evidence": {},
                         }
                     ]
@@ -426,7 +431,7 @@ def test_manifest_publishes_normalized_closed_seed_provenance(
         )
 
     destination = publish.write_domain_manifest(
-        project, grouping_runner=grouping_runner
+        project, relationship_runner=relationship_runner
     )
     manifest = json.loads(destination.read_text(encoding="utf-8"))
     reference = manifest["seed_provenance_artifact"]
@@ -740,7 +745,9 @@ def test_manifest_prefers_requested_seed_domain_records_over_foundation(tmp_path
     assert payload["domain_packages"][0]["seed_paper"] == "arXiv:1234.5678"
 
 
-def test_manifest_hard_separates_only_high_confidence_distinct_fields(tmp_path: Path) -> None:
+def test_manifest_preserves_high_confidence_distinct_relationship_as_advice(
+    tmp_path: Path,
+) -> None:
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(json.dumps({"user_intent": "bridge", "seed_paper_list": ["seed:a", "seed:b"]}))
@@ -749,14 +756,20 @@ def test_manifest_hard_separates_only_high_confidence_distinct_fields(tmp_path: 
     pair = {"package_a": "domain-a", "package_b": "domain-b", "classification": "distinct_field",
             "confidence": 0.8, "reason": "different methods", "evidence": {"semantic": "x"}}
 
-    payload = publish.build_domain_manifest(project, grouping_result={"pairs": [pair]})
+    payload = publish.build_domain_manifest(
+        project, relationship_result={"pairs": [pair]}
+    )
 
-    assert payload["field_count"] == 2
-    assert payload["research_scope"] == "cross_domain"
-    assert all(item["field_id"].startswith("field-") for item in payload["field_groups"])
+    relation = payload["domain_relationships"]
+    assert relation["status"] == "available"
+    assert relation["pair_classifications"] == [pair]
+    assert "research_scope" not in payload
+    assert "field_groups" not in payload
 
 
-def test_manifest_low_confidence_or_failed_grouping_merges_conservatively(tmp_path: Path) -> None:
+def test_manifest_low_confidence_relationship_remains_advisory_and_invalid_is_warning(
+    tmp_path: Path,
+) -> None:
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(json.dumps({"user_intent": "same area"}))
@@ -765,47 +778,25 @@ def test_manifest_low_confidence_or_failed_grouping_merges_conservatively(tmp_pa
     pair = {"package_a": "domain-a", "package_b": "domain-b", "classification": "distinct_field",
             "confidence": 0.79, "reason": "weak", "evidence": {}}
 
-    low = publish.build_domain_manifest(project, grouping_result={"pairs": [pair]})
-    failed = publish.build_domain_manifest(project, grouping_result={"pairs": []})
-
-    assert low["field_count"] == 1
-    assert failed["field_count"] == 1
-    assert failed["grouping_method"] == "conservative_fallback"
-    assert failed["grouping_warnings"]
-
-
-def test_field_grouping_ignores_non_object_mathematical_opportunities() -> None:
-    package = {
-        "domain_package_id": "domain-a",
-        "seed_paper": "seed:a",
-        "title": "Alpha",
-        "overview": "Overview",
-        "task_focus": {},
-        "methodology": [],
-        "known_solved_cases": [],
-        "open_axes_for_new_work": [],
-        "mathematical_opportunities": None,
-        "summary_schema_version": "arc.domain_summary.v5",
-        "summary_json_path": ".arc/domain/packages/a_domain_summary.json",
-        "summary_markdown_path": ".arc/domain/packages/a_domain_summary.md",
-        "paper_json_pack_path": ".arc/domain/packages/a_paper_json_pack.json",
-        "paper_ids": ["seed:a"],
-        "citation_edges": [],
-    }
-
-    groups = build_field_groups(
-        [package],
-        [],
-        intent="",
-        force_single=False,
+    low = publish.build_domain_manifest(
+        project, relationship_result={"pairs": [pair]}
+    )
+    invalid = publish.build_domain_manifest(
+        project, relationship_result={"pairs": []}
     )
 
-    assert groups[0]["field_card"]["mathematical_opportunities"] == {
-        "well_defined_problems": []
-    }
+    assert low["domain_relationships"]["status"] == "available"
+    assert low["domain_relationships"]["pair_classifications"][0][
+        "confidence"
+    ] == 0.79
+    assert invalid["domain_relationships"]["status"] == "unavailable"
+    assert invalid["domain_relationships"]["warnings"]
+    assert invalid["package_count"] == 2
 
 
-def test_manifest_three_package_grouping_is_deterministic_and_evidence_backed(tmp_path: Path) -> None:
+def test_manifest_three_package_relationships_are_deterministic_without_equivalence_constraint(
+    tmp_path: Path,
+) -> None:
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(json.dumps({"user_intent": "bridge"}), encoding="utf-8")
@@ -814,40 +805,24 @@ def test_manifest_three_package_grouping_is_deterministic_and_evidence_backed(tm
     pairs = [
         {"package_a": "domain-a", "package_b": "domain-b", "classification": "same_field", "confidence": 0.91, "reason": "same methods", "evidence": {"semantic": "shared"}},
         {"package_a": "domain-a", "package_b": "domain-c", "classification": "distinct_field", "confidence": 0.94, "reason": "different objects", "evidence": {"semantic": "distinct"}},
-        {"package_a": "domain-b", "package_b": "domain-c", "classification": "distinct_field", "confidence": 0.88, "reason": "different objects", "evidence": {"semantic": "distinct"}},
+        {"package_a": "domain-b", "package_b": "domain-c", "classification": "uncertain", "confidence": 0.7, "reason": "relationship uncertain", "evidence": {"semantic": "uncertain"}},
     ]
 
-    first = publish.build_domain_manifest(project, grouping_result={"pairs": pairs})
-    second = publish.build_domain_manifest(project, grouping_result={"pairs": list(reversed(pairs))})
+    first = publish.build_domain_manifest(
+        project, relationship_result={"pairs": pairs}
+    )
+    second = publish.build_domain_manifest(
+        project,
+        relationship_result={"pairs": list(reversed(pairs))},
+    )
 
-    assert first["field_count"] == 2
-    assert [item["field_id"] for item in first["field_groups"]] == [item["field_id"] for item in second["field_groups"]]
-    merged = next(item for item in first["field_groups"] if len(item["domain_package_ids"]) == 2)
-    assert merged["confidence"] == 0.91
-    assert merged["reason"]
-    assert merged["evidence"]
-
-
-def test_manifest_falls_back_on_nontransitive_grouping_across_hard_distinct_pair(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "context.json").write_text(json.dumps({"user_intent": "bridge"}), encoding="utf-8")
-    for suffix in ("a", "b", "c"):
-        _write_domain(project, suffix, f"domain-{suffix}", f"seed:{suffix}")
-    pairs = [
-        {"package_a": "domain-a", "package_b": "domain-b", "classification": "same_field", "confidence": 0.9, "reason": "same", "evidence": {}},
-        {"package_a": "domain-b", "package_b": "domain-c", "classification": "uncertain", "confidence": 0.7, "reason": "uncertain", "evidence": {}},
-        {"package_a": "domain-a", "package_b": "domain-c", "classification": "distinct_field", "confidence": 0.95, "reason": "hard split", "evidence": {}},
+    assert first["domain_relationships"] == second[
+        "domain_relationships"
     ]
-
-    payload = publish.build_domain_manifest(project, grouping_result={"pairs": pairs})
-
-    assert payload["field_count"] == 1
-    assert payload["research_scope"] == "single_domain"
-    assert payload["grouping_method"] == "conservative_fallback"
-    assert "non-transitive" in payload["grouping_warnings"][0]
-    assert not (project / payload["grouping_artifact"]).exists()
-    assert not (project / DOMAIN_STATE / "domain-manifest.json").exists()
+    assert first["domain_relationships"]["status"] == "available"
+    assert len(
+        first["domain_relationships"]["pair_classifications"]
+    ) == 3
 
 
 def test_manifest_requires_companion_artifacts(tmp_path: Path) -> None:
@@ -878,7 +853,9 @@ def test_manifest_requires_companion_artifacts(tmp_path: Path) -> None:
         publish.build_domain_manifest(project)
 
 
-def test_write_manifest_uses_injected_typed_llm_runner(tmp_path: Path) -> None:
+def test_write_manifest_uses_injected_typed_relationship_runner(
+    tmp_path: Path,
+) -> None:
     from arc_llm import LLMCompleted
 
     project = tmp_path / "project"
@@ -918,21 +895,29 @@ def test_write_manifest_uses_injected_typed_llm_runner(tmp_path: Path) -> None:
             )
         )
 
-    destination = publish.write_domain_manifest(project, grouping_runner=runner)
+    destination = publish.write_domain_manifest(
+        project, relationship_runner=runner
+    )
 
     assert destination == project / DOMAIN_STATE / "domain-manifest.json"
     assert len(calls) == 1
     request, run_root = calls[0]
-    assert request.task_id.startswith("domain-field-grouping-")
+    assert request.task_id.startswith("domain-relationships-")
     assert request.model.provider == "auto"
     assert request.model.tier == "medium"
-    assert run_root == project / DOMAIN_STATE / "field-grouping-llm"
+    assert run_root == (
+        project / DOMAIN_STATE / "domain-relationships-llm"
+    )
     payload = json.loads(destination.read_text(encoding="utf-8"))
-    assert payload["field_count"] == 2
-    assert payload["research_scope"] == "cross_domain"
+    assert payload["domain_relationships"]["status"] == "available"
+    assert payload["domain_relationships"][
+        "pair_classifications"
+    ][0]["classification"] == "distinct_field"
 
 
-def test_write_manifest_single_package_does_not_call_llm_runner(tmp_path: Path) -> None:
+def test_write_manifest_single_package_marks_relationships_not_applicable(
+    tmp_path: Path,
+) -> None:
     project = tmp_path / "project"
     project.mkdir()
     (project / "context.json").write_text(
@@ -942,13 +927,21 @@ def test_write_manifest_single_package_does_not_call_llm_runner(tmp_path: Path) 
     _write_domain(project, "a", "domain-a", "seed:a")
 
     def unexpected_runner(*_args):
-        raise AssertionError("single-package grouping must not invoke an LLM")
+        raise AssertionError(
+            "single-package relationships must not invoke an LLM"
+        )
 
-    destination = publish.write_domain_manifest(project, grouping_runner=unexpected_runner)
+    destination = publish.write_domain_manifest(
+        project, relationship_runner=unexpected_runner
+    )
 
     payload = json.loads(destination.read_text(encoding="utf-8"))
-    assert payload["field_count"] == 1
-    assert payload["grouping_method"] == "llm_semantic_pair_classification"
+    assert payload["domain_relationships"] == {
+        "status": "not_applicable",
+        "method": "not_applicable",
+        "pair_classifications": [],
+        "warnings": [],
+    }
 
 
 def test_write_manifest_holds_lease_and_publishes_manifest_last(
@@ -986,7 +979,6 @@ def test_write_manifest_holds_lease_and_publishes_manifest_last(
 
     destination = publish.write_domain_manifest(project)
     manifest = json.loads(destination.read_text(encoding="utf-8"))
-    grouping_path = project / manifest["grouping_artifact"]
     provenance_path = (
         project
         / manifest["seed_provenance_artifact"]["path"]
@@ -999,17 +991,14 @@ def test_write_manifest_holds_lease_and_publishes_manifest_last(
         ),
         ("lease-acquired", True),
         ("write", provenance_path),
-        ("write", grouping_path),
         ("write", destination),
         ("lease-released", None),
     ]
 
-    grouping_bytes = grouping_path.read_bytes()
     events.clear()
     second_destination = publish.write_domain_manifest(project)
 
     assert second_destination == destination
-    assert grouping_path.read_bytes() == grouping_bytes
     assert events == [
         (
             "lease-created",
@@ -1043,8 +1032,6 @@ def test_write_manifest_refuses_to_overwrite_referenced_inputs(
     _write_domain(project, "a", "domain-a", "seed:a")
     protected_path = project / relative_path
     original = protected_path.read_bytes()
-    preview = publish.build_domain_manifest(project)
-    grouping_path = project / preview["grouping_artifact"]
 
     with pytest.raises(
         inputs.ManifestError,
@@ -1056,10 +1043,9 @@ def test_write_manifest_refuses_to_overwrite_referenced_inputs(
         )
 
     assert protected_path.read_bytes() == original
-    assert not grouping_path.exists()
 
 
-def test_write_manifest_refuses_grouping_path_as_output(
+def test_write_manifest_refuses_seed_provenance_path_as_output(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
@@ -1070,18 +1056,20 @@ def test_write_manifest_refuses_grouping_path_as_output(
     )
     _write_domain(project, "a", "domain-a", "seed:a")
     preview = publish.build_domain_manifest(project)
-    grouping_path = project / preview["grouping_artifact"]
+    provenance_path = (
+        project / preview["seed_provenance_artifact"]["path"]
+    )
 
     with pytest.raises(
         inputs.ManifestError,
-        match="must not be the immutable grouping artifact",
+        match="must not be the immutable seed provenance artifact",
     ):
         publish.write_domain_manifest(
             project,
-            output=grouping_path,
+            output=provenance_path,
         )
 
-    assert not grouping_path.exists()
+    assert not provenance_path.exists()
 
 
 def test_write_manifest_refuses_output_outside_project(
@@ -1094,8 +1082,6 @@ def test_write_manifest_refuses_output_outside_project(
         encoding="utf-8",
     )
     _write_domain(project, "a", "domain-a", "seed:a")
-    preview = publish.build_domain_manifest(project)
-    grouping_path = project / preview["grouping_artifact"]
     outside = tmp_path / "outside-manifest.json"
 
     with pytest.raises(
@@ -1108,7 +1094,6 @@ def test_write_manifest_refuses_output_outside_project(
         )
 
     assert not outside.exists()
-    assert not grouping_path.exists()
 
 
 def test_custom_manifest_output_keeps_project_relative_provenance(
@@ -1134,7 +1119,7 @@ def test_custom_manifest_output_keeps_project_relative_provenance(
     assert (project / reference["path"]).is_file()
 
 
-def test_write_manifest_stops_for_incomplete_typed_llm_outcomes(
+def test_write_manifest_warns_for_incomplete_typed_llm_outcomes(
     tmp_path: Path,
 ) -> None:
     from arc_jobs import ResumeReason
@@ -1153,12 +1138,6 @@ def test_write_manifest_stops_for_incomplete_typed_llm_outcomes(
     )
     _write_domain(project, "a", "domain-a", "seed:a")
     _write_domain(project, "b", "domain-b", "seed:b")
-    old_manifest = project / DOMAIN_STATE / "domain-manifest.json"
-    old_grouping = project / DOMAIN_STATE / "field-grouping.json"
-    old_manifest.parent.mkdir(parents=True, exist_ok=True)
-    old_manifest.write_bytes(b'{"old":"manifest"}\n')
-    old_grouping.write_bytes(b'{"old":"grouping"}\n')
-
     outcomes = [
         (
             LLMPaused(
@@ -1168,7 +1147,7 @@ def test_write_manifest_stops_for_incomplete_typed_llm_outcomes(
             "paused",
         ),
         (
-            LLMFailed(InvalidRequestError("invalid grouping request")),
+            LLMFailed(InvalidRequestError("invalid relationship request")),
             "failed",
         ),
         (LLMStopped(), "stopped"),
@@ -1177,21 +1156,23 @@ def test_write_manifest_stops_for_incomplete_typed_llm_outcomes(
         def incomplete_runner(*_args, outcome=outcome):
             return SimpleNamespace(outcome=outcome)
 
-        with pytest.raises(
-            grouping.GroupingLLMRunError,
-            match=message,
-        ):
-            publish.write_domain_manifest(
-                project,
-                grouping_runner=incomplete_runner,
-            )
+        destination = publish.write_domain_manifest(
+            project,
+            relationship_runner=incomplete_runner,
+        )
+        payload = json.loads(
+            destination.read_text(encoding="utf-8")
+        )
+        assert payload["domain_relationships"]["status"] == (
+            "unavailable"
+        )
+        assert message in payload["domain_relationships"][
+            "warnings"
+        ][0]
+        assert payload["package_count"] == 2
 
-    assert old_manifest.read_bytes() == b'{"old":"manifest"}\n'
-    assert old_grouping.read_bytes() == b'{"old":"grouping"}\n'
-    assert not (project / DOMAIN_STATE / "field-groupings").exists()
 
-
-def test_write_manifest_runner_exception_publishes_nothing(
+def test_write_manifest_runner_exception_publishes_warning(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
@@ -1202,27 +1183,22 @@ def test_write_manifest_runner_exception_publishes_nothing(
     )
     _write_domain(project, "a", "domain-a", "seed:a")
     _write_domain(project, "b", "domain-b", "seed:b")
-    old_manifest = project / DOMAIN_STATE / "domain-manifest.json"
-    old_grouping = project / DOMAIN_STATE / "field-grouping.json"
-    old_manifest.parent.mkdir(parents=True, exist_ok=True)
-    old_manifest.write_bytes(b'{"old":"manifest"}\n')
-    old_grouping.write_bytes(b'{"old":"grouping"}\n')
-
     def failed_runner(*_args):
         raise RuntimeError("runner failed before typed completion")
 
-    with pytest.raises(RuntimeError, match="runner failed"):
-        publish.write_domain_manifest(
-            project,
-            grouping_runner=failed_runner,
-        )
+    destination = publish.write_domain_manifest(
+        project,
+        relationship_runner=failed_runner,
+    )
 
-    assert old_manifest.read_bytes() == b'{"old":"manifest"}\n'
-    assert old_grouping.read_bytes() == b'{"old":"grouping"}\n'
-    assert not (project / DOMAIN_STATE / "field-groupings").exists()
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    assert payload["domain_relationships"]["status"] == "unavailable"
+    assert "runner failed before typed completion" in (
+        payload["domain_relationships"]["warnings"][0]
+    )
 
 
-def test_immutable_grouping_conflict_preserves_existing_manifest(
+def test_immutable_seed_provenance_conflict_preserves_existing_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1234,12 +1210,13 @@ def test_immutable_grouping_conflict_preserves_existing_manifest(
     )
     _write_domain(project, "a", "domain-a", "seed:a")
     preview = publish.build_domain_manifest(project)
-    grouping_path = project / preview["grouping_artifact"]
     provenance_path = (
         project / preview["seed_provenance_artifact"]["path"]
     )
-    grouping_path.parent.mkdir(parents=True)
-    grouping_path.write_text('{"conflict":true}\n', encoding="utf-8")
+    provenance_path.parent.mkdir(parents=True)
+    provenance_path.write_text(
+        '{"conflict":true}\n', encoding="utf-8"
+    )
     manifest_path = project / DOMAIN_STATE / "domain-manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_bytes(b'{"old":"manifest"}\n')
@@ -1256,15 +1233,14 @@ def test_immutable_grouping_conflict_preserves_existing_manifest(
 
     with pytest.raises(
         inputs.ManifestError,
-        match="immutable field grouping conflicts",
+        match="immutable seed provenance conflicts",
     ):
         publish.write_domain_manifest(project)
 
     assert manifest_path.read_bytes() == b'{"old":"manifest"}\n'
-    assert grouping_path.read_text(encoding="utf-8") == (
+    assert provenance_path.read_text(encoding="utf-8") == (
         '{"conflict":true}\n'
     )
-    assert not provenance_path.exists()
     assert writes == []
 
 
@@ -1280,7 +1256,9 @@ def test_manifest_publication_failure_preserves_existing_manifest(
     )
     _write_domain(project, "a", "domain-a", "seed:a")
     preview = publish.build_domain_manifest(project)
-    grouping_path = project / preview["grouping_artifact"]
+    provenance_path = (
+        project / preview["seed_provenance_artifact"]["path"]
+    )
     manifest_path = project / DOMAIN_STATE / "domain-manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_bytes(b'{"old":"manifest"}\n')
@@ -1301,4 +1279,4 @@ def test_manifest_publication_failure_preserves_existing_manifest(
         publish.write_domain_manifest(project)
 
     assert manifest_path.read_bytes() == b'{"old":"manifest"}\n'
-    assert grouping_path.is_file()
+    assert provenance_path.is_file()
