@@ -443,7 +443,6 @@ class CompanionBuildHandler:
             CachedDocumentError,
             SourceRepositoryError,
             OSError,
-            ValueError,
         ):
             # The verified text projection remains sufficient for model work.
             # Cache access is an optimization and must not create a host turn.

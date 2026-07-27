@@ -625,7 +625,7 @@ def test_same_language_skips_all_translation_owned_steps(
     assert book.chapters[0].translations == ()
 
 
-def test_cached_document_parse_failure_uses_verified_text_fallback(
+def test_cached_document_parse_failure_is_not_downgraded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -638,7 +638,7 @@ def test_cached_document_parse_failure_uses_verified_text_fallback(
     )
     service = CompanionService(tmp_path / "jobs")
 
-    completed = service.build(
+    failed = service.build(
         CompanionBuildRequest(document, target_language="en"),
         execution=CompanionExecutionOptions(
             workers=1,
@@ -648,16 +648,10 @@ def test_cached_document_parse_failure_uses_verified_text_fallback(
         translation_adapter=FakeTranslationAdapter(mode="skipped"),
     )
 
-    assert completed.status is RunStatus.SUCCEEDED
-    store = ImmutableArtifactStore(
-        service.repository.run_directory(completed.run_id),
-        repository_root=service.repository.root,
-    )
-    ref = store.find("source/model-index")
-    assert ref is not None
-    index = json.loads(store.read_bytes(ref))
-    assert index["cache_relationship"] == "fallback_only"
-    assert index["cached_document"] is None
+    assert failed.status is RunStatus.FAILED
+    assert failed.error is not None
+    assert failed.error.code == "companion_content_invalid"
+    assert "duplicate math span IDs" in failed.error.message
 
 
 def test_review_remove_publishes_ordered_subset_without_retry(
