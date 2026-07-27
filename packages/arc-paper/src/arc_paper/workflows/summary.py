@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping, TypeAlias
 
@@ -521,10 +522,18 @@ def _section_request(
     return LLMRequest(
         _task_id("summary-section", identity),
         prompt,
-        JsonOutput(_SECTION_SCHEMA),
+        JsonOutput(_section_schema(section.section_id)),
         model,
         inputs=(artifact_input,),
     )
+
+
+def _section_schema(section_id: str) -> dict[str, Any]:
+    """Bind the machine-authored section identity before LLM acceptance."""
+
+    schema = deepcopy(_SECTION_SCHEMA)
+    schema["properties"]["section_id"]["const"] = section_id
+    return schema
 
 
 def _synthesis_request(

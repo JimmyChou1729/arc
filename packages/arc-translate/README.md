@@ -37,7 +37,8 @@ state. Status exposes `can_resume`, `recovery_epoch`, and stable `working/`
 paths. Glossary candidates contain only term IDs plus translated content, and
 translation candidates contain only block IDs plus translated text; source
 identity is attached locally. An agent may correct a candidate and resume
-without another provider call, or delete it to regenerate it.
+without another provider call. Deleting an exhausted retry candidate does not
+grant a third automatic generation attempt.
 
 When a model response is structurally valid JSON but violates a
 machine-checkable language, term, block, formula, link, or review identity or

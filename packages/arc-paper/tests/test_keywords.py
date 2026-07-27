@@ -93,6 +93,54 @@ class FakeKeywordTasks:
         return LLMCompleted(value, "fake", "fake-model", None, None)
 
 
+class SemanticRetryKeywordTasks:
+    def __init__(self, *, retry_valid: bool) -> None:
+        self.retry_valid = retry_valid
+        self.requests = []
+
+    def execute_or_resume(self, context, request, *, input=None, options=None):
+        del context, input, options
+        self.requests.append(request)
+        if request.task_id.startswith("keyword-review-"):
+            allowed = request.output.schema["properties"]["entries"][
+                "items"
+            ]["properties"]["source_entry_ids"]["items"]["enum"]
+            is_retry = "semantic-retry" in request.task_id
+            if is_retry and self.retry_valid:
+                value = {
+                    "status": "usable",
+                    "reason": "",
+                    "entries": [
+                        {
+                            "term": f"reviewed {index}",
+                            "source_entry_ids": [source_id],
+                        }
+                        for index, source_id in enumerate(allowed)
+                    ],
+                    "discarded_source_entry_ids": [],
+                }
+            else:
+                value = {
+                    "status": "usable",
+                    "reason": "",
+                    "entries": [
+                        {
+                            "term": "incomplete review",
+                            "source_entry_ids": [allowed[0]],
+                        }
+                    ],
+                    "discarded_source_entry_ids": [],
+                }
+        else:
+            value = {
+                "entries": [
+                    {"term": "chapter fallback one"},
+                    {"term": "chapter fallback two"},
+                ]
+            }
+        return LLMCompleted(value, "fake", "fake-model", None, None)
+
+
 def _prompt_value(prompt: str, label: str) -> str:
     match = re.search(rf"^{re.escape(label)}: (.+)$", prompt, re.MULTILINE)
     assert match is not None
@@ -335,6 +383,13 @@ def test_unusable_explicit_list_pauses_without_cache_then_discards_or_aborts(
     paused = runner.execute(document, approx_count=2, run_id="discard-case")
     assert paused.status is RunStatus.PAUSED
     assert cache.admin_entries() == ()
+    assert len(
+        [
+            request
+            for request in fake.requests
+            if request.task_id.startswith("keyword-review-")
+        ]
+    ) == 1
     assert paused.awaiting is not None
     resumed = runner.execute(
         document,
@@ -369,6 +424,88 @@ def test_unusable_explicit_list_pauses_without_cache_then_discards_or_aborts(
     assert aborted.error is not None
     assert aborted.error.code == "explicit_term_list_unusable"
     assert other_cache.admin_entries() == ()
+
+
+def test_explicit_review_semantic_failure_gets_one_fresh_retry(
+    tmp_path: Path,
+) -> None:
+    document = _parsed(explicit_entries=("first term", "second term"))
+    tasks = SemanticRetryKeywordTasks(retry_valid=True)
+    runner = KeywordExtractionRunner(
+        tmp_path / "jobs",
+        store=TermInventoryStore(tmp_path / "cache"),
+        task_service=tasks,
+    )
+
+    snapshot = runner.execute(
+        document,
+        approx_count=2,
+        run_id="semantic-retry-success",
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    review_requests = [
+        request
+        for request in tasks.requests
+        if request.task_id.startswith("keyword-review-")
+    ]
+    assert len(review_requests) == 2
+    assert "semantic-retry" in review_requests[1].task_id
+    assert "Validation feedback:" in review_requests[1].prompt
+    allowed = review_requests[0].output.schema["properties"]["entries"][
+        "items"
+    ]["properties"]["source_entry_ids"]["items"]["enum"]
+    assert len(allowed) == 2
+    assert (
+        review_requests[0].output.schema["properties"][
+            "discarded_source_entry_ids"
+        ]["items"]["enum"]
+        == allowed
+    )
+    assert not runner.read_result(snapshot).warnings
+
+
+def test_second_invalid_explicit_review_degrades_once_and_replays(
+    tmp_path: Path,
+) -> None:
+    document = _parsed(explicit_entries=("first term", "second term"))
+    tasks = SemanticRetryKeywordTasks(retry_valid=False)
+    runner = KeywordExtractionRunner(
+        tmp_path / "jobs",
+        store=TermInventoryStore(tmp_path / "cache"),
+        task_service=tasks,
+    )
+
+    first = runner.execute(
+        document,
+        approx_count=2,
+        run_id="semantic-retry-exhausted",
+    )
+
+    assert first.status is RunStatus.SUCCEEDED
+    result = runner.read_result(first)
+    assert any(
+        "machine-invalid after one fresh retry" in warning
+        for warning in result.warnings
+    )
+    review_requests = [
+        request
+        for request in tasks.requests
+        if request.task_id.startswith("keyword-review-")
+    ]
+    assert len(review_requests) == 2
+    assert "semantic-retry" in review_requests[1].task_id
+    request_count = len(tasks.requests)
+
+    replayed = runner.execute(
+        document,
+        approx_count=2,
+        run_id="semantic-retry-exhausted",
+    )
+
+    assert replayed.status is RunStatus.SUCCEEDED
+    assert len(tasks.requests) == request_count
+    assert runner.read_result(replayed).warnings == result.warnings
 
 
 def test_keyword_llm_resume_ignores_foreign_parent_response() -> None:

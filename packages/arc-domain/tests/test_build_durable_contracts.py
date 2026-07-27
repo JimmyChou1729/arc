@@ -248,12 +248,14 @@ class DomainTaskService:
         selected_foundation: str = FOUNDATION,
         stopped_stage: str | None = None,
         summary_value: dict | None = None,
+        summary_retry_value: dict | None = None,
     ) -> None:
         self.fail_stage = fail_stage
         self.expand_audit = expand_audit
         self.selected_foundation = selected_foundation
         self.stopped_stage = stopped_stage
         self.summary_value = summary_value
+        self.summary_retry_value = summary_retry_value
         self.requests = []
 
     def execute_or_resume(self, context, request, **kwargs):
@@ -279,7 +281,12 @@ class DomainTaskService:
             )
         if stage == "summary":
             payload = (
-                self.summary_value
+                self.summary_retry_value
+                if (
+                    "semantic-retry" in request.task_id
+                    and self.summary_retry_value is not None
+                )
+                else self.summary_value
                 if self.summary_value is not None
                 else _summary_payload(user_intent=_request().intent)
             )
@@ -669,7 +676,7 @@ def test_real_task_service_ignores_unrelated_summary_state_and_replays_parent(
     assert adapter.start_calls == 5
 
 
-def test_invalid_summary_provenance_is_a_typed_terminal_failure(
+def test_invalid_summary_provenance_retries_once_then_pauses_with_candidate(
     tmp_path: Path,
 ) -> None:
     repository = RunRepository(tmp_path / "runs")
@@ -681,26 +688,87 @@ def test_invalid_summary_provenance_is_a_typed_terminal_failure(
         }
     ]
 
+    tasks = DomainTaskService(summary_value=payload)
     snapshot = DomainBuildRunner(repository).execute(
         _request(),
         paper_access=FakePaperAccess(),
-        task_service=DomainTaskService(summary_value=payload),
+        task_service=tasks,
         reference_service=ForbiddenReferenceService(),
     )
 
-    assert snapshot.status is RunStatus.FAILED
-    assert snapshot.awaiting is None
-    assert snapshot.error is not None
-    assert snapshot.error.code == "domain_summary_invalid"
-    assert "$.methodology[0].papers[0]" in snapshot.error.message
-    assert snapshot.error.details["stage"] == "summary"
-    candidate_path = Path(str(snapshot.error.details["candidate_path"]))
+    assert snapshot.status is RunStatus.PAUSED
+    assert snapshot.awaiting is not None
+    assert (
+        snapshot.awaiting.details["code"]
+        == "domain_summary_semantic_invalid_after_retry"
+    )
+    assert snapshot.awaiting.details["stage"] == "summary"
+    candidate_path = Path(
+        str(snapshot.awaiting.details["candidate_path"])
+    )
     assert candidate_path.is_file()
+    summary_requests = [
+        request.task_id
+        for request in tasks.requests
+        if _request_stage(request.task_id) == "summary"
+    ]
+    assert len(summary_requests) == 2
+    assert "semantic-retry" in summary_requests[1]
     store = ImmutableArtifactStore(
         repository.run_directory(snapshot.run_id), repository_root=repository.root
     )
+    assert snapshot.awaiting.request_ref is not None
+    diagnostic = json.loads(
+        store.read_bytes(snapshot.awaiting.request_ref)
+    )
+    assert "$.methodology[0].papers[0]" in diagnostic["retry_error"]
+    assert diagnostic["initial_candidate_artifact_id"]
     assert store.find("summary/json") is None
     assert store.find("summary/markdown") is None
+
+
+def test_invalid_summary_provenance_fresh_retry_can_complete(
+    tmp_path: Path,
+) -> None:
+    repository = RunRepository(tmp_path / "runs")
+    invalid = _summary_payload(user_intent=_request().intent)
+    invalid["methodology"] = [
+        {
+            "claim": "Unsupported method attribution.",
+            "papers": ["doi:10.9999/not-in-domain"],
+        }
+    ]
+    tasks = DomainTaskService(
+        summary_value=invalid,
+        summary_retry_value=_summary_payload(
+            user_intent=_request().intent
+        ),
+    )
+
+    snapshot = DomainBuildRunner(repository).execute(
+        _request(),
+        paper_access=FakePaperAccess(),
+        task_service=tasks,
+        reference_service=ForbiddenReferenceService(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    summary_requests = [
+        request
+        for request in tasks.requests
+        if _request_stage(request.task_id) == "summary"
+    ]
+    assert len(summary_requests) == 2
+    assert "semantic-retry" in summary_requests[1].task_id
+    assert "Validation feedback:" in summary_requests[1].prompt
+    candidate_path = (
+        repository.run_directory(snapshot.run_id)
+        / "working"
+        / "candidates"
+        / "domain"
+        / "summary.json"
+    )
+    assert json.loads(candidate_path.read_text())["methodology"] == []
 
 
 def test_edited_summary_candidate_recovers_without_another_provider_call(
@@ -716,15 +784,17 @@ def test_edited_summary_candidate_recovers_without_another_provider_call(
     ]
     tasks = DomainTaskService(summary_value=invalid)
     runner = DomainBuildRunner(repository)
-    failed = runner.execute(
+    paused = runner.execute(
         _request(),
         paper_access=FakePaperAccess(),
         task_service=tasks,
         reference_service=ForbiddenReferenceService(),
     )
-    assert failed.status is RunStatus.FAILED
-    assert failed.error is not None
-    candidate_path = Path(str(failed.error.details["candidate_path"]))
+    assert paused.status is RunStatus.PAUSED
+    assert paused.awaiting is not None
+    candidate_path = Path(
+        str(paused.awaiting.details["candidate_path"])
+    )
     request_count = len(tasks.requests)
     candidate_path.write_text(
         json.dumps(_summary_payload(user_intent=_request().intent)),
@@ -732,14 +802,14 @@ def test_edited_summary_candidate_recovers_without_another_provider_call(
     )
 
     recovered = runner.resume(
-        failed.run_id,
+        paused.run_id,
         paper_access=FakePaperAccess(),
         task_service=tasks,
         reference_service=ForbiddenReferenceService(),
     )
 
     assert recovered.status is RunStatus.SUCCEEDED
-    assert recovered.recovery_epoch == 1
+    assert recovered.recovery_epoch == 0
     assert len(tasks.requests) == request_count
 
 
@@ -756,28 +826,30 @@ def test_deleted_summary_candidate_is_regenerated_only_on_explicit_resume(
     ]
     tasks = DomainTaskService(summary_value=invalid)
     runner = DomainBuildRunner(repository)
-    failed = runner.execute(
+    paused = runner.execute(
         _request(),
         paper_access=FakePaperAccess(),
         task_service=tasks,
         reference_service=ForbiddenReferenceService(),
     )
-    assert failed.error is not None
-    candidate_path = Path(str(failed.error.details["candidate_path"]))
+    assert paused.awaiting is not None
+    candidate_path = Path(
+        str(paused.awaiting.details["candidate_path"])
+    )
     request_count = len(tasks.requests)
     candidate_path.unlink()
     assert len(tasks.requests) == request_count
 
     retried = runner.resume(
-        failed.run_id,
+        paused.run_id,
         paper_access=FakePaperAccess(),
         task_service=tasks,
         reference_service=ForbiddenReferenceService(),
     )
 
-    assert retried.status is RunStatus.FAILED
-    assert retried.recovery_epoch == 1
-    assert len(tasks.requests) == request_count + 1
+    assert retried.status is RunStatus.PAUSED
+    assert retried.recovery_epoch == 0
+    assert len(tasks.requests) == request_count + 2
 
 
 def test_build_validates_the_package_view_before_publishing_summary(
@@ -805,15 +877,26 @@ def test_build_validates_the_package_view_before_publishing_summary(
         reference_service=ForbiddenReferenceService(),
     )
 
-    assert snapshot.status is RunStatus.FAILED
-    assert snapshot.error is not None
-    assert snapshot.error.code == "domain_package_invalid"
-    assert snapshot.error.message == "simulated package coverage failure"
-    assert snapshot.error.details["stage"] == "summary"
-    assert Path(str(snapshot.error.details["candidate_path"])).is_file()
+    assert snapshot.status is RunStatus.PAUSED
+    assert snapshot.awaiting is not None
+    assert (
+        snapshot.awaiting.details["code"]
+        == "domain_summary_semantic_invalid_after_retry"
+    )
+    assert Path(
+        str(snapshot.awaiting.details["candidate_path"])
+    ).is_file()
+    assert snapshot.awaiting.request_ref is not None
     store = ImmutableArtifactStore(
         repository.run_directory(snapshot.run_id),
         repository_root=repository.root,
+    )
+    diagnostic = json.loads(
+        store.read_bytes(snapshot.awaiting.request_ref)
+    )
+    assert (
+        diagnostic["retry_error"]
+        == "simulated package coverage failure"
     )
     assert store.find("summary/json") is None
     assert store.find("summary/markdown") is None

@@ -216,6 +216,10 @@ def test_summary_accepts_arbitrary_parsed_document_artifact_and_replays(
         ("section_id", "summary", "warnings"),
         ("title", "high_value_summary", "reading_guide", "warnings"),
     ]
+    assert [
+        request.output.schema["properties"]["section_id"]["const"]
+        for request in fake.requests[:2]
+    ] == ["section-0", "section-1"]
     assert all(item.provider == "codex" for item in first.result.provenance)
     assert all(item.model == "fake-model" for item in first.result.provenance)
 

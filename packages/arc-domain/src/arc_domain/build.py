@@ -51,6 +51,7 @@ from ._llm import (
     is_transient_failure,
     outer_resume_input,
     run_error_from_failure,
+    semantic_retry_request,
 )
 from .catalog import register_domain_run
 from .contracts import (
@@ -124,6 +125,7 @@ _PACK_WARNINGS_ARTIFACT = "packs/warnings"
 _NETWORK_HTML_ARTIFACT = "render/network-html"
 _SUMMARY_ARTIFACT = "summary/json"
 _SUMMARY_MARKDOWN_ARTIFACT = "summary/markdown"
+_SUMMARY_SEMANTIC_VALIDATOR = "arc.domain.summary_semantics.v1"
 _RESULT_ARTIFACT = "result"
 _FOUNDATION_RECENT_CITER_WITNESS_LIMIT = 50
 _FOUNDATION_WITNESS_LIMIT = 60
@@ -1241,6 +1243,7 @@ class DomainBuildHandler:
             ),
         )
         outcome: Any | None = None
+        summary: dict[str, Any] | None = None
         if candidate_value is None:
             self._operation_started(
                 context,
@@ -1258,50 +1261,114 @@ class DomainBuildHandler:
                 candidate_value = _mapping(
                     outcome.value, "domain summary candidate"
                 )
-                candidate_path = context.working.write_candidate_json(
-                    candidate_id, candidate_value
-                )
+                try:
+                    summary = _validated_summary_candidate(
+                        candidate_value,
+                        graph=graph,
+                        evidence=evidence,
+                        selection=selection,
+                        paper_pack=paper_pack,
+                        intent=self.request.intent,
+                        expected_domain_id=domain_id_for(
+                            self.request.seed_paper,
+                            self.request.intent,
+                        ),
+                    )
+                except (ValueError, DomainBuildStageError) as initial_error:
+                    initial_ref = _publish_domain_summary_invalid_candidate(
+                        context,
+                        candidate_value,
+                        error=initial_error,
+                        attempt="initial",
+                    )
+                    retry_request = semantic_retry_request(
+                        request,
+                        validator_contract=_SUMMARY_SEMANTIC_VALIDATOR,
+                        feedback=str(initial_error),
+                    )
+                    self._operation_started(
+                        context,
+                        stage="summary",
+                        operation="domain_summary_semantic_retry_llm",
+                    )
+                    retry_outcome = execute_routed(
+                        self.task_service,
+                        context,
+                        retry_request,
+                        resume_input=resume_input,
+                        options=self.llm,
+                    )
+                    if not isinstance(retry_outcome, LLMCompleted):
+                        return _domain_summary_noncompleted_outcome(
+                            retry_outcome,
+                            retry_request,
+                        )
+                    candidate_value = _mapping(
+                        retry_outcome.value,
+                        "domain summary retry candidate",
+                    )
+                    candidate_path = context.working.write_candidate_json(
+                        candidate_id,
+                        candidate_value,
+                    )
+                    try:
+                        summary = _validated_summary_candidate(
+                            candidate_value,
+                            graph=graph,
+                            evidence=evidence,
+                            selection=selection,
+                            paper_pack=paper_pack,
+                            intent=self.request.intent,
+                            expected_domain_id=domain_id_for(
+                                self.request.seed_paper,
+                                self.request.intent,
+                            ),
+                        )
+                    except (
+                        ValueError,
+                        DomainBuildStageError,
+                    ) as retry_error:
+                        return _domain_summary_semantic_pause(
+                            context,
+                            request=retry_request,
+                            candidate=candidate_value,
+                            candidate_path=candidate_path,
+                            initial_error=str(initial_error),
+                            retry_error=str(retry_error),
+                            initial_candidate_ref=initial_ref,
+                        )
+                else:
+                    candidate_path = context.working.write_candidate_json(
+                        candidate_id,
+                        candidate_value,
+                    )
         if candidate_value is not None:
             assert candidate_path is not None
-            try:
-                summary = normalize_summary_output(
-                    candidate_value,
-                    graph=graph,
-                    evidence=evidence,
-                    selection=selection,
-                    intent=self.request.intent,
-                )
-            except ValueError as exc:
-                return Failed(
-                    RunError(
-                        "domain_summary_invalid",
-                        str(exc),
-                        {
-                            "stage": "summary",
-                            "candidate_path": str(candidate_path),
-                        },
+            if summary is None:
+                try:
+                    summary = _validated_summary_candidate(
+                        candidate_value,
+                        graph=graph,
+                        evidence=evidence,
+                        selection=selection,
+                        paper_pack=paper_pack,
+                        intent=self.request.intent,
+                        expected_domain_id=domain_id_for(
+                            self.request.seed_paper,
+                            self.request.intent,
+                        ),
                     )
-                )
-            try:
-                _validate_domain_package_artifacts(
-                    summary,
-                    paper_pack,
-                    expected_domain_id=domain_id_for(
-                        self.request.seed_paper,
-                        self.request.intent,
-                    ),
-                )
-            except DomainBuildStageError as exc:
-                return Failed(
-                    RunError(
-                        exc.code,
-                        str(exc),
-                        {
-                            **exc.details,
-                            "candidate_path": str(candidate_path),
-                        },
+                except (ValueError, DomainBuildStageError) as exc:
+                    return _domain_summary_semantic_pause(
+                        context,
+                        request=request,
+                        candidate=candidate_value,
+                        candidate_path=candidate_path,
+                        initial_error=None,
+                        retry_error=str(exc),
+                        initial_candidate_ref=None,
                     )
-                )
+            assert summary is not None
             summary_ref = context.artifacts.publish_json(_SUMMARY_ARTIFACT, summary)
             markdown_ref = context.artifacts.publish_bytes(
                 _SUMMARY_MARKDOWN_ARTIFACT,
@@ -1310,34 +1377,7 @@ class DomainBuildHandler:
             )
             return summary_ref, markdown_ref
         assert outcome is not None
-        if isinstance(outcome, LLMPaused):
-            return Paused(awaiting_from_pause(outcome))
-        if isinstance(outcome, LLMFailed):
-            if not is_transient_failure(outcome):
-                return Failed(run_error_from_failure(outcome))
-            llm_error: dict[str, JsonValue] = {
-                "code": outcome.error.code.value,
-            }
-            safe_error_details = _safe_json_mapping(
-                outcome.error.details
-            )
-            if safe_error_details:
-                llm_error["details"] = safe_error_details
-            return Paused(
-                Awaiting(
-                    ResumeReason.EXTERNAL_CONDITION,
-                    f"{request.task_id}-retry",
-                    False,
-                    details={
-                        "code": "domain_summary_provider_unavailable",
-                        "message": str(outcome.error),
-                        "llm_error": llm_error,
-                    },
-                )
-            )
-        if isinstance(outcome, LLMStopped):
-            raise StoppedError("domain summary stopped")
-        raise RuntimeError("unknown domain-summary outcome")
+        return _domain_summary_noncompleted_outcome(outcome, request)
 
     def _group_values(
         self,
@@ -1592,6 +1632,135 @@ def _validate_domain_package_artifacts(
             str(exc),
             {"stage": "summary"},
         ) from exc
+
+
+def _validated_summary_candidate(
+    candidate: Mapping[str, Any],
+    *,
+    graph: dict[str, Any],
+    evidence: dict[str, Any],
+    selection: dict[str, Any],
+    paper_pack: dict[str, Any],
+    intent: str,
+    expected_domain_id: str,
+) -> dict[str, Any]:
+    summary = normalize_summary_output(
+        candidate,
+        graph=graph,
+        evidence=evidence,
+        selection=selection,
+        intent=intent,
+    )
+    _validate_domain_package_artifacts(
+        summary,
+        paper_pack,
+        expected_domain_id=expected_domain_id,
+    )
+    return summary
+
+
+def _publish_domain_summary_invalid_candidate(
+    context: RunContext,
+    candidate: Mapping[str, Any],
+    *,
+    error: Exception,
+    attempt: str,
+) -> ArtifactRef:
+    document = {
+        "schema_version": "arc.domain.summary_semantic_invalid_candidate.v1",
+        "validator_contract": _SUMMARY_SEMANTIC_VALIDATOR,
+        "attempt": attempt,
+        "error": str(error)[:4000],
+        "candidate": dict(candidate),
+    }
+    digest = hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+    return context.artifacts.publish_json(
+        f"summary/semantic-retry/{attempt}-{digest[:24]}",
+        document,
+    )
+
+
+def _domain_summary_semantic_pause(
+    context: RunContext,
+    *,
+    request: LLMRequest,
+    candidate: Mapping[str, Any],
+    candidate_path: Path,
+    initial_error: str | None,
+    retry_error: str,
+    initial_candidate_ref: ArtifactRef | None,
+) -> Paused:
+    document: dict[str, JsonValue] = {
+        "schema_version": "arc.domain.summary_semantic_retry_exhausted.v1",
+        "validator_contract": _SUMMARY_SEMANTIC_VALIDATOR,
+        "task_id": request.task_id,
+        "initial_error": (
+            None if initial_error is None else initial_error[:4000]
+        ),
+        "retry_error": retry_error[:4000],
+        "initial_candidate_artifact_id": (
+            None
+            if initial_candidate_ref is None
+            else initial_candidate_ref.artifact_id
+        ),
+        "candidate_path": str(candidate_path),
+        "candidate": dict(candidate),
+        "automatic_retry_exhausted": initial_error is not None,
+        "output_attempts": 2 if initial_error is not None else 1,
+    }
+    digest = hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+    request_ref = context.artifacts.publish_json(
+        f"summary/semantic-output-invalid/{digest[:24]}",
+        document,
+    )
+    return Paused(
+        Awaiting(
+            ResumeReason.SUPERVISION_REQUIRED,
+            f"domain-summary-semantic-{digest[:24]}",
+            False,
+            request_ref,
+            details={
+                "code": "domain_summary_semantic_invalid_after_retry",
+                "stage": "summary",
+                "candidate_path": str(candidate_path),
+                "validator_contract": _SUMMARY_SEMANTIC_VALIDATOR,
+                "automatic_retry_exhausted": initial_error is not None,
+                "output_attempts": 2 if initial_error is not None else 1,
+            },
+        )
+    )
+
+
+def _domain_summary_noncompleted_outcome(
+    outcome: Any,
+    request: LLMRequest,
+) -> Paused | Failed:
+    if isinstance(outcome, LLMPaused):
+        return Paused(awaiting_from_pause(outcome))
+    if isinstance(outcome, LLMFailed):
+        if not is_transient_failure(outcome):
+            return Failed(run_error_from_failure(outcome))
+        llm_error: dict[str, JsonValue] = {
+            "code": outcome.error.code.value,
+        }
+        safe_error_details = _safe_json_mapping(outcome.error.details)
+        if safe_error_details:
+            llm_error["details"] = safe_error_details
+        return Paused(
+            Awaiting(
+                ResumeReason.EXTERNAL_CONDITION,
+                f"{request.task_id[:88]}-retry",
+                False,
+                details={
+                    "code": "domain_summary_provider_unavailable",
+                    "message": str(outcome.error),
+                    "llm_error": llm_error,
+                },
+            )
+        )
+    if isinstance(outcome, LLMStopped):
+        raise StoppedError("domain summary stopped")
+    raise RuntimeError("unknown domain-summary outcome")
 
 
 def _read_json(context: RunContext, ref: Any, description: str) -> dict[str, Any]:

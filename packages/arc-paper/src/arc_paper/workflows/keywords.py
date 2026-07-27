@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,6 +69,7 @@ from ._llm import (
     execute_routed,
     model_document,
     run_error_from_failure,
+    semantic_retry_request,
 )
 
 
@@ -79,7 +81,15 @@ EXPLICIT_TERM_SUPERVISION_SCHEMA = (
 )
 KEYWORD_NORMALIZATION_CONTRACT = "arc.paper.keyword_normalization.v1"
 KEYWORD_OCCURRENCE_CONTRACT = "arc.paper.keyword_occurrence_literal.v1"
+KEYWORD_REVIEW_SEMANTIC_VALIDATOR = "arc.paper.keyword_review_semantics.v1"
 _EXPLICIT_WINDOW_SIZE = 80
+_EXPLICIT_REVIEW_INVALID_ARTIFACT = (
+    "paper-keywords/explicit-review-semantic-invalid"
+)
+_EXPLICIT_REVIEW_INVALID_WARNING = (
+    "Explicit term review remained machine-invalid after one fresh retry; "
+    "the explicit field was discarded and chapter extraction continued."
+)
 
 _REVIEW_ITEMS_SCHEMA: dict[str, Any] = {
     "type": "array",
@@ -221,12 +231,13 @@ class KeywordInventoryService:
             cached, cache_warnings = self.store.load(document, lineage)
         except TermInventoryStoreError as exc:
             return Failed(RunError(exc.code, exc.message))
+        semantic_warnings = _semantic_retry_warnings(context)
         if cached is not None and cached.high_water >= planned_count:
             return result_from_inventory(
                 cached,
                 approx_count=approx_count,
                 planned_count=planned_count,
-                warnings=cache_warnings,
+                warnings=(*cache_warnings, *semantic_warnings),
             )
 
         existing_candidates = (
@@ -253,7 +264,12 @@ class KeywordInventoryService:
             )
             if isinstance(explicit_outcome, (Paused, Failed)):
                 return explicit_outcome
-            explicit_candidates, disposition = explicit_outcome
+            (
+                explicit_candidates,
+                disposition,
+                explicit_warnings,
+            ) = explicit_outcome
+            semantic_warnings.extend(explicit_warnings)
 
         current_unique = {
             normalize_term(item.term)
@@ -293,7 +309,7 @@ class KeywordInventoryService:
             stored,
             approx_count=approx_count,
             planned_count=planned_count,
-            warnings=cache_warnings,
+            warnings=(*cache_warnings, *semantic_warnings),
         )
 
     def _review_explicit_fields(
@@ -305,7 +321,7 @@ class KeywordInventoryService:
         model: ModelSelection,
         resume_input: Mapping[str, JsonValue] | None,
         options: LLMExecutionOptions,
-    ) -> tuple[list[TermCandidate], str] | Paused | Failed:
+    ) -> tuple[list[TermCandidate], str, tuple[str, ...]] | Paused | Failed:
         resume = _supervision_resume(resume_input, document)
         if resume == "abort":
             return Failed(
@@ -315,7 +331,7 @@ class KeywordInventoryService:
                 )
             )
         if resume == "discard_index_and_continue":
-            return [], "discarded"
+            return [], "discarded", ()
 
         artifact_input = _document_input(context, document)
         reviewed: list[TermCandidate] = []
@@ -347,21 +363,65 @@ class KeywordInventoryService:
                 if not isinstance(outcome, LLMCompleted):
                     raise RuntimeError("unknown explicit term review outcome")
                 try:
-                    value = _object(outcome.value, "explicit term review")
-                    status = _required_string(value, "status")
-                    candidates = _review_candidates(
-                        value,
+                    status, reason, candidates = _decode_explicit_review(
+                        outcome.value,
                         field=field,
                         window=entries,
                     )
                 except ValueError as exc:
-                    return Failed(RunError("keyword_output_invalid", str(exc)))
+                    retry_request = semantic_retry_request(
+                        request,
+                        validator_contract=KEYWORD_REVIEW_SEMANTIC_VALIDATOR,
+                        feedback=str(exc),
+                    )
+                    retry_outcome = execute_routed(
+                        self.task_service,
+                        context,
+                        retry_request,
+                        resume_input=_llm_resume_input(resume_input),
+                        options=options,
+                    )
+                    if isinstance(retry_outcome, LLMPaused):
+                        return Paused(awaiting_from_pause(retry_outcome))
+                    if isinstance(retry_outcome, LLMFailed):
+                        return Failed(run_error_from_failure(retry_outcome))
+                    if isinstance(retry_outcome, LLMStopped):
+                        raise StoppedError("explicit term review retry stopped")
+                    if not isinstance(retry_outcome, LLMCompleted):
+                        raise RuntimeError(
+                            "unknown explicit term review retry outcome"
+                        )
+                    try:
+                        (
+                            status,
+                            reason,
+                            candidates,
+                        ) = _decode_explicit_review(
+                            retry_outcome.value,
+                            field=field,
+                            window=entries,
+                        )
+                    except ValueError as retry_exc:
+                        _publish_explicit_review_invalid(
+                            context,
+                            request=request,
+                            retry_request=retry_request,
+                            initial_value=outcome.value,
+                            retry_value=retry_outcome.value,
+                            initial_error=str(exc),
+                            retry_error=str(retry_exc),
+                        )
+                        return (
+                            [],
+                            "discarded",
+                            (_EXPLICIT_REVIEW_INVALID_WARNING,),
+                        )
                 if status == "unusable":
                     return _explicit_supervision_pause(
                         context,
                         document,
                         field,
-                        reason=str(value.get("reason") or ""),
+                        reason=reason,
                     )
                 if status != "usable":
                     return Failed(
@@ -371,7 +431,7 @@ class KeywordInventoryService:
                         )
                     )
                 reviewed.extend(candidates)
-        return reviewed, "reviewed"
+        return reviewed, "reviewed", ()
 
     def _extract_chapters(
         self,
@@ -762,10 +822,26 @@ def _explicit_review_request(
     return LLMRequest(
         _task_id("keyword-review", identity),
         prompt,
-        JsonOutput(_REVIEW_SCHEMA, repair="format"),
+        JsonOutput(_explicit_review_schema(entries), repair="format"),
         model,
         inputs=(artifact_input,),
     )
+
+
+def _explicit_review_schema(
+    entries: Sequence[_ExplicitEntry],
+) -> dict[str, Any]:
+    """Bind source identifiers that are known only for this review window."""
+
+    schema = deepcopy(_REVIEW_SCHEMA)
+    allowed = [item.entry_id for item in entries]
+    schema["properties"]["entries"]["items"]["properties"][
+        "source_entry_ids"
+    ]["items"]["enum"] = allowed
+    schema["properties"]["discarded_source_entry_ids"]["items"][
+        "enum"
+    ] = allowed
+    return schema
 
 
 def _chapter_request(
@@ -970,6 +1046,58 @@ def _review_candidates(
     return output
 
 
+def _decode_explicit_review(
+    value: Any,
+    *,
+    field: _ExplicitField,
+    window: Sequence[_ExplicitEntry],
+) -> tuple[str, str, list[TermCandidate]]:
+    document = _object(value, "explicit term review")
+    status = _required_string(document, "status")
+    reason = _required_string(document, "reason", allow_empty=True)
+    candidates = _review_candidates(
+        document,
+        field=field,
+        window=window,
+    )
+    return status, reason, candidates
+
+
+def _publish_explicit_review_invalid(
+    context: RunContext,
+    *,
+    request: LLMRequest,
+    retry_request: LLMRequest,
+    initial_value: Any,
+    retry_value: Any,
+    initial_error: str,
+    retry_error: str,
+) -> None:
+    context.artifacts.publish_json(
+        _EXPLICIT_REVIEW_INVALID_ARTIFACT,
+        {
+            "schema_version": "arc.paper.keyword_review_semantic_invalid.v1",
+            "validator_contract": KEYWORD_REVIEW_SEMANTIC_VALIDATOR,
+            "initial_task_id": request.task_id,
+            "retry_task_id": retry_request.task_id,
+            "initial_error": initial_error[:4000],
+            "retry_error": retry_error[:4000],
+            "initial_candidate": initial_value,
+            "retry_candidate": retry_value,
+            "disposition": "discarded",
+        },
+    )
+
+
+def _semantic_retry_warnings(context: RunContext) -> list[str]:
+    return (
+        [_EXPLICIT_REVIEW_INVALID_WARNING]
+        if context.artifacts.find(_EXPLICIT_REVIEW_INVALID_ARTIFACT)
+        is not None
+        else []
+    )
+
+
 def _chapter_candidates(value: Any, *, source_ref: str) -> list[TermCandidate]:
     if not isinstance(value, list):
         raise ValueError("keyword entries must be an array")
@@ -993,9 +1121,14 @@ def _object(value: Any, description: str) -> dict[str, Any]:
     return dict(value)
 
 
-def _required_string(value: Mapping[str, Any], key: str) -> str:
+def _required_string(
+    value: Mapping[str, Any],
+    key: str,
+    *,
+    allow_empty: bool = False,
+) -> str:
     item = value.get(key)
-    if not isinstance(item, str) or not item.strip():
+    if not isinstance(item, str) or (not allow_empty and not item.strip()):
         raise ValueError(f"{key} must be a non-empty string")
     return item.strip()
 

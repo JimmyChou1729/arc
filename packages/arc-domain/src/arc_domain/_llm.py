@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+import hashlib
 from typing import Any
 
-from arc_jobs import Awaiting, JsonValue, RunContext, RunError
+from arc_jobs import Awaiting, JsonValue, RunContext, RunError, canonical_json_bytes
 from arc_llm import (
     FailureCategory,
     LLMFailed,
@@ -27,6 +29,41 @@ class DomainLLMError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def semantic_retry_request(
+    request: LLMRequest,
+    *,
+    validator_contract: str,
+    feedback: str,
+) -> LLMRequest:
+    """Create one deterministic fresh task after package semantic validation."""
+
+    bounded_feedback = feedback.strip()[:4000]
+    identity = {
+        "schema_version": "arc.domain.semantic_output_retry.v1",
+        "source_task_id": request.task_id,
+        "validator_contract": validator_contract,
+        "feedback": bounded_feedback,
+    }
+    digest = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+    task_id = (
+        f"{request.task_id[:72]}-semantic-retry-{digest[:24]}"
+    )
+    prompt = "\n\n".join(
+        (
+            request.prompt,
+            (
+                "ARC package validation found that the previous JSON response "
+                "was structurally valid but unusable. Produce a complete fresh "
+                "response for the original task; do not merely describe or patch "
+                "the prior response."
+            ),
+            f"Validator contract: {validator_contract}",
+            f"Validation feedback:\n{bounded_feedback}",
+        )
+    )
+    return replace(request, task_id=task_id, prompt=prompt)
 
 
 def execute_routed(
@@ -104,4 +141,5 @@ __all__ = [
     "model_document",
     "outer_resume_input",
     "run_error_from_failure",
+    "semantic_retry_request",
 ]

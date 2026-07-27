@@ -24,6 +24,15 @@ otherwise use `unknown`. Reuse the identical value if the durable keyword run
 is resumed. Authority is runtime-only rather than part of the keyword
 inventory identity.
 
+LLM workflow schemas bind request-local identities such as the requested
+summary section and explicit-term source IDs. Cross-field source-coverage
+errors that cannot be expressed in JSON Schema receive one deterministic fresh
+retry with bounded validation feedback. If an explicit-term review remains
+machine-invalid, that non-essential explicit field is discarded with a durable
+warning and chapter extraction continues. A valid scientific or document
+quality result such as `status="unusable"` is not a machine-output failure and
+does not trigger this retry; its existing supervision path is preserved.
+
 ## Python API
 
 The deterministic service exposes the same operation:

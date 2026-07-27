@@ -40,14 +40,20 @@ defaults to `unknown`; use `unrestricted` only when the invoking host has
 explicitly granted those permissions. It is not part of the domain request or
 published artifacts, so provide the same value again when resuming such a run.
 
-A failed build can be diagnosed and explicitly resumed with the same run ID.
-`status` reports `can_resume`, `recovery_epoch`, and the stable `working/`
-paths. Model candidates are written before domain validation, so an agent may
-correct a candidate and resume without another provider call, or delete it to
-regenerate it. Editing an upstream semantic input or artifact is accepted with
-a warning; the agent is responsible for deleting downstream working files
-that should be rebuilt. The previously active domain generation stays
-published until the recovered build fully validates.
+A failed or paused build can be diagnosed and explicitly resumed with the same
+run ID. `status` reports `can_resume`, `recovery_epoch`, and the stable
+`working/` paths. A structurally valid domain-summary response that fails
+package identity or evidence-coverage validation receives one deterministic
+fresh model retry with bounded validation feedback. If that retry is also
+machine-invalid, the build pauses with the retry candidate in `working/` and
+both attempts retained as diagnostics; an agent may correct the candidate and
+resume without another provider call. Deleting the candidate does not grant a
+third automatic generation attempt. This retry is for unusable machine output,
+not for revising a valid scientific judgment. Editing an upstream semantic
+input or artifact is accepted with a warning; the agent is responsible for
+deleting downstream working files that should be rebuilt. The previously
+active domain generation stays published until the recovered build fully
+validates.
 
 ## Tests
 
