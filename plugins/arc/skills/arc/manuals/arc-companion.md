@@ -4,8 +4,7 @@
 guides, searchable PDF, and Web reader. Use this manual for package commands.
 
 Build and resume require public `arc-translate`, proposer-reviewer, paper, LLM,
-and jobs dependencies; an incomplete runtime returns
-`runtime_dependency_missing`.
+and jobs dependencies; incomplete runtimes return `runtime_dependency_missing`.
 
 ## Build from a Local Rich Source
 
@@ -21,24 +20,21 @@ arc-companion build <source.md> \
   --target-language <language-tag>
 ```
 
-Add `--reuse-translation-from <existing-project-dir>` to preserve a successful
-project's exact source-compatible language, glossary, and translations without
-invoking a translation provider. Companion also copies the prior accepted guide
-as optional model context: the model may improve, recombine, or discard old
-ideas; its structure and bibliography are not current constraints.
+Add `--reuse-translation-from <existing-project-dir>` to preserve exact
+source-compatible language, glossary, and translations without invoking a
+translation provider. The prior guide is optional context, not a template or
+current evidence.
 
-Use the user-chosen `<project-dir>` itself; do not append `companion`, `build-v2`,
-`fresh`, or an attempt suffix. Inside this checkout, use a stable ignored path
-below `local/`; that convention does not apply to an external user directory.
+Use the user-chosen `<project-dir>` itself; do not append an attempt suffix.
+Inside this checkout use a stable ignored path below `local/`.
 
 Set `<host-authority>` once per run: use `unrestricted` only when explicitly
 reported; otherwise use `unknown`. Reuse it for every resume. For `restricted`
 or `unknown` host requests, follow `manuals/arc-llm.md`.
 
-The root may contain unrelated user files; Companion preserves them. It claims
-only `.arc/companion/`, `releases/`, `companion.pdf`, and `companion.html`, and
-refuses exact conflicts there. Command JSON may use any unrelated path, but
-never a managed Companion path.
+Companion preserves unrelated root files. It claims only `.arc/companion/`,
+`releases/`, `companion.pdf`, and `companion.html`; command JSON must not use
+those managed paths.
 
 For a remote arXiv paper, let ARC fetch the PDF validator:
 
@@ -74,12 +70,11 @@ textbooks target students with prerequisites without presuming hard topics are
 mastered. Required needs remain covered; no count quota applies. Corrective
 contrast requires a misconception established by source or evidence.
 
-Guide writing uses `arc-proposer-reviewer`: a reviewer accepts immediately when
-there is no concrete improvement, or gives constructive feedback for at most
-two complete revisions. It may suggest worthwhile new anchored,
-evidence-backed companion ideas. The maximum sequence is
-proposer-reviewer-proposer-reviewer-proposer; no unused final review follows
-the last revision. Companion injects the chapter ID deterministically.
+`arc-proposer-reviewer` accepts immediately when no concrete improvement
+exists, or gives constructive feedback for at most two complete revisions,
+including worthwhile anchored, evidence-backed ideas. The maximum sequence is
+proposer-reviewer-proposer-reviewer-proposer; no unused final review follows.
+Companion injects the chapter ID.
 
 Without `--paper-cache-root`, Companion uses ARC's shared paper cache. Durable
 project state remains under `<project-dir>/.arc/companion/`.
@@ -108,16 +103,12 @@ successful build and resume already publish a complete immutable PDF/Web
 release. Use `render` after renderer, font, style, or validator changes;
 `--format` filters reported artifacts, not what is validated and published.
 
-Open `<project-dir>/companion.pdf` or `companion.html` after publication. The
-PDF is an exact copy; HTML is a standalone offline copy with local reader
-assets embedded, while external source and bibliography links remain navigation
-links. The release manifest and CLI artifacts are authoritative. Do not
-place unrelated files at either managed root path.
+Open `<project-dir>/companion.pdf` or `companion.html`. The PDF is exact; HTML
+is standalone with local assets embedded and external source links preserved.
+The release manifest and CLI artifacts are authoritative.
 
-Companion freezes every source figure asset needed for its accepted release in
-the project runtime before publication completes. A completed project can
-therefore render and validate after the corresponding shared paper-cache entry
-has been removed.
+Companion freezes required source figures so completed projects remain
+renderable after shared paper-cache removal.
 
 ## Help
 
@@ -125,6 +116,3 @@ has been removed.
 arc-companion --help
 arc-companion <command> --help
 ```
-
-Use help for target-language defaults, workers, glossary size, provider/model
-selection, refresh behavior, and typed build failures.

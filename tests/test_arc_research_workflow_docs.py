@@ -585,7 +585,10 @@ def test_translate_docs_define_standalone_approximate_workflows() -> None:
     assert "never definitions" in paper
 
     assert "`arc-translate`" in companion
-    assert "may proceed in parallel" in companion
+    assert (
+        "translation completes before reviewed guide generation"
+        in " ".join(companion.split())
+    )
     assert "glossary size is approximate" in companion
 
 
