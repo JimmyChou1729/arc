@@ -48,6 +48,40 @@ print(metadata.get("title", ""))
 Repository-backed parsing and LLM-backed workflows are also available through
 their public package facades.
 
+### Reference material cache
+
+Reference acquisition is cache-first and independent of any agent host:
+
+```python
+from arc_paper import ReferenceAcquisitionService, ReferenceIdentity
+
+references = ReferenceAcquisitionService()
+cached = references.lookup_cached_reference(doi="10.1000/example")
+if cached is None:
+    cached = references.acquire_reference("doi:10.1000/example")
+
+# Files already obtained through an available, authorized channel can be
+# admitted without coupling that channel to arc-paper.
+local = references.admit_reference_file(
+    "paper.epub",
+    ReferenceIdentity(dois=("10.1000/example",)),
+)
+readable = references.cache.read_resource(local.readable_resource)
+```
+
+`ReferenceIdentity` retains every DOI while its `doi` property projects the
+first DOI for compatibility. Exact cache-only lookup accepts a DOI, arXiv ID,
+HTTP(S) URL, or normalized title. Titles are never fuzzy-matched. Arbitrary
+media are stored through verified `CachedResourceRef` handles; EPUB originals
+remain intact and receive a deterministic readable HTML derivative assembled
+in publication spine order.
+
+The built-in network paths cover official arXiv representations, DOI metadata
+from INSPIRE and Crossref, Crossref full-text or landing links, and one ordinary
+HTTP(S) resource. `ReferenceAcquisitionBackend` is the small extension contract
+for caller-owned authorized backends. Package code does not inspect plugins,
+agent hosts, or workflow files.
+
 ## Tests
 
 The unit suite is offline; network integration is opt-in:

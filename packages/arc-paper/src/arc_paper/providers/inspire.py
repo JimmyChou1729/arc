@@ -298,7 +298,8 @@ def _normalize_record(payload: dict[str, Any]) -> dict[str, Any]:
     arxiv_id = _first_arxiv_id(metadata)
     recid = str(metadata.get("control_number") or payload.get("id") or "")
     paper_id = f"arXiv:{arxiv_id}" if arxiv_id else (f"inspire:{recid}" if recid else "")
-    doi = _first_doi(metadata)
+    dois = _all_dois(metadata)
+    doi = dois[0] if dois else ""
     return {
         "paper_id": paper_id,
         "title": _first_title(metadata),
@@ -307,6 +308,7 @@ def _normalize_record(payload: dict[str, Any]) -> dict[str, Any]:
         "arxiv_id": arxiv_id,
         "inspire_recid": recid,
         "doi": doi,
+        "dois": dois,
         "identifiers": _identifiers(paper_id=paper_id, arxiv_id=arxiv_id, inspire_recid=recid, doi=doi),
         "year": _year(metadata),
         "published": str(metadata.get("earliest_date") or metadata.get("preprint_date") or ""),
@@ -335,7 +337,8 @@ def _normalize_reference(item: dict[str, Any]) -> dict[str, Any]:
     arxiv_id = _reference_arxiv_id(item)
     title = raw.get("title") or raw.get("titles") or ""
     paper_id = normalize_paper_id(arxiv_id) if arxiv_id else (f"inspire:{recid}" if recid else "")
-    doi = _first_doi(raw)
+    dois = _all_dois(raw)
+    doi = dois[0] if dois else ""
     if not paper_id and not title and not raw:
         return {}
     out = {
@@ -358,6 +361,8 @@ def _normalize_reference(item: dict[str, Any]) -> dict[str, Any]:
         out["inspire_recid"] = recid
     if doi:
         out["doi"] = doi
+    if dois:
+        out["dois"] = dois
     if identifiers := _identifiers(paper_id=paper_id, arxiv_id=arxiv_id, inspire_recid=recid, doi=doi):
         out["identifiers"] = identifiers
     if year := _year(raw):
@@ -375,6 +380,9 @@ def _reference_lookup_id(reference: dict[str, Any]) -> str:
         return f"inspire:{recid}"
     if paper_id := reference.get("paper_id"):
         return normalize_paper_id(str(paper_id))
+    for doi in reference.get("dois") or []:
+        if normalized := doi_value(str(doi)):
+            return f"doi:{normalized}"
     if doi := reference.get("doi"):
         return normalize_paper_id(f"doi:{doi}")
     return ""
@@ -392,6 +400,16 @@ def _merge_reference_metadata(reference: dict[str, Any], metadata: dict[str, Any
             merged[key] = value
         elif key not in merged:
             merged[key] = "" if key not in {"year", "citation_count"} else None
+    merged_dois = _dedupe_dois(
+        [
+            *(metadata.get("dois") or []),
+            metadata.get("doi") or "",
+            *(reference.get("dois") or []),
+            reference.get("doi") or "",
+        ]
+    )
+    merged["dois"] = merged_dois
+    merged["doi"] = merged_dois[0] if merged_dois else ""
     merged["identifiers"] = metadata.get("identifiers") or _identifiers(
         paper_id=str(merged.get("paper_id") or ""),
         arxiv_id=str(merged.get("arxiv_id") or ""),
@@ -457,13 +475,27 @@ def _normalize_arxiv_value(value: Any) -> str:
     return arxiv_path_id(str(value or ""))
 
 
-def _first_doi(metadata: dict[str, Any]) -> str:
+def _all_dois(metadata: dict[str, Any]) -> list[str]:
+    values: list[Any] = []
     for item in metadata.get("dois") or []:
-        if isinstance(item, dict) and item.get("value"):
-            return str(item["value"])
-        if isinstance(item, str):
-            return item
-    return ""
+        if isinstance(item, dict):
+            values.append(item.get("value") or "")
+        else:
+            values.append(item)
+    if metadata.get("doi"):
+        values.append(metadata["doi"])
+    return _dedupe_dois(values)
+
+
+def _dedupe_dois(values: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        normalized = doi_value(str(item or ""))
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            out.append(normalized)
+    return out
 
 
 def _year(metadata: dict[str, Any]) -> int | None:

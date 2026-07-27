@@ -791,6 +791,7 @@ def test_inspire_references_are_normalized_enriched_and_cached(tmp_path):
                     "reference": {
                         "title": "Reference",
                         "arxiv_eprint": "0801.0001v3",
+                        "dois": [{"value": "10.1000/reference-old"}],
                     },
                 }
             ],
@@ -804,6 +805,10 @@ def test_inspire_references_are_normalized_enriched_and_cached(tmp_path):
             "authors": [{"full_name": "Ref Author"}],
             "abstracts": [{"value": "Reference abstract."}],
             "arxiv_eprints": [{"value": "0801.0001"}],
+            "dois": [
+                {"value": "10.1000/reference-primary"},
+                {"value": "10.1000/reference-secondary"},
+            ],
             "citation_count": 11,
         },
     }
@@ -827,6 +832,12 @@ def test_inspire_references_are_normalized_enriched_and_cached(tmp_path):
     assert values[0]["paper_id"] == "arXiv:0801.0001"
     assert values[0]["title"] == "Enriched reference"
     assert values[0]["authors"] == ["Ref Author"]
+    assert values[0]["doi"] == "10.1000/reference-primary"
+    assert values[0]["dois"] == [
+        "10.1000/reference-primary",
+        "10.1000/reference-secondary",
+        "10.1000/reference-old",
+    ]
     assert values[0]["metadata_enriched"] is True
     assert len(calls) == 2
 
@@ -851,7 +862,11 @@ def test_inspire_doi_lookup_uses_normalized_content_addressed_request_cache(tmp_
             "control_number": 123,
             "titles": [{"title": "DOI paper"}],
             "arxiv_eprints": [{"value": "0911.3380"}],
-            "dois": [{"value": "10.1000/example"}],
+            "dois": [
+                {"value": "10.1000/example"},
+                {"value": "10.1000/ALTERNATE"},
+                {"value": "10.1000/example"},
+            ],
         },
     }
 
@@ -875,6 +890,11 @@ def test_inspire_doi_lookup_uses_normalized_content_addressed_request_cache(tmp_
     assert first == second
     assert first["paper_id"] == "arXiv:0911.3380"
     assert first["identifiers"]["doi"] == "10.1000/example"
+    assert first["doi"] == "10.1000/example"
+    assert first["dois"] == [
+        "10.1000/example",
+        "10.1000/alternate",
+    ]
     assert len(calls) == 1
 
 
