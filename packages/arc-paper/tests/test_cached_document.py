@@ -51,7 +51,7 @@ def test_cached_document_ref_round_trip_and_cache_only_reads(
         "source_sha256": reference.source_sha256,
         "source_size": len(SOURCE.encode("utf-8")),
         "media_type": "text/markdown",
-        "parser_contract": "arc.paper.parser.v3",
+        "parser_contract": "arc.paper.parser.v4",
         "parsed_document_sha256": reference.parsed_document_sha256,
     }
 
@@ -80,6 +80,22 @@ def test_target_specific_search_does_not_scan_other_cached_documents(
     result = service.search_cached_document(reference, "UniqueOnlyElsewhere")
 
     assert result.matches == ()
+
+
+def test_cached_document_accepts_repeated_identical_math_on_one_line(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "repeated.md"
+    source_path.write_text(
+        "# Repeated math\n\nThe same value $x$ appears again as $x$.\n",
+        encoding="utf-8",
+    )
+    service = ArcPaperService(cache_root=tmp_path / "cache")
+
+    reference = service.cache_document(service.import_source(source_path))
+
+    assert reference.parser_contract == "arc.paper.parser.v4"
+    assert service.get_cached_table_of_contents(reference).entries
 
 
 def test_cached_document_rebuilds_only_derived_projection(

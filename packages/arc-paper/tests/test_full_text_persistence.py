@@ -115,7 +115,7 @@ def test_parser_contract_rebuilds_from_legacy_derived_entry_without_removing_sou
     source = _store(repository, payload, SourceFormat.HTML)
     legacy = ParsedDocumentCache(
         repository=repository,
-        parser_contract="arc.paper.parser.v2",
+        parser_contract="arc.paper.parser.v3",
     )
     legacy_document, _ = legacy.get_or_parse(
         source,
@@ -134,7 +134,7 @@ def test_parser_contract_rebuilds_from_legacy_derived_entry_without_removing_sou
         parser_contract=legacy.parser_contract,
         parsed_cache_key=legacy_key,
     )
-    assert PARSER_CONTRACT == "arc.paper.parser.v3"
+    assert PARSER_CONTRACT == "arc.paper.parser.v4"
 
     current_calls: list[str] = []
     original_parse = parser_service_module.parse_artifact_bytes

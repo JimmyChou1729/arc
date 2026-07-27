@@ -334,7 +334,7 @@ def test_standard_markdown_projection_has_canonical_encoded_output(tmp_path):
     assert parsed_document_to_document(document) == {
         "schema_version": "arc.paper.parsed_document.v2",
         "document_digest": (
-            "875350b1793dc1d67ba26f55144318f81b31b2712e36761c766db6024a2e1b42"
+            "6f529e23d1613ef632466871ff79938ff4bc11ca96a69b8a31d22a74e0d3f8b7"
         ),
         "source": {
             "source_format": "markdown",
@@ -357,7 +357,7 @@ def test_standard_markdown_projection_has_canonical_encoded_output(tmp_path):
         ],
         "math_spans": [
             {
-                "span_id": "math-e5f282db9a837a130a6337c3",
+                "span_id": "math-0fdd2cfeec4932e0842059a7",
                 "kind": "inline",
                 "source_line_start": 2,
                 "source_column_start": None,
@@ -369,7 +369,7 @@ def test_standard_markdown_projection_has_canonical_encoded_output(tmp_path):
                 "source_label": "",
             },
             {
-                "span_id": "math-62931744711492423c0e5088",
+                "span_id": "math-acdec12f8a953f76d2b05527",
                 "kind": "display",
                 "source_line_start": 4,
                 "source_column_start": None,
@@ -604,6 +604,40 @@ def test_markdown_math_manifest_covers_inline_and_display_with_stable_positions(
         for item in first.math_spans
         if item.kind is MathSpanKind.DISPLAY
     ] == [display.span_id]
+
+
+@pytest.mark.parametrize(
+    ("source_format", "payload"),
+    (
+        (
+            SourceFormat.MARKDOWN,
+            b"# Repeated math\nThe same value $x$ appears again as $x$.\n",
+        ),
+        (
+            SourceFormat.TEX,
+            br"\section{Repeated math}" b"\n"
+            br"The same value $x$ appears again as $x$." b"\n",
+        ),
+    ),
+)
+def test_repeated_identical_math_on_one_line_has_unique_stable_ids(
+    tmp_path: Path,
+    source_format: SourceFormat,
+    payload: bytes,
+) -> None:
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, source_format)
+    service = PaperParserService(repository)
+
+    first = service.parse_source(artifact)
+    second = service.parse_source(artifact)
+
+    assert [span.normalized_tex for span in first.math_spans] == ["x", "x"]
+    assert all(span.source_column_start is None for span in first.math_spans)
+    assert len({span.span_id for span in first.math_spans}) == 2
+    assert [span.span_id for span in first.math_spans] == [
+        span.span_id for span in second.math_spans
+    ]
 
 
 def test_markdown_indented_code_blocks_are_excluded_from_math_manifest(tmp_path):
