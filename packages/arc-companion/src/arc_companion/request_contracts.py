@@ -31,7 +31,10 @@ _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4 = (
 )
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3 = "arc.companion.build_request.v3"
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2 = "arc.companion.build_request.v2"
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v11"
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v12"
+_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11 = (
+    "arc.companion.generation_recipe.v11"
+)
 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10 = (
     "arc.companion.generation_recipe.v10"
 )
@@ -394,6 +397,12 @@ def decode_generation_recipe(
             "chapter_guide_max_rounds",
             "chapter_guide_review_final_round",
         }
+    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11:
+        fields = common_fields | {
+            "author_identity_prompt",
+            "chapter_guide_max_rounds",
+            "chapter_guide_review_final_round",
+        }
     elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10:
         fields = common_fields | {
             "author_identity_prompt",
@@ -457,6 +466,7 @@ def decode_generation_recipe(
         _string(raw_recipe, key)
     if schema_version not in {
         COMPANION_GENERATION_RECIPE_SCHEMA,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V4,
     }:
@@ -468,6 +478,15 @@ def decode_generation_recipe(
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7,
     }:
         _string(raw_recipe, "evidence_research_prompt")
+    if schema_version in {
+        COMPANION_GENERATION_RECIPE_SCHEMA,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V8,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V6,
+    }:
         _string(raw_recipe, "author_identity_prompt")
     legacy_recipe = schema_version != COMPANION_GENERATION_RECIPE_SCHEMA
     return CompanionGenerationRecipe(
@@ -478,13 +497,9 @@ def decode_generation_recipe(
         ),
         approx_term_count=_integer(raw_recipe, "approx_term_count"),
         author_identity_prompt=(
-            _string(raw_recipe, "author_identity_prompt")
-            if schema_version in {
-                COMPANION_GENERATION_RECIPE_SCHEMA,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9,
-            }
-            else AUTHOR_IDENTITY_PROMPT_VERSION
+            AUTHOR_IDENTITY_PROMPT_VERSION
+            if legacy_recipe
+            else _string(raw_recipe, "author_identity_prompt")
         ),
         chapter_plan_prompt=(
             CHAPTER_PLAN_PROMPT_VERSION
@@ -505,6 +520,7 @@ def decode_generation_recipe(
             _integer(raw_recipe, "chapter_guide_max_rounds")
             if schema_version in {
                 COMPANION_GENERATION_RECIPE_SCHEMA,
+                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9,
             }
@@ -517,6 +533,7 @@ def decode_generation_recipe(
             )
             if schema_version in {
                 COMPANION_GENERATION_RECIPE_SCHEMA,
+                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9,
             }

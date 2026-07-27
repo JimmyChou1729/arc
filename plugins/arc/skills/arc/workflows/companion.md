@@ -93,13 +93,16 @@ matching primary language; mixed or unknown source is translated. Chapters are
 derived from headings and cover every source block exactly once.
 
 Model tasks receive a small cache-identity manifest, while each chapter task
-receives only that chapter's block locators in its task payload. With an exact
-`arc-paper` cached document, agents use cache-only section, range, and search
-operations; Companion does not duplicate the whole source into every agent
-workspace. A verified text-only whole-source input exists only when cache
-access could not be established. Do not open source image or media assets for
-reading; deterministic assembly restores them later. Models author semantic
-JSON, while Companion injects routing identities such as chapter IDs.
+receives that chapter's block locators in its task payload. With an exact
+`arc-paper` cached document, agents should prefer cache-only reads of the
+precise line ranges or search results they need. They may read a complete
+current chapter when narrower excerpts are insufficient; discourage
+whole-book reads when chapter-scoped access is enough, but do not prohibit
+them in program logic. Companion does not duplicate the whole source into
+every agent workspace. A verified text-only whole-source input exists only
+when cache access could not be established. Do not open source image or media
+assets for reading; deterministic assembly restores them later. Models author
+semantic JSON, while Companion injects routing identities such as chapter IDs.
 
 Do not run a document-wide literature survey before planning. Planning first
 audits reader needs and supplies seed units; references are discovered on

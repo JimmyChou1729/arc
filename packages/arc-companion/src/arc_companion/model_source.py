@@ -115,9 +115,18 @@ def model_chapter_block_index(
 ) -> list[dict[str, Any]]:
     """Return locator metadata only for the chapter handled by one model task."""
 
+    return model_block_access_index(document, chapter.block_ids)
+
+
+def model_block_access_index(
+    document: RichDocument,
+    block_ids: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Return locator metadata for one bounded model task."""
+
     by_id = {item.block_id: item for item in document.blocks}
     output: list[dict[str, Any]] = []
-    for block_id in chapter.block_ids:
+    for block_id in block_ids:
         block = by_id[block_id]
         provenance = equation_label_provenance(document, block.block_id)
         output.append(
@@ -255,6 +264,7 @@ def _longest_run(value: str, character: str) -> int:
 
 __all__ = [
     "MODEL_SOURCE_INDEX_SCHEMA",
+    "model_block_access_index",
     "model_chapter_block_index",
     "model_source_index",
     "model_source_view",

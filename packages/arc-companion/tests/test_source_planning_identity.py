@@ -49,7 +49,7 @@ from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
-    assert CompanionBuildHandler.name == "arc.companion.build.v8"
+    assert CompanionBuildHandler.name == "arc.companion.build.v9"
     assert not any(name.startswith("Legacy") for name in public_names)
     for module_name in (
         "arc_companion.build_v2",
@@ -537,9 +537,21 @@ def test_author_identity_requires_high_confidence_for_authors() -> None:
         auto_candidates=[
             {"author": "Example Author", "basis": "source byline"}
         ],
+        block_access=[
+            {
+                "block_id": "b1",
+                "start_line": 1,
+                "end_line": 2,
+            }
+        ],
     )
     assert "publication identity" in prompt
     assert "Do not guess" in prompt
+    assert "Prefer the bounded front-matter line ranges" in prompt
+    assert "complete relevant chapter" in prompt
+    assert "Avoid reading the whole book" in prompt
+    assert "Use only" not in prompt
+    assert _prompt_payload(prompt)["block_access"][0]["block_id"] == "b1"
     assert set(AUTHOR_IDENTITY_SCHEMA["properties"]) == {
         "authors",
         "confidence",
@@ -732,7 +744,7 @@ def test_provider_model_and_prompt_contract_change_run_identity(
     recipe_input = semantic_input["generation_recipe"]
     assert (
         recipe_input["schema_version"]
-            == "arc.companion.generation_recipe.v11"
+            == "arc.companion.generation_recipe.v12"
     )
     assert recipe_input["chapter_guide_max_rounds"] == 3
     assert recipe_input["chapter_guide_review_final_round"] is False

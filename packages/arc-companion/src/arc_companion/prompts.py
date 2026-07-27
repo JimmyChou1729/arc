@@ -12,7 +12,7 @@ CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
     "arc.companion.chapter-learning-review-prompt.v9"
 )
 CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v10"
-AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v2"
+AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
 
 
 def _closed(
@@ -422,12 +422,13 @@ A cache miss or cache write failure may remain local to your research process.
 
 The source body is not embedded in the loop context. Inspect the
 `companion-source-index` workspace input first and use its exact cache-only
-paper operations when available, passing the cached reference unchanged. Use
-this loop's `block_access` line ranges and selectors to read only the chapter
-sections or search results needed for this loop. A verified text-only
-`companion-source` input exists only in fallback-only mode. Never open image
-or media assets. The loop context is authoritative for chapter and block IDs
-and for effective equation labels.
+paper operations when available, passing the cached reference unchanged.
+Prefer this loop's `block_access` line ranges and selectors. If those excerpts
+do not provide enough context, you may inspect the complete current chapter.
+Avoid reading the whole book when chapter-scoped or narrower access is enough.
+A verified text-only `companion-source` input exists only in fallback-only
+mode. Never open image or media assets. The loop context is authoritative for
+chapter and block IDs and for effective equation labels.
 """
 
 
@@ -470,10 +471,11 @@ misconception. Otherwise request direct affirmative prose. A prior Companion
 is optional reference material, not a template or authority.
 
 Inspect the `companion-source-index` workspace input first and use its exact
-cache-only paper operations with this loop's `block_access` line ranges and
-selectors. A verified text-only `companion-source` input exists only in
-fallback-only mode. Read only the passages required for this chapter and never
-open image or media assets.
+cache-only paper operations. Prefer this loop's `block_access` line ranges and
+selectors; if they are insufficient, you may inspect the complete current
+chapter. Avoid reading the whole book when chapter-scoped or narrower access
+is enough. A verified text-only `companion-source` input exists only in
+fallback-only mode. Never open image or media assets.
 """
 
 
@@ -547,6 +549,7 @@ def author_identity_prompt(
     *,
     title: str,
     auto_candidates: Sequence[Mapping[str, Any]],
+    block_access: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     return _prompt(
         AUTHOR_IDENTITY_PROMPT_VERSION,
@@ -561,10 +564,17 @@ def author_identity_prompt(
         at medium or low confidence, authors must be empty. Give the exact
         source anchors that support a high-confidence attribution. Explain the
         basis even when authors is empty. Never invent source block IDs.
+        Prefer the bounded front-matter line ranges in `block_access`. If they
+        are insufficient, use a precise search or inspect a complete relevant
+        chapter. Avoid reading the whole book when narrower evidence resolves
+        the identity. Every anchor must be a real source block ID. If the
+        inspected source does not establish authorship, return an empty,
+        non-high-confidence result.
         """,
         {
             "title": title,
             "auto_candidates": list(auto_candidates),
+            "block_access": [dict(item) for item in block_access],
             "source_inputs": _source_input_manifest(),
         },
     )
@@ -592,14 +602,16 @@ def _source_input_manifest(
             "Inspect companion-source-index first. In direct mode, prefer the "
             "exact cache-only arc-paper operations listed there and pass its "
             "cached document reference unchanged. For chapter tasks, use the "
-            "task's block_access line ranges and selectors to read only the "
-            "current chapter or relevant search results. A verified text-only "
-            "companion-source input is present only when cache_relationship is "
-            "fallback_only. Never open image or media assets. The task payload "
-            "is authoritative for chapter and block IDs and effective equation "
-            "labels. Other named inputs are verified JSON files. In restricted "
-            "or unknown mode, use an available text-only fallback rather than "
-            "requesting a host turn solely to read the same source."
+            "task's block_access line ranges and selectors first. If those "
+            "excerpts are insufficient, the agent may inspect the complete "
+            "current chapter. Avoid reading the whole book when chapter-scoped "
+            "or narrower access is enough. A verified text-only companion-source "
+            "input is present only when cache_relationship is fallback_only. "
+            "Never open image or media assets. The task payload is authoritative "
+            "for chapter and block IDs and effective equation labels. Other named "
+            "inputs are verified JSON files. In restricted or unknown mode, use "
+            "an available text-only fallback rather than requesting a host turn "
+            "solely to read the same source."
         ),
     }
 

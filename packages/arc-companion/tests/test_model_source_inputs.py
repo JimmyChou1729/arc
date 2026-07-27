@@ -16,6 +16,7 @@ from arc_paper import (
 )
 
 from arc_companion.model_source import (
+    model_block_access_index,
     model_chapter_block_index,
     model_source_index,
     model_source_view,
@@ -154,6 +155,22 @@ def test_model_source_index_has_identity_and_no_body_or_asset_metadata() -> None
     )
     assert equation["equation_label"] == "2"
     assert index["cached_document"] == cached
+
+
+def test_model_block_access_index_accepts_a_task_selected_subset() -> None:
+    document = _document()
+
+    access = model_block_access_index(
+        document,
+        ("paragraph", "equation"),
+    )
+
+    assert [item["block_id"] for item in access] == [
+        "paragraph",
+        "equation",
+    ]
+    assert access[0]["line_start"] == 3
+    assert access[1]["equation_label"] == "2"
 
 
 def test_model_source_index_supports_verified_text_fallback_only() -> None:

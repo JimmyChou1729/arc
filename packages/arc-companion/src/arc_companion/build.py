@@ -98,6 +98,7 @@ from .llm_runtime import (
     run_error_from_failure,
 )
 from .model_source import (
+    model_block_access_index,
     model_chapter_block_index,
     model_source_index,
     model_source_view,
@@ -137,10 +138,11 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v8"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v9"
 COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
     {
         COMPANION_BUILD_HANDLER,
+        "arc.companion.build.v8",
         "arc.companion.build.v7",
         "arc.companion.build.v5",
         "arc.companion.build.v4",
@@ -505,6 +507,9 @@ class CompanionBuildHandler:
                 AUTHOR_IDENTITY_PROMPT_VERSION,
             ),
         }
+        author_block_ids = tuple(
+            item.block_id for item in source.blocks[:64]
+        )
         request = LLMRequest(
             task_id("author-identity", semantic),
             author_identity_prompt(
@@ -516,6 +521,9 @@ class CompanionBuildHandler:
                     }
                     for author in auto_candidates
                 ],
+                block_access=model_block_access_index(
+                    source, author_block_ids
+                ),
             ),
             JsonOutput(AUTHOR_IDENTITY_SCHEMA, repair="format"),
             self.recipe.model,
