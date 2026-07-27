@@ -508,10 +508,15 @@ def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
     assert "including chapter-guide, section-guide, and local-companion titles" in guide
     assert "not just X" in guide
     assert "rhetorical shortcut for a definition" in guide
+    assert "plain, accessible language suited to the" in guide
+    assert "material to explain, not style templates" in guide
+    assert "easier to understand than the passage" in guide
     assert "Translate English excerpts" in guide
     assert "Treat unsupported corrective framing as a material defect" in review
     assert "including titles, definitions, opening sentences" in review
     assert "do not overlook the defect merely because the contrast occurs in a" in review
+    assert "Require plain, accessible language in every title and body" in review
+    assert "source-imitating prose" in review
     assert "Do not criticize merely to demonstrate reviewer activity" in review
     assert "accept it by choosing `stop`" in review
     assert "valuable new Companion idea" in review

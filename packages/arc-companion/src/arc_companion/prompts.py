@@ -7,9 +7,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v13"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v14"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v13"
+    "arc.companion.chapter-learning-review-prompt.v14"
 )
 CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v10"
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
@@ -334,6 +334,14 @@ courses. For a textbook, assume a student who completed standard prerequisite
 courses, but do not assume difficult prerequisite concepts are confidently
 mastered.
 
+Write every guide and companion in plain, accessible language suited to the
+resolved reader. The source and translation are material to explain, not
+style templates. If either is difficult, compressed, jargon-heavy, or
+syntactically dense, do not imitate that style. Unpack the reasoning, explain
+necessary terms, prefer concrete wording, and split overloaded sentences or
+steps while preserving technical accuracy. A reader should find the
+Companion easier to understand than the passage it accompanies.
+
 Concentrate first on making difficult or compressed material understandable:
 provide missing background for isolated quotations or named works, supply
 skipped derivation steps, bridge real logical gaps, and explain prerequisite
@@ -467,6 +475,13 @@ Compression is permitted, not required and not the chapter guide's only
 purpose. Do not reject it solely for compressing chapter information. Request
 revision when it merely retells the chapter or reproduces its contents
 without a concrete reading benefit.
+Require plain, accessible language in every title and body. Treat the source
+and translation as material to explain, not style templates. If they are
+difficult, compressed, jargon-heavy, or syntactically dense, the proposal
+must make them easier to understand by unpacking reasoning, explaining
+necessary terms, using concrete wording, and splitting overloaded sentences
+or steps without losing technical accuracy. Request revision for needlessly
+abstract, opaque, or source-imitating prose even when its facts are correct.
 Require nearby positional `[@N]` citations for externally grounded claims.
 
 Treat unsupported corrective framing as a material defect. Audit every
