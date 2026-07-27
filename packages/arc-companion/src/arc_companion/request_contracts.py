@@ -274,7 +274,7 @@ class CompanionGenerationRecipe:
 class CompanionExecutionOptions:
     """Non-semantic runtime policy for one invocation."""
 
-    workers: int = 4
+    workers: int = 16
     llm: LLMExecutionOptions = field(default_factory=LLMExecutionOptions)
     paper_cache_root: Path | None = None
 

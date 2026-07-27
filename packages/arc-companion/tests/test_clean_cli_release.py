@@ -39,6 +39,7 @@ from arc_companion.release import (
     release_id_for,
 )
 from arc_companion.renderer import RenderedCompanion
+from arc_companion.request_contracts import CompanionExecutionOptions
 
 
 class _FakeRenderer:
@@ -139,6 +140,16 @@ def test_cli_exposes_exactly_six_protocol_commands() -> None:
         "render",
         "validate",
     }
+
+
+def test_companion_defaults_to_sixteen_parallel_workers() -> None:
+    assert CompanionExecutionOptions().workers == 16
+    build = _parser().parse_args(
+        ["build", "source.md", "--project-dir", "project"]
+    )
+    resume = _parser().parse_args(["resume", "--project-dir", "project"])
+    assert build.workers == 16
+    assert resume.workers == 16
 
 
 def test_nonempty_explicit_project_preserves_unrelated_files_on_initialization(

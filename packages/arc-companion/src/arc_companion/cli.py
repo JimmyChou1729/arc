@@ -121,7 +121,12 @@ def _parser() -> _Parser:
     build.add_argument("--user-intent", default="", help="reader intent used to focus the guide")
     build.add_argument("--provider", default="auto", help="LLM provider (default: auto)")
     build.add_argument("--model", help="provider-specific model name")
-    build.add_argument("--workers", type=int, default=4, help="parallel workers (default: 4)")
+    build.add_argument(
+        "--workers",
+        type=int,
+        default=16,
+        help="parallel workers (default: 16)",
+    )
     build.add_argument(
         "--approx-term-count", type=int, default=50, help="target glossary size (default: 50)"
     )
@@ -154,7 +159,12 @@ def _parser() -> _Parser:
         "--input",
         help="JSON object or path containing the current pause response",
     )
-    resume.add_argument("--workers", type=int, default=4, help="parallel workers (default: 4)")
+    resume.add_argument(
+        "--workers",
+        type=int,
+        default=16,
+        help="parallel workers (default: 16)",
+    )
     _paper_cache_argument(resume)
     _host_authority_argument(resume)
 
