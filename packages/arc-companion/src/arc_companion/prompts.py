@@ -7,9 +7,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v11"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v12"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v11"
+    "arc.companion.chapter-learning-review-prompt.v12"
 )
 CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v10"
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
@@ -287,17 +287,31 @@ particular, do not move an explanation of an earlier title, quotation, work,
 or concept to a later date merely because the same unit mentions a later
 development. Work only on the current real chapter.
 
-Every unit must add a concrete increment of understanding that the nearby
-source does not itself supply. Missing context, an intermediate derivation,
-a logical bridge, prerequisite clarification, a later correction or
-development, historical significance, and a substantive connection across
-passages are non-exhaustive examples, not a taxonomy or quota. A brief source
-phrase may identify the explanation's target, but the body must then add new
-information. Reordered facts, same-meaning rewrite, generic summary,
-transitions such as “this shows”, or polished paraphrase do not qualify. If
-removing a proposed unit would leave the resolved reader's understanding
-essentially unchanged, omit it. Simple, self-contained source material needs
-no local companion.
+Every local companion and section guide must add a concrete increment of
+understanding that the nearby source does not itself supply. Missing context,
+an intermediate derivation, a logical bridge, prerequisite clarification, a
+later correction or development, historical significance, and a substantive
+connection across passages are non-exhaustive examples, not a taxonomy or
+quota. A brief source phrase may identify the explanation's target, but the
+body must then add new information, a missing reasoning step, context, or a
+useful connection not already available at that location. Compacting,
+reorganizing, or summarizing information already present in the paragraph or
+chapter does not qualify for a local companion or section guide, even when
+the result is fluent or shorter. Reordered facts, same-meaning rewrite,
+generic summary, transitions such as “this shows”, or polished paraphrase
+likewise do not qualify. If removing a proposed unit would leave the resolved
+reader's understanding essentially unchanged, omit it. Simple,
+self-contained source material needs no local companion.
+
+A chapter guide has a different role. It may select, organize, and compress
+information already present in the chapter when that creates a useful reading
+map, foregrounds a real through-line, or gives the reader an effective way
+into the chapter. It may also add new background, connections, reading
+strategies, later developments, or any other useful help supported by the
+source and references. Permission to compress is not a default form, a limit,
+or the chapter guide's only purpose. Still, do not merely retell the chapter
+or reproduce its table of contents: any selection and compression must
+provide a concrete reading benefit.
 
 The structured `title` field is the unit's sole main title.
 `content_markdown` must begin with substantive prose, not another Markdown
@@ -327,6 +341,30 @@ material the reader should not be assumed to command. When references support
 it, add later corrections, disputes, doubts, unexpectedly important
 developments, or historical significance. These are priorities, not a
 taxonomy or quota.
+
+Do not decide in advance that the Companion will explain only one kind of
+thing. Check the actual source for every place where the resolved reader needs
+help. One useful explanation does not cancel a different need nearby: for
+example, historical context does not replace an omitted equation step, and an
+equation explanation does not replace needed context. When a source contains
+mathematical, scientific, or other technical material, actively check for
+unexplained terms, mechanisms, methods, formal steps, equations, experiments,
+and relevant people, and add useful explanations rather than overlooking
+them. This request adds missing coverage; it is not a reason to omit other
+useful Companion material, and the total amount may grow. These are
+non-exhaustive signals, not a fixed list, minimum count, or required format.
+
+Before explaining a technical term, mechanism, or person, search the complete
+source document to see whether the author explains it substantially elsewhere.
+Use `arc_commands.full_document_search_examples`: one example shows a literal
+term search; the “A or B” example is represented by two literal ARC commands,
+one for each alternative, because the command does not require shell-regex
+syntax. Replace only the final query argument. Search the original-language
+name and useful alternative names when appropriate. If the source explains
+the subject elsewhere, point the reader to or connect that explanation
+instead of redundantly paraphrasing it. If it does not, supply the missing
+explanation. A remote, highly compressed, or differently purposed occurrence
+does not automatically make local help unnecessary.
 
 Prefer direct affirmative explanation. Use “not X but Y” or another corrective
 contrast only when the source, user intent, or an inspected reference shows
@@ -392,12 +430,36 @@ skipped derivation steps, logical gaps, prerequisite knowledge the reader may
 not command, and reference-grounded later corrections, disputes, doubts,
 unexpected developments, or historical significance. Remove or replace
 paraphrase, repeated reasoning, generic summary, and unsupported claims.
-For every retained unit, identify a concrete understanding increment absent
-from the nearby source. Reordered source facts, same-meaning rewrite, a
-transition such as “this shows”, or prose whose removal would not change the
-reader's understanding is not an increment. A chapter guide may orient the
-reader with a conceptual map or reading path, but must not be merely a chapter
-summary.
+If an existing unit clearly helps the reader understand something and has no
+specific defect, keep it. Do not remove it merely because you want to add a
+different kind of explanation. When the source contains mathematical,
+scientific, or other technical material, also check its terms, mechanisms,
+methods, formal steps, equations, experiments, and relevant people carefully.
+Suggest useful additions where the proposal missed them, even if this makes
+the Companion longer. For an explanation of a term, mechanism, or person, use
+the supplied full-document ARC search examples to check whether the author
+already gives a substantial explanation elsewhere; for “A or B”, run both
+literal alternative commands. Keep a useful cross-reference or local bridge
+when the other occurrence is remote, compressed, or serves a different
+purpose.
+For every retained local companion and section guide, identify a concrete
+understanding increment absent from the nearby source. Reordered source
+facts, same-meaning rewrite, a transition such as “this shows”, or prose whose
+removal would not change the reader's understanding is not an increment.
+Reject a local companion or section guide that merely compacts, reorganizes,
+or summarizes information already present nearby, even if it is fluent.
+Require new information, a missing reasoning step, context, or a useful
+connection that the source does not already make locally.
+
+Review the chapter guide by a different standard. It may appropriately
+select, organize, and compress information already in the chapter when that
+creates a useful reading map, foregrounds a real through-line, or gives the
+reader an effective way into the chapter. It may also add new background,
+connections, reading strategies, later developments, or other useful help.
+Compression is permitted, not required and not the chapter guide's only
+purpose. Do not reject it solely for compressing chapter information. Request
+revision when it merely retells the chapter or reproduces its contents
+without a concrete reading benefit.
 Require nearby positional `[@N]` citations for externally grounded claims.
 
 Treat unsupported corrective framing as a material defect. A “not X but Y”

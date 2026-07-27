@@ -58,7 +58,7 @@ from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
-    assert CompanionBuildHandler.name == "arc.companion.build.v11"
+    assert CompanionBuildHandler.name == "arc.companion.build.v12"
     assert not any(name.startswith("Legacy") for name in public_names)
     for module_name in (
         "arc_companion.build_v2",
@@ -527,6 +527,20 @@ def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
     assert "`fallback_only`" in review
     assert "terminal revision" in guide
     assert "recorded as inspected" in guide
+    assert "Do not decide in advance" in guide
+    assert "the total amount may grow" in guide
+    assert "full_document_search_examples" in guide
+    assert "A or B" in guide
+    assert "If an existing unit clearly helps the reader" in review
+    assert "even if this makes the Companion longer" in review
+    assert "Compacting, reorganizing, or summarizing" in guide
+    assert "A chapter guide has a different role" in guide
+    assert "select, organize, and compress" in guide
+    assert "Permission to compress is not a default form" in guide
+    assert "local companion or section guide that merely compacts" in review
+    assert "Review the chapter guide by a different standard" in review
+    assert "Compression is permitted, not required" in review
+    assert "Do not reject it solely for compressing" in review
 
 
 def test_guide_validation_decodes_model_escaped_paragraphs() -> None:
@@ -998,7 +1012,7 @@ def test_provider_model_and_prompt_contract_change_run_identity(
     recipe_input = semantic_input["generation_recipe"]
     assert (
         recipe_input["schema_version"]
-            == "arc.companion.generation_recipe.v14"
+            == "arc.companion.generation_recipe.v15"
     )
     assert recipe_input["chapter_guide_max_rounds"] == 3
     assert recipe_input["chapter_guide_review_final_round"] is False

@@ -143,10 +143,11 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v11"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v12"
 COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
     {
         COMPANION_BUILD_HANDLER,
+        "arc.companion.build.v11",
         "arc.companion.build.v10",
         "arc.companion.build.v9",
         "arc.companion.build.v8",
@@ -1287,6 +1288,15 @@ def _chapter_arc_commands(
                 "no exact cached source command is available."
             ),
             "source": [],
+            "full_document_search_examples": {
+                "availability": "fallback_only",
+                "instructions": (
+                    "Search the attached verified text-only source with the "
+                    "host's ordinary text search."
+                ),
+                "single_term": None,
+                "alternative_terms": [],
+            },
             "research_examples": _research_command_examples(),
         }
     paper = ArcPaperService(cache_root=cache_root)
@@ -1410,6 +1420,21 @@ def _chapter_arc_commands(
             ),
         )
     )
+
+    def search_example(command_id: str, query: str) -> dict[str, Any]:
+        return _command(
+            command_id,
+            [
+                "arc-paper",
+                "search-cached-document",
+                "--document-ref",
+                document_json,
+                "--cache-root",
+                str(paper.cache_root),
+                query,
+            ],
+        )
+
     return {
         "availability": "exact",
         "instructions": (
@@ -1417,6 +1442,27 @@ def _chapter_arc_commands(
             "chapter when more context is needed."
         ),
         "source": source_commands,
+        "full_document_search_examples": {
+            "availability": "exact",
+            "instructions": (
+                "Replace only the final query argument. Searches are literal. "
+                "For A or B, run both alternative commands."
+            ),
+            "single_term": search_example(
+                "search-full-document-single-term",
+                "<term>",
+            ),
+            "alternative_terms": [
+                search_example(
+                    "search-full-document-alternative-a",
+                    "<term-A>",
+                ),
+                search_example(
+                    "search-full-document-alternative-b",
+                    "<term-B>",
+                ),
+            ],
+        },
         "research_examples": _research_command_examples(),
     }
 

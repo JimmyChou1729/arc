@@ -37,7 +37,10 @@ _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4 = (
 )
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3 = "arc.companion.build_request.v3"
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2 = "arc.companion.build_request.v2"
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v14"
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v15"
+_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14 = (
+    "arc.companion.generation_recipe.v14"
+)
 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13 = (
     "arc.companion.generation_recipe.v13"
 )
@@ -492,6 +495,8 @@ def decode_generation_recipe(
     }
     if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA:
         fields = current_fields
+    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14:
+        fields = current_fields
     elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13:
         fields = current_fields
     elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12:
@@ -571,6 +576,7 @@ def decode_generation_recipe(
         _string(raw_recipe, key)
     if schema_version not in {
         COMPANION_GENERATION_RECIPE_SCHEMA,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
@@ -587,6 +593,7 @@ def decode_generation_recipe(
         _string(raw_recipe, "evidence_research_prompt")
     if schema_version in {
         COMPANION_GENERATION_RECIPE_SCHEMA,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
@@ -628,6 +635,7 @@ def decode_generation_recipe(
             _integer(raw_recipe, "chapter_guide_max_rounds")
             if schema_version in {
                 COMPANION_GENERATION_RECIPE_SCHEMA,
+                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
@@ -643,6 +651,7 @@ def decode_generation_recipe(
             )
             if schema_version in {
                 COMPANION_GENERATION_RECIPE_SCHEMA,
+                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,

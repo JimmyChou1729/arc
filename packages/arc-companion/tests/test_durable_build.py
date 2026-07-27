@@ -484,6 +484,21 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
             item["command_id"] != "current-section"
             for item in commands["source"]
         )
+        search_examples = commands["full_document_search_examples"]
+        assert search_examples["availability"] == "exact"
+        assert (
+            search_examples["single_term"]["argv"][1]
+            == "search-cached-document"
+        )
+        assert len(search_examples["alternative_terms"]) == 2
+        assert all(
+            item["argv"][1] == "search-cached-document"
+            for item in search_examples["alternative_terms"]
+        )
+        assert {
+            item["argv"][-1]
+            for item in search_examples["alternative_terms"]
+        } == {"<term-A>", "<term-B>"}
         assert all(
             "A quantum field appears here." not in item["shell"]
             for item in commands["source"]
@@ -1159,7 +1174,11 @@ def test_default_adapter_preflight_requires_public_translate_facade(
 
 @pytest.mark.parametrize(
     "handler",
-    ("arc.companion.build.v6", "arc.companion.build.v10"),
+    (
+        "arc.companion.build.v6",
+        "arc.companion.build.v10",
+        "arc.companion.build.v11",
+    ),
 )
 def test_unfinished_legacy_handlers_require_a_new_build(
     tmp_path: Path,
