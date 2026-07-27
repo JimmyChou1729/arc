@@ -21,6 +21,9 @@ from arc_paper import (
 from .contracts import TranslationSource
 
 
+STRUCTURAL_FIGURE_PLACEHOLDER = "\ufffc"
+
+
 class TranslationSourceError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -189,7 +192,25 @@ def validate_translation_text(text: str, block: Mapping[str, Any]) -> None:
 
 
 def prompt_block(block: Mapping[str, Any]) -> dict[str, Any]:
-    return {**dict(block), "source_identity": source_identity(block)}
+    if str(block.get("kind")) != "figure":
+        return {**dict(block), "source_identity": source_identity(block)}
+    payload = block.get("payload")
+    if not isinstance(payload, Mapping):
+        raise TranslationSourceError(
+            "source_block_invalid", "source block payload must be an object"
+        )
+    return {
+        "block_id": block.get("block_id"),
+        "ordinal": block.get("ordinal"),
+        "kind": "figure",
+        "section_path": block.get("section_path"),
+        "payload": {"caption": str(payload.get("caption", ""))},
+        "source_identity": {
+            "equations": [],
+            "code_text": None,
+            "link_targets": [],
+        },
+    }
 
 
 def block_text(block: Mapping[str, Any]) -> str:
@@ -217,11 +238,7 @@ def block_text(block: Mapping[str, Any]) -> str:
             if isinstance(row, Sequence) and not isinstance(row, (str, bytes))
         )
     if kind == "figure":
-        return " ".join(
-            str(payload.get(field, ""))
-            for field in ("alt_text", "caption")
-            if payload.get(field)
-        )
+        return str(payload.get("caption", ""))
     raise TranslationSourceError(
         "source_block_invalid", f"unsupported block kind: {kind}"
     )
@@ -316,11 +333,7 @@ def _rich_block_text(block: RichBlock) -> str:
         rows = [payload["headers"], *payload["rows"]]
         return "\n".join(" | ".join(map(str, row)) for row in rows)
     if block.kind is RichBlockKind.FIGURE:
-        return " ".join(
-            str(payload[name])
-            for name in ("alt_text", "caption")
-            if payload[name]
-        )
+        return str(payload["caption"])
     raise TranslationSourceError(
         "source_block_invalid", f"unsupported block kind: {block.kind}"
     )
@@ -349,6 +362,7 @@ def _primary_language(tag: str) -> str:
 
 
 __all__ = [
+    "STRUCTURAL_FIGURE_PLACEHOLDER",
     "TranslationSourceError",
     "block_digest",
     "block_text",

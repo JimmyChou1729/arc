@@ -43,7 +43,11 @@ from arc_translate.prompts import (
     TRANSLATION_PROMPT_VERSION,
 )
 from arc_translate.source import block_text
-from arc_translate.source import TranslationSourceError, resolve_translation_source
+from arc_translate.source import (
+    STRUCTURAL_FIGURE_PLACEHOLDER,
+    TranslationSourceError,
+    resolve_translation_source,
+)
 from arc_translate.workflow import REVIEW_SUPERVISION_SCHEMA
 
 
@@ -61,6 +65,8 @@ class FakeTasks:
         self.calls: list[str] = []
         self.translation_glossaries: list[list[str]] = []
         self.prompt_glossary_fields: list[list[set[str]]] = []
+        self.translation_blocks: list[list[dict[str, Any]]] = []
+        self.review_blocks: list[list[dict[str, Any]]] = []
 
     def execute_or_resume(
         self, _context, request, *, input=None, options=None
@@ -85,6 +91,7 @@ class FakeTasks:
                 ]
             }
         elif contract == TRANSLATION_PROMPT_VERSION:
+            self.translation_blocks.append(payload["blocks"])
             self.translation_glossaries.append(
                 [item["term"] for item in payload["glossary"]]
             )
@@ -115,6 +122,7 @@ class FakeTasks:
                 )
             value = {"translations": translations}
         elif contract == REVIEW_PROMPT_VERSION:
+            self.review_blocks.append(payload["blocks"])
             self.prompt_glossary_fields.append(
                 [set(item) for item in payload["glossary"]]
             )
@@ -670,6 +678,139 @@ def test_block_selector_normalizes_order_and_filters_window_glossary(tmp_path):
     assert invalid.code == "block_selector_invalid"
 
 
+def test_structural_figures_bypass_models_and_keep_ordered_coverage(tmp_path):
+    assets = tmp_path / "images"
+    assets.mkdir()
+    (assets / "structural.png").write_bytes(b"\x89PNG structural")
+    (assets / "captioned.png").write_bytes(b"\x89PNG captioned")
+    markdown = tmp_path / "figures.md"
+    markdown.write_text(
+        "# Figures\n\n"
+        "![accessibility alt](images/structural.png)\n\n"
+        "<details>\n<summary>natural_image</summary>\n\n"
+        "Extractor-only sidecar text.\n</details>\n\n"
+        "![private alt](images/captioned.png \"Visible scientific caption\")\n\n"
+        "The surrounding prose remains translatable.\n",
+        encoding="utf-8",
+    )
+    paper = ArcPaperService(cache_root=tmp_path / "figure-cache")
+    artifact = paper.import_source(markdown)
+    source = TranslationSource(
+        parsed=paper.parser.parse_source(artifact),
+        rich=RichDocumentParserService(paper.repository).parse_source(artifact),
+    )
+    blocks = source_blocks(source)
+    structural = next(
+        item
+        for item in blocks
+        if item["kind"] == "figure"
+        and not str(item["payload"]["caption"]).strip()
+    )
+    captioned = next(
+        item
+        for item in blocks
+        if item["kind"] == "figure"
+        and str(item["payload"]["caption"]).strip()
+    )
+    language = LanguageResult(
+        source.document_digest,
+        source.source_digest,
+        "en",
+        "known",
+        1,
+        "fr",
+        "enabled",
+    )
+    glossary = GlossaryResult(
+        source.document_digest,
+        source.source_digest,
+        "fr",
+        1,
+        "e" * 64,
+        (),
+    )
+    tasks = FakeTasks()
+
+    result = TranslationWorkflowService(tasks).translate_blocks(
+        _context(tmp_path, "figures"),
+        source,
+        language=language,
+        glossary=glossary,
+        target_language="fr",
+    )
+
+    assert isinstance(result, BlocksResult)
+    assert [item["block_id"] for item in result.translations] == [
+        item["block_id"] for item in blocks
+    ]
+    translated = {
+        item["block_id"]: item["text"] for item in result.translations
+    }
+    assert translated[structural["block_id"]] == STRUCTURAL_FIGURE_PLACEHOLDER
+    prompted = [
+        item for window in tasks.translation_blocks for item in window
+    ]
+    reviewed = [item for window in tasks.review_blocks for item in window]
+    assert structural["block_id"] not in {
+        item["block_id"] for item in [*prompted, *reviewed]
+    }
+    prompted_caption = next(
+        item for item in prompted if item["block_id"] == captioned["block_id"]
+    )
+    assert prompted_caption["payload"] == {
+        "caption": "Visible scientific caption"
+    }
+    assert set(prompted_caption) == {
+        "block_id",
+        "ordinal",
+        "kind",
+        "section_path",
+        "payload",
+        "source_identity",
+    }
+    figure_prompts = json.dumps(
+        [
+            item
+            for item in [*prompted, *reviewed]
+            if item["kind"] == "figure"
+        ],
+        ensure_ascii=False,
+    )
+    for private_value in (
+        "images/structural.png",
+        "images/captioned.png",
+        "accessibility alt",
+        "private alt",
+        "Extractor-only sidecar text",
+        "asset_digest",
+        "asset_target",
+        "alt_text",
+        "logical_name",
+        '"target"',
+    ):
+        assert private_value not in figure_prompts
+
+    structural_only_tasks = FakeTasks()
+    structural_only = TranslationWorkflowService(
+        structural_only_tasks
+    ).translate_blocks(
+        _context(tmp_path, "structural-only"),
+        source,
+        language=language,
+        glossary=glossary,
+        target_language="fr",
+        block_ids=[structural["block_id"]],
+    )
+    assert isinstance(structural_only, BlocksResult)
+    assert structural_only.translations == (
+        {
+            "block_id": structural["block_id"],
+            "text": STRUCTURAL_FIGURE_PLACEHOLDER,
+        },
+    )
+    assert structural_only_tasks.calls == []
+
+
 def test_failed_review_can_accept_validated_pre_review_translation(tmp_path):
     source = _source(tmp_path)
     first_context = _context(tmp_path, "review-supervision")
@@ -754,7 +895,7 @@ def test_review_prompt_obeys_the_same_complete_input_budget(tmp_path):
             (),
         ),
         target_language="fr",
-        input_budget_bytes=4096,
+        input_budget_bytes=4500,
     )
     assert isinstance(result, RunError)
     assert result.code == "translation_review_exceeds_input_budget"

@@ -9,8 +9,8 @@ from typing import Any
 
 LANGUAGE_PROMPT_VERSION = "arc.translate.language_prompt.v1"
 GLOSSARY_PROMPT_VERSION = "arc.translate.glossary_prompt.v2"
-TRANSLATION_PROMPT_VERSION = "arc.translate.blocks_prompt.v2"
-REVIEW_PROMPT_VERSION = "arc.translate.review_prompt.v1"
+TRANSLATION_PROMPT_VERSION = "arc.translate.blocks_prompt.v3"
+REVIEW_PROMPT_VERSION = "arc.translate.review_prompt.v2"
 
 
 def _closed(
@@ -141,10 +141,13 @@ def translation_prompt(
         """
 Translate every supplied source block into the target language. Return each
 block ID exactly once and in source order. Keep each block indivisible. Preserve
-formula occurrences, code text, link targets, and asset identity exactly, and
-use the supplied preferred glossary translations consistently. Copy each
-block_id exactly; the caller attaches source identity locally. Return only the translation layer:
-do not add explanations, guides, summaries, or learning material.
+formula occurrences, code text, and link targets exactly, and use the supplied
+preferred glossary translations consistently. A supplied figure contains only
+an authored visible caption; translate that caption without inventing an image
+description. Structural figures and all asset identity remain local and are
+not supplied for translation. Copy each block_id exactly; the caller attaches
+source identity locally. Return only the translation layer: do not add
+explanations, guides, summaries, or learning material.
 """,
         {
             "target_language": target_language,

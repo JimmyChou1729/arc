@@ -188,7 +188,7 @@ def test_cached_markdown_source_range_text_only_uses_rich_figure_projection(
             "",
             "Before the figure.",
             "",
-            "![extractor image](images/plot.png)",
+            '![extractor image](images/plot.png "Structured figure caption.")',
             "",
             "<details>",
             "<summary>natural_image</summary>",
@@ -236,6 +236,7 @@ def test_cached_markdown_source_range_text_only_uses_rich_figure_projection(
     assert "natural_image" not in projected.text
     assert "Machine-only image description." not in projected.text
     assert "Before the figure." in projected.text
+    assert "Structured figure caption." in projected.text
     assert "Figure 1. An authored caption." in projected.text
     assert "$$\nE = mc^2\n$$" in projected.text
     assert "```python\nprint('kept')\n```" in projected.text

@@ -1007,6 +1007,7 @@ class ArcPaperService:
 
         document = RichDocumentParserService(self.repository).parse_source(source)
         excluded: set[int] = set()
+        replacements: dict[int, str] = {}
         for block in document.blocks:
             if block.kind is not RichBlockKind.FIGURE:
                 continue
@@ -1021,11 +1022,18 @@ class ArcPaperService:
             ):
                 continue
             excluded.update(range(line_start, line_end + 1))
-        return [
-            lines[line_number - 1]
-            for line_number in range(start_line, end_line + 1)
-            if line_number not in excluded
-        ]
+            caption = str(block.payload.get("caption", "")).strip()
+            if caption:
+                replacements[line_start] = caption
+        projected: list[str] = []
+        for line_number in range(start_line, end_line + 1):
+            if line_number not in excluded:
+                projected.append(lines[line_number - 1])
+                continue
+            replacement = replacements.get(line_number)
+            if replacement is not None:
+                projected.append(replacement)
+        return projected
 
     def search_cached_document(
         self,

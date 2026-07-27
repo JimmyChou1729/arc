@@ -1074,14 +1074,7 @@ def _rich_block_text(block: RichBlock) -> str:
         ]
         return "\n".join(item for item in parts if item)
     if block.kind is RichBlockKind.FIGURE:
-        return "\n".join(
-            item
-            for item in (
-                str(payload.get("caption") or ""),
-                str(payload.get("alt_text") or ""),
-            )
-            if item
-        )
+        return str(payload.get("caption") or "").strip()
     return ""
 
 

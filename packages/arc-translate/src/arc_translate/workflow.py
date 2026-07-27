@@ -58,6 +58,7 @@ from .prompts import (
     translation_prompt,
 )
 from .source import (
+    STRUCTURAL_FIGURE_PLACEHOLDER,
     TranslationSourceError,
     block_text,
     deterministic_language_samples,
@@ -598,7 +599,7 @@ class TranslationWorkflowService:
             return result
         try:
             windows = _translation_windows(
-                blocks,
+                _model_translation_blocks(blocks),
                 glossary=glossary.entries,
                 target_language=target_language,
                 language=language,
@@ -759,13 +760,17 @@ class TranslationWorkflowService:
             accepted_doc = {"translations": reviewed}
             context.artifacts.publish_json(accepted_id, accepted_doc)
             translations.extend(reviewed)
+        merged_translations = _merge_structural_figure_translations(
+            blocks,
+            translations,
+        )
         result = BlocksResult(
             document_digest=source.document_digest,
             source_digest=source.source_digest,
             source_language=language.language_tag,
             target_language=target_language,
             mode="enabled",
-            translations=tuple(translations),
+            translations=merged_translations,
         )
         _validate_complete_coverage(result, blocks)
         context.artifacts.publish_json(artifact_id, result.to_document())
@@ -1387,6 +1392,59 @@ def _select_blocks(
             f"block_ids contain unknown source IDs: {sorted(missing)!r}",
         )
     return tuple(item for item in blocks if str(item["block_id"]) in requested)
+
+
+def _model_translation_blocks(
+    blocks: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    return tuple(
+        block for block in blocks if not _is_structural_figure(block)
+    )
+
+
+def _is_structural_figure(block: Mapping[str, Any]) -> bool:
+    if str(block.get("kind")) != "figure":
+        return False
+    payload = block.get("payload")
+    if not isinstance(payload, Mapping):
+        raise TranslationWorkflowError(
+            "source_block_invalid",
+            "source block payload must be an object",
+        )
+    return not str(payload.get("caption", "")).strip()
+
+
+def _merge_structural_figure_translations(
+    blocks: Sequence[Mapping[str, Any]],
+    model_translations: Sequence[Mapping[str, str]],
+) -> tuple[Mapping[str, str], ...]:
+    translated_by_id = {
+        str(item["block_id"]): dict(item) for item in model_translations
+    }
+    merged: list[Mapping[str, str]] = []
+    for block in blocks:
+        block_id = str(block["block_id"])
+        if _is_structural_figure(block):
+            merged.append(
+                {
+                    "block_id": block_id,
+                    "text": STRUCTURAL_FIGURE_PLACEHOLDER,
+                }
+            )
+            continue
+        translation = translated_by_id.pop(block_id, None)
+        if translation is None:
+            raise TranslationWorkflowError(
+                "translation_coverage_invalid",
+                f"translation omitted source block {block_id}",
+            )
+        merged.append(translation)
+    if translated_by_id:
+        raise TranslationWorkflowError(
+            "translation_coverage_invalid",
+            "translation contains unknown or duplicate source blocks",
+        )
+    return tuple(merged)
 
 
 def _window_glossary(

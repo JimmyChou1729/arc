@@ -37,6 +37,7 @@ from arc_paper import (
     TermInventoryStoreError,
     build_keyword_terms,
     keyword_chapters,
+    keyword_text_units,
     keyword_result_from_document,
     parse_rich_artifact_bytes,
     validate_approx_count,
@@ -900,6 +901,31 @@ def test_standard_and_rich_parsers_preserve_explicit_term_fields(
     assert tuple(rich.metadata["explicit_term_fields"][0]["entries"]) == tuple(
         expected
     )
+
+
+def test_rich_keyword_projection_uses_figure_caption_not_asset_metadata() -> None:
+    payload = (
+        b'# Figures\n\n![private alt](images/private.png)\n\n'
+        b'![other alt](images/captioned.png "Visible caption")\n'
+    )
+    source = SourceArtifact(
+        SourceFormat.MARKDOWN,
+        hashlib.sha256(payload).hexdigest(),
+        len(payload),
+        "text/markdown",
+        SourceOrigin(SourceOriginKind.REPOSITORY, locator="figures"),
+    )
+
+    document = parse_rich_artifact_bytes(source, payload).document
+    projected = "\n".join(
+        unit.text for unit in keyword_text_units(document)
+    )
+
+    assert "Visible caption" in projected
+    assert "private alt" not in projected
+    assert "other alt" not in projected
+    assert "images/private.png" not in projected
+    assert "images/captioned.png" not in projected
 
 
 def test_explicit_yaml_list_is_excluded_from_frequency_and_search_context() -> None:
