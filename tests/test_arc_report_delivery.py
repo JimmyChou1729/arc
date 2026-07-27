@@ -28,6 +28,19 @@ output.write_bytes(b"%PDF-1.7\\nARC test report\\n%%EOF\\n")
     executable.chmod(0o755)
 
 
+def _failing_pandoc(bin_dir: Path) -> None:
+    executable = bin_dir / "pandoc"
+    executable.write_text(
+        """#!/usr/bin/env python3
+import sys
+print("renderer unavailable", file=sys.stderr)
+raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+
+
 def _run(project: Path, source: Path, output: Path, bin_dir: Path):
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -80,9 +93,12 @@ def test_markdown_source_in_hidden_state_publishes_visible_pdf(tmp_path: Path) -
     assert output.read_bytes().startswith(b"%PDF-")
     payload = json.loads(completed.stdout)
     assert payload == {
+        "artifacts": [str(output.resolve())],
+        "delivery_status": "published",
         "format": "pdf",
-        "path": str(output.resolve()),
-        "schema_version": "arc.report_delivery.v1",
+        "requested_artifacts": [str(output.resolve())],
+        "schema_version": "arc.report_delivery.v2",
+        "warnings": [],
     }
     assert not tuple((project / ".arc" / "report-render").iterdir())
 
@@ -105,6 +121,33 @@ def test_report_delivery_refuses_hidden_output(tmp_path: Path) -> None:
 
     assert completed.returncode == 1
     assert "output must use a visible project path" in completed.stderr
+
+
+def test_report_render_failure_is_a_warning_without_a_pdf(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "report.md"
+    source.write_text("# Report\n", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _failing_pandoc(bin_dir)
+    output = project / "report.pdf"
+
+    completed = _run(project, source, output, bin_dir)
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    assert not output.exists()
+    payload = json.loads(completed.stdout)
+    assert payload["schema_version"] == "arc.report_delivery.v2"
+    assert payload["delivery_status"] == "unavailable"
+    assert payload["requested_artifacts"] == [str(output.resolve())]
+    assert payload["artifacts"] == []
+    assert payload["warnings"][0]["code"] == "pdf_render_unavailable"
+    assert "renderer unavailable" in payload["warnings"][0]["message"]
+    assert source.read_text(encoding="utf-8") == "# Report\n"
 
 
 def test_visible_copy_refuses_non_pdf_delivery(tmp_path: Path) -> None:
@@ -173,7 +216,9 @@ def test_rank_ideas_pdf_publishes_archive_and_latest(
     assert latest.read_bytes() == archived.read_bytes()
     delivery = json.loads(capsys.readouterr().out)
     assert delivery["format"] == "pdf"
-    assert "mode" not in delivery
+    assert delivery["mode"] == "formal"
+    assert delivery["delivery_status"] == "published"
+    assert delivery["schema_version"] == "arc.ideas.delivery.v2"
     assert delivery["artifacts"] == [str(archived), str(latest)]
 
 

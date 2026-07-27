@@ -225,8 +225,8 @@ writing the hidden current work note, follow
 `manuals/arc-jobs.md` Markdown Report Export for
 `<project-dir>/.arc/calculate/<run-id>/work-note.md` and atomically replace
 `<project-dir>/work-note.pdf`. If rendering fails, record a `WARNING:` with the
-exact blocker and preserve calculation state, but do not claim delivery or
-advance to another workflow until the visible PDF exists.
+exact blocker and preserve calculation state, but do not claim PDF delivery or
+prevent an otherwise-authorized handoff from the verified hidden work note.
 
 ## Phase 6: Planning Handoff
 

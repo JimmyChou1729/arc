@@ -353,10 +353,11 @@ from errors repairable in another round. No-assessment single-domain variants
 remain visibly marked as using the `no_assessment` policy; do not infer an
 alternate artifact layout.
 
-Step 2: Require both visible PDFs from Step 1 before claiming ideas delivery.
-On rendering failure, print `WARNING:` with the exact error and preserve the
-hidden Markdown source and durable run for retry. Do not proceed to a
-downstream workflow or claim delivery until the PDFs exist.
+Step 2: Attempt both visible PDFs from Step 1 before claiming PDF delivery. On
+rendering failure, print `WARNING:` with the exact error and preserve the
+hidden Markdown source and durable run for retry. PDF availability does not
+change ranking, candidate visibility, scientific status, or eligibility for a
+downstream workflow that the caller already requested.
 
 Do not invent rankings or novelty claims. Use only public committed proposals,
 review envelopes, and reviewer `payload` values returned through the

@@ -299,7 +299,9 @@ After writing each hidden domain summary Markdown report, follow
 `<project-dir>/.arc/domain/packages/<seed-safe>_domain_summary.md` and publish
 `<project-dir>/domain/<seed-safe>_domain_summary.pdf`. If it fails, record a
 `WARNING:` with the exact blocker, preserve the hidden machine package, and do
-not claim domain delivery or proceed to ideas until the visible PDF exists.
+not claim PDF delivery. PDF availability does not change domain-build status or
+handoff eligibility; proceed from the verified package and manifest when Ideas
+is otherwise in scope.
 
 Do not generate, attach, or copy separate single-paper LLM summaries for the
 foundation paper or best-reference paper as part of the domain build. The

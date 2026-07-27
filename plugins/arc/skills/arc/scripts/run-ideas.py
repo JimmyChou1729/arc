@@ -370,19 +370,22 @@ def _maybe_publish_partial(
         )
     ):
         return
-    try:
-        payload = rank_run(config.run_dir, config.run_id, mode="partial")
-        result["partial_delivery"] = publish_ideas_pdf(
-            project_dir=config.project_dir,
-            run_id=config.run_id,
-            payload=payload,
-            mode="partial",
-        )
-    except (Exception, SystemExit) as exc:
+    payload = rank_run(config.run_dir, config.run_id, mode="partial")
+    delivery = publish_ideas_pdf(
+        project_dir=config.project_dir,
+        run_id=config.run_id,
+        payload=payload,
+        mode="partial",
+    )
+    result["partial_delivery"] = delivery
+    for warning in delivery.get("warnings", []):
+        if not isinstance(warning, Mapping):
+            continue
+        code = str(warning.get("code") or "pdf_delivery_unavailable")
+        message = str(warning.get("message") or "PDF delivery is unavailable")
         _append_unique_warning(
             warnings,
-            "partial_ideas_delivery_failed: "
-            f"{type(exc).__name__}",
+            f"WARNING: {code}: {message}",
         )
 
 

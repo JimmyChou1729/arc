@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
+from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-from _arc_workflows.report_delivery import render_markdown_pdf
+from _arc_workflows.report_delivery import (
+    ReportDeliveryContractError,
+    ReportDeliveryUnavailable,
+    render_markdown_pdf,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -31,15 +35,41 @@ def main(argv: list[str] | None = None) -> int:
             source=args.source,
             output=args.output,
         )
-    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+    except ReportDeliveryContractError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
+    except ReportDeliveryUnavailable as exc:
+        print(
+            json.dumps(
+                {
+                    "schema_version": "arc.report_delivery.v2",
+                    "delivery_status": "unavailable",
+                    "format": "pdf",
+                    "requested_artifacts": [
+                        str(Path(args.output).expanduser().resolve())
+                    ],
+                    "artifacts": [],
+                    "warnings": [
+                        {
+                            "code": "pdf_render_unavailable",
+                            "message": str(exc),
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0
     print(
         json.dumps(
             {
-                "schema_version": "arc.report_delivery.v1",
+                "schema_version": "arc.report_delivery.v2",
+                "delivery_status": "published",
                 "format": "pdf",
-                "path": str(output),
+                "requested_artifacts": [str(output)],
+                "artifacts": [str(output)],
+                "warnings": [],
             },
             ensure_ascii=False,
             sort_keys=True,

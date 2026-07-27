@@ -49,4 +49,6 @@ The renderer uses Pandoc, XeLaTeX, the report directory as a resource path,
 1.5 cm margins, and `Noto Sans CJK SC`; allow up to 600 seconds. A missing
 renderer, invalid PDF, or conversion failure means the report has not been
 delivered. Preserve the Markdown as editable project source, report the exact
-failure, and do not claim workflow delivery until the visible PDF exists.
+failure, and do not claim PDF delivery. The failure is delivery-only: it does
+not change scientific status or prevent an otherwise-authorized handoff from a
+verified Markdown or machine artifact.

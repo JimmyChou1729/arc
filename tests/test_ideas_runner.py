@@ -1081,7 +1081,7 @@ def test_partial_delivery_is_automatic_for_verified_committed_rounds(
     assert warnings == []
 
 
-def test_partial_delivery_failure_only_adds_warning(
+def test_partial_delivery_unavailable_is_preserved_as_a_warning(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1102,22 +1102,30 @@ def test_partial_delivery_failure_only_adds_warning(
         lambda _root, _run_id, *, mode: {"mode": mode, "ranking": []},
     )
 
-    def fail_publish(**_kwargs):
-        raise RuntimeError("renderer unavailable")
+    def unavailable_delivery(**_kwargs):
+        return {
+            "schema_version": "arc.ideas.delivery.v2",
+            "delivery_status": "unavailable",
+            "format": "pdf",
+            "mode": "partial",
+            "requested_artifacts": [],
+            "artifacts": [],
+            "warnings": [
+                {
+                    "code": "pdf_render_unavailable",
+                    "message": "renderer unavailable",
+                }
+            ],
+        }
 
-    monkeypatch.setattr(runner, "publish_ideas_pdf", fail_publish)
+    monkeypatch.setattr(runner, "publish_ideas_pdf", unavailable_delivery)
 
     runner._maybe_publish_partial(config, result, warnings)
 
-    assert result == {
-        "status": "paused",
-        "batch": {
-            "trace_verified": True,
-            "rankable_loop_count": 0,
-        },
-        "loops": [{"committed_rounds": 1}],
-    }
-    assert warnings == ["partial_ideas_delivery_failed: RuntimeError"]
+    assert result["partial_delivery"]["delivery_status"] == "unavailable"
+    assert warnings == [
+        "WARNING: pdf_render_unavailable: renderer unavailable"
+    ]
 
 
 def test_ideas_template_modules_have_one_way_dependencies() -> None:

@@ -109,8 +109,9 @@ After writing `<project-dir>/.arc/calculate/<run-id>/initial-note-check.md`, fol
 `manuals/arc-jobs.md` Markdown Report Export for
 `<project-dir>/.arc/calculate/<run-id>/initial-note-check.md` and publish
 `<project-dir>/initial-note-check.pdf`. If rendering fails, record a `WARNING:`
-with the exact blocker and preserve the check state, but do not claim delivery
-or enter the owning planning workflow until the visible PDF exists.
+with the exact blocker and preserve the check state, but do not claim PDF
+delivery. Continue to the owning planning workflow from the verified check
+state when it is otherwise in scope.
 This PDF export applies only to ARC-generated Markdown reports, not to the
 original TeX/PDF note being checked.
 

@@ -44,7 +44,9 @@ For user-facing Markdown, run the project-aware PDF renderer from
 `rules/math_typeset.md` as an ordinary blocking command instead of routing it
 through `arc-jobs`. The Markdown remains editable workflow source; the visible
 PDF is the human delivery. On failure, print `WARNING:` with the exact error
-and preserve workflow state, but do not claim delivery until the PDF exists.
+and preserve workflow state, but do not claim PDF delivery. Rendering failure
+does not change scientific status or handoff eligibility; continue from the
+verified Markdown or machine artifact when later work is otherwise authorized.
 Do not debug Pandoc or TeX as part of the research workflow unless the user
 explicitly asks for typesetting diagnosis.
 

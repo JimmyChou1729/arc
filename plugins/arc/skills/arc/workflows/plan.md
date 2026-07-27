@@ -209,8 +209,8 @@ Step 5: Follow `manuals/arc-jobs.md` Markdown Report Export for
 `<project-dir>/work-note.pdf`. The
 Markdown remains editable source, but the PDF is the human delivery. If
 rendering fails, record a `WARNING:` with the exact blocker, preserve the
-planning state, and do not claim plan delivery or enter calculation until the
-visible PDF exists.
+planning state, and do not claim PDF delivery. Continue to calculation from the
+reviewed hidden work note when calculation is otherwise in scope.
 
 ## Phase 5: Review
 Step 1: Review the plan before execution. If the host and workflow permissions
@@ -223,5 +223,6 @@ the Journal, write a new immutable work-note version, mirror it to the hidden cu
 `manuals/arc-jobs.md` Markdown Report Export and replace
 `<project-dir>/work-note.pdf`. If rendering fails, record a `WARNING:` with the
 exact blocker, preserve the reviewed Markdown and durable state, and do not
-claim delivery or enter calculation until the visible PDF exists.
+claim PDF delivery. Continue to calculation from that reviewed state when it is
+otherwise in scope.
 After the work note passes review, enter calculation only when it is in the caller's requested scope: pause first in `interactive` mode, or hand off ready steps directly in `auto` mode.
