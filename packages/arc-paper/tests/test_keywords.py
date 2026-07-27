@@ -13,6 +13,10 @@ from arc_llm import LLMCompleted, ModelSelection
 
 from arc_paper import (
     ArcPaperService,
+    CachedDocumentRef,
+    DocumentStructureEntry,
+    DocumentStructureNodeKind,
+    DocumentStructureOverlay,
     KeywordExtractionService,
     KeywordExtractionRunner,
     KeywordTextUnit,
@@ -32,6 +36,7 @@ from arc_paper import (
     TermInventoryStore,
     TermInventoryStoreError,
     build_keyword_terms,
+    keyword_chapters,
     keyword_result_from_document,
     parse_rich_artifact_bytes,
     validate_approx_count,
@@ -291,6 +296,185 @@ def test_weighted_chapter_recipe_uses_distinct_cache_lineage() -> None:
     assert lineage.key != old_lineage.key
 
 
+def _structured_rich_document() -> tuple[RichDocument, DocumentStructureOverlay]:
+    payload = b"# Flat 1\nAlpha chapter concept.\n# Flat 2\nAlpha detail.\n# Flat 3\nBeta chapter concept.\n# Flat 4\nBeta detail.\n"
+    source = SourceArtifact(
+        SourceFormat.MARKDOWN,
+        hashlib.sha256(payload).hexdigest(),
+        len(payload),
+        "text/markdown",
+        SourceOrigin(SourceOriginKind.REPOSITORY, locator="structured"),
+    )
+    sections = tuple(
+        RichSection(
+            f"flat-{index}",
+            f"Flat {index}",
+            1,
+            index - 1,
+            (f"flat-{index}",),
+            index - 1,
+            index,
+        )
+        for index in range(1, 5)
+    )
+    texts = (
+        "Alpha chapter concept.",
+        "Alpha detail.",
+        "Beta chapter concept.",
+        "Beta detail.",
+    )
+    blocks = tuple(
+        RichBlock(
+            f"block-{index}",
+            index - 1,
+            RichBlockKind.PARAGRAPH,
+            (f"flat-{index}",),
+            SourceLocator(
+                SourceFormat.MARKDOWN,
+                line_start=index * 2,
+                line_end=index * 2,
+            ),
+            {
+                "text": text,
+                "inline_spans": [
+                    {
+                        "kind": "text",
+                        "start": 0,
+                        "end": len(text),
+                        "text": text,
+                    }
+                ],
+            },
+        )
+        for index, text in enumerate(texts, start=1)
+    )
+    document = RichDocument(source, blocks, sections)
+    markdown_ref = CachedDocumentRef(
+        SourceFormat.MARKDOWN,
+        source.artifact_digest,
+        source.size,
+        source.media_type,
+        "parser.v1",
+        "a" * 64,
+    )
+    pdf_ref = CachedDocumentRef(
+        SourceFormat.PDF,
+        "b" * 64,
+        100,
+        "application/pdf",
+        "parser.v1",
+        "c" * 64,
+    )
+    entries = (
+        DocumentStructureEntry(
+            "part",
+            "Part",
+            1,
+            None,
+            0,
+            1,
+            1,
+            8,
+            1,
+            2,
+            DocumentStructureNodeKind.CONTAINER,
+            "fixture",
+        ),
+        DocumentStructureEntry(
+            "chapter-1",
+            "Chapter One",
+            2,
+            "part",
+            1,
+            1,
+            1,
+            4,
+            1,
+            1,
+            DocumentStructureNodeKind.CONTENT,
+            "fixture",
+        ),
+        DocumentStructureEntry(
+            "chapter-1-detail",
+            "Chapter One Detail",
+            3,
+            "chapter-1",
+            2,
+            3,
+            3,
+            4,
+            1,
+            1,
+            DocumentStructureNodeKind.INTERNAL,
+            "fixture",
+        ),
+        DocumentStructureEntry(
+            "chapter-2",
+            "Chapter Two",
+            2,
+            "part",
+            3,
+            5,
+            5,
+            8,
+            2,
+            2,
+            DocumentStructureNodeKind.CONTENT,
+            "fixture",
+        ),
+    )
+    return document, DocumentStructureOverlay(markdown_ref, pdf_ref, entries)
+
+
+def test_structure_overlay_groups_flat_headings_without_full_document_inputs(
+    tmp_path: Path,
+) -> None:
+    document, structure = _structured_rich_document()
+    sections = keyword_chapters(
+        document,
+        structure=structure,
+        section_ids=("chapter-1", "chapter-2"),
+    )
+    assert tuple(item.section_id for item in sections) == (
+        "chapter-1",
+        "chapter-2",
+    )
+    assert sections[0].text == "Alpha chapter concept.\nAlpha detail."
+    assert sections[1].text == "Beta chapter concept.\nBeta detail."
+
+    fake = FakeKeywordTasks()
+    runner = KeywordExtractionRunner(
+        tmp_path / "jobs",
+        store=TermInventoryStore(tmp_path / "cache"),
+        task_service=fake,
+    )
+    snapshot = runner.execute(
+        document,
+        structure=structure,
+        section_ids=("chapter-1", "chapter-2"),
+        approx_count=2,
+    )
+    assert snapshot.status is RunStatus.SUCCEEDED
+    chapter_requests = [
+        item
+        for item in fake.requests
+        if item.task_id.startswith("keyword-chapter-")
+    ]
+    assert len(chapter_requests) == 2
+    assert all(item.inputs == () for item in chapter_requests)
+    assert "Beta chapter concept" not in chapter_requests[0].prompt
+    assert "Alpha chapter concept" not in chapter_requests[1].prompt
+    assert (
+        workflow_lineage(document, ModelSelection()).key
+        != workflow_lineage(
+            document,
+            ModelSelection(),
+            structure=structure,
+            section_ids=("chapter-1", "chapter-2"),
+        ).key
+    )
+
+
 def test_explicit_windows_are_auditable_and_result_is_frequency_projection(
     tmp_path: Path,
 ) -> None:
@@ -313,6 +497,7 @@ def test_explicit_windows_are_auditable_and_result_is_frequency_projection(
         80,
         1,
     ]
+    assert all(item.inputs == () for item in review_requests)
     assert result.planned_count == 3
     assert result.returned_count == 3
     assert len(result.terms) == 3

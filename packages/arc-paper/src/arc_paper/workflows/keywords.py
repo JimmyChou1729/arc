@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from arc_jobs import (
-    ArtifactSourceRef,
     Awaiting,
     Failed,
     ImmutableArtifactStore,
@@ -36,7 +35,6 @@ from arc_llm import (
     LLMCompleted,
     LLMFailed,
     LLMExecutionOptions,
-    LLMInputArtifact,
     LLMPaused,
     LLMRequest,
     LLMStopped,
@@ -47,8 +45,8 @@ from arc_llm import (
     decode_resume_input,
 )
 
-from ..parse import ParsedDocument, parsed_document_to_document
-from ..rich_document import rich_document_to_document
+from ..document_structure import DocumentStructureOverlay
+from ..parse import ParsedDocument
 from ..terms import (
     KeywordDocument,
     KeywordResult,
@@ -216,6 +214,8 @@ class KeywordInventoryService:
         context: RunContext,
         document: KeywordDocument,
         *,
+        structure: DocumentStructureOverlay | None = None,
+        section_ids: Sequence[str] | None = None,
         approx_count: int = 50,
         model: ModelSelection = ModelSelection(tier="medium"),
         resume_input: Mapping[str, JsonValue] | None = None,
@@ -226,7 +226,17 @@ class KeywordInventoryService:
         effective_resume = (
             context.resume_input if resume_input is None else resume_input
         )
-        lineage = _lineage(document, model)
+        sections = keyword_chapters(
+            document,
+            structure=structure,
+            section_ids=section_ids,
+        )
+        lineage = _lineage(
+            document,
+            model,
+            structure=structure,
+            section_ids=section_ids,
+        )
         try:
             cached, cache_warnings = self.store.load(document, lineage)
         except TermInventoryStoreError as exc:
@@ -252,7 +262,11 @@ class KeywordInventoryService:
             cached.explicit_disposition if cached is not None else "absent"
         )
         explicit_candidates: list[TermCandidate] = []
-        fields = _explicit_fields(document)
+        fields = _explicit_fields(
+            document,
+            structure=structure,
+            section_ids=section_ids,
+        )
         if cached is None and fields:
             explicit_outcome = self._review_explicit_fields(
                 context,
@@ -281,6 +295,7 @@ class KeywordInventoryService:
             chapter_outcome = self._extract_chapters(
                 context,
                 document,
+                sections=sections,
                 requested_total=max(1, planned_count - len(current_unique)),
                 model=model,
                 resume_input=effective_resume,
@@ -333,7 +348,6 @@ class KeywordInventoryService:
         if resume == "discard_index_and_continue":
             return [], "discarded", ()
 
-        artifact_input = _document_input(context, document)
         reviewed: list[TermCandidate] = []
         for field in fields:
             for window_index, entries in enumerate(
@@ -344,7 +358,6 @@ class KeywordInventoryService:
                     field,
                     entries,
                     window_index=window_index,
-                    artifact_input=artifact_input,
                     model=model,
                 )
                 outcome = execute_routed(
@@ -438,18 +451,16 @@ class KeywordInventoryService:
         context: RunContext,
         document: KeywordDocument,
         *,
+        sections: Sequence[KeywordTextUnit],
         requested_total: int,
         model: ModelSelection,
         resume_input: Mapping[str, JsonValue] | None,
         existing_terms: Sequence[str],
         options: LLMExecutionOptions,
     ) -> list[TermCandidate] | Paused | Failed:
-        allocations = _chapter_allocations(
-            keyword_chapters(document), requested_total
-        )
+        allocations = _chapter_allocations(sections, requested_total)
         if not allocations:
             return []
-        artifact_input = _document_input(context, document)
         output: list[TermCandidate] = []
         known = set(existing_terms)
         for section, requested_count in allocations:
@@ -457,7 +468,6 @@ class KeywordInventoryService:
                 document,
                 section,
                 requested_count=requested_count,
-                artifact_input=artifact_input,
                 model=model,
                 existing_terms=tuple(sorted(known)),
             )
@@ -532,6 +542,8 @@ class KeywordExtractionHandler:
         self,
         document: KeywordDocument,
         *,
+        structure: DocumentStructureOverlay | None = None,
+        section_ids: Sequence[str] | None = None,
         store: TermInventoryStore,
         approx_count: int = 50,
         model: ModelSelection = ModelSelection(tier="medium"),
@@ -539,6 +551,12 @@ class KeywordExtractionHandler:
         options: LLMExecutionOptions = LLMExecutionOptions(),
     ) -> None:
         self.document = document
+        self.structure = structure
+        self.section_ids = (
+            tuple(str(item) for item in section_ids)
+            if section_ids is not None
+            else None
+        )
         self.approx_count = validate_approx_count(approx_count)
         self.model = model
         self.options = options
@@ -547,7 +565,7 @@ class KeywordExtractionHandler:
         )
 
     def semantic_input(self) -> dict[str, JsonValue]:
-        return {
+        value: dict[str, JsonValue] = {
             "schema_version": "arc.paper.keyword_extraction_request.v1",
             "document_digest": self.document.document_digest,
             "source_digest": self.document.source.artifact_digest,
@@ -557,6 +575,13 @@ class KeywordExtractionHandler:
             "planned_count": math.ceil(1.5 * self.approx_count),
             "model_requirement": model_document(self.model),
         }
+        if self.structure is not None:
+            value["schema_version"] = "arc.paper.keyword_extraction_request.v2"
+            value["source_structure"] = _source_structure_identity(
+                self.structure,
+                self.section_ids,
+            )
+        return value
 
     def execute(self, context: RunContext):
         if dict(context.semantic_input) != self.semantic_input():
@@ -570,6 +595,8 @@ class KeywordExtractionHandler:
             outcome = self.service.extract_keywords(
                 context,
                 self.document,
+                structure=self.structure,
+                section_ids=self.section_ids,
                 approx_count=self.approx_count,
                 model=self.model,
                 options=self.options,
@@ -602,6 +629,8 @@ class KeywordExtractionRunner:
         self,
         document: KeywordDocument,
         *,
+        structure: DocumentStructureOverlay | None = None,
+        section_ids: Sequence[str] | None = None,
         approx_count: int = 50,
         model: ModelSelection = ModelSelection(tier="medium"),
         run_id: str | None = None,
@@ -610,6 +639,8 @@ class KeywordExtractionRunner:
     ) -> RunSnapshot:
         handler = KeywordExtractionHandler(
             document,
+            structure=structure,
+            section_ids=section_ids,
             store=self.store,
             approx_count=approx_count,
             model=model,
@@ -654,7 +685,12 @@ class KeywordExtractionRunner:
         return keyword_result_from_document(value)
 
 
-def _explicit_fields(document: KeywordDocument) -> tuple[_ExplicitField, ...]:
+def _explicit_fields(
+    document: KeywordDocument,
+    *,
+    structure: DocumentStructureOverlay | None = None,
+    section_ids: Sequence[str] | None = None,
+) -> tuple[_ExplicitField, ...]:
     raw_fields: list[tuple[str, str, tuple[str, ...]]] = []
     metadata_fields = document.metadata.get("explicit_term_fields")
     if isinstance(metadata_fields, Sequence) and not isinstance(
@@ -681,7 +717,11 @@ def _explicit_fields(document: KeywordDocument) -> tuple[_ExplicitField, ...]:
         entries = _deterministic_entries(raw)
         if entries:
             raw_fields.append(("index" if "index" in normalized_key else "keywords", str(key), entries))
-    for section in keyword_chapters(document):
+    for section in keyword_chapters(
+        document,
+        structure=structure,
+        section_ids=section_ids,
+    ):
         title = re.sub(r"[^a-z]", "", section.title.casefold())
         if title not in {"keyword", "keywords", "keyterms", "index", "subjectindex"}:
             continue
@@ -781,7 +821,6 @@ def _explicit_review_request(
     entries: Sequence[_ExplicitEntry],
     *,
     window_index: int,
-    artifact_input: LLMInputArtifact,
     model: ModelSelection,
 ) -> LLMRequest:
     prompt = "\n".join(
@@ -824,7 +863,6 @@ def _explicit_review_request(
         prompt,
         JsonOutput(_explicit_review_schema(entries), repair="format"),
         model,
-        inputs=(artifact_input,),
     )
 
 
@@ -849,7 +887,6 @@ def _chapter_request(
     section: Any,
     *,
     requested_count: int,
-    artifact_input: LLMInputArtifact,
     model: ModelSelection,
     existing_terms: Sequence[str],
 ) -> LLMRequest:
@@ -888,26 +925,6 @@ def _chapter_request(
         prompt,
         JsonOutput(_CHAPTER_SCHEMA, repair="format"),
         model,
-        inputs=(artifact_input,),
-    )
-
-
-def _document_input(
-    context: RunContext, document: KeywordDocument
-) -> LLMInputArtifact:
-    encoded = (
-        parsed_document_to_document(document)
-        if isinstance(document, ParsedDocument)
-        else rich_document_to_document(document)
-    )
-    ref = context.artifacts.publish_json(
-        "paper-keywords/source-document",
-        encoded,
-    )
-    return LLMInputArtifact(
-        "source-document",
-        ArtifactSourceRef(context.run_id, ref.artifact_id, ref.digest),
-        "application/json",
     )
 
 
@@ -1147,8 +1164,26 @@ def _run_id(value: Mapping[str, JsonValue]) -> str:
     )
 
 
+def _source_structure_identity(
+    structure: DocumentStructureOverlay,
+    section_ids: Sequence[str] | None,
+) -> dict[str, JsonValue]:
+    return {
+        "schema_version": structure.schema_version,
+        "structure_contract": structure.structure_contract,
+        "structure_sha256": structure.structure_sha256,
+        "section_ids": (
+            list(section_ids) if section_ids is not None else None
+        ),
+    }
+
+
 def _lineage(
-    document: KeywordDocument, model: ModelSelection
+    document: KeywordDocument,
+    model: ModelSelection,
+    *,
+    structure: DocumentStructureOverlay | None = None,
+    section_ids: Sequence[str] | None = None,
 ) -> TermInventoryLineage:
     return TermInventoryLineage(
         document_digest=document.document_digest,
@@ -1162,6 +1197,11 @@ def _lineage(
         normalization_contract=KEYWORD_NORMALIZATION_CONTRACT,
         count_contract=KEYWORD_OCCURRENCE_CONTRACT,
         model_requirement=model_document(model),
+        source_structure=(
+            _source_structure_identity(structure, section_ids)
+            if structure is not None
+            else {}
+        ),
     )
 
 

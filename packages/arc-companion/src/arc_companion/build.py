@@ -286,6 +286,12 @@ class CompanionBuildHandler:
 
             glossary: dict[str, Any]
             if translation_required:
+                glossary_options: dict[str, Any] = {}
+                if self.request.structure_ref is not None:
+                    glossary_options.update(
+                        structure_ref=self.request.structure_ref,
+                        section_ids=self.request.companion_section_ids,
+                    )
                 glossary_outcome = self.translation_adapter.build_glossary(
                     context,
                     source,
@@ -295,6 +301,7 @@ class CompanionBuildHandler:
                     model=self.recipe.model,
                     execution=self.llm_options,
                     resume_input=resume_input,
+                    **glossary_options,
                 )
                 if isinstance(glossary_outcome, Paused):
                     return glossary_outcome

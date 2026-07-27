@@ -416,6 +416,17 @@ def _parser() -> _Parser:
     keywords.add_argument("--run-id", help="explicit durable run identifier")
     keywords.add_argument("--resume-input", type=_json_object, help="resume response JSON object")
     keywords.add_argument(
+        "--structure-ref",
+        type=_json_object,
+        help="optional CachedDocumentStructureRef JSON object",
+    )
+    keywords.add_argument(
+        "--section-id",
+        action="append",
+        dest="section_ids",
+        help="overlay content section ID to include; repeat as needed",
+    )
+    keywords.add_argument(
         "--host-authority",
         choices=("unknown", "restricted", "unrestricted"),
         default="unknown",
@@ -710,6 +721,8 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "model_tier": args.model_tier,
             "run_id": args.run_id,
             "resume_input": args.resume_input,
+            "structure_ref": args.structure_ref,
+            "section_ids": args.section_ids,
             "host_authority": args.host_authority,
         }
     if command == "cache":

@@ -13,7 +13,7 @@ from arc_llm import (
     ModelSelection,
     ResumeInput,
 )
-from arc_paper import RichDocument
+from arc_paper import CachedDocumentStructureRef, RichDocument
 
 
 TranslationStep = Mapping[str, Any] | Paused | RunError
@@ -137,19 +137,30 @@ class ArcTranslateAdapter:
         *,
         language: Mapping[str, Any],
         target_language: str,
+        structure_ref: CachedDocumentStructureRef | None = None,
+        section_ids: Sequence[str] | None = None,
         approx_count: int,
         model: ModelSelection,
         execution: LLMExecutionOptions,
         resume_input: ResumeInput | None,
     ) -> TranslationStep:
         service, translation_source = self._service_and_source(source)
+        from arc_paper import DocumentStructureCache
         from arc_translate import LanguageResult
+
+        keyword_structure = (
+            DocumentStructureCache(self.paper_cache_root).read(structure_ref)
+            if structure_ref is not None
+            else None
+        )
 
         outcome = service.build_glossary(
             context,
             translation_source,
             language=LanguageResult.from_document(language),
             target_language=target_language,
+            keyword_structure=keyword_structure,
+            keyword_section_ids=section_ids,
             approx_count=approx_count,
             model=model,
             execution=execution,

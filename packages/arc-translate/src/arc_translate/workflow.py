@@ -78,6 +78,8 @@ class KeywordProvider(Protocol):
         context: RunContext,
         source: Any,
         *,
+        structure: Any | None = None,
+        section_ids: Sequence[str] | None = None,
         approx_count: int = 50,
         model: ModelSelection = ModelSelection(tier="medium"),
         resume_input: Mapping[str, JsonValue] | None = None,
@@ -397,6 +399,8 @@ class TranslationWorkflowService:
         *,
         language: LanguageResult,
         target_language: str,
+        keyword_structure: Any | None = None,
+        keyword_section_ids: Sequence[str] | None = None,
         approx_count: int = 50,
         model: ModelSelection = ModelSelection(),
         execution: LLMExecutionOptions = LLMExecutionOptions(),
@@ -424,6 +428,10 @@ class TranslationWorkflowService:
             )
             assert keyword_source is not None
             try:
+                keyword_options: dict[str, Any] = {}
+                if keyword_structure is not None:
+                    keyword_options["structure"] = keyword_structure
+                    keyword_options["section_ids"] = keyword_section_ids
                 keyword_outcome = self.keyword_provider.extract_keywords(
                     context,
                     keyword_source,
@@ -435,6 +443,7 @@ class TranslationWorkflowService:
                         else None
                     ),
                     options=execution,
+                    **keyword_options,
                 )
                 if isinstance(keyword_outcome, Paused):
                     return keyword_outcome

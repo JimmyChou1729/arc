@@ -1569,6 +1569,18 @@ _OPERATIONS = (
                 },
                 "run_id": {"type": ["string", "null"]},
                 "resume_input": {"type": ["object", "null"]},
+                "structure_ref": {
+                    "anyOf": [
+                        _CACHED_DOCUMENT_STRUCTURE_REF_SCHEMA,
+                        {"type": "null"},
+                    ]
+                },
+                "section_ids": {
+                    "type": ["array", "null"],
+                    "items": _NONEMPTY_STRING,
+                    "minItems": 1,
+                    "uniqueItems": True,
+                },
                 "host_authority": {
                     "enum": ["unknown", "restricted", "unrestricted"],
                 },

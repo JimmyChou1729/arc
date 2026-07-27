@@ -8,7 +8,7 @@ import re
 import shutil
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +16,10 @@ from typing import Any
 from ._cache_root import resolve_cache_root
 from ._durable_io import atomic_write_bytes
 from ._file_lock import exclusive_file_lock
+from .document_structure import (
+    DocumentStructureNodeKind,
+    DocumentStructureOverlay,
+)
 from .parse import ParsedDocument
 from .rich_document import RichBlock, RichBlockKind, RichDocument
 
@@ -179,6 +183,7 @@ class TermInventoryLineage:
     normalization_contract: str
     count_contract: str
     model_requirement: Mapping[str, Any]
+    source_structure: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _sha256_string(self.document_digest, "document digest")
@@ -203,9 +208,10 @@ class TermInventoryLineage:
         object.__setattr__(
             self, "model_requirement", dict(self.model_requirement)
         )
+        object.__setattr__(self, "source_structure", dict(self.source_structure))
 
     def to_document(self) -> dict[str, Any]:
-        return {
+        value = {
             "document_digest": self.document_digest,
             "source_digest": self.source_digest,
             "source_format": self.source_format,
@@ -218,6 +224,9 @@ class TermInventoryLineage:
             "count_contract": self.count_contract,
             "model_requirement": dict(self.model_requirement),
         }
+        if self.source_structure:
+            value["source_structure"] = dict(self.source_structure)
+        return value
 
     @property
     def key(self) -> str:
@@ -807,7 +816,20 @@ class KeywordTextUnit:
     page_number: int | None = None
 
 
-def keyword_chapters(document: KeywordDocument) -> tuple[KeywordTextUnit, ...]:
+def keyword_chapters(
+    document: KeywordDocument,
+    *,
+    structure: DocumentStructureOverlay | None = None,
+    section_ids: Sequence[str] | None = None,
+) -> tuple[KeywordTextUnit, ...]:
+    if structure is not None:
+        return _structured_keyword_chapters(
+            document,
+            structure=structure,
+            section_ids=section_ids,
+        )
+    if section_ids is not None:
+        raise ValueError("section_ids requires a document structure overlay")
     if isinstance(document, ParsedDocument):
         return tuple(
             KeywordTextUnit(
@@ -846,6 +868,88 @@ def keyword_chapters(document: KeywordDocument) -> tuple[KeywordTextUnit, ...]:
             values.append(
                 KeywordTextUnit(section.section_id, section.title, text)
             )
+    return tuple(values)
+
+
+def _structured_keyword_chapters(
+    document: KeywordDocument,
+    *,
+    structure: DocumentStructureOverlay,
+    section_ids: Sequence[str] | None,
+) -> tuple[KeywordTextUnit, ...]:
+    if not isinstance(document, RichDocument):
+        raise ValueError(
+            "document structure keyword grouping requires a RichDocument"
+        )
+    if not isinstance(structure, DocumentStructureOverlay):
+        raise TypeError("structure must be a DocumentStructureOverlay")
+    cached = structure.document
+    source = document.source
+    if (
+        cached.source_format is not source.source_format
+        or cached.source_sha256 != source.artifact_digest
+        or cached.source_size != source.size
+        or cached.media_type != source.media_type
+    ):
+        raise ValueError("document structure overlay differs from keyword source")
+
+    requested = None
+    if section_ids is not None:
+        requested = tuple(str(item) for item in section_ids)
+        if not requested or any(not item for item in requested):
+            raise ValueError("section_ids must contain non-empty IDs")
+        if len(set(requested)) != len(requested):
+            raise ValueError("section_ids must be unique")
+    content = tuple(
+        item
+        for item in structure.entries
+        if item.kind is DocumentStructureNodeKind.CONTENT
+        and not _is_explicit_term_title(item.title)
+        and (requested is None or item.section_id in requested)
+    )
+    if requested is not None and {item.section_id for item in content} != set(
+        requested
+    ):
+        raise ValueError(
+            "section_ids must identify content entries in the structure overlay"
+        )
+
+    values: list[KeywordTextUnit] = []
+    seen_blocks: set[str] = set()
+    for entry in content:
+        selected: list[str] = []
+        for block in document.blocks:
+            line_start = block.locator.line_start
+            line_end = block.locator.line_end
+            if line_start is None or line_end is None:
+                continue
+            if (
+                line_end < entry.source_line_start
+                or line_start > entry.source_line_end
+            ):
+                continue
+            if block.block_id in seen_blocks:
+                raise ValueError(
+                    "document structure content ranges overlap keyword blocks"
+                )
+            text = _rich_block_text(block)
+            if text:
+                selected.append(text)
+                seen_blocks.add(block.block_id)
+        text = "\n".join(selected)
+        if text:
+            values.append(
+                KeywordTextUnit(
+                    entry.section_id,
+                    entry.title,
+                    text,
+                    entry.pdf_page_start,
+                )
+            )
+    if not values:
+        raise ValueError(
+            "document structure contains no mapped keyword content"
+        )
     return tuple(values)
 
 

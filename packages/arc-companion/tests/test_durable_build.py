@@ -240,6 +240,7 @@ class FakeTranslationAdapter:
         self.guide_started = guide_started
         self.calls: list[str] = []
         self.approx_counts: list[int] = []
+        self.glossary_kwargs: list[dict] = []
 
     def detect_language(self, _context, source, **kwargs):
         self.calls.append("language")
@@ -257,6 +258,7 @@ class FakeTranslationAdapter:
     def build_glossary(self, _context, source, **kwargs):
         self.calls.append("glossary")
         self.approx_counts.append(kwargs["approx_count"])
+        self.glossary_kwargs.append(dict(kwargs))
         return {
             "schema_version": "arc.translate.glossary_result.v1",
             "document_digest": source.document_digest,
@@ -330,6 +332,46 @@ def _document(tmp_path: Path):
         ),
     )
     return RichDocumentParserService(repository).parse_source(artifact)
+
+
+class StrictLegacyTranslationAdapter(FakeTranslationAdapter):
+    """Adapter using the pre-structure keyword-only signature."""
+
+    def build_glossary(
+        self,
+        context,
+        source,
+        *,
+        language,
+        target_language,
+        approx_count,
+        model,
+        execution,
+        resume_input,
+    ):
+        return super().build_glossary(
+            context,
+            source,
+            language=language,
+            target_language=target_language,
+            approx_count=approx_count,
+            model=model,
+            execution=execution,
+            resume_input=resume_input,
+        )
+
+
+def test_unstructured_build_preserves_legacy_translation_adapter_signature(
+    tmp_path: Path,
+) -> None:
+    completed = CompanionService(tmp_path / "jobs").build(
+        CompanionBuildRequest(_document(tmp_path), target_language="zh-CN"),
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=FakeGuideTasks(),  # type: ignore[arg-type]
+        translation_adapter=StrictLegacyTranslationAdapter(mode="enabled"),
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
 
 
 def _request_payload(prompt: str) -> tuple[str, dict]:
@@ -553,6 +595,8 @@ def test_structural_display_chapter_skips_loop_but_translates_and_augments(
     )
 
     assert snapshot.status is RunStatus.SUCCEEDED
+    assert translation.glossary_kwargs[0]["structure_ref"] == structure_ref
+    assert translation.glossary_kwargs[0]["section_ids"] == ("real-chapter",)
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 3
     book = service.accepted_book(snapshot.run_id)
     assert len(book.chapters) == 2

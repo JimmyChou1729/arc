@@ -29,7 +29,18 @@ arc-paper get-cached-section \
   --document-ref '<Markdown CachedDocumentRef JSON>' \
   --structure-ref '<CachedDocumentStructureRef JSON>' \
   '<section id or exact title>'
+arc-paper extract-keywords ./book.md \
+  --project-dir ./project \
+  --structure-ref '<CachedDocumentStructureRef JSON>' \
+  --section-id '<content section id>' \
+  --section-id '<another content section id>' \
+  --host-authority unrestricted
 ```
+
+With `--structure-ref`, keyword extraction groups text by the reconstructed
+content hierarchy instead of unreliable native heading levels. Each model
+request receives only its selected section text; the complete parsed document
+and its assets are not attached.
 
 References use exact identities and verified shared-cache handles:
 

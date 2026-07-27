@@ -49,6 +49,7 @@ from .document_structure import (
     DocumentStructureCache,
     DocumentStructureError,
     DocumentStructureOverlay,
+    cached_document_structure_ref_from_document,
     reconstruct_document_structure,
 )
 from .document_search import (
@@ -609,6 +610,10 @@ class ArcPaperService:
         source: SourceArtifact | ParsedDocument | RichDocument,
         *,
         project_dir: str | Path,
+        structure: (
+            CachedDocumentStructureRef | DocumentStructureOverlay | None
+        ) = None,
+        section_ids: Sequence[str] | None = None,
         approx_count: int = 50,
         model: ModelSelection = ModelSelection(tier="medium"),
         run_id: str | None = None,
@@ -622,7 +627,7 @@ class ArcPaperService:
         directly and are never re-opened through a path.
         """
 
-        from .rich_document import RichDocument
+        from .rich_document import RichDocument, RichDocumentParserService
         from .terms import KeywordResult
         from .workflows.keywords import (
             KeywordExtractionError,
@@ -631,14 +636,36 @@ class ArcPaperService:
         )
 
         if isinstance(source, SourceArtifact):
-            document: ParsedDocument | RichDocument = self.parser.parse_source(
-                source
-            )
+            document: ParsedDocument | RichDocument
+            if structure is None:
+                document = self.parser.parse_source(source)
+            else:
+                document = RichDocumentParserService(self.repository).parse(
+                    SourceBundle(primary=source)
+                ).document
         elif isinstance(source, (ParsedDocument, RichDocument)):
             document = source
         else:
             raise PaperInputError(
                 "keyword source must be a repository SourceArtifact, ParsedDocument, or RichDocument"
+            )
+        overlay: DocumentStructureOverlay | None
+        if isinstance(structure, CachedDocumentStructureRef):
+            overlay = self._resolve_cached_structure(
+                structure.document,
+                structure,
+            )
+        elif isinstance(structure, DocumentStructureOverlay):
+            overlay = structure
+        elif structure is None:
+            overlay = None
+        else:
+            raise PaperInputError(
+                "structure must be a cached structure reference or overlay"
+            )
+        if overlay is not None and isinstance(document, ParsedDocument):
+            raise PaperInputError(
+                "structured keyword extraction requires a rich text document"
             )
         runner = KeywordExtractionRunner(
             project_dir,
@@ -647,6 +674,8 @@ class ArcPaperService:
         )
         snapshot = runner.execute(
             document,
+            structure=overlay,
+            section_ids=section_ids,
             approx_count=approx_count,
             model=model,
             run_id=run_id,
@@ -1904,6 +1933,8 @@ def extract_keywords(
     source: str | Path,
     *,
     project_dir: str | Path,
+    structure_ref: Mapping[str, Any] | None = None,
+    section_ids: Sequence[str] | None = None,
     approx_count: int = 50,
     cache_root: str | Path | None = None,
     refresh: bool = False,
@@ -1925,6 +1956,12 @@ def extract_keywords(
     return service.extract_keywords(
         artifact,
         project_dir=project_dir,
+        structure=(
+            cached_document_structure_ref_from_document(structure_ref)
+            if structure_ref is not None
+            else None
+        ),
+        section_ids=section_ids,
         approx_count=approx_count,
         model=ModelSelection(
             provider=llm_provider,
