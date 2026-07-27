@@ -16,6 +16,8 @@ from arc_paper import (
     cached_document_ref_from_document,
     cached_document_ref_to_document,
     dispatch_operation,
+    get_operation,
+    read_cached_source_range,
 )
 from arc_paper._parsed_document_cache import DERIVED_CACHE_REBUILT_WARNING
 from arc_paper.cli import main
@@ -176,6 +178,70 @@ def test_cached_source_range_validates_text_and_bounds(tmp_path: Path) -> None:
     assert error.value.code == "cached_source_not_text"
 
 
+def test_cached_markdown_source_range_text_only_uses_rich_figure_projection(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "illustrated.md"
+    source_text = "\n".join(
+        [
+            "# Opening",
+            "",
+            "Before the figure.",
+            "",
+            "![extractor image](images/plot.png)",
+            "",
+            "<details>",
+            "<summary>natural_image</summary>",
+            "",
+            "Machine-only image description.",
+            "</details>",
+            "",
+            "Figure 1. An authored caption.",
+            "",
+            "$$",
+            "E = mc^2",
+            "$$",
+            "",
+            "```python",
+            "print('kept')",
+            "```",
+        ]
+    )
+    source_path.write_text(source_text, encoding="utf-8")
+    cache_root = tmp_path / "cache"
+    service = ArcPaperService(cache_root=cache_root)
+    reference = service.cache_document(service.import_source(source_path))
+
+    raw = service.read_cached_source_range(
+        reference, 1, len(source_text.splitlines())
+    )
+    projected = service.read_cached_source_range(
+        reference,
+        1,
+        len(source_text.splitlines()),
+        text_only=True,
+    )
+    wrapped = read_cached_source_range(
+        reference,
+        1,
+        len(source_text.splitlines()),
+        text_only=True,
+        cache_root=cache_root,
+    )
+
+    assert raw.text == source_text
+    assert projected.text == wrapped.text
+    assert "images/plot.png" not in projected.text
+    assert "<details>" not in projected.text
+    assert "natural_image" not in projected.text
+    assert "Machine-only image description." not in projected.text
+    assert "Before the figure." in projected.text
+    assert "Figure 1. An authored caption." in projected.text
+    assert "$$\nE = mc^2\n$$" in projected.text
+    assert "```python\nprint('kept')\n```" in projected.text
+    assert projected.total_lines == len(source_text.splitlines())
+
+
 def test_cached_document_registry_and_cli_are_typed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -208,6 +274,59 @@ def test_cached_document_registry_and_cli_are_typed(
     assert output["status"] == "completed"
     assert output["data"]["document"] == document
     assert output["data"]["matches"][0]["matched_in"] == "text"
+
+
+def test_cached_source_range_text_only_is_published_by_registry_and_cli(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source_path = tmp_path / "illustrated.md"
+    source_path.write_text(
+        "Before.\n\n![](plot.png)\n\n"
+        "<details><summary>text_image</summary>\n"
+        "Extractor text.\n</details>\n\nAfter.\n",
+        encoding="utf-8",
+    )
+    cache_root = tmp_path / "cache"
+    service = ArcPaperService(cache_root=cache_root)
+    reference = service.cache_document(service.import_source(source_path))
+    document = cached_document_ref_to_document(reference)
+    parameters = {
+        "document": document,
+        "start_line": 1,
+        "end_line": 9,
+        "text_only": True,
+        "cache_root": str(cache_root),
+    }
+
+    operation = get_operation("read-cached-source-range")
+    assert operation is not None
+    assert operation.version == 2
+    assert operation.input_codec.schema["properties"]["text_only"] == {
+        "type": "boolean",
+        "default": False,
+    }
+    result = dispatch_operation("read-cached-source-range", parameters)
+    assert result["text"].strip() == "Before.\n\n\nAfter."
+
+    assert (
+        main(
+            [
+                "read-cached-source-range",
+                "--document-ref",
+                json.dumps(document),
+                "--cache-root",
+                str(cache_root),
+                "1",
+                "9",
+                "--text-only",
+            ]
+        )
+        == 0
+    )
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "completed"
+    assert output["data"]["text"] == result["text"]
 
 
 class _EmptyPDFExtractor:

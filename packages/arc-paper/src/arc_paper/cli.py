@@ -216,6 +216,14 @@ def _parser() -> _Parser:
     _cached_document_arguments(cached_range)
     cached_range.add_argument("start_line", type=int, help="first one-based line")
     cached_range.add_argument("end_line", type=int, help="last one-based line")
+    cached_range.add_argument(
+        "--text-only",
+        action="store_true",
+        help=(
+            "for Markdown, omit standalone figure markup and recognized "
+            "extraction sidecars while preserving other selected lines"
+        ),
+    )
 
     cached_search = commands.add_parser(
         "search-cached-document",
@@ -650,6 +658,7 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "document": args.document_ref,
             "start_line": args.start_line,
             "end_line": args.end_line,
+            "text_only": args.text_only,
             "cache_root": args.cache_root,
         }
     if command == "search-cached-document":

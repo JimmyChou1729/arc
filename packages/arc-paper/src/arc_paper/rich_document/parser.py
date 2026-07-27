@@ -50,6 +50,20 @@ _MarkdownImage = tuple[str, str, str]
 _MARKDOWN_IMAGE_RE = re.compile(
     r'!\[([^\]]*)\]\((\S+?)(?:\s+["\'](.*?)["\'])?\)'
 )
+_MARKDOWN_EXTRACTION_SIDECAR_KINDS = frozenset(
+    {
+        "natural_image",
+        "text_image",
+        "flowchart",
+        "chemical",
+        "line",
+    }
+)
+_MARKDOWN_EXTRACTION_SUMMARY_RE = re.compile(
+    r"<summary>\s*("
+    + "|".join(sorted(_MARKDOWN_EXTRACTION_SIDECAR_KINDS))
+    + r")\s*</summary>"
+)
 
 
 @dataclass(frozen=True)
@@ -319,12 +333,13 @@ def _parse_markdown(
         if figure is not None:
             alt_text, target, caption = figure
             asset = import_asset(target)
+            sidecar_end = _markdown_extraction_sidecar_end(lines, index)
             output.append(
                 _raw(
                     artifact,
                     RichBlockKind.FIGURE,
                     index + 1,
-                    index + 1,
+                    sidecar_end,
                     _figure_payload(
                         asset,
                         alt_text=alt_text,
@@ -333,7 +348,7 @@ def _parse_markdown(
                     ),
                 )
             )
-            index += 1
+            index = sidecar_end
             continue
         start = index
         paragraph_lines: list[str] = []
@@ -353,6 +368,60 @@ def _parse_markdown(
             import_asset=import_asset,
         )
     return output
+
+
+def _markdown_extraction_sidecar_end(
+    lines: list[str],
+    figure_index: int,
+) -> int:
+    """Return the exclusive end of one recognized figure extraction sidecar.
+
+    Extractors may append machine-readable image descriptions in a reserved
+    ``details`` block.  They are figure metadata rather than authored prose.
+    Recognition stays deliberately narrow so ordinary authored ``details``
+    blocks continue through the regular Markdown paragraph path.
+    """
+
+    cursor = figure_index + 1
+    while cursor < len(lines) and not lines[cursor].strip():
+        cursor += 1
+    if cursor >= len(lines):
+        return figure_index + 1
+
+    first = lines[cursor].strip()
+    summary_index: int
+    if first == "<details>":
+        summary_index = cursor + 1
+        while (
+            summary_index < len(lines)
+            and not lines[summary_index].strip()
+        ):
+            summary_index += 1
+        if summary_index >= len(lines):
+            return figure_index + 1
+        summary = lines[summary_index].strip()
+    else:
+        combined = re.fullmatch(
+            r"<details>\s*(<summary>.*</summary>)",
+            first,
+        )
+        if combined is None:
+            return figure_index + 1
+        summary_index = cursor
+        summary = combined.group(1)
+
+    if _MARKDOWN_EXTRACTION_SUMMARY_RE.fullmatch(summary) is None:
+        return figure_index + 1
+
+    cursor = summary_index + 1
+    while cursor < len(lines):
+        stripped = lines[cursor].strip()
+        if stripped == "</details>":
+            return cursor + 1
+        if stripped.startswith("<details"):
+            return figure_index + 1
+        cursor += 1
+    return figure_index + 1
 
 
 def _markdown_starts_block(

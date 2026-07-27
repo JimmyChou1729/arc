@@ -136,6 +136,100 @@ def test_markdown_rich_parse_preserves_blocks_links_math_and_assets(tmp_path):
     assert all(block.section_path == document.sections[0].path for block in document.blocks)
 
 
+@pytest.mark.parametrize(
+    "sidecar_kind",
+    ["natural_image", "text_image", "flowchart", "chemical", "line"],
+)
+def test_markdown_figure_consumes_known_extraction_sidecar(
+    tmp_path,
+    sidecar_kind,
+):
+    source = tmp_path / "extracted.md"
+    source.write_text(
+        "\n".join(
+            [
+                "# Figures",
+                "",
+                "![authored alt](missing.png)",
+                "",
+                "<details>",
+                f"<summary>{sidecar_kind}</summary>",
+                "",
+                "Extractor-only description and raw metadata.",
+                "</details>",
+                "",
+                "Figure 1. This authored caption remains source prose.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    repository = SourceRepository(tmp_path / "cache")
+
+    document = RichDocumentParserService(repository).parse_source(
+        repository.import_path(source)
+    )
+
+    assert [block.kind for block in document.blocks] == [
+        RichBlockKind.HEADING,
+        RichBlockKind.FIGURE,
+        RichBlockKind.PARAGRAPH,
+    ]
+    figure = document.blocks[1]
+    assert figure.locator.line_start == 3
+    assert figure.locator.line_end == 9
+    assert figure.payload["alt_text"] == "authored alt"
+    assert "Extractor-only" not in str(figure.payload)
+    assert document.blocks[2].payload["text"] == (
+        "Figure 1. This authored caption remains source prose."
+    )
+
+
+def test_markdown_keeps_author_details_and_fenced_extraction_tags(tmp_path):
+    source = tmp_path / "authored-details.md"
+    source.write_text(
+        "\n".join(
+            [
+                "![plot](missing.png)",
+                "",
+                "<details>",
+                "<summary>Author note</summary>",
+                "",
+                "Authored explanation.",
+                "</details>",
+                "",
+                "```markdown",
+                "![example](inside-code.png)",
+                "<details><summary>natural_image</summary>",
+                "Literal example.",
+                "</details>",
+                "```",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    repository = SourceRepository(tmp_path / "cache")
+
+    document = RichDocumentParserService(repository).parse_source(
+        repository.import_path(source)
+    )
+
+    figure = document.blocks[0]
+    assert figure.kind is RichBlockKind.FIGURE
+    assert figure.locator.line_end == 1
+    authored_text = "\n".join(
+        str(block.payload.get("text", ""))
+        for block in document.blocks
+        if block.kind is RichBlockKind.PARAGRAPH
+    )
+    assert "<summary>Author note</summary>" in authored_text
+    assert "Authored explanation." in authored_text
+    code = next(
+        block for block in document.blocks if block.kind is RichBlockKind.CODE
+    )
+    assert "<summary>natural_image</summary>" in code.payload["text"]
+    assert "Literal example." in code.payload["text"]
+
+
 def test_markdown_rich_parse_supports_setext_headings(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     artifact = _store(

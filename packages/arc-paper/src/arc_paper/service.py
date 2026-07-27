@@ -8,6 +8,7 @@ remains owned by :mod:`arc_llm`.
 from __future__ import annotations
 
 import json
+import re
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -96,6 +97,15 @@ from .sources import (
 if TYPE_CHECKING:
     from .rich_document import RichDocument
     from .terms import KeywordResult, TermInventoryStore
+
+
+_STANDALONE_MARKDOWN_IMAGE_RE = re.compile(
+    r'\s*!\[[^\]]*\]\(\S+?(?:\s+["\'].*?["\'])?\)\s*'
+)
+
+
+def _is_standalone_markdown_image(value: str) -> bool:
+    return _STANDALONE_MARKDOWN_IMAGE_RE.fullmatch(value) is not None
 
 
 class PaperInputError(ValueError):
@@ -926,6 +936,8 @@ class ArcPaperService:
         document: CachedDocumentRef,
         start_line: int,
         end_line: int,
+        *,
+        text_only: bool = False,
     ) -> CachedSourceRange:
         parsed, _ = self._resolve_cached_document(document)
         if (
@@ -939,6 +951,11 @@ class ArcPaperService:
             raise CachedDocumentError(
                 "invalid_source_range",
                 "source range requires one-based start_line <= end_line",
+            )
+        if not isinstance(text_only, bool):
+            raise CachedDocumentError(
+                "invalid_text_only",
+                "text_only must be a boolean",
             )
         if parsed.source.source_format is SourceFormat.PDF:
             raise CachedDocumentError(
@@ -960,13 +977,55 @@ class ArcPaperService:
                 "source_range_out_of_bounds",
                 f"source range ends at {end_line}, but source has {total_lines} lines",
             )
+        selected_lines = lines[start_line - 1 : end_line]
+        if text_only and parsed.source.source_format is SourceFormat.MARKDOWN:
+            selected_lines = self._markdown_text_only_range(
+                parsed.source,
+                lines,
+                start_line=start_line,
+                end_line=end_line,
+            )
         return CachedSourceRange(
             document=document,
             start_line=start_line,
             end_line=end_line,
             total_lines=total_lines,
-            text="\n".join(lines[start_line - 1 : end_line]),
+            text="\n".join(selected_lines),
         )
+
+    def _markdown_text_only_range(
+        self,
+        source: SourceArtifact,
+        lines: Sequence[str],
+        *,
+        start_line: int,
+        end_line: int,
+    ) -> list[str]:
+        """Project a Markdown range without standalone figure source lines."""
+
+        from .rich_document import RichBlockKind, RichDocumentParserService
+
+        document = RichDocumentParserService(self.repository).parse_source(source)
+        excluded: set[int] = set()
+        for block in document.blocks:
+            if block.kind is not RichBlockKind.FIGURE:
+                continue
+            line_start = block.locator.line_start
+            line_end = block.locator.line_end
+            if (
+                line_start is None
+                or line_end is None
+                or line_start < 1
+                or line_start > len(lines)
+                or not _is_standalone_markdown_image(lines[line_start - 1])
+            ):
+                continue
+            excluded.update(range(line_start, line_end + 1))
+        return [
+            lines[line_number - 1]
+            for line_number in range(start_line, end_line + 1)
+            if line_number not in excluded
+        ]
 
     def search_cached_document(
         self,
@@ -1752,10 +1811,14 @@ def read_cached_source_range(
     start_line: int,
     end_line: int,
     *,
+    text_only: bool = False,
     cache_root: str | Path | None = None,
 ) -> CachedSourceRange:
     return ArcPaperService(cache_root=cache_root).read_cached_source_range(
-        document, start_line, end_line
+        document,
+        start_line,
+        end_line,
+        text_only=text_only,
     )
 
 
