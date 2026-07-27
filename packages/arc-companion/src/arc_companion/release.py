@@ -22,13 +22,17 @@ from .renderer import (
     WEB_RENDER_RECIPE,
     CompanionRenderer,
 )
+from .standalone_html import StandaloneHtmlError, standalone_html_bytes
 
 
 _LEGACY_RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v1"
 RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v2"
 _LEGACY_DELIVERY_RECIPE = "arc.companion.delivery.v1"
-DELIVERY_RECIPE = "arc.companion.delivery.v2"
-RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v4"
+_BASE_DELIVERY_RECIPE = "arc.companion.delivery.v2"
+DELIVERY_RECIPE = "arc.companion.delivery.v3"
+_LEGACY_WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v7"
+_LEGACY_RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v4"
+RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v5"
 _FULL_FORMATS = ("pdf", "web")
 _WEB_ONLY_FORMATS = ("web",)
 _WINDOWS = os.name == "nt"
@@ -241,7 +245,11 @@ class CompanionReleasePublisher:
                 staged_pdf = staging / "companion.pdf"
                 shutil.copyfile(release.pdf, staged_pdf)
             staged_html.write_bytes(
-                _delivery_html_bytes(release.web_index, release.release_id)
+                _delivery_html_bytes(
+                    release.web_index,
+                    release.release_id,
+                    _delivery_recipe_for_manifest(release.manifest),
+                )
             )
             previous = self._snapshot_delivery()
             try:
@@ -277,6 +285,7 @@ class CompanionReleasePublisher:
             self.project,
             release.release_id,
             release.available_formats,
+            _delivery_recipe_for_manifest(release.manifest),
         )
 
     def _snapshot_delivery(self) -> _DeliverySnapshot:
@@ -346,12 +355,14 @@ class CompanionReleasePublisher:
                     continue
             else:
                 canonical = release_dir / "reader" / "index.html"
-                if not canonical.is_file():
+                manifest = release_dir / "manifest.json"
+                if not canonical.is_file() or not manifest.is_file():
                     continue
                 try:
                     expected = _delivery_html_bytes(
                         canonical,
                         release_dir.name,
+                        _delivery_recipe_for_manifest(manifest),
                     )
                 except CompanionReleaseError:
                     continue
@@ -399,9 +410,10 @@ class CompanionReleasePublisher:
                 value.get("available_formats"),
                 code="release_invalid",
             )
-            expected_identity = _release_identity(
+            expected_identity = _release_identity_for_recipe(
                 book,
-                available_formats=available_formats,
+                available_formats,
+                _delivery_recipe_from_value(value, code="release_invalid"),
             )
         else:
             raise CompanionReleaseError(
@@ -495,11 +507,57 @@ def _legacy_release_identity(book: AcceptedBook) -> dict[str, str]:
     return {
         "accepted_book_digest": book.content_digest,
         "pdf_render_recipe": PDF_RENDER_RECIPE,
-        "web_render_recipe": WEB_RENDER_RECIPE,
-        "validator_version": RENDER_VALIDATOR_VERSION,
+        "web_render_recipe": _LEGACY_WEB_RENDER_RECIPE,
+        "validator_version": _LEGACY_RENDER_VALIDATOR_VERSION,
         "delivery_recipe": _LEGACY_DELIVERY_RECIPE,
         "manifest_schema": _LEGACY_RELEASE_MANIFEST_SCHEMA,
     }
+
+
+def _release_identity_for_recipe(
+    book: AcceptedBook,
+    available_formats: tuple[str, ...],
+    delivery_recipe: str,
+) -> dict[str, Any]:
+    if delivery_recipe == DELIVERY_RECIPE:
+        return _release_identity(book, available_formats=available_formats)
+    if delivery_recipe == _BASE_DELIVERY_RECIPE:
+        return {
+            "accepted_book_digest": book.content_digest,
+            "pdf_render_recipe": PDF_RENDER_RECIPE,
+            "web_render_recipe": _LEGACY_WEB_RENDER_RECIPE,
+            "validator_version": _LEGACY_RENDER_VALIDATOR_VERSION,
+            "delivery_recipe": _BASE_DELIVERY_RECIPE,
+            "manifest_schema": RELEASE_MANIFEST_SCHEMA,
+            "available_formats": list(available_formats),
+        }
+    raise CompanionReleaseError(
+        "release_invalid", "release manifest uses an unsupported delivery recipe"
+    )
+
+
+def _delivery_recipe_from_value(value: dict[str, Any], *, code: str) -> str:
+    identity = value.get("identity")
+    if not isinstance(identity, dict):
+        raise CompanionReleaseError(code, "release manifest has invalid identity")
+    recipe = identity.get("delivery_recipe")
+    if recipe not in {_LEGACY_DELIVERY_RECIPE, _BASE_DELIVERY_RECIPE, DELIVERY_RECIPE}:
+        raise CompanionReleaseError(
+            code, "release manifest uses an unsupported delivery recipe"
+        )
+    return recipe
+
+
+def _delivery_recipe_for_manifest(manifest: Path) -> str:
+    try:
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CompanionReleaseError(
+            "delivery_invalid", "release manifest is unreadable"
+        ) from exc
+    if not isinstance(value, dict):
+        raise CompanionReleaseError("delivery_invalid", "release manifest is invalid")
+    return _delivery_recipe_from_value(value, code="delivery_invalid")
 
 
 def validate_current_delivery(
@@ -540,7 +598,12 @@ def validate_current_delivery(
             "delivery_invalid",
             "current release manifest uses an unsupported schema",
         )
-    _verify_delivery_files(project, release_id, available_formats)
+    _verify_delivery_files(
+        project,
+        release_id,
+        available_formats,
+        _delivery_recipe_from_value(value, code="delivery_invalid"),
+    )
     return available_formats
 
 
@@ -548,13 +611,16 @@ def _verify_delivery_files(
     project: CompanionProjectPaths,
     release_id: str,
     available_formats: tuple[str, ...],
+    delivery_recipe: str,
 ) -> None:
     release = project.releases_root / release_id
     canonical_pdf = release / "companion.pdf"
     canonical_html = release / "reader" / "index.html"
     try:
-        expected_html = _delivery_html_bytes(canonical_html, release_id)
-    except OSError as exc:
+        expected_html = _delivery_html_bytes(
+            canonical_html, release_id, delivery_recipe
+        )
+    except (OSError, StandaloneHtmlError) as exc:
         raise CompanionReleaseError(
             "delivery_invalid",
             "current release delivery sources are unavailable",
@@ -613,7 +679,20 @@ def _snapshot_file(path: Path) -> _FileSnapshot:
     return _FileSnapshot(True, path.read_bytes())
 
 
-def _delivery_html_bytes(index: Path, release_id: str) -> bytes:
+def _delivery_html_bytes(
+    index: Path, release_id: str, delivery_recipe: str
+) -> bytes:
+    if delivery_recipe == DELIVERY_RECIPE:
+        try:
+            return standalone_html_bytes(index)
+        except StandaloneHtmlError as exc:
+            raise CompanionReleaseError(
+                "delivery_invalid", str(exc)
+            ) from exc
+    if delivery_recipe not in {_LEGACY_DELIVERY_RECIPE, _BASE_DELIVERY_RECIPE}:
+        raise CompanionReleaseError(
+            "delivery_invalid", "release uses an unsupported delivery recipe"
+        )
     if re.fullmatch(r"[A-Za-z0-9._-]+", release_id) is None:
         raise CompanionReleaseError(
             "delivery_invalid",

@@ -36,6 +36,7 @@ test = ["pytest>=8.0"]
 
 [project.scripts]
 arc-companion = "arc_companion.cli:main"
+arc-standalone-html = "arc_companion.standalone_html:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/arc_companion"]

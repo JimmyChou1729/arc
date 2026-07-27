@@ -27,6 +27,11 @@ from .renderer import (
     CompanionRenderer,
     RenderedCompanion,
 )
+from .standalone_html import (
+    StandaloneHtmlError,
+    standalone_html_bytes,
+    write_standalone_html,
+)
 from .validation import (
     AcceptedBookValidationError,
     ValidationIssue,
@@ -130,6 +135,7 @@ __all__ = [
     "PlannedLearningUnit",
     "RenderedCompanion",
     "SourceAnchor",
+    "StandaloneHtmlError",
     "TranslatedBlock",
     "TranslationReuseError",
     "TranslationReusePlan",
@@ -140,4 +146,6 @@ __all__ = [
     "release_id_for",
     "require_valid_accepted_book",
     "validate_accepted_book",
+    "standalone_html_bytes",
+    "write_standalone_html",
 ]

@@ -26,7 +26,7 @@ from . import rich_text
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v7"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v8"
 PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v9"
 _SOURCE_DATE_EPOCH = "946684800"
 _GLOSSARY_PROTECTED_TEXT = re.compile(
@@ -1764,7 +1764,6 @@ _WEB_CSS = """\
   --line: #dfe4e9;
   --translation: #eef5ff;
   --learning: #fff7e7;
-  --glossary-blue: #1469b8;
 }
 * { box-sizing: border-box; }
 body {
@@ -1773,7 +1772,7 @@ body {
   background: #f3f5f7;
   font: 1rem/1.65 Inter, ui-sans-serif, system-ui, "Noto Sans CJK SC", sans-serif;
 }
-a { color: #235b83; text-underline-offset: .15em; }
+a { color: inherit; text-decoration-color: #9aa3aa; text-decoration-thickness: 1px; text-underline-offset: .15em; }
 .book-header, main { width: min(100% - 2rem, 94rem); margin-inline: auto; }
 .book-header { padding: 3rem 0 1.5rem; border-bottom: 1px solid var(--line); }
 .book-header h1 { margin: .2rem 0 0; font-size: clamp(1.8rem, 4vw, 3.1rem); }
@@ -1809,10 +1808,14 @@ figure img { max-width: 100%; max-height: 38rem; object-fit: contain; }
 figcaption, .citations, .source-links { color: var(--muted); font-size: .84rem; }
 .citation-marker { margin-left: .12em; white-space: nowrap; }
 .glossary-term {
-  color: var(--glossary-blue);
+  color: inherit;
   cursor: help;
   border-radius: .15em;
   outline-offset: .12em;
+  text-decoration: underline;
+  text-decoration-color: #9aa3aa;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .15em;
 }
 .glossary-term:focus-visible {
   outline: 2px solid #5b92c3;

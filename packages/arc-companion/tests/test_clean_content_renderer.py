@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import replace
 import hashlib
 import json
@@ -552,7 +553,7 @@ def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
     assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v9"
-    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v7"
+    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v8"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
         == r"first line\newline{} second line\par third paragraph"
@@ -833,8 +834,9 @@ def test_web_glossary_terms_cover_reader_layers_and_exclude_metadata(
     css = (reader / "assets" / "reader.css").read_text(encoding="utf-8")
     javascript = (reader / "assets" / "reader.js").read_text(encoding="utf-8")
     assert ".glossary-term" in css
-    assert "--glossary-blue: #1469b8" in css
-    assert "color: var(--glossary-blue)" in css
+    assert ".glossary-term {\n  color: inherit;" in css
+    assert "text-decoration-color: #9aa3aa" in css
+    assert "color: var(--glossary-blue)" not in css
     assert 'event.key === "Escape"' in javascript
     assert '"focusin"' in javascript
     assert '"focusout"' in javascript
@@ -1516,11 +1518,13 @@ def test_real_renderer_release_manifest_exactly_matches_files(
     assert declared == actual
     assert project.delivery_pdf.read_bytes() == release.pdf.read_bytes()
     delivered_html = project.delivery_html.read_text(encoding="utf-8")
-    assert (
-        f'<base href="releases/{release.release_id}/reader/index.html">'
-        in delivered_html
-    )
-    assert 'href="assets/reader.css"' in delivered_html
+    assert "<base" not in delivered_html.casefold()
+    assert "assets/reader.css" not in delivered_html
+    assert "Content-Security-Policy" in delivered_html
+    image = re.search(r'<img src="data:image/png;base64,([^"]+)"', delivered_html)
+    assert image is not None
+    assert base64.b64decode(image.group(1)) == _PNG
+    assert delivered_html.index("<script defer") > delivered_html.index("<main>")
 
 
 @pytest.mark.skipif(

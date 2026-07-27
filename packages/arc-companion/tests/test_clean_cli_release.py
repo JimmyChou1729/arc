@@ -582,7 +582,7 @@ def test_status_waits_for_delivery_publication_before_reading_current(
     render_thread.start()
     assert pdf_replaced.wait(timeout=5)
     assert project.delivery_pdf.read_bytes() != first.pdf.read_bytes()
-    assert first.release_id in project.delivery_html.read_text(encoding="utf-8")
+    assert _book().content_digest in project.delivery_html.read_text(encoding="utf-8")
 
     monkeypatch.setattr(cli_module, "file_lease", observed_file_lease)
     monkeypatch.setattr(
@@ -733,11 +733,10 @@ def test_release_is_immutable_reused_and_current_updates_last(
     assert first.pdf.read_bytes() == second.pdf.read_bytes()
     assert project.delivery_pdf.read_bytes() == first.pdf.read_bytes()
     delivered_html = project.delivery_html.read_text(encoding="utf-8")
-    assert (
-        f'<base href="releases/{first.release_id}/reader/index.html">'
-        in delivered_html
-    )
-    assert 'href="assets/reader.css"' in delivered_html
+    assert "<base" not in delivered_html.casefold()
+    assert "assets/reader.css" not in delivered_html
+    assert "Content-Security-Policy" in delivered_html
+    assert ".source{display:block}" in delivered_html
     assert project.delivery_html.read_bytes() != first.web_index.read_bytes()
     manifest = json.loads(first.manifest.read_text(encoding="utf-8"))
     assert manifest["identity"]["accepted_book_digest"] == book.content_digest
@@ -795,7 +794,7 @@ def test_pdf_failure_publishes_web_only_and_later_retry_publishes_full_release(
         item["path"] for item in web_manifest["files"]
     }
     assert not project.delivery_pdf.exists()
-    assert web_only.release_id in project.delivery_html.read_text(
+    assert retry_book.content_digest in project.delivery_html.read_text(
         encoding="utf-8"
     )
     current = project.current_release()
@@ -852,7 +851,11 @@ def test_legacy_release_manifest_and_current_pointer_remain_readable(
     legacy_web = legacy_directory / "reader" / "index.html"
     project.delivery_pdf.write_bytes(legacy_pdf.read_bytes())
     project.delivery_html.write_bytes(
-        release_module._delivery_html_bytes(legacy_web, legacy_id)
+        release_module._delivery_html_bytes(
+            legacy_web,
+            legacy_id,
+            release_module._LEGACY_DELIVERY_RECIPE,
+        )
     )
     project.publish_current(
         release_id=legacy_id,
@@ -866,6 +869,60 @@ def test_legacy_release_manifest_and_current_pointer_remain_readable(
 
     assert validated.release_id == legacy_id
     assert validated.available_formats == ("pdf", "web")
+    assert release_module.validate_current_delivery(project, pointer) == (
+        "pdf",
+        "web",
+    )
+
+
+def test_v2_delivery_release_remains_valid_after_standalone_delivery_upgrade(
+    tmp_path: Path,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
+    book = _book()
+    current = publisher.publish(book, run_id="new-run")
+    current_manifest = json.loads(current.manifest.read_text(encoding="utf-8"))
+    legacy_identity = release_module._release_identity_for_recipe(
+        book,
+        ("pdf", "web"),
+        release_module._BASE_DELIVERY_RECIPE,
+    )
+    legacy_id = release_module._release_id(legacy_identity)
+    legacy_directory = project.releases_root / legacy_id
+    shutil.copytree(current.directory, legacy_directory)
+    legacy_manifest = legacy_directory / "manifest.json"
+    legacy_manifest.write_bytes(
+        release_module.canonical_json_bytes(
+            {
+                "schema_version": release_module.RELEASE_MANIFEST_SCHEMA,
+                "release_id": legacy_id,
+                "identity": legacy_identity,
+                "available_formats": ["pdf", "web"],
+                "files": current_manifest["files"],
+            }
+        )
+        + b"\n"
+    )
+    project.delivery_pdf.write_bytes(
+        (legacy_directory / "companion.pdf").read_bytes()
+    )
+    project.delivery_html.write_bytes(
+        release_module._delivery_html_bytes(
+            legacy_directory / "reader" / "index.html",
+            legacy_id,
+            release_module._BASE_DELIVERY_RECIPE,
+        )
+    )
+    project.publish_current(
+        release_id=legacy_id,
+        manifest=legacy_manifest,
+        run_id="legacy-v2-run",
+    )
+
+    pointer = project.current_release()
+    assert pointer is not None
+    assert publisher.validate_current(pointer, book).release_id == legacy_id
     assert release_module.validate_current_delivery(project, pointer) == (
         "pdf",
         "web",
@@ -919,10 +976,9 @@ def test_reused_release_repairs_missing_and_corrupt_delivery_copies(
     assert repaired.reused
     assert repaired.release_id == first.release_id
     assert project.delivery_pdf.read_bytes() == repaired.pdf.read_bytes()
-    assert (
-        f'<base href="releases/{repaired.release_id}/reader/index.html">'
-        in project.delivery_html.read_text(encoding="utf-8")
-    )
+    assert "<base" not in project.delivery_html.read_text(
+        encoding="utf-8"
+    ).casefold()
 
 
 def test_new_release_replaces_delivery_but_keeps_old_release(
@@ -940,10 +996,8 @@ def test_new_release_replaces_delivery_but_keeps_old_release(
     assert second.directory.is_dir()
     assert project.delivery_pdf.read_bytes() == second.pdf.read_bytes()
     delivered_html = project.delivery_html.read_text(encoding="utf-8")
-    assert (
-        f'<base href="releases/{second.release_id}/reader/index.html">'
-        in delivered_html
-    )
+    assert "<base" not in delivered_html.casefold()
+    assert second_book.content_digest in delivered_html
     assert first.release_id not in delivered_html
     current = project.current_release()
     assert current is not None
@@ -997,13 +1051,17 @@ def test_delivery_failure_keeps_current_pointer_last_and_retry_repairs(
     assert current["release_id"] == first.release_id
     assert current["run_id"] == "run-one"
     assert project.delivery_pdf.read_bytes() == first.pdf.read_bytes()
-    assert first.release_id in project.delivery_html.read_text(encoding="utf-8")
+    assert _book().content_digest in project.delivery_html.read_text(
+        encoding="utf-8"
+    )
 
     monkeypatch.undo()
     repaired = publisher.publish(second_book, run_id="run-two")
     assert repaired.reused
     assert project.current_release()["release_id"] == second_id  # type: ignore[index]
-    assert second_id in project.delivery_html.read_text(encoding="utf-8")
+    assert second_book.content_digest in project.delivery_html.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_first_publish_failure_removes_both_new_delivery_files(
@@ -1033,7 +1091,9 @@ def test_first_publish_failure_removes_both_new_delivery_files(
     repaired = publisher.publish(_book(), run_id="run-one")
     assert repaired.reused
     assert project.delivery_pdf.read_bytes() == repaired.pdf.read_bytes()
-    assert repaired.release_id in project.delivery_html.read_text(encoding="utf-8")
+    assert _book().content_digest in project.delivery_html.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_delivery_verification_failure_restores_prior_pair(
