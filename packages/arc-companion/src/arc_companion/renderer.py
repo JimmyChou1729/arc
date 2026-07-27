@@ -1375,6 +1375,14 @@ def _normalize_pdf_characters(value: Any) -> str:
             {
                 "\N{HYPHEN}": "-",
                 "\N{NON-BREAKING HYPHEN}": "-",
+                "\N{LEFT SINGLE QUOTATION MARK}": "'",
+                "\N{RIGHT SINGLE QUOTATION MARK}": "'",
+                "\N{SINGLE LOW-9 QUOTATION MARK}": "'",
+                "\N{SINGLE HIGH-REVERSED-9 QUOTATION MARK}": "'",
+                "\N{LEFT DOUBLE QUOTATION MARK}": '"',
+                "\N{RIGHT DOUBLE QUOTATION MARK}": '"',
+                "\N{DOUBLE LOW-9 QUOTATION MARK}": '"',
+                "\N{DOUBLE HIGH-REVERSED-9 QUOTATION MARK}": '"',
             }
         )
     )
