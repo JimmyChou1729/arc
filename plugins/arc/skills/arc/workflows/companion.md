@@ -92,6 +92,15 @@ Companion detects source language once. It skips translation only for a known
 matching primary language; mixed or unknown source is translated. Chapters are
 derived from headings and cover every source block exactly once.
 
+Whole-document model tasks receive a compact chapter/block index plus a
+verified text-only workspace view, not a prompt JSON copy of the source body.
+In direct mode, inspect the index first and prefer its exact, cache-only
+`arc-paper` document operations, reading only relevant sections or search
+results. Use the text-only view when those operations are unavailable. Do not
+open source image or media assets for reading; deterministic assembly restores
+them later. Models author semantic JSON, while Companion injects routing
+identities such as chapter IDs.
+
 Guide planning is evidence-first. Before chapter planning, inspect at least 20
 distinct candidate works or substantive discussions across sources named by
 the document, important prior history, and later work central to its debates.

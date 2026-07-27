@@ -8,20 +8,20 @@ from typing import Any
 
 
 LITERATURE_REQUEST_PROMPT_VERSION = (
-    "arc.companion.literature-request-prompt.v2"
+    "arc.companion.literature-request-prompt.v3"
 )
 EVIDENCE_RESEARCH_PROMPT_VERSION = (
-    "arc.companion.evidence-research-prompt.v1"
+    "arc.companion.evidence-research-prompt.v2"
 )
 LITERATURE_SURVEY_PROMPT_VERSION = (
-    "arc.companion.literature-survey-prompt.v2"
+    "arc.companion.literature-survey-prompt.v3"
 )
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v6"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v7"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v6"
+    "arc.companion.chapter-learning-review-prompt.v7"
 )
-CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v7"
-AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v1"
+CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v8"
+AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v2"
 
 
 def _closed(
@@ -281,9 +281,9 @@ CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA = _closed(
 
 def literature_request_prompt(
     *,
-    blocks: Sequence[Mapping[str, Any]],
+    block_ids: Sequence[str],
     intent: str,
-    prior_companion: Mapping[str, Any] | None = None,
+    has_prior_companion: bool = False,
 ) -> str:
     return _prompt(
         LITERATURE_REQUEST_PROMPT_VERSION,
@@ -306,11 +306,9 @@ def literature_request_prompt(
         """,
         {
             "intent": intent,
-            "blocks": list(blocks),
-            "prior_companion": (
-                dict(prior_companion)
-                if prior_companion is not None
-                else None
+            "block_ids": list(block_ids),
+            "source_inputs": _source_input_manifest(
+                has_prior_companion=has_prior_companion
             ),
         },
     )
@@ -318,10 +316,9 @@ def literature_request_prompt(
 
 def literature_survey_prompt(
     *,
-    blocks: Sequence[Mapping[str, Any]],
+    block_ids: Sequence[str],
     intent: str,
-    selected_evidence: Sequence[Mapping[str, Any]],
-    prior_companion: Mapping[str, Any] | None = None,
+    has_prior_companion: bool = False,
 ) -> str:
     return _prompt(
         LITERATURE_SURVEY_PROMPT_VERSION,
@@ -337,12 +334,10 @@ def literature_survey_prompt(
         """,
         {
             "intent": intent,
-            "blocks": list(blocks),
-            "selected_evidence": list(selected_evidence),
-            "prior_companion": (
-                dict(prior_companion)
-                if prior_companion is not None
-                else None
+            "block_ids": list(block_ids),
+            "source_inputs": _source_input_manifest(
+                has_prior_companion=has_prior_companion,
+                additional=("selected-evidence",),
             ),
         },
     )
@@ -350,8 +345,6 @@ def literature_survey_prompt(
 
 def evidence_research_prompt(
     *,
-    requests: Sequence[Mapping[str, Any]],
-    blocks: Sequence[Mapping[str, Any]],
     target_language: str,
     intent: str,
 ) -> str:
@@ -384,8 +377,9 @@ def evidence_research_prompt(
         {
             "target_language": target_language,
             "intent": intent,
-            "requests": list(requests),
-            "blocks": list(blocks),
+            "source_inputs": _source_input_manifest(
+                additional=("literature-requests",)
+            ),
         },
     )
 
@@ -396,12 +390,10 @@ def chapter_plan_prompt(
     title: str,
     document_title: str | None = None,
     document_outline: Sequence[str] = (),
-    blocks: Sequence[Mapping[str, Any]],
+    block_ids: Sequence[str],
     target_language: str,
     intent: str,
-    literature_survey: Mapping[str, Any] | None = None,
-    selected_evidence: Sequence[Mapping[str, Any]] = (),
-    prior_companion: Mapping[str, Any] | None = None,
+    has_prior_companion: bool = False,
 ) -> str:
     return _prompt(
         CHAPTER_PLAN_PROMPT_VERSION,
@@ -483,16 +475,10 @@ def chapter_plan_prompt(
             "document_outline": list(document_outline),
             "target_language": target_language,
             "intent": intent,
-            "blocks": list(blocks),
-            "literature_survey": dict(
-                literature_survey
-                or {"themes": [], "limitations": []}
-            ),
-            "selected_evidence": list(selected_evidence),
-            "prior_companion": (
-                dict(prior_companion)
-                if prior_companion is not None
-                else None
+            "block_ids": list(block_ids),
+            "source_inputs": _source_input_manifest(
+                has_prior_companion=has_prior_companion,
+                additional=("literature-survey", "selected-evidence"),
             ),
         },
     )
@@ -539,6 +525,15 @@ write “the author is not denying X, but asking Y” merely as a transition;
 state what the author uses X to investigate and devote attention to the
 missing context. Translate English excerpts or quotations into the target
 language while citing their assigned English source identity nearby.
+
+The source body is not embedded in the loop context. Inspect the
+`companion-source-index` workspace input first. In direct mode, prefer the
+exact cache-only `arc-paper` operations listed there and pass the cached
+document reference unchanged. Read only the chapter sections or search
+results needed for this loop. If the cache command is unavailable, read
+the verified text-only `companion-source` workspace input. Never open
+image or media assets. The index is authoritative for chapter and block
+IDs and for effective equation labels.
 """
 
 
@@ -579,6 +574,13 @@ evidence shows that X is a live misconception. Otherwise tell the
 proposer to state Y affirmatively and use the space for the missing
 context, reasoning, or later development. A prior Companion is optional
 reference material, not a template or authority.
+
+The source body is not embedded in the loop context. Inspect the
+`companion-source-index` workspace input first. In direct mode, prefer its
+exact cache-only `arc-paper` operations; otherwise use the verified
+text-only `companion-source` input. Read only the source passages required
+to check this chapter. Never open image or media assets. Treat the index
+as authoritative for chapter and block identities.
 """
 
 
@@ -599,12 +601,12 @@ def chapter_guide_reviewer_instructions() -> str:
 def chapter_guide_prompt(
     *,
     plan: Mapping[str, Any],
-    blocks: Sequence[Mapping[str, Any]],
+    block_ids: Sequence[str],
     glossary: Sequence[Mapping[str, Any]],
     target_language: str,
     language_result: Mapping[str, Any],
     evidence: Sequence[Mapping[str, Any]],
-    prior_companion: Mapping[str, Any] | None = None,
+    has_prior_companion: bool = False,
 ) -> str:
     return _prompt(
         CHAPTER_GUIDE_PROMPT_VERSION,
@@ -613,13 +615,11 @@ def chapter_guide_prompt(
             "target_language": target_language,
             "language_result": dict(language_result),
             "plan": dict(plan),
-            "blocks": list(blocks),
+            "block_ids": list(block_ids),
             "glossary": list(glossary),
             "selected_evidence": list(evidence),
-            "prior_companion": (
-                dict(prior_companion)
-                if prior_companion is not None
-                else None
+            "source_inputs": _source_input_manifest(
+                has_prior_companion=has_prior_companion
             ),
         },
     )
@@ -629,10 +629,10 @@ def chapter_guide_review_prompt(
     *,
     plan: Mapping[str, Any],
     draft: Mapping[str, Any],
-    blocks: Sequence[Mapping[str, Any]],
+    block_ids: Sequence[str],
     glossary: Sequence[Mapping[str, Any]],
     evidence: Sequence[Mapping[str, Any]],
-    prior_companion: Mapping[str, Any] | None = None,
+    has_prior_companion: bool = False,
 ) -> str:
     return _prompt(
         CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
@@ -640,13 +640,11 @@ def chapter_guide_review_prompt(
         {
             "plan": dict(plan),
             "draft": dict(draft),
-            "source_blocks": list(blocks),
+            "block_ids": list(block_ids),
             "glossary": list(glossary),
             "selected_evidence": list(evidence),
-            "prior_companion": (
-                dict(prior_companion)
-                if prior_companion is not None
-                else None
+            "source_inputs": _source_input_manifest(
+                has_prior_companion=has_prior_companion
             ),
         },
     )
@@ -655,14 +653,13 @@ def chapter_guide_review_prompt(
 def author_identity_prompt(
     *,
     title: str,
-    blocks: Sequence[Mapping[str, Any]],
     auto_candidates: Sequence[Mapping[str, Any]],
 ) -> str:
     return _prompt(
         AUTHOR_IDENTITY_PROMPT_VERSION,
         """
-        Verify publication authorship from the supplied title, source blocks,
-        and automatically parsed candidates with their bases. Author names are
+        Verify publication authorship from the supplied title, verified source
+        inputs, and automatically parsed candidates with their bases. Author names are
         publication identity, not a constraint on Companion interpretation or
         creative form. Confirm or correct an automatic candidate when the
         supplied material supports it, or infer an author when there is no
@@ -674,10 +671,41 @@ def author_identity_prompt(
         """,
         {
             "title": title,
-            "blocks": list(blocks),
             "auto_candidates": list(auto_candidates),
+            "source_inputs": _source_input_manifest(),
         },
     )
+
+
+def _source_input_manifest(
+    *,
+    has_prior_companion: bool = False,
+    additional: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Describe verified workspace inputs without embedding their content."""
+
+    inputs = [
+        "companion-source-index",
+        "companion-source",
+        *additional,
+    ]
+    if has_prior_companion:
+        inputs.append("prior-companion")
+    return {
+        "input_ids": inputs,
+        "instructions": (
+            "Inspect companion-source-index first. In direct mode, prefer the "
+            "exact cache-only arc-paper operations listed there and pass its "
+            "cached document reference unchanged; read only relevant sections "
+            "or search results. If cache access is unavailable, read the "
+            "verified text-only companion-source input. Never open image or "
+            "media assets. The index is authoritative for chapter IDs, block "
+            "IDs, and effective equation labels. Other named inputs are "
+            "verified JSON files. In restricted or unknown mode, use the "
+            "text-only fallback rather than requesting a host turn solely to "
+            "read the same source."
+        ),
+    }
 
 
 def _prompt(

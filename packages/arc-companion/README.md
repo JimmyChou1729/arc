@@ -93,6 +93,15 @@ paper cache unless `--paper-cache-root` selects another shared cache. Figure
 assets needed by a completed release are frozen into the project before
 publication completes, so later rendering does not depend on cache retention.
 
+Whole-document model tasks do not receive the source body inside prompt JSON.
+Companion freezes a compact chapter/block index and a verified text-only
+Markdown view as `arc-llm` workspace inputs. In direct mode, the index tells a
+worker how to query the exact immutable `arc-paper` cached-document handle for
+only the sections or search hits it needs. If that cache interface is
+unavailable, the worker reads the text-only view instead; image and media bytes
+are never model inputs. Chapter IDs remain program-owned routing data, while
+model-authored plans and guide proposals remain schema-validated JSON.
+
 The project layout is stable:
 
 ```text

@@ -51,7 +51,7 @@ class _EvidenceResumeTasks:
                 "anchor_block_ids": [],
             }
         elif contract == LITERATURE_REQUEST_PROMPT_VERSION:
-            block_id = payload["blocks"][0]["block_id"]
+            block_id = payload["block_ids"][0]
             value = {
                 "requests": [
                     {
@@ -64,7 +64,7 @@ class _EvidenceResumeTasks:
                 ],
             }
         elif contract == LITERATURE_SURVEY_PROMPT_VERSION:
-            block_id = payload["blocks"][0]["block_id"]
+            block_id = payload["block_ids"][0]
             value = {
                 "themes": [
                     {
@@ -78,7 +78,7 @@ class _EvidenceResumeTasks:
                 "limitations": [],
             }
         elif contract == CHAPTER_PLAN_PROMPT_VERSION:
-            block_id = payload["blocks"][0]["block_id"]
+            block_id = payload["block_ids"][0]
             value = {
                 "chapter_id": payload["chapter_id"],
                 "reader_profile": {
@@ -90,7 +90,7 @@ class _EvidenceResumeTasks:
                 },
                 "reader_needs": [
                     {
-                        "block_id": block["block_id"],
+                        "block_id": block_id,
                         "needs_companion": index == 0,
                         "reason": (
                             "The first block needs the supporting result."
@@ -101,7 +101,7 @@ class _EvidenceResumeTasks:
                             ["reading"] if index == 0 else []
                         ),
                     }
-                    for index, block in enumerate(payload["blocks"])
+                    for index, block_id in enumerate(payload["block_ids"])
                 ],
                 "learning_units": [
                     {

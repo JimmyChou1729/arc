@@ -60,7 +60,7 @@ from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
-    assert CompanionBuildHandler.name == "arc.companion.build.v5"
+    assert CompanionBuildHandler.name == "arc.companion.build.v6"
     assert not any(name.startswith("Legacy") for name in public_names)
     for module_name in (
         "arc_companion.build_v2",
@@ -115,13 +115,13 @@ def test_companion_provider_enum_nodes_declare_string_types() -> None:
 
 def test_evidence_first_prompts_encode_selective_value_contract() -> None:
     request = literature_request_prompt(
-        blocks=[{"block_id": "b1", "text": "source"}],
+        block_ids=["b1"],
         intent="Explain only useful omissions.",
     )
     plan = chapter_plan_prompt(
         chapter_id="chapter",
         title="Chapter",
-        blocks=[{"block_id": "b1", "text": "source"}],
+        block_ids=["b1"],
         target_language="en",
         intent="Explain only useful omissions.",
     )
@@ -198,16 +198,6 @@ def _research_output(source: str = "https://example.test/source") -> dict:
 
 def test_evidence_research_prompt_and_schema_use_direct_agent_contract() -> None:
     prompt = evidence_research_prompt(
-        requests=[
-            {
-                "request_id": "request",
-                "kind": "web",
-                "query": "context",
-                "purpose": "reader context",
-                "anchor_block_ids": ["b1"],
-            }
-        ],
-        blocks=[{"block_id": "b1", "text": "source"}],
         target_language="zh-CN",
         intent="Explain the source.",
     )
@@ -322,13 +312,16 @@ def test_prior_companion_is_reference_context_not_a_template() -> None:
     prompt = chapter_plan_prompt(
         chapter_id="chapter",
         title="Chapter",
-        blocks=[{"block_id": "b1", "text": "source"}],
+        block_ids=["b1"],
         target_language="zh-CN",
         intent="Improve the reading companion.",
-        prior_companion=prior,
+        has_prior_companion=True,
     )
 
-    assert _prompt_payload(prompt)["prior_companion"] == prior
+    assert "prior-companion" in _prompt_payload(prompt)["source_inputs"][
+        "input_ids"
+    ]
+    assert "旧伴读" not in prompt
     assert "optional reference" in prompt
     assert "never copy its repeated format" in prompt
 
@@ -573,7 +566,7 @@ def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
     }
     guide = chapter_guide_prompt(
         plan=plan,
-        blocks=[],
+        block_ids=[],
         glossary=[],
         target_language="zh-CN",
         language_result={"language_tag": "en"},
@@ -582,7 +575,7 @@ def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
     review = chapter_guide_review_prompt(
         plan=plan,
         draft={"chapter_id": "chapter", "learning_units": []},
-        blocks=[],
+        block_ids=[],
         glossary=[],
         evidence=[],
     )
@@ -701,7 +694,6 @@ def test_guide_review_can_replace_title_and_markdown_only() -> None:
 def test_author_identity_requires_high_confidence_for_authors() -> None:
     prompt = author_identity_prompt(
         title="A source title",
-        blocks=[{"block_id": "b1", "text": "By Example Author."}],
         auto_candidates=[
             {"author": "Example Author", "basis": "source byline"}
         ],
@@ -851,7 +843,7 @@ def test_empty_intent_contract_enters_prompt_and_identity(
     prompt = chapter_plan_prompt(
         chapter_id="chapter",
         title="Source",
-        blocks=[],
+        block_ids=[],
         target_language=request.target_language,
         intent=request.effective_intent,
     )
@@ -900,7 +892,7 @@ def test_provider_model_and_prompt_contract_change_run_identity(
     recipe_input = semantic_input["generation_recipe"]
     assert (
         recipe_input["schema_version"]
-        == "arc.companion.generation_recipe.v8"
+            == "arc.companion.generation_recipe.v9"
     )
     assert recipe_input["chapter_guide_max_rounds"] == 3
     assert recipe_input["chapter_guide_review_final_round"] is False

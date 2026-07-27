@@ -34,7 +34,10 @@ _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4 = (
 )
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3 = "arc.companion.build_request.v3"
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2 = "arc.companion.build_request.v2"
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v8"
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v9"
+_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V8 = (
+    "arc.companion.generation_recipe.v8"
+)
 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7 = (
     "arc.companion.generation_recipe.v7"
 )
@@ -400,6 +403,15 @@ def decode_generation_recipe(
             "chapter_guide_max_rounds",
             "chapter_guide_review_final_round",
         }
+    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V8:
+        fields = common_fields | {
+            "literature_request_prompt",
+            "evidence_research_prompt",
+            "literature_survey_prompt",
+            "author_identity_prompt",
+            "chapter_guide_max_rounds",
+            "chapter_guide_review_final_round",
+        }
     elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7:
         fields = common_fields | {
             "literature_request_prompt",
@@ -442,6 +454,7 @@ def decode_generation_recipe(
         _string(raw_recipe, "literature_survey_prompt")
     if schema_version in {
         COMPANION_GENERATION_RECIPE_SCHEMA,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V8,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7,
     }:
         _string(raw_recipe, "evidence_research_prompt")

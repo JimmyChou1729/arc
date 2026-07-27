@@ -74,6 +74,8 @@ class FakeGuideTasks:
         self.counts: Counter[str] = Counter()
         self.guide_glossaries: dict[str, list[dict]] = {}
         self.requests: list[tuple[str, str, str]] = []
+        self.request_input_ids: list[tuple[str, tuple[str, ...]]] = []
+        self.runtime_environments: list[dict[str, str | None]] = []
         self._completed = {}
         self._lock = Lock()
 
@@ -89,6 +91,17 @@ class FakeGuideTasks:
             self.requests.append(
                 (contract, request.task_id, request.prompt)
             )
+            self.request_input_ids.append(
+                (
+                    contract,
+                    tuple(item.input_id for item in request.inputs),
+                )
+            )
+            options = _kwargs.get("options")
+            if options is not None:
+                self.runtime_environments.append(
+                    dict(options.runtime_environment.values)
+                )
         if contract == AUTHOR_IDENTITY_PROMPT_VERSION:
             value = {
                 "authors": [],
@@ -104,9 +117,7 @@ class FakeGuideTasks:
                         "kind": "paper",
                         "query": "Inspect directly relevant literature.",
                         "purpose": "Test the frozen research-log boundary.",
-                        "anchor_block_ids": [
-                            payload["blocks"][0]["block_id"]
-                        ],
+                        "anchor_block_ids": [payload["block_ids"][0]],
                     }
                 ]
             }
@@ -138,10 +149,8 @@ class FakeGuideTasks:
                 ]
             }
         elif contract == LITERATURE_SURVEY_PROMPT_VERSION:
-            block_id = payload["blocks"][0]["block_id"]
-            evidence_id = payload["selected_evidence"][0][
-                "evidence_id"
-            ]
+            block_id = payload["block_ids"][0]
+            evidence_id = "candidate-1"
             value = {
                 "themes": [
                     {
@@ -155,7 +164,7 @@ class FakeGuideTasks:
                 "limitations": [],
             }
         elif contract == CHAPTER_PLAN_PROMPT_VERSION:
-            block_id = payload["blocks"][0]["block_id"]
+            block_id = payload["block_ids"][0]
             units = [
                 {
                     "unit_id": "intuition",
@@ -186,7 +195,7 @@ class FakeGuideTasks:
                 },
                 "reader_needs": [
                     {
-                        "block_id": block["block_id"],
+                        "block_id": block_id,
                         "needs_companion": index == 0,
                         "reason": (
                             "The first block benefits from one connection."
@@ -197,7 +206,7 @@ class FakeGuideTasks:
                             ["intuition"] if index == 0 else []
                         ),
                     }
-                    for index, block in enumerate(payload["blocks"])
+                    for index, block_id in enumerate(payload["block_ids"])
                 ],
                 "learning_units": units,
             }
@@ -468,6 +477,7 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     tasks = FakeGuideTasks(
         guide_started=guide_started,
         translation_started=translation_started,
+        select_evidence=True,
     )
     translation = FakeTranslationAdapter(
         mode="enabled",
@@ -484,7 +494,10 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     ).handler == COMPANION_BUILD_HANDLER
     completed = service.execute(
         prepared.run_id,
-        execution=CompanionExecutionOptions(workers=2),
+        execution=CompanionExecutionOptions(
+            workers=2,
+            paper_cache_root=tmp_path / "paper",
+        ),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,
     )
@@ -494,6 +507,48 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     assert tasks.counts[CHAPTER_PLAN_PROMPT_VERSION] == 2
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 6
     assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 4
+    assert all(
+        "A quantum field appears here." not in prompt
+        for _contract, _task_id, prompt in tasks.requests
+    )
+    for contract, input_ids in tasks.request_input_ids:
+        assert input_ids[:2] == (
+            "companion-source-index",
+            "companion-source",
+        ), contract
+    evidence_inputs = next(
+        inputs
+        for contract, inputs in tasks.request_input_ids
+        if contract == EVIDENCE_RESEARCH_PROMPT_VERSION
+    )
+    assert "literature-requests" in evidence_inputs
+    survey_inputs = next(
+        inputs
+        for contract, inputs in tasks.request_input_ids
+        if contract == LITERATURE_SURVEY_PROMPT_VERSION
+    )
+    assert "selected-evidence" in survey_inputs
+    plan_inputs = next(
+        inputs
+        for contract, inputs in tasks.request_input_ids
+        if contract == CHAPTER_PLAN_PROMPT_VERSION
+    )
+    assert {"literature-survey", "selected-evidence"} <= set(plan_inputs)
+    assert tasks.runtime_environments
+    assert {
+        item["ARC_PAPER_CACHE"] for item in tasks.runtime_environments
+    } == {str(tmp_path / "paper")}
+    run_store = ImmutableArtifactStore(
+        service.repository.run_directory(completed.run_id),
+        repository_root=service.repository.root,
+    )
+    source_index_ref = run_store.find("source/model-index")
+    assert source_index_ref is not None
+    source_index = json.loads(run_store.read_bytes(source_index_ref))
+    assert source_index["cache_relationship"] == "exact"
+    assert source_index["cached_document"]["source_sha256"] == (
+        document.source.artifact_digest
+    )
     planned_chapters = plan_source_chapters(document)
     for chapter in planned_chapters:
         candidate = json.loads(

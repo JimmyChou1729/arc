@@ -153,7 +153,7 @@ class CompanionService:
         task_service: LLMTaskService | None,
         translation_adapter: CompanionTranslationAdapter | None,
     ) -> CompanionBuildHandler:
-        if spec.handler in COMPATIBLE_COMPANION_BUILD_HANDLERS:
+        if spec.handler == COMPANION_BUILD_HANDLER:
             request, recipe = decode_handler_semantic_input(
                 spec.semantic_input
             )
@@ -168,6 +168,12 @@ class CompanionService:
                 execution=execution,
                 task_service=task_service,
                 translation_adapter=translation_adapter,
+            )
+        if spec.handler in COMPATIBLE_COMPANION_BUILD_HANDLERS:
+            raise CompanionServiceError(
+                "legacy_run_requires_new_build",
+                "unfinished Companion runs created by an older handler must "
+                "be rebuilt as a new run; completed releases remain readable",
             )
         raise CompanionServiceError(
             "run_handler_invalid", "run is not a Companion build"

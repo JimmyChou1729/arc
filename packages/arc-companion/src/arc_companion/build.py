@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
+import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from arc_jobs import (
+    ArtifactRef,
+    ArtifactSourceRef,
     Failed,
     FailureMode,
     GroupResult,
@@ -19,14 +26,17 @@ from arc_jobs import (
     canonical_json_bytes,
 )
 from arc_llm import (
+    ArcRuntimeEnvironment,
     JsonOutput,
     LLMFailed,
+    LLMInputArtifact,
     LLMPaused,
     LLMRequest,
     LLMTaskService,
 )
 from arc_paper import (
     ArcPaperService,
+    CachedDocumentError,
     EquationLabelReviewService,
     PdftoppmFullPageRenderer,
     RichDocument,
@@ -34,6 +44,7 @@ from arc_paper import (
     SourceRepositoryError,
     apply_visual_equation_labels,
     detect_suspicious_equation_labels,
+    cached_document_ref_to_document,
     rich_document_from_document,
     rich_document_to_document,
 )
@@ -57,7 +68,6 @@ from ._build_support import (
     frozen_evidence,
     mapping,
     mapping_list,
-    planned_source_documents,
     read_json,
     ref_document,
     task_id,
@@ -86,6 +96,11 @@ from .llm_runtime import (
     execute_semantically_validated_task,
     outer_resume_input,
     run_error_from_failure,
+)
+from .model_source import (
+    model_source_index,
+    model_source_view,
+    validate_model_source_index,
 )
 from .prompts import (
     AUTHOR_IDENTITY_PROMPT_VERSION,
@@ -130,10 +145,11 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v5"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v6"
 COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
     {
         COMPANION_BUILD_HANDLER,
+        "arc.companion.build.v5",
         "arc.companion.build.v4",
         "arc.companion.build.v3",
     }
@@ -142,8 +158,12 @@ COMPANION_BUILD_DIAGNOSTICS_SCHEMA = "arc.companion.build_diagnostics.v1"
 _BOOK_ARTIFACT = "book/accepted"
 _DIAGNOSTICS_ARTIFACT = "diagnostics/build"
 _EFFECTIVE_SOURCE_ARTIFACT = "source/effective"
+_MODEL_SOURCE_VIEW_ARTIFACT = "source/model-view"
+_MODEL_SOURCE_INDEX_ARTIFACT = "source/model-index"
+_ORIGINAL_SOURCE_ARTIFACT = "source/original"
 _AUTHOR_IDENTITY_ARTIFACT = "identity/authors"
 _PRIOR_COMPANION_ARTIFACT = "translation-reuse/prior-companion"
+_PRIOR_REFERENCE_ARTIFACT = "translation-reuse/prior-reference"
 _RESULT_ARTIFACT = "result"
 
 
@@ -164,6 +184,7 @@ class CompanionBuildHandler:
         self.request = request
         self.recipe = recipe
         self.execution = execution
+        self.llm_options = _companion_llm_options(execution)
         self.task_service = task_service or LLMTaskService()
         self.translation_adapter = translation_adapter or ArcTranslateAdapter(
             self.task_service,
@@ -190,6 +211,10 @@ class CompanionBuildHandler:
             if isinstance(prepared_source, Paused):
                 return prepared_source
             source = prepared_source
+            chapters = plan_source_chapters(source)
+            model_inputs = self._model_source_inputs(
+                context, source, chapters
+            )
             try:
                 reader_labels = resolve_reader_labels(
                     self.request.target_language,
@@ -208,11 +233,11 @@ class CompanionBuildHandler:
                 title=title,
                 auto_candidates=identity.candidate_authors,
                 author_basis=identity.author_basis,
+                inputs=model_inputs,
             )
             if isinstance(authors_outcome, (Paused, Failed)):
                 return authors_outcome
             authors = authors_outcome
-            chapters = plan_source_chapters(source)
             blocks = {
                 item.block_id: item for item in source.blocks
             }
@@ -222,7 +247,7 @@ class CompanionBuildHandler:
                 source,
                 target_language=self.request.target_language,
                 model=self.recipe.model,
-                execution=self.execution.llm,
+                execution=self.llm_options,
                 resume_input=resume_input,
             )
             if isinstance(language, Paused):
@@ -237,9 +262,19 @@ class CompanionBuildHandler:
                     "arc-translate language mode is invalid",
                 )
             prior_companion = _prior_companion_reference(context)
+            prior_input = _prior_reference_input(
+                context, prior_companion
+            )
+            document_inputs = model_inputs + (
+                (prior_input,) if prior_input is not None else ()
+            )
 
             literature_requests = self._literature_requests(
-                context, resume_input, source, prior_companion
+                context,
+                resume_input,
+                source,
+                prior_companion,
+                inputs=document_inputs,
             )
             if isinstance(literature_requests, (Paused, Failed)):
                 return literature_requests
@@ -248,6 +283,7 @@ class CompanionBuildHandler:
                 resume_input,
                 source,
                 literature_requests,
+                inputs=document_inputs,
             )
             if isinstance(evidence_collection, (Paused, Failed)):
                 return evidence_collection
@@ -258,6 +294,7 @@ class CompanionBuildHandler:
                 source,
                 evidence,
                 prior_companion,
+                inputs=document_inputs,
             )
             if isinstance(literature_survey, (Paused, Failed)):
                 return literature_survey
@@ -271,6 +308,7 @@ class CompanionBuildHandler:
                 literature_survey,
                 evidence,
                 prior_companion,
+                inputs=document_inputs,
             )
             if isinstance(plans, (Paused, Failed)):
                 return plans
@@ -284,7 +322,7 @@ class CompanionBuildHandler:
                     target_language=self.request.target_language,
                     approx_count=self.recipe.approx_term_count,
                     model=self.recipe.model,
-                    execution=self.execution.llm,
+                    execution=self.llm_options,
                     resume_input=resume_input,
                 )
                 if isinstance(glossary_outcome, Paused):
@@ -310,6 +348,7 @@ class CompanionBuildHandler:
                 language=language,
                 translation_required=translation_required,
                 prior_companion=prior_companion,
+                model_inputs=document_inputs,
             )
             if isinstance(chapters_outcome, (Paused, Failed)):
                 return chapters_outcome
@@ -370,6 +409,93 @@ class CompanionBuildHandler:
         except (KeyError, TypeError, ValueError) as exc:
             return Failed(RunError("companion_content_invalid", str(exc)))
 
+    def _model_source_inputs(
+        self,
+        context: RunContext,
+        source: RichDocument,
+        chapters: Sequence[SourceChapter],
+    ) -> tuple[LLMInputArtifact, ...]:
+        """Freeze body-free index plus text-only source fallback."""
+
+        paper = ArcPaperService(cache_root=self.execution.paper_cache_root)
+        cached_document: Mapping[str, Any] | None = None
+        try:
+            source_bytes = paper.repository.read_bytes(source.source)
+            original = context.artifacts.find(_ORIGINAL_SOURCE_ARTIFACT)
+            if original is None:
+                original = context.artifacts.publish_bytes(
+                    _ORIGINAL_SOURCE_ARTIFACT,
+                    source_bytes,
+                    media_type=source.source.media_type,
+                )
+            if (
+                original.digest.value != source.source.artifact_digest
+                or original.digest.size_bytes != source.source.size
+            ):
+                raise CompanionContentError(
+                    "model_source_original_mismatch",
+                    "Frozen original source does not match its source identity.",
+                )
+            cached_document = cached_document_ref_to_document(
+                paper.cache_document(source.source)
+            )
+        except (CachedDocumentError, SourceRepositoryError, OSError):
+            # The verified text projection remains sufficient for model work.
+            # Cache access is an optimization and must not create a host turn.
+            cached_document = None
+
+        cache_relationship = (
+            "fallback_only"
+            if cached_document is None
+            else (
+                "exact"
+                if source.document_digest
+                == self.request.source.document_digest
+                else "equation_label_overlay"
+            )
+        )
+        source_text = model_source_view(source, chapters).encode("utf-8")
+        source_ref = context.artifacts.find(_MODEL_SOURCE_VIEW_ARTIFACT)
+        if source_ref is None:
+            source_ref = context.artifacts.publish_bytes(
+                _MODEL_SOURCE_VIEW_ARTIFACT,
+                source_text,
+                media_type="text/markdown",
+            )
+        elif context.artifacts.read_bytes(source_ref) != source_text:
+            raise CompanionContentError(
+                "model_source_view_mismatch",
+                "Frozen model source view differs from the effective source.",
+            )
+
+        index = model_source_index(
+            source,
+            chapters,
+            cache_document=cached_document,
+            cache_relationship=cache_relationship,
+        )
+        index_ref = context.artifacts.find(_MODEL_SOURCE_INDEX_ARTIFACT)
+        if index_ref is None:
+            index_ref = context.artifacts.publish_json(
+                _MODEL_SOURCE_INDEX_ARTIFACT, index
+            )
+        else:
+            frozen_index = read_json(
+                context, index_ref, "model source index"
+            )
+            validate_model_source_index(
+                frozen_index, document=source, chapters=chapters
+            )
+            if frozen_index != index:
+                raise CompanionContentError(
+                    "model_source_index_mismatch",
+                    "Frozen model source index differs from current cache identity.",
+                )
+        return (
+            _llm_input(context, "companion-source-index", index_ref),
+            _llm_input(context, "companion-source", source_ref),
+        )
+
     def _authors(
         self,
         context: RunContext,
@@ -379,6 +505,7 @@ class CompanionBuildHandler:
         title: str,
         auto_candidates: Sequence[str],
         author_basis: str,
+        inputs: tuple[LLMInputArtifact, ...],
     ) -> tuple[str, ...] | Paused | Failed:
         """Resolve visible publication authors without asking the guide model."""
 
@@ -411,10 +538,6 @@ class CompanionBuildHandler:
             task_id("author-identity", semantic),
             author_identity_prompt(
                 title=title,
-                blocks=[
-                    _source_block_document(source, item)
-                    for item in source.blocks
-                ],
                 auto_candidates=[
                     {
                         "author": author,
@@ -425,6 +548,7 @@ class CompanionBuildHandler:
             ),
             JsonOutput(AUTHOR_IDENTITY_SCHEMA, repair="format"),
             self.recipe.model,
+            inputs=inputs,
         )
         outcome = execute_semantically_validated_task(
             self.task_service,
@@ -437,7 +561,7 @@ class CompanionBuildHandler:
                 block_ids=[item.block_id for item in source.blocks],
             ),
             resume_input=resume_input,
-            options=self.execution.llm,
+            options=self.llm_options,
         )
         if isinstance(outcome, Paused):
             return outcome
@@ -556,7 +680,7 @@ class CompanionBuildHandler:
                     pdf_bytes=pdf_bytes,
                     model=self.recipe.model,
                     resume_input=resume_input,
-                    options=self.execution.llm,
+                    options=self.llm_options,
                 )
                 if isinstance(outcome, LLMPaused):
                     return Paused(awaiting_from_pause(outcome))
@@ -633,6 +757,8 @@ class CompanionBuildHandler:
         resume_input: Any,
         source: RichDocument,
         prior_companion: Mapping[str, Any] | None,
+        *,
+        inputs: tuple[LLMInputArtifact, ...],
     ) -> Mapping[str, Any] | Paused | Failed:
         artifact_id = "planning/literature-requests"
         existing = context.artifacts.find(artifact_id)
@@ -656,17 +782,15 @@ class CompanionBuildHandler:
         request = LLMRequest(
             task_id("literature-requests", semantic),
             literature_request_prompt(
-                blocks=[
-                    _source_block_document(source, item)
-                    for item in source.blocks
-                ],
+                block_ids=[item.block_id for item in source.blocks],
                 intent=self.request.effective_intent,
-                prior_companion=prior_companion,
+                has_prior_companion=prior_companion is not None,
             ),
             JsonOutput(
                 LITERATURE_REQUEST_PLAN_SCHEMA, repair="format"
             ),
             self.recipe.model,
+            inputs=inputs,
         )
         outcome = execute_semantically_validated_task(
             self.task_service,
@@ -679,7 +803,7 @@ class CompanionBuildHandler:
                 block_ids=[item.block_id for item in source.blocks],
             ),
             resume_input=resume_input,
-            options=self.execution.llm,
+            options=self.llm_options,
         )
         if isinstance(outcome, Paused):
             return outcome
@@ -697,6 +821,8 @@ class CompanionBuildHandler:
         source: RichDocument,
         evidence: Sequence[Mapping[str, Any]],
         prior_companion: Mapping[str, Any] | None,
+        *,
+        inputs: tuple[LLMInputArtifact, ...],
     ) -> Mapping[str, Any] | Paused | Failed:
         artifact_id = "planning/literature-survey"
         existing = context.artifacts.find(artifact_id)
@@ -728,16 +854,18 @@ class CompanionBuildHandler:
         request = LLMRequest(
             task_id("literature-survey", semantic),
             literature_survey_prompt(
-                blocks=[
-                    _source_block_document(source, item)
-                    for item in source.blocks
-                ],
+                block_ids=[item.block_id for item in source.blocks],
                 intent=self.request.effective_intent,
-                selected_evidence=evidence,
-                prior_companion=prior_companion,
+                has_prior_companion=prior_companion is not None,
             ),
             JsonOutput(LITERATURE_SURVEY_SCHEMA, repair="format"),
             self.recipe.model,
+            inputs=inputs
+            + (
+                _artifact_input(
+                    context, "selected-evidence", "planning/evidence"
+                ),
+            ),
         )
         outcome = execute_semantically_validated_task(
             self.task_service,
@@ -753,7 +881,7 @@ class CompanionBuildHandler:
                 ],
             ),
             resume_input=resume_input,
-            options=self.execution.llm,
+            options=self.llm_options,
         )
         if isinstance(outcome, Paused):
             return outcome
@@ -770,6 +898,8 @@ class CompanionBuildHandler:
         resume_input: Any,
         source: RichDocument,
         request_plan: Mapping[str, Any],
+        *,
+        inputs: tuple[LLMInputArtifact, ...],
     ) -> Mapping[str, Any] | Paused | Failed:
         existing = frozen_evidence(context, request_plan)
         if existing is not None:
@@ -791,19 +921,19 @@ class CompanionBuildHandler:
         request = LLMRequest(
             task_id("evidence-research", semantic),
             evidence_research_prompt(
-                requests=mapping_list(
-                    request_plan.get("requests"),
-                    "literature requests",
-                ),
-                blocks=[
-                    _source_block_document(source, item)
-                    for item in source.blocks
-                ],
                 target_language=self.request.target_language,
                 intent=self.request.effective_intent,
             ),
             JsonOutput(EVIDENCE_RESEARCH_SCHEMA, repair="format"),
             self.recipe.model,
+            inputs=inputs
+            + (
+                _artifact_input(
+                    context,
+                    "literature-requests",
+                    "planning/literature-requests",
+                ),
+            ),
         )
         outcome = execute_semantically_validated_task(
             self.task_service,
@@ -815,7 +945,7 @@ class CompanionBuildHandler:
                 context, request_plan, raw
             ),
             resume_input=resume_input,
-            options=self.execution.llm,
+            options=self.llm_options,
         )
         if isinstance(outcome, Paused):
             return outcome
@@ -835,6 +965,8 @@ class CompanionBuildHandler:
         literature_survey: Mapping[str, Any],
         evidence: Sequence[Mapping[str, Any]],
         prior_companion: Mapping[str, Any] | None,
+        *,
+        inputs: tuple[LLMInputArtifact, ...],
     ) -> tuple[dict[str, Any], ...] | Paused | Failed:
         units = tuple(
             WorkUnit(
@@ -874,18 +1006,26 @@ class CompanionBuildHandler:
                     document_outline=[
                         item.title for item in chapters
                     ],
-                    blocks=[
-                        _source_block_document(source, blocks[item])
-                        for item in chapter.block_ids
-                    ],
+                    block_ids=chapter.block_ids,
                     target_language=self.request.target_language,
                     intent=self.request.effective_intent,
-                    literature_survey=literature_survey,
-                    selected_evidence=evidence,
-                    prior_companion=prior_companion,
+                    has_prior_companion=prior_companion is not None,
                 ),
                 JsonOutput(CHAPTER_PLAN_SCHEMA, repair="format"),
                 self.recipe.model,
+                inputs=inputs
+                + (
+                    _artifact_input(
+                        context,
+                        "literature-survey",
+                        "planning/literature-survey",
+                    ),
+                    _artifact_input(
+                        context,
+                        "selected-evidence",
+                        "planning/evidence",
+                    ),
+                ),
             )
             outcome = execute_semantically_validated_task(
                 self.task_service,
@@ -908,7 +1048,7 @@ class CompanionBuildHandler:
                     "chapter_id": chapter.chapter_id,
                 },
                 resume_input=resume_input,
-                options=self.execution.llm,
+                options=self.llm_options,
             )
             if isinstance(outcome, Paused):
                 return outcome
@@ -962,6 +1102,7 @@ class CompanionBuildHandler:
         language: Mapping[str, Any],
         translation_required: bool,
         prior_companion: Mapping[str, Any] | None,
+        model_inputs: tuple[LLMInputArtifact, ...],
     ) -> tuple[AcceptedChapter, ...] | Paused | Failed:
         by_chapter = {item.chapter_id: item for item in chapters}
         by_plan = {str(item["chapter_id"]): item for item in plans}
@@ -1044,7 +1185,7 @@ class CompanionBuildHandler:
                     glossary=glossary,
                     target_language=self.request.target_language,
                     model=self.recipe.model,
-                    execution=self.execution.llm,
+                    execution=self.llm_options,
                     resume_input=resume_input,
                     artifact_prefix=f"chapters/{chapter_id}/translation",
                 )
@@ -1093,9 +1234,10 @@ class CompanionBuildHandler:
 
         guide_loops: list[LoopSpec] = []
         guide_contexts: dict[str, Mapping[str, Any]] = {}
-        replay_guide_batch = (
-            context.artifacts.find("proposer-reviewer/request") is not None
+        existing_guide_batch = context.artifacts.find(
+            "proposer-reviewer/batch/result"
         )
+        replay_guide_batch = existing_guide_batch is not None
         for chapter in chapters:
             artifact_id = f"chapters/{chapter.chapter_id}/guide-accepted"
             existing = context.artifacts.find(artifact_id)
@@ -1119,24 +1261,16 @@ class CompanionBuildHandler:
                 completed_results[f"guide-{chapter.chapter_id}"] = read_json(
                     context, existing, "accepted chapter guide"
                 )
-            source_documents = [
-                _source_block_document(source, blocks[item])
-                for item in chapter.block_ids
-            ]
             guide_context = {
                 "target_language": self.request.target_language,
                 "language_result": language_identity,
                 "plan": dict(plan),
-                "blocks": planned_source_documents(plan, source_documents),
+                "block_ids": list(chapter.block_ids),
                 "glossary": list(chapter_entries[chapter.chapter_id]),
                 "selected_evidence": list(
                     evidence_by_chapter[chapter.chapter_id]
                 ),
-                "prior_companion": (
-                    dict(prior_companion)
-                    if prior_companion is not None
-                    else None
-                ),
+                "has_prior_companion": prior_companion is not None,
             }
             guide_contexts[chapter.chapter_id] = guide_context
             guide_loops.append(
@@ -1169,28 +1303,32 @@ class CompanionBuildHandler:
             )
 
         if guide_loops:
-            guide_outcome = ProposerReviewerService(
-                self.task_service
-            ).execute(
-                context,
-                BatchRequest(
-                    BATCH_SCHEMA_VERSION,
-                    "companion-chapter-guides",
-                    tuple(guide_loops),
-                    BatchFailurePolicy.FAIL_FAST,
-                ),
-                options=ProposerReviewerExecutionOptions(
-                    max_concurrent_loops=self.execution.workers,
-                    max_concurrent_workers=1,
-                    llm=self.execution.llm,
-                ),
-            )
-            if isinstance(guide_outcome, Paused):
-                return guide_outcome
-            if isinstance(guide_outcome, Failed):
-                return guide_outcome
-            assert isinstance(guide_outcome, Succeeded)
-            if guide_outcome.result_ref is None:
+            guide_result_ref = existing_guide_batch
+            if guide_result_ref is None:
+                guide_outcome = ProposerReviewerService(
+                    self.task_service
+                ).execute(
+                    context,
+                    BatchRequest(
+                        BATCH_SCHEMA_VERSION,
+                        "companion-chapter-guides",
+                        tuple(guide_loops),
+                        BatchFailurePolicy.FAIL_FAST,
+                        model_inputs,
+                    ),
+                    options=ProposerReviewerExecutionOptions(
+                        max_concurrent_loops=self.execution.workers,
+                        max_concurrent_workers=1,
+                        llm=self.llm_options,
+                    ),
+                )
+                if isinstance(guide_outcome, Paused):
+                    return guide_outcome
+                if isinstance(guide_outcome, Failed):
+                    return guide_outcome
+                assert isinstance(guide_outcome, Succeeded)
+                guide_result_ref = guide_outcome.result_ref
+            if guide_result_ref is None:
                 return Failed(
                     RunError(
                         "chapter_guide_batch_invalid",
@@ -1200,7 +1338,7 @@ class CompanionBuildHandler:
             guide_batch = decode_batch_result(
                 read_json(
                     context,
-                    guide_outcome.result_ref,
+                    guide_result_ref,
                     "chapter guide proposer-reviewer result",
                 )
             )
@@ -1545,6 +1683,85 @@ def _prior_companion_reference(
             for item in book.bibliography
         ],
     }
+
+
+def _prior_reference_input(
+    context: RunContext,
+    prior_companion: Mapping[str, Any] | None,
+) -> LLMInputArtifact | None:
+    if prior_companion is None:
+        return None
+    ref = context.artifacts.find(_PRIOR_REFERENCE_ARTIFACT)
+    if ref is None:
+        ref = context.artifacts.publish_json(
+            _PRIOR_REFERENCE_ARTIFACT, dict(prior_companion)
+        )
+    elif read_json(context, ref, "prior Companion reference") != dict(
+        prior_companion
+    ):
+        raise CompanionContentError(
+            "prior_companion_reference_mismatch",
+            "Frozen prior Companion reference differs from staged reuse input.",
+        )
+    return _llm_input(context, "prior-companion", ref)
+
+
+def _artifact_input(
+    context: RunContext,
+    input_id: str,
+    artifact_id: str,
+) -> LLMInputArtifact:
+    ref = context.artifacts.find(artifact_id)
+    if ref is None:
+        raise CompanionContentError(
+            "model_input_missing",
+            f"Required model input artifact is missing: {artifact_id}.",
+        )
+    return _llm_input(context, input_id, ref)
+
+
+def _llm_input(
+    context: RunContext,
+    input_id: str,
+    ref: ArtifactRef,
+) -> LLMInputArtifact:
+    return LLMInputArtifact(
+        input_id,
+        ArtifactSourceRef(context.run_id, ref.artifact_id, ref.digest),
+        ref.media_type,
+    )
+
+
+def _companion_llm_options(
+    execution: CompanionExecutionOptions,
+):
+    """Expose the exact paper cache and installed CLI to direct workers."""
+
+    values = dict(execution.llm.runtime_environment.values)
+    cache_root = ArcPaperService(
+        cache_root=execution.paper_cache_root
+    ).cache_root
+    values["ARC_PAPER_CACHE"] = str(cache_root)
+    path_value = values.get("PATH") or ""
+    command = shutil.which("arc-paper", path=path_value)
+    if command is None:
+        executable_name = (
+            "arc-paper.exe" if os.name == "nt" else "arc-paper"
+        )
+        candidate = Path(sys.executable).resolve().parent / executable_name
+        if candidate.is_file():
+            command = str(candidate)
+    if command is not None:
+        command_dir = str(Path(command).resolve().parent)
+        path_parts = path_value.split(os.pathsep) if path_value else []
+        if command_dir not in path_parts:
+            values["PATH"] = os.pathsep.join(
+                [command_dir, *path_parts]
+            )
+    return replace(
+        execution.llm,
+        runtime_environment=ArcRuntimeEnvironment(values),
+    )
 
 
 def _optional_document_digest(

@@ -96,9 +96,7 @@ class _GuideTasks:
                         "kind": "paper",
                         "query": "Inspect directly relevant literature.",
                         "purpose": "Exercise the frozen research log.",
-                        "anchor_block_ids": [
-                            payload["blocks"][0]["block_id"]
-                        ],
+                        "anchor_block_ids": [payload["block_ids"][0]],
                     }
                 ]
             }
@@ -124,10 +122,23 @@ class _GuideTasks:
                 ]
             }
         elif "chapter-plan-prompt" in contract:
+            index_input = next(
+                item
+                for item in request.inputs
+                if item.input_id == "companion-source-index"
+            )
+            index_ref = _context.artifacts.find(
+                index_input.source.source_artifact_id
+            )
+            assert index_ref is not None
+            source_index = json.loads(
+                _context.artifacts.read_bytes(index_ref)
+            )
             self.plan_labels.extend(
-                str(block["payload"]["label"])
-                for block in payload["blocks"]
-                if block["kind"] == "equation"
+                str(block["equation_label"])
+                for block in source_index["blocks"]
+                if block["block_id"] in payload["block_ids"]
+                and block["kind"] == "equation"
             )
             value = {
                 "chapter_id": payload["chapter_id"],
@@ -140,12 +151,12 @@ class _GuideTasks:
                 },
                 "reader_needs": [
                     {
-                        "block_id": block["block_id"],
+                        "block_id": block_id,
                         "needs_companion": False,
                         "reason": "The visual-label fixture is self-contained.",
                         "learning_unit_ids": [],
                     }
-                    for block in payload["blocks"]
+                    for block_id in payload["block_ids"]
                 ],
                 "learning_units": [],
             }
