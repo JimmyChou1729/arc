@@ -69,6 +69,16 @@ def _pdf(repository: SourceRepository):
 
 
 def _request_payload(prompt: str) -> tuple[str, dict]:
+    if prompt.startswith("## Package protocol\n"):
+        sections: dict[str, str] = {}
+        for raw_section in prompt.removeprefix("## ").split("\n\n## "):
+            heading, separator, body = raw_section.partition("\n")
+            assert separator
+            sections[heading] = body
+        contract = sections["Worker instructions"].splitlines()[0]
+        payload = json.loads(sections["Caller context"])
+        payload["_round_task"] = json.loads(sections["Round task"])
+        return contract.removeprefix("Contract: "), payload
     first, _blank, rest = prompt.partition("\n\n")
     _instruction, marker, payload = rest.partition("\n\nInput JSON:\n")
     assert marker
@@ -87,39 +97,6 @@ class _GuideTasks:
                 "confidence": "low",
                 "basis": "No author is confirmed by this fixture.",
                 "anchor_block_ids": [],
-            }
-        elif "literature-request-prompt" in contract:
-            value = {
-                "requests": [
-                    {
-                        "request_id": "research-log",
-                        "kind": "paper",
-                        "query": "Inspect directly relevant literature.",
-                        "purpose": "Exercise the frozen research log.",
-                        "anchor_block_ids": [payload["block_ids"][0]],
-                    }
-                ]
-            }
-        elif "evidence-research-prompt" in contract:
-            value = {
-                "responses": [
-                    {
-                        "request_id": "research-log",
-                        "candidates": [
-                            {
-                                "evidence_id": f"candidate-{index}",
-                                "title": f"Candidate {index}",
-                                "content": "Inspected but not selected.",
-                                "source": f"fixture:{index}",
-                            }
-                            for index in range(1, 21)
-                        ],
-                        "selected_evidence_ids": [],
-                        "selection_rationale": (
-                            "No candidate adds value to this visual-label fixture."
-                        ),
-                    }
-                ]
             }
         elif "chapter-plan-prompt" in contract:
             index_input = next(
@@ -160,9 +137,28 @@ class _GuideTasks:
                 ],
                 "learning_units": [],
             }
+        elif "chapter-learning-review-prompt" in contract:
+            value = {
+                "schema_version": "arc.proposer_reviewer.review.v1",
+                "action": "stop",
+                "reason": "The self-contained fixture needs no additions.",
+                "feedback": {"guide-proposer": "No revision is needed."},
+                "payload": {
+                    "reader_needs_satisfied": True,
+                    "grounding_sufficient": True,
+                    "remaining_issues": [],
+                    "suggested_learning_units": [],
+                    "suggested_references": [],
+                },
+            }
+        elif "chapter-learning-prompt" in contract:
+            value = {"learning_units": [], "references": []}
         else:  # pragma: no cover - the visual service is replaced in these tests
             raise AssertionError(f"unexpected task contract: {contract}")
         return LLMCompleted(value, "fake", "fake", None, None)
+
+    def execute(self, context, request, **kwargs):
+        return self.execute_or_resume(context, request, **kwargs)
 
 
 class _Translation:

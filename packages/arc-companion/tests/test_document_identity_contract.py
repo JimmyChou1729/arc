@@ -274,10 +274,12 @@ def test_recipe_identity_reserves_author_prompt_and_decodes_v5(
         }
     }
     legacy["schema_version"] = "arc.companion.generation_recipe.v5"
+    legacy["literature_request_prompt"] = "legacy.literature-request"
+    legacy["literature_survey_prompt"] = "legacy.literature-survey"
 
     decoded = decode_generation_recipe(legacy)
 
-    assert encoded["schema_version"] == "arc.companion.generation_recipe.v9"
+    assert encoded["schema_version"] == "arc.companion.generation_recipe.v10"
     assert encoded["author_identity_prompt"] == recipe.author_identity_prompt
     assert decoded.author_identity_prompt == recipe.author_identity_prompt
 
@@ -312,10 +314,12 @@ def test_recipe_identity_decodes_v6_without_evidence_prompt() -> None:
         }
     }
     legacy["schema_version"] = "arc.companion.generation_recipe.v6"
+    legacy["literature_request_prompt"] = "legacy.literature-request"
+    legacy["literature_survey_prompt"] = "legacy.literature-survey"
 
     decoded = decode_generation_recipe(legacy)
 
-    assert decoded.evidence_research_prompt == recipe.evidence_research_prompt
+    assert decoded.chapter_plan_prompt == recipe.chapter_plan_prompt
 
 
 def test_recipe_identity_decodes_v7_with_terminal_revision_defaults() -> None:
@@ -330,6 +334,9 @@ def test_recipe_identity_decodes_v7_with_terminal_revision_defaults() -> None:
         }
     }
     legacy["schema_version"] = "arc.companion.generation_recipe.v7"
+    legacy["literature_request_prompt"] = "legacy.literature-request"
+    legacy["evidence_research_prompt"] = "legacy.evidence-research"
+    legacy["literature_survey_prompt"] = "legacy.literature-survey"
 
     decoded = decode_generation_recipe(legacy)
 

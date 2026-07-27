@@ -40,11 +40,15 @@ from arc_paper import (
     EquationLabelReviewService,
     PdftoppmFullPageRenderer,
     RichDocument,
+    ReferenceMaterialCache,
+    ReferenceCacheError,
     SourceFormat,
     SourceRepositoryError,
     apply_visual_equation_labels,
     detect_suspicious_equation_labels,
     cached_document_ref_to_document,
+    cached_reference_material_from_document,
+    cached_reference_material_to_document,
     rich_document_from_document,
     rich_document_to_document,
 )
@@ -55,6 +59,7 @@ from arc_proposer_reviewer import (
     LoopSpec,
     ProposerFailurePolicy,
     ProposerReviewerService,
+    RevisionContextMode,
     WorkerSpec,
 )
 from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
@@ -62,10 +67,6 @@ from arc_proposer_reviewer.protocol import decode_batch_result
 
 from ._build_support import (
     accepted_chapter_document,
-    bibliography_contracts,
-    evidence_digest,
-    freeze_evidence,
-    frozen_evidence,
     mapping,
     mapping_list,
     read_json,
@@ -76,6 +77,7 @@ from .contracts import (
     AcceptedBook,
     AcceptedChapter,
     CompanionContentCodec,
+    EvidenceSource,
     GlossaryEntry,
     LearningUnit,
     SourceAnchor,
@@ -86,8 +88,6 @@ from .generation_validation import (
     validate_author_identity,
     validate_chapter_guide,
     validate_chapter_plan,
-    validate_literature_request_plan,
-    validate_literature_survey,
 )
 from .llm_runtime import (
     CompanionLLMError,
@@ -108,19 +108,10 @@ from .prompts import (
     CHAPTER_GUIDE_PROPOSAL_SCHEMA,
     CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA,
     CHAPTER_PLAN_SCHEMA,
-    EVIDENCE_RESEARCH_PROMPT_VERSION,
-    EVIDENCE_RESEARCH_SCHEMA,
-    LITERATURE_REQUEST_PLAN_SCHEMA,
-    LITERATURE_REQUEST_PROMPT_VERSION,
-    LITERATURE_SURVEY_PROMPT_VERSION,
-    LITERATURE_SURVEY_SCHEMA,
     author_identity_prompt,
     chapter_guide_proposer_instructions,
     chapter_guide_reviewer_instructions,
     chapter_plan_prompt,
-    evidence_research_prompt,
-    literature_request_prompt,
-    literature_survey_prompt,
 )
 from .reader_labels import ReaderLabelError, resolve_reader_labels
 from .reading_order import first_visible_citation_ids
@@ -145,7 +136,7 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v6"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v7"
 COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
     {
         COMPANION_BUILD_HANDLER,
@@ -269,35 +260,6 @@ class CompanionBuildHandler:
                 (prior_input,) if prior_input is not None else ()
             )
 
-            literature_requests = self._literature_requests(
-                context,
-                resume_input,
-                source,
-                prior_companion,
-                inputs=document_inputs,
-            )
-            if isinstance(literature_requests, (Paused, Failed)):
-                return literature_requests
-            evidence_collection = self._evidence_research(
-                context,
-                resume_input,
-                source,
-                literature_requests,
-                inputs=document_inputs,
-            )
-            if isinstance(evidence_collection, (Paused, Failed)):
-                return evidence_collection
-            evidence = evidence_collection["selected_evidence"]
-            literature_survey = self._literature_survey(
-                context,
-                resume_input,
-                source,
-                evidence,
-                prior_companion,
-                inputs=document_inputs,
-            )
-            if isinstance(literature_survey, (Paused, Failed)):
-                return literature_survey
             plans = self._plans(
                 context,
                 resume_input,
@@ -305,8 +267,6 @@ class CompanionBuildHandler:
                 chapters,
                 blocks,
                 title,
-                literature_survey,
-                evidence,
                 prior_companion,
                 inputs=document_inputs,
             )
@@ -342,7 +302,6 @@ class CompanionBuildHandler:
                 chapters,
                 plans,
                 glossary,
-                evidence,
                 blocks,
                 source=source,
                 language=language,
@@ -364,6 +323,11 @@ class CompanionBuildHandler:
                     chapters_outcome,
                     glossary_contracts,
                 )
+                bibliography = _chapter_reference_contracts(
+                    context,
+                    chapters,
+                    cited_ids=cited_ids,
+                )
                 book = AcceptedBook(
                     document_digest=source.document_digest,
                     title=title,
@@ -376,9 +340,7 @@ class CompanionBuildHandler:
                     ),
                     chapters=chapters_outcome,
                     glossary=glossary_contracts,
-                    bibliography=bibliography_contracts(
-                        evidence, cited_ids=cited_ids
-                    ),
+                    bibliography=bibliography,
                 )
                 require_valid_accepted_book(
                     book,
@@ -755,209 +717,6 @@ class CompanionBuildHandler:
         validate_build_diagnostics(document)
         context.artifacts.publish_json(_DIAGNOSTICS_ARTIFACT, document)
 
-    def _literature_requests(
-        self,
-        context: RunContext,
-        resume_input: Any,
-        source: RichDocument,
-        prior_companion: Mapping[str, Any] | None,
-        *,
-        inputs: tuple[LLMInputArtifact, ...],
-    ) -> Mapping[str, Any] | Paused | Failed:
-        artifact_id = "planning/literature-requests"
-        existing = context.artifacts.find(artifact_id)
-        if existing is not None:
-            return read_json(
-                context, existing, "literature request plan"
-            )
-        prompt_contract = getattr(
-            self.recipe,
-            "literature_request_prompt",
-            LITERATURE_REQUEST_PROMPT_VERSION,
-        )
-        semantic = {
-            "document_digest": source.document_digest,
-            "intent": self.request.effective_intent,
-            "prompt_contract": prompt_contract,
-            "prior_companion_digest": _optional_document_digest(
-                prior_companion
-            ),
-        }
-        request = LLMRequest(
-            task_id("literature-requests", semantic),
-            literature_request_prompt(
-                block_ids=[item.block_id for item in source.blocks],
-                intent=self.request.effective_intent,
-                has_prior_companion=prior_companion is not None,
-            ),
-            JsonOutput(
-                LITERATURE_REQUEST_PLAN_SCHEMA, repair="format"
-            ),
-            self.recipe.model,
-            inputs=inputs,
-        )
-        outcome = execute_semantically_validated_task(
-            self.task_service,
-            context,
-            request,
-            candidate_id="planning/literature-requests.json",
-            description="literature request planning",
-            validate=lambda raw: validate_literature_request_plan(
-                raw,
-                block_ids=[item.block_id for item in source.blocks],
-            ),
-            resume_input=resume_input,
-            options=self.llm_options,
-        )
-        if isinstance(outcome, Paused):
-            return outcome
-        if isinstance(outcome, LLMFailed):
-            return Failed(run_error_from_failure(outcome))
-        assert isinstance(outcome, SemanticTaskCompleted)
-        value = outcome.value
-        context.artifacts.publish_json(artifact_id, value)
-        return value
-
-    def _literature_survey(
-        self,
-        context: RunContext,
-        resume_input: Any,
-        source: RichDocument,
-        evidence: Sequence[Mapping[str, Any]],
-        prior_companion: Mapping[str, Any] | None,
-        *,
-        inputs: tuple[LLMInputArtifact, ...],
-    ) -> Mapping[str, Any] | Paused | Failed:
-        artifact_id = "planning/literature-survey"
-        existing = context.artifacts.find(artifact_id)
-        if existing is not None:
-            return read_json(context, existing, "literature survey")
-        if not evidence:
-            value: dict[str, Any] = {
-                "themes": [],
-                "limitations": [
-                    "No external evidence was selected for this document."
-                ],
-            }
-            context.artifacts.publish_json(artifact_id, value)
-            return value
-        prompt_contract = getattr(
-            self.recipe,
-            "literature_survey_prompt",
-            LITERATURE_SURVEY_PROMPT_VERSION,
-        )
-        semantic = {
-            "document_digest": source.document_digest,
-            "intent": self.request.effective_intent,
-            "evidence_digest": evidence_digest(evidence),
-            "prompt_contract": prompt_contract,
-            "prior_companion_digest": _optional_document_digest(
-                prior_companion
-            ),
-        }
-        request = LLMRequest(
-            task_id("literature-survey", semantic),
-            literature_survey_prompt(
-                block_ids=[item.block_id for item in source.blocks],
-                intent=self.request.effective_intent,
-                has_prior_companion=prior_companion is not None,
-            ),
-            JsonOutput(LITERATURE_SURVEY_SCHEMA, repair="format"),
-            self.recipe.model,
-            inputs=inputs
-            + (
-                _artifact_input(
-                    context, "selected-evidence", "planning/evidence"
-                ),
-            ),
-        )
-        outcome = execute_semantically_validated_task(
-            self.task_service,
-            context,
-            request,
-            candidate_id="planning/literature-survey.json",
-            description="literature survey",
-            validate=lambda raw: validate_literature_survey(
-                raw,
-                block_ids=[item.block_id for item in source.blocks],
-                evidence_ids=[
-                    str(item["evidence_id"]) for item in evidence
-                ],
-            ),
-            resume_input=resume_input,
-            options=self.llm_options,
-        )
-        if isinstance(outcome, Paused):
-            return outcome
-        if isinstance(outcome, LLMFailed):
-            return Failed(run_error_from_failure(outcome))
-        assert isinstance(outcome, SemanticTaskCompleted)
-        value = outcome.value
-        context.artifacts.publish_json(artifact_id, value)
-        return value
-
-    def _evidence_research(
-        self,
-        context: RunContext,
-        resume_input: Any,
-        source: RichDocument,
-        request_plan: Mapping[str, Any],
-        *,
-        inputs: tuple[LLMInputArtifact, ...],
-    ) -> Mapping[str, Any] | Paused | Failed:
-        existing = frozen_evidence(context, request_plan)
-        if existing is not None:
-            return existing
-        prompt_contract = getattr(
-            self.recipe,
-            "evidence_research_prompt",
-            EVIDENCE_RESEARCH_PROMPT_VERSION,
-        )
-        semantic = {
-            "document_digest": source.document_digest,
-            "target_language": self.request.target_language,
-            "intent": self.request.effective_intent,
-            "request_plan_digest": hashlib.sha256(
-                canonical_json_bytes(dict(request_plan))
-            ).hexdigest(),
-            "prompt_contract": prompt_contract,
-        }
-        request = LLMRequest(
-            task_id("evidence-research", semantic),
-            evidence_research_prompt(
-                target_language=self.request.target_language,
-                intent=self.request.effective_intent,
-            ),
-            JsonOutput(EVIDENCE_RESEARCH_SCHEMA, repair="format"),
-            self.recipe.model,
-            inputs=inputs
-            + (
-                _artifact_input(
-                    context,
-                    "literature-requests",
-                    "planning/literature-requests",
-                ),
-            ),
-        )
-        outcome = execute_semantically_validated_task(
-            self.task_service,
-            context,
-            request,
-            candidate_id="planning/evidence-research.json",
-            description="evidence research",
-            validate=lambda raw: freeze_evidence(
-                context, request_plan, raw
-            ),
-            resume_input=resume_input,
-            options=self.llm_options,
-        )
-        if isinstance(outcome, Paused):
-            return outcome
-        if isinstance(outcome, LLMFailed):
-            return Failed(run_error_from_failure(outcome))
-        assert isinstance(outcome, SemanticTaskCompleted)
-        return outcome.value
-
     def _plans(
         self,
         context: RunContext,
@@ -966,8 +725,6 @@ class CompanionBuildHandler:
         chapters: tuple[SourceChapter, ...],
         blocks: Mapping[str, Any],
         document_title: str,
-        literature_survey: Mapping[str, Any],
-        evidence: Sequence[Mapping[str, Any]],
         prior_companion: Mapping[str, Any] | None,
         *,
         inputs: tuple[LLMInputArtifact, ...],
@@ -982,10 +739,6 @@ class CompanionBuildHandler:
                     "intent": self.request.effective_intent,
                     "content_contract": self.request.content_contract,
                     "prompt_contract": self.recipe.chapter_plan_prompt,
-                    "literature_survey_digest": hashlib.sha256(
-                        canonical_json_bytes(dict(literature_survey))
-                    ).hexdigest(),
-                    "evidence_digest": evidence_digest(evidence),
                     "prior_companion_digest": _optional_document_digest(
                         prior_companion
                     ),
@@ -1017,19 +770,7 @@ class CompanionBuildHandler:
                 ),
                 JsonOutput(CHAPTER_PLAN_SCHEMA, repair="format"),
                 self.recipe.model,
-                inputs=inputs
-                + (
-                    _artifact_input(
-                        context,
-                        "literature-survey",
-                        "planning/literature-survey",
-                    ),
-                    _artifact_input(
-                        context,
-                        "selected-evidence",
-                        "planning/evidence",
-                    ),
-                ),
+                inputs=inputs,
             )
             outcome = execute_semantically_validated_task(
                 self.task_service,
@@ -1041,9 +782,6 @@ class CompanionBuildHandler:
                     raw,
                     chapter_id=chapter.chapter_id,
                     block_ids=chapter.block_ids,
-                    evidence_ids=[
-                        str(item["evidence_id"]) for item in evidence
-                    ],
                 ),
                 # Caller-owned routing identity is a deterministic repair, not
                 # model-authored scientific content.
@@ -1099,7 +837,6 @@ class CompanionBuildHandler:
         chapters: tuple[SourceChapter, ...],
         plans: Sequence[Mapping[str, Any]],
         glossary: Mapping[str, Any],
-        evidence: Sequence[Mapping[str, Any]],
         blocks: Mapping[str, Any],
         *,
         source: RichDocument,
@@ -1110,27 +847,6 @@ class CompanionBuildHandler:
     ) -> tuple[AcceptedChapter, ...] | Paused | Failed:
         by_chapter = {item.chapter_id: item for item in chapters}
         by_plan = {str(item["chapter_id"]): item for item in plans}
-        evidence_by_id = {
-            str(item["evidence_id"]): item for item in evidence
-        }
-        evidence_by_chapter = {
-            chapter.chapter_id: tuple(
-                evidence_by_id[evidence_id]
-                for evidence_id in dict.fromkeys(
-                    str(evidence_id)
-                    for unit in mapping_list(
-                        by_plan[chapter.chapter_id].get(
-                            "learning_units"
-                        ),
-                        "learning units",
-                    )
-                    for evidence_id in unit.get(
-                        "evidence_ids", []
-                    )
-                )
-            )
-            for chapter in chapters
-        }
         entries = _glossary_entries(glossary)
         chapter_entries = {
             chapter.chapter_id: _literal_glossary_entries(
@@ -1251,16 +967,6 @@ class CompanionBuildHandler:
                 )
                 continue
             plan = by_plan[chapter.chapter_id]
-            if not mapping_list(
-                plan.get("learning_units"), "planned learning units"
-            ):
-                empty = {
-                    "chapter_id": chapter.chapter_id,
-                    "learning_units": [],
-                }
-                context.artifacts.publish_json(artifact_id, empty)
-                completed_results[f"guide-{chapter.chapter_id}"] = empty
-                continue
             if existing is not None:
                 completed_results[f"guide-{chapter.chapter_id}"] = read_json(
                     context, existing, "accepted chapter guide"
@@ -1271,9 +977,6 @@ class CompanionBuildHandler:
                 "plan": dict(plan),
                 "block_ids": list(chapter.block_ids),
                 "glossary": list(chapter_entries[chapter.chapter_id]),
-                "selected_evidence": list(
-                    evidence_by_chapter[chapter.chapter_id]
-                ),
                 "has_prior_companion": prior_companion is not None,
             }
             guide_contexts[chapter.chapter_id] = guide_context
@@ -1302,6 +1005,9 @@ class CompanionBuildHandler:
                     ),
                     review_final_round=(
                         self.recipe.chapter_guide_review_final_round
+                    ),
+                    revision_context_mode=(
+                        RevisionContextMode.FULL_REVIEW_ENVELOPE
                     ),
                 )
             )
@@ -1367,12 +1073,14 @@ class CompanionBuildHandler:
                 candidate_id = f"chapters/{chapter_id}/guide-final.json"
                 candidate_path = context.working.find_candidate(candidate_id)
                 if candidate_path is None:
-                    candidate = {
-                        **proposal,
-                        # Routing identity is deterministic caller data, not
-                        # model-authored semantic content.
-                        "chapter_id": chapter_id,
-                    }
+                    candidate = _normalize_chapter_reference_ids(
+                        {
+                            **proposal,
+                            # Routing identity is deterministic caller data,
+                            # not model-authored semantic content.
+                            "chapter_id": chapter_id,
+                        }
+                    )
                     candidate_path = context.working.write_candidate_json(
                         candidate_id, candidate
                     )
@@ -1380,10 +1088,12 @@ class CompanionBuildHandler:
                     stored_candidate = context.working.read_candidate_json(
                         candidate_id
                     )
-                    candidate = {
-                        **stored_candidate,
-                        "chapter_id": chapter_id,
-                    }
+                    candidate = _normalize_chapter_reference_ids(
+                        {
+                            **stored_candidate,
+                            "chapter_id": chapter_id,
+                        }
+                    )
                     if candidate != stored_candidate:
                         candidate_path = (
                             context.working.write_candidate_json(
@@ -1394,14 +1104,10 @@ class CompanionBuildHandler:
                     accepted_guide = validate_chapter_guide(
                         candidate,
                         plan=mapping(guide_context["plan"], "chapter plan"),
-                        evidence_ids=[
-                            str(item["evidence_id"])
-                            for item in mapping_list(
-                                guide_context["selected_evidence"],
-                                "selected evidence",
-                            )
-                        ],
-                        allow_removed=True,
+                    )
+                    _verify_cached_reference_materials(
+                        accepted_guide,
+                        cache_root=self.execution.paper_cache_root,
                     )
                 except CompanionContentError as exc:
                     return Failed(
@@ -1524,6 +1230,180 @@ class CompanionBuildHandler:
                     )
             accepted.append(chapter_value)
         return tuple(accepted)
+
+
+def _normalize_chapter_reference_ids(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Assign stable publication IDs while preserving model-authored metadata."""
+
+    result = dict(value)
+    references = mapping_list(result.get("references"), "chapter references")
+    local_to_published: dict[str, str] = {}
+    normalized_by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for reference in references:
+        local_id = str(reference.get("reference_id") or "").strip()
+        identity = {
+            "title": str(reference.get("title") or "").strip(),
+            "source": str(reference.get("source") or "").strip(),
+            "dois": sorted(
+                {
+                    str(item).strip().casefold()
+                    for item in reference.get("dois", [])
+                    if isinstance(item, str) and item.strip()
+                }
+            ),
+            "arxiv_ids": sorted(
+                {
+                    str(item).strip().casefold()
+                    for item in reference.get("arxiv_ids", [])
+                    if isinstance(item, str) and item.strip()
+                }
+            ),
+        }
+        published_id = (
+            "reference-"
+            + hashlib.sha256(canonical_json_bytes(identity)).hexdigest()[:20]
+        )
+        local_to_published[local_id] = published_id
+        normalized = {
+            **reference,
+            "reference_id": published_id,
+            "dois": identity["dois"],
+            "arxiv_ids": identity["arxiv_ids"],
+        }
+        existing = normalized_by_id.get(published_id)
+        if existing is not None and existing != normalized:
+            raise CompanionContentError(
+                "chapter_reference_identity_collision",
+                "references with the same publication identity disagree",
+            )
+        if existing is None:
+            order.append(published_id)
+            normalized_by_id[published_id] = normalized
+
+    units = []
+    for raw in mapping_list(result.get("learning_units"), "learning units"):
+        unit = dict(raw)
+        markdown = str(unit.get("content_markdown") or "")
+        for local_id, published_id in local_to_published.items():
+            markdown = markdown.replace(
+                f"[@{local_id}]",
+                f"[@{published_id}]",
+            )
+        unit["content_markdown"] = markdown
+        units.append(unit)
+    result["learning_units"] = units
+    result["references"] = [
+        normalized_by_id[reference_id] for reference_id in order
+    ]
+    return result
+
+
+def _verify_cached_reference_materials(
+    guide: Mapping[str, Any],
+    *,
+    cache_root: Path | None,
+) -> None:
+    cache = ReferenceMaterialCache(cache_root)
+    for reference in mapping_list(
+        guide.get("references"), "chapter references"
+    ):
+        raw = reference.get("cached_material")
+        if raw is None:
+            continue
+        try:
+            material = cached_reference_material_from_document(
+                mapping(raw, "cached reference material")
+            )
+            for resource in material.resources:
+                cache.read_resource(resource)
+            identity = material.identity
+            if identity.dois:
+                resolved = cache.lookup(doi=identity.dois[0])
+            elif identity.arxiv_id:
+                resolved = cache.lookup(arxiv_id=identity.arxiv_id)
+            elif identity.urls:
+                resolved = cache.lookup(url=identity.urls[0])
+            else:
+                resolved = cache.lookup(title=identity.title)
+        except (OSError, ReferenceCacheError, TypeError, ValueError) as exc:
+            raise CompanionContentError(
+                "chapter_reference_cache_invalid",
+                "cached_material is not present and readable in the configured "
+                f"shared cache: {exc}",
+            ) from exc
+        if (
+            resolved is None
+            or cached_reference_material_to_document(resolved)
+            != cached_reference_material_to_document(material)
+        ):
+            raise CompanionContentError(
+                "chapter_reference_cache_invalid",
+                "cached_material does not match the material admitted to the "
+                "configured shared cache",
+            )
+
+
+def _chapter_reference_contracts(
+    context: RunContext,
+    chapters: Sequence[SourceChapter],
+    *,
+    cited_ids: Sequence[str],
+) -> tuple[EvidenceSource, ...]:
+    by_id: dict[str, EvidenceSource] = {}
+    for chapter in chapters:
+        ref = context.artifacts.find(
+            f"chapters/{chapter.chapter_id}/guide-accepted"
+        )
+        if ref is None:
+            raise CompanionContentError(
+                "chapter_reference_missing",
+                f"accepted guide is missing for {chapter.chapter_id}",
+            )
+        guide = read_json(context, ref, "accepted chapter guide")
+        for item in mapping_list(guide.get("references"), "chapter references"):
+            value = EvidenceSource(
+                evidence_id=str(item["reference_id"]),
+                title=str(item["title"]),
+                source=str(item["source"]),
+                dois=tuple(str(value) for value in item["dois"]),
+                arxiv_ids=tuple(
+                    str(value) for value in item["arxiv_ids"]
+                ),
+                cached_document=(
+                    mapping(
+                        item["cached_document"],
+                        "cached document reference",
+                    )
+                    if item["cached_document"] is not None
+                    else None
+                ),
+                cached_material=(
+                    mapping(
+                        item["cached_material"],
+                        "cached reference material",
+                    )
+                    if item["cached_material"] is not None
+                    else None
+                ),
+            )
+            existing = by_id.get(value.evidence_id)
+            if existing is not None and existing != value:
+                raise CompanionContentError(
+                    "chapter_reference_identity_collision",
+                    "chapters disagree about shared reference metadata",
+                )
+            by_id[value.evidence_id] = value
+    missing = [reference_id for reference_id in cited_ids if reference_id not in by_id]
+    if missing:
+        raise CompanionContentError(
+            "chapter_reference_missing",
+            f"cited chapter references are missing metadata: {missing}",
+        )
+    return tuple(by_id[reference_id] for reference_id in cited_ids)
+
 
 def _validated_translations(
     value: Mapping[str, Any], *, block_ids: Sequence[str]
@@ -1683,6 +1563,18 @@ def _prior_companion_reference(
                 "evidence_id": item.evidence_id,
                 "title": item.title,
                 "source": item.source,
+                "dois": list(item.dois),
+                "arxiv_ids": list(item.arxiv_ids),
+                "cached_document": (
+                    dict(item.cached_document)
+                    if item.cached_document is not None
+                    else None
+                ),
+                "cached_material": (
+                    dict(item.cached_material)
+                    if item.cached_material is not None
+                    else None
+                ),
             }
             for item in book.bibliography
         ],

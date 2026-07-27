@@ -71,6 +71,32 @@ def validate_accepted_book(
                 "bibliography evidence IDs must be unique",
             )
         bibliography_ids.add(evidence.evidence_id)
+        parsed_source = (
+            evidence.source
+            if "://" in evidence.source
+            else f"//{evidence.source}"
+        )
+        hostname = (urlparse(parsed_source).hostname or "").casefold()
+        if (
+            hostname.endswith(".wikipedia.org")
+            and hostname != "en.wikipedia.org"
+        ):
+            _issue(
+                issues,
+                "reference_source_invalid",
+                f"{path}.source",
+                "only the English Wikipedia host is allowed",
+            )
+        if (
+            len(evidence.dois) != len(set(evidence.dois))
+            or len(evidence.arxiv_ids) != len(set(evidence.arxiv_ids))
+        ):
+            _issue(
+                issues,
+                "reference_identifier_invalid",
+                path,
+                "reference DOI and arXiv identifiers must be unique",
+            )
 
     for chapter_index, chapter in enumerate(book.chapters):
         chapter_path = f"chapters[{chapter_index}]"

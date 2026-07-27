@@ -22,7 +22,6 @@ from arc_companion.contracts import (
     ChapterPlan,
     CompanionContentCodec,
     ContentCodecError,
-    EvidenceRequest,
     EvidenceSource,
     GlossaryEntry,
     LearningUnit,
@@ -508,13 +507,18 @@ def test_accepted_book_codec_is_canonical_strict_and_immutable(
         CompanionContentCodec.from_document(document)
 
 
-def test_accepted_book_v2_decodes_to_v5_markdown_contract(
+def test_accepted_book_v2_decodes_to_current_markdown_contract(
     accepted_book: AcceptedBook,
 ) -> None:
     document = CompanionContentCodec.to_document(accepted_book)
     document["schema_version"] = "arc.companion.accepted_book.v2"
     del document["authors"]
     del document["reader_labels"]
+    for reference in document["bibliography"]:
+        reference.pop("dois")
+        reference.pop("arxiv_ids")
+        reference.pop("cached_document")
+        reference.pop("cached_material")
     for chapter in document["chapters"]:
         chapter["guide"] = None
         for unit in chapter["learning_units"]:
@@ -524,7 +528,7 @@ def test_accepted_book_v2_decodes_to_v5_markdown_contract(
 
     migrated = CompanionContentCodec.from_document(document)
 
-    assert migrated.schema_version == "arc.companion.accepted_book.v5"
+    assert migrated.schema_version == "arc.companion.accepted_book.v6"
     unit = migrated.chapters[0].learning_units[0]
     assert unit.placement == "inline"
     assert unit.content_markdown == f"*{unit.title}*\n\nNormalization says the alternatives exhaust the state space."
@@ -536,13 +540,18 @@ def test_accepted_book_v4_drops_legacy_source_page_label(
     document = CompanionContentCodec.to_document(accepted_book)
     document["schema_version"] = "arc.companion.accepted_book.v4"
     document["reader_labels"]["source_page"] = "Source page {page}"
+    for reference in document["bibliography"]:
+        reference.pop("dois")
+        reference.pop("arxiv_ids")
+        reference.pop("cached_document")
+        reference.pop("cached_material")
 
     migrated = CompanionContentCodec.from_document(document)
     html = CompanionRenderer(
         asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
     ).render_web(migrated, tmp_path / "reader").read_text(encoding="utf-8")
 
-    assert migrated.schema_version == "arc.companion.accepted_book.v5"
+    assert migrated.schema_version == "arc.companion.accepted_book.v6"
     assert "source_page" not in migrated.reader_labels
     assert "Source page" not in BeautifulSoup(
         html, "html.parser"
@@ -552,8 +561,8 @@ def test_accepted_book_v4_drops_legacy_source_page_label(
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
-    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v10"
-    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v8"
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v11"
+    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v9"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
         == r"first line\newline{} second line\par third paragraph"
@@ -651,7 +660,6 @@ def test_renderer_public_import_does_not_load_llm_runtime() -> None:
                 anchor_ids=("b-intro",),
                 placement="inline",
                 purpose="Connect the equation to exhaustive alternatives.",
-                evidence_ids=("paper:1234.56789",),
             ),
         ),
     )

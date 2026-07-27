@@ -26,8 +26,8 @@ from . import rich_text
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v8"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v10"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v9"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v11"
 _SOURCE_DATE_EPOCH = "946684800"
 _GLOSSARY_PROTECTED_TEXT = re.compile(
     r"(?:https?://|mailto:)[^\s<>{}\[\]]+"
@@ -290,6 +290,8 @@ class CompanionRenderer:
                 for value in (
                     evidence.title,
                     evidence.source,
+                    *evidence.dois,
+                    *evidence.arxiv_ids,
                 )
             ):
                 raise CompanionRenderError(
@@ -370,6 +372,8 @@ class CompanionRenderer:
                     for value in (
                         evidence.title,
                         evidence.source,
+                        *evidence.dois,
+                        *evidence.arxiv_ids,
                     )
                 ):
                     raise CompanionRenderError(
@@ -808,10 +812,17 @@ def _render_html_bibliography(book: AcceptedBook, *, labels: Mapping[str, str]) 
         landing_url = _paper_landing_url(item.source)
         if landing_url is not None:
             title = f'<a href="{escape_html(landing_url)}">{title}</a>'
+        metadata = "".join(
+            f' <span class="reference-identifier">DOI: {escape_html(value)}</span>'
+            for value in item.dois
+        ) + "".join(
+            f' <span class="reference-identifier">arXiv: {escape_html(value)}</span>'
+            for value in item.arxiv_ids
+        )
         rows.append(
             f'<li id="reference-{escape_html(item.evidence_id)}">'
             f'<span class="reference-number">[{number}]</span> '
-            f"{title} — {escape_html(item.source)}</li>"
+            f"{title} — {escape_html(item.source)}{metadata}</li>"
         )
     return (
         '<section class="bibliography" id="references">'
@@ -1275,7 +1286,14 @@ def _render_tex_bibliography(book: AcceptedBook, *, labels: Mapping[str, str]) -
             if _allows_pdf_line_concat(item.source)
             else _tex_escape(item.source)
         )
-        rows.append(rf"\item \hypertarget{{reference-{_reference_token(item.evidence_id)}}}{{}}{title} --- {source}")
+        identifiers = "".join(
+            rf" DOI: {_tex_escape(value)}"
+            for value in item.dois
+        ) + "".join(
+            rf" arXiv: {_tex_escape(value)}"
+            for value in item.arxiv_ids
+        )
+        rows.append(rf"\item \hypertarget{{reference-{_reference_token(item.evidence_id)}}}{{}}{title} --- {source}{identifiers}")
     return (
         rf"\section{{{_tex_escape(labels['references'])}}}\begin{{enumerate}}"
         + "\n".join(rows)

@@ -138,7 +138,7 @@ loop. A chapter starts with a complete proposal. A reviewer may accept it
 immediately when there is no concrete improvement to make; otherwise it gives
 constructive, actionable feedback for at most two complete revisions. The
 maximum sequence is proposer-reviewer-proposer-reviewer-proposer. The final
-revision goes directly to deterministic anchor, evidence, coverage, and
+revision goes directly to deterministic anchor, reference, coverage, and
 rich-text validation, so no unused final review is generated. Companion writes
 the caller-owned chapter ID into the final candidate rather than asking the
 model to generate routing identity.
@@ -153,11 +153,15 @@ preserving readable successful work. The active PDF, HTML, and current release
 pointer are not replaced until the recovered build fully succeeds and the
 replacement release validates.
 
-Guide generation is evidence-first and selective. One document-wide research
-log must inspect at least 20 distinct candidate works or substantive
-discussions spanning source-named works, important prior history, and central
-later debates. This is not an inclusion quota: only directly relevant selected
-evidence can influence chapter planning or appear in the bibliography.
+Guide generation is selective and researched chapter by chapter. Every
+chapter runs the shared proposer-reviewer loop, including chapters whose seed
+plan contains no learning units. Proposers and reviewers may actively inspect
+new references when doing so can materially improve explanation, historical
+context, or later-information accuracy. There is no minimum or maximum
+reference count, and neither role searches or criticizes merely to accumulate
+citations. Only references actually cited by accepted learning units enter the
+bibliography. Compact reference metadata may include a verified shared
+reference-cache handle; reference bodies are never copied into model payloads.
 Paragraph-local notes and chapter-level or cross-paragraph notes have equal
 status, with placement chosen case by case. Units that merely summarize,
 paraphrase, or repeat the source are removed; retained units must add a

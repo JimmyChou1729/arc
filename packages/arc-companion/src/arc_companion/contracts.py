@@ -17,11 +17,12 @@ from types import MappingProxyType
 from typing import Any
 
 
-ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v5"
+ACCEPTED_BOOK_SCHEMA = "arc.companion.accepted_book.v6"
 _LEGACY_ACCEPTED_BOOK_SCHEMAS = {
     "arc.companion.accepted_book.v2",
     "arc.companion.accepted_book.v3",
     "arc.companion.accepted_book.v4",
+    "arc.companion.accepted_book.v5",
 }
 _LEGACY_LEARNING_SCHEMAS = {
     "arc.companion.accepted_book.v2",
@@ -115,7 +116,6 @@ class PlannedLearningUnit:
     anchor_ids: tuple[str, ...]
     placement: str
     purpose: str
-    evidence_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.unit_id:
@@ -128,29 +128,6 @@ class PlannedLearningUnit:
             raise ValueError("planned learning unit content is incomplete")
         if any(not item for item in self.anchor_ids):
             raise ValueError("planned learning unit contains an empty anchor")
-        object.__setattr__(self, "anchor_ids", tuple(self.anchor_ids))
-        object.__setattr__(self, "evidence_ids", tuple(self.evidence_ids))
-
-
-@dataclass(frozen=True)
-class EvidenceRequest:
-    request_id: str
-    kind: str
-    query: str
-    purpose: str
-    anchor_ids: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        if (
-            not self.request_id
-            or self.kind not in {"paper", "web", "user"}
-            or not self.query
-            or not self.purpose
-            or not self.anchor_ids
-        ):
-            raise ValueError("evidence request is incomplete")
-        if any(not item for item in self.anchor_ids):
-            raise ValueError("evidence request contains an empty anchor")
         object.__setattr__(self, "anchor_ids", tuple(self.anchor_ids))
 
 
@@ -260,10 +237,30 @@ class EvidenceSource:
     evidence_id: str
     title: str
     source: str
+    dois: tuple[str, ...] = ()
+    arxiv_ids: tuple[str, ...] = ()
+    cached_document: Mapping[str, Any] | None = None
+    cached_material: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.evidence_id or not self.title or not self.source:
             raise ValueError("evidence source is incomplete")
+        if any(not item for item in (*self.dois, *self.arxiv_ids)):
+            raise ValueError("evidence source identifiers must be non-empty")
+        object.__setattr__(self, "dois", tuple(self.dois))
+        object.__setattr__(self, "arxiv_ids", tuple(self.arxiv_ids))
+        if self.cached_document is not None:
+            object.__setattr__(
+                self,
+                "cached_document",
+                _freeze_mapping(self.cached_document),
+            )
+        if self.cached_material is not None:
+            object.__setattr__(
+                self,
+                "cached_material",
+                _freeze_mapping(self.cached_material),
+            )
 
 
 @dataclass(frozen=True)
@@ -430,6 +427,18 @@ def _book_to_document(book: AcceptedBook) -> dict[str, Any]:
                 "evidence_id": item.evidence_id,
                 "title": item.title,
                 "source": item.source,
+                "dois": list(item.dois),
+                "arxiv_ids": list(item.arxiv_ids),
+                "cached_document": (
+                    _thaw_json(item.cached_document)
+                    if item.cached_document is not None
+                    else None
+                ),
+                "cached_material": (
+                    _thaw_json(item.cached_material)
+                    if item.cached_material is not None
+                    else None
+                ),
             }
             for item in book.bibliography
         ],
@@ -447,7 +456,6 @@ def _plan_to_document(plan: ChapterPlan) -> dict[str, Any]:
                 "anchor_ids": list(item.anchor_ids),
                 "placement": item.placement,
                 "purpose": item.purpose,
-                "evidence_ids": list(item.evidence_ids),
             }
             for item in plan.learning_units
         ],
@@ -475,7 +483,6 @@ def _plan_from_document(value: Mapping[str, Any]) -> ChapterPlan:
                 "anchor_ids",
                 "placement",
                 "purpose",
-                "evidence_ids",
             },
             "planned learning unit",
         )
@@ -491,10 +498,6 @@ def _plan_from_document(value: Mapping[str, Any]) -> ChapterPlan:
                 purpose=_string(
                     item["purpose"],
                     "planned learning unit purpose",
-                ),
-                evidence_ids=_strings(
-                    item["evidence_ids"],
-                    "planned learning unit evidence IDs",
                 ),
             )
         )
@@ -753,9 +756,22 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
     bibliography = []
     for raw in _sequence(value["bibliography"], "accepted book bibliography"):
         item = _mapping(raw, "evidence source")
+        legacy_reference = schema_version != ACCEPTED_BOOK_SCHEMA
         _fields(
             item,
-            {"evidence_id", "title", "source"},
+            (
+                {"evidence_id", "title", "source"}
+                if legacy_reference
+                else {
+                    "evidence_id",
+                    "title",
+                    "source",
+                    "dois",
+                    "arxiv_ids",
+                    "cached_document",
+                    "cached_material",
+                }
+            ),
             "evidence source",
         )
         bibliography.append(
@@ -763,6 +779,35 @@ def _book_from_document(value: Mapping[str, Any]) -> AcceptedBook:
                 evidence_id=_string(item["evidence_id"], "evidence source evidence_id"),
                 title=_string(item["title"], "evidence source title"),
                 source=_string(item["source"], "evidence source source"),
+                dois=(
+                    ()
+                    if legacy_reference
+                    else _strings(item["dois"], "evidence source DOIs")
+                ),
+                arxiv_ids=(
+                    ()
+                    if legacy_reference
+                    else _strings(
+                        item["arxiv_ids"],
+                        "evidence source arXiv identifiers",
+                    )
+                ),
+                cached_document=(
+                    None
+                    if legacy_reference or item["cached_document"] is None
+                    else _mapping(
+                        item["cached_document"],
+                        "evidence source cached_document",
+                    )
+                ),
+                cached_material=(
+                    None
+                    if legacy_reference or item["cached_material"] is None
+                    else _mapping(
+                        item["cached_material"],
+                        "evidence source cached_material",
+                    )
+                ),
             )
         )
     if legacy:
@@ -967,7 +1012,6 @@ __all__ = [
     "ChapterPlan",
     "CompanionContentCodec",
     "ContentCodecError",
-    "EvidenceRequest",
     "EvidenceSource",
     "GlossaryEntry",
     "LearningUnit",

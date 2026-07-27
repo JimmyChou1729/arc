@@ -10,31 +10,33 @@ import pytest
 
 from arc_jobs import (
     ImmutableArtifactStore,
-    ResumeReason,
     RunRepository,
     RunStatus,
 )
-from arc_llm import LLMCompleted, LLMPaused
+from arc_llm import LLMCompleted
 from arc_paper import (
+    ReferenceIdentity,
+    ReferenceMaterialCache,
     RichDocumentParserService,
     SourceFormat,
     SourceOrigin,
     SourceOriginKind,
     SourceRepository,
+    cached_reference_material_to_document,
 )
 
 from arc_companion.build import (
     COMPANION_BUILD_HANDLER,
     CompanionBuildHandler,
+    _verify_cached_reference_materials,
 )
+from arc_companion.contracts import CompanionContentCodec
+from arc_companion.generation_validation import CompanionContentError
 from arc_companion.prompts import (
     AUTHOR_IDENTITY_PROMPT_VERSION,
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
     CHAPTER_PLAN_PROMPT_VERSION,
-    EVIDENCE_RESEARCH_PROMPT_VERSION,
-    LITERATURE_REQUEST_PROMPT_VERSION,
-    LITERATURE_SURVEY_PROMPT_VERSION,
 )
 from arc_companion.request_contracts import (
     CompanionBuildRequest,
@@ -57,18 +59,20 @@ class FakeGuideTasks:
         guide_started: Event | None = None,
         translation_started: Event | None = None,
         remove_second_unit: bool = False,
-        malformed_evidence: bool = False,
-        select_evidence: bool = False,
         reviewer_stop_round: int | None = None,
+        empty_seed: bool = False,
+        with_reference: bool = False,
+        invalid_cached_material: bool = False,
         semantic_invalid_contract: str | None = None,
         semantic_invalid_calls: frozenset[int] = frozenset({1}),
     ) -> None:
         self.guide_started = guide_started
         self.translation_started = translation_started
         self.remove_second_unit = remove_second_unit
-        self.malformed_evidence = malformed_evidence
-        self.select_evidence = select_evidence
         self.reviewer_stop_round = reviewer_stop_round
+        self.empty_seed = empty_seed
+        self.with_reference = with_reference
+        self.invalid_cached_material = invalid_cached_material
         self.semantic_invalid_contract = semantic_invalid_contract
         self.semantic_invalid_calls = semantic_invalid_calls
         self.counts: Counter[str] = Counter()
@@ -109,60 +113,6 @@ class FakeGuideTasks:
                 "basis": "The fixture contains no confirmed author.",
                 "anchor_block_ids": [],
             }
-        elif contract == LITERATURE_REQUEST_PROMPT_VERSION:
-            value = {
-                "requests": [
-                    {
-                        "request_id": "research-log",
-                        "kind": "paper",
-                        "query": "Inspect directly relevant literature.",
-                        "purpose": "Test the frozen research-log boundary.",
-                        "anchor_block_ids": [payload["block_ids"][0]],
-                    }
-                ]
-            }
-        elif contract == EVIDENCE_RESEARCH_PROMPT_VERSION:
-            value = {
-                "responses": [
-                    {
-                        "request_id": "research-log",
-                        "candidates": [
-                            {
-                                "evidence_id": f"candidate-{index}",
-                                "title": f"Candidate {index}",
-                                "content": "Inspected but not selected.",
-                                "source": f"fixture:{index}",
-                            }
-                            for index in range(
-                                1, 20 if self.malformed_evidence else 21
-                            )
-                        ],
-                        "selected_evidence_ids": (
-                            ["candidate-1"]
-                            if self.select_evidence
-                            else []
-                        ),
-                        "selection_rationale": (
-                            "None adds value beyond this self-contained fixture."
-                        ),
-                    }
-                ]
-            }
-        elif contract == LITERATURE_SURVEY_PROMPT_VERSION:
-            block_id = payload["block_ids"][0]
-            evidence_id = "candidate-1"
-            value = {
-                "themes": [
-                    {
-                        "theme_id": "direct-context",
-                        "title": "Direct context",
-                        "synthesis": "One selected source adds context.",
-                        "anchor_block_ids": [block_id],
-                        "evidence_ids": [evidence_id],
-                    }
-                ],
-                "limitations": [],
-            }
         elif contract == CHAPTER_PLAN_PROMPT_VERSION:
             block_id = payload["block_ids"][0]
             units = [
@@ -171,7 +121,6 @@ class FakeGuideTasks:
                     "anchor_block_ids": [block_id],
                     "placement": "inline",
                     "purpose": "Makes one implicit connection explicit.",
-                    "evidence_ids": [],
                 }
             ]
             if self.remove_second_unit:
@@ -181,9 +130,10 @@ class FakeGuideTasks:
                         "anchor_block_ids": [block_id],
                         "placement": "chapter",
                         "purpose": "Claims to repeat the source.",
-                        "evidence_ids": [],
                     }
                 )
+            if self.empty_seed:
+                units = []
             value = {
                 "chapter_id": "model-supplied-title-not-routing-identity",
                 "reader_profile": {
@@ -203,7 +153,13 @@ class FakeGuideTasks:
                             else "This block is simple and self-contained."
                         ),
                         "learning_unit_ids": (
-                            ["intuition"] if index == 0 else []
+                            (
+                                []
+                                if self.empty_seed
+                                else ["intuition"]
+                            )
+                            if index == 0
+                            else []
                         ),
                     }
                     for index, block_id in enumerate(payload["block_ids"])
@@ -220,6 +176,16 @@ class FakeGuideTasks:
                 assert self.translation_started.is_set()
             round_task = payload["_round_task"]
             revised = round_task["kind"] == "revised_proposal"
+            proposal_units = payload["plan"]["learning_units"] or [
+                {
+                    "unit_id": "proposer-added",
+                    "anchor_block_ids": [
+                        payload["plan"]["reader_needs"][0]["block_id"]
+                    ],
+                    "placement": "inline",
+                    "purpose": "Supply the missing connection.",
+                }
+            ]
             value = {
                 "learning_units": [
                     {
@@ -229,19 +195,71 @@ class FakeGuideTasks:
                             if item["unit_id"] == "intuition"
                             else "Restatement"
                         ),
+                        "anchor_block_ids": list(
+                            item["anchor_block_ids"]
+                        ),
+                        "placement": item["placement"],
+                        "purpose": item["purpose"],
                         "content_markdown": (
-                            "A focused source-anchored explanation."
+                            "A focused source-anchored explanation "
+                            "[@fixture-reference]."
+                            if self.with_reference
+                            else "A focused source-anchored explanation."
                             if item["unit_id"] == "intuition"
                             else "The source says the same thing again."
                         ),
                     }
-                    for item in payload["plan"]["learning_units"]
+                    for item in proposal_units
                     if not (
                         revised
                         and self.remove_second_unit
                         and item["unit_id"] == "redundant"
                     )
                 ],
+                "references": (
+                    [
+                        {
+                            "reference_id": "fixture-reference",
+                            "title": "An English Reference",
+                            "source": "https://example.test/reference",
+                            "dois": ["10.1000/FIXTURE"],
+                            "arxiv_ids": ["2401.00001"],
+                            "cached_document": None,
+                            "cached_material": None,
+                            **(
+                                {
+                                    "cached_material": {
+                                        "identity": {
+                                            "arxiv_id": "2401.00001",
+                                            "dois": ["10.1000/fixture"],
+                                            "urls": [
+                                                "https://example.test/reference"
+                                            ],
+                                            "title": "An English Reference",
+                                            "inspire_recid": "",
+                                        },
+                                        "resources": [
+                                            {
+                                                "resource_sha256": "f" * 64,
+                                                "resource_size": 10,
+                                                "media_type": "text/plain",
+                                                "source_locator": (
+                                                    "https://example.test/reference"
+                                                ),
+                                                "filename": "reference.txt",
+                                            }
+                                        ],
+                                        "readable_resource": None,
+                                    }
+                                }
+                                if self.invalid_cached_material
+                                else {}
+                            ),
+                        }
+                    ]
+                    if self.with_reference
+                    else []
+                ),
             }
         elif contract == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION:
             assert "translations" not in payload["draft"]
@@ -274,6 +292,8 @@ class FakeGuideTasks:
                         if action == "stop"
                         else ["Remove any redundant restatement."]
                     ),
+                    "suggested_learning_units": [],
+                    "suggested_references": [],
                 },
             }
         else:
@@ -302,16 +322,10 @@ def _semantically_invalid_value(contract: str, value: dict) -> dict:
                 "anchor_block_ids": [],
             }
         )
-    elif contract == LITERATURE_REQUEST_PROMPT_VERSION:
-        invalid["requests"][0]["anchor_block_ids"] = ["unknown-block"]
-    elif contract == EVIDENCE_RESEARCH_PROMPT_VERSION:
-        invalid["responses"][0]["candidates"].pop()
-    elif contract == LITERATURE_SURVEY_PROMPT_VERSION:
-        invalid["themes"][0]["anchor_block_ids"] = ["unknown-block"]
     elif contract == CHAPTER_PLAN_PROMPT_VERSION:
         invalid["reader_needs"][0]["block_id"] = "unknown-block"
     elif contract == CHAPTER_GUIDE_PROMPT_VERSION:
-        invalid["learning_units"][0]["unit_id"] = "unknown-unit"
+        invalid["learning_units"][0]["anchor_block_ids"] = ["unknown-block"]
     else:
         raise AssertionError(f"unsupported invalid contract: {contract}")
     return invalid
@@ -407,28 +421,6 @@ class FakeTranslationAdapter:
         }
 
 
-class _HostTurnEvidenceTasks(FakeGuideTasks):
-    def execute_or_resume(self, context, request, **kwargs):
-        contract, _payload = _request_payload(request.prompt)
-        if contract == EVIDENCE_RESEARCH_PROMPT_VERSION:
-            request_ref = context.artifacts.publish_json(
-                "test/host-turn-request",
-                {
-                    "schema_version": "arc.llm.host_turn.v1",
-                    "state": "request_host",
-                },
-            )
-            return LLMPaused(
-                ResumeReason.INTERACTION_REQUIRED,
-                "arc-llm-host-turn",
-                {"code": "host_broker_required"},
-                request_ref=request_ref,
-                input_required=True,
-                response_contract="arc.llm.resume_input.v3",
-            )
-        return super().execute_or_resume(context, request, **kwargs)
-
-
 def _document(tmp_path: Path):
     repository = SourceRepository(tmp_path / "paper")
     artifact = repository.store_bytes(
@@ -477,7 +469,6 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     tasks = FakeGuideTasks(
         guide_started=guide_started,
         translation_started=translation_started,
-        select_evidence=True,
     )
     translation = FakeTranslationAdapter(
         mode="enabled",
@@ -516,24 +507,13 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
             "companion-source-index",
             "companion-source",
         ), contract
-    evidence_inputs = next(
-        inputs
-        for contract, inputs in tasks.request_input_ids
-        if contract == EVIDENCE_RESEARCH_PROMPT_VERSION
-    )
-    assert "literature-requests" in evidence_inputs
-    survey_inputs = next(
-        inputs
-        for contract, inputs in tasks.request_input_ids
-        if contract == LITERATURE_SURVEY_PROMPT_VERSION
-    )
-    assert "selected-evidence" in survey_inputs
     plan_inputs = next(
         inputs
         for contract, inputs in tasks.request_input_ids
         if contract == CHAPTER_PLAN_PROMPT_VERSION
     )
-    assert {"literature-survey", "selected-evidence"} <= set(plan_inputs)
+    assert "literature-survey" not in plan_inputs
+    assert "selected-evidence" not in plan_inputs
     assert tasks.runtime_environments
     assert {
         item["ARC_PAPER_CACHE"] for item in tasks.runtime_environments
@@ -617,12 +597,137 @@ def test_same_language_skips_all_translation_owned_steps(
     )
     assert completed.status is RunStatus.SUCCEEDED
     assert translation.calls == ["language"]
+
+
+def test_empty_seed_still_runs_three_proposals_and_covers_reader_need(
+    tmp_path: Path,
+) -> None:
+    tasks = FakeGuideTasks(empty_seed=True)
+    service = CompanionService(tmp_path / "jobs")
+
+    completed = service.build(
+        CompanionBuildRequest(_document(tmp_path), target_language="en"),
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 6
-    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 4
-    book = service.accepted_book(completed.run_id)
-    assert book.translation_mode == "skipped"
-    assert book.glossary == ()
-    assert book.chapters[0].translations == ()
+    store = ImmutableArtifactStore(
+        service.repository.run_directory(completed.run_id),
+        repository_root=service.repository.root,
+    )
+    book_ref = store.find("book/accepted")
+    assert book_ref is not None
+    book = CompanionContentCodec.loads(store.read_bytes(book_ref))
+    assert all(chapter.learning_units for chapter in book.chapters)
+
+
+def test_program_names_and_publishes_only_cited_chapter_references(
+    tmp_path: Path,
+) -> None:
+    tasks = FakeGuideTasks(with_reference=True)
+    service = CompanionService(tmp_path / "jobs")
+
+    completed = service.build(
+        CompanionBuildRequest(_document(tmp_path), target_language="en"),
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    store = ImmutableArtifactStore(
+        service.repository.run_directory(completed.run_id),
+        repository_root=service.repository.root,
+    )
+    book_ref = store.find("book/accepted")
+    assert book_ref is not None
+    book = CompanionContentCodec.loads(store.read_bytes(book_ref))
+    assert len(book.bibliography) == 1
+    reference = book.bibliography[0]
+    assert reference.evidence_id.startswith("reference-")
+    assert reference.dois == ("10.1000/fixture",)
+    assert reference.arxiv_ids == ("2401.00001",)
+    assert all(
+        unit.citations == (reference.evidence_id,)
+        for chapter in book.chapters
+        for unit in chapter.learning_units
+    )
+
+
+def test_forged_cached_material_reports_program_owned_candidate(
+    tmp_path: Path,
+) -> None:
+    tasks = FakeGuideTasks(
+        with_reference=True,
+        invalid_cached_material=True,
+    )
+    service = CompanionService(tmp_path / "jobs")
+
+    failed = service.build(
+        CompanionBuildRequest(_document(tmp_path), target_language="en"),
+        execution=CompanionExecutionOptions(
+            workers=1,
+            paper_cache_root=tmp_path / "paper-cache",
+        ),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
+    )
+
+    assert failed.status is RunStatus.FAILED
+    assert failed.error is not None
+    assert failed.error.code == "chapter_reference_cache_invalid"
+    assert Path(failed.error.details["candidate_path"]).is_file()
+
+
+def test_cached_material_rejects_mismatched_identity_and_resources(
+    tmp_path: Path,
+) -> None:
+    cache = ReferenceMaterialCache(tmp_path / "paper-cache")
+    first_resource = cache.store_resource(
+        b"first",
+        media_type="text/plain",
+    )
+    second_resource = cache.store_resource(
+        b"second",
+        media_type="text/plain",
+    )
+    first = cache.store_material(
+        ReferenceIdentity(dois=("10.1000/first",)),
+        (first_resource,),
+        readable_resource=first_resource,
+    )
+    cache.store_material(
+        ReferenceIdentity(dois=("10.1000/second",)),
+        (second_resource,),
+        readable_resource=second_resource,
+    )
+    forged = cached_reference_material_to_document(first)
+    forged["resources"] = [
+        {
+            "resource_sha256": second_resource.resource_sha256,
+            "resource_size": second_resource.resource_size,
+            "media_type": second_resource.media_type,
+            "source_locator": second_resource.source_locator,
+            "filename": second_resource.filename,
+        }
+    ]
+    forged["readable_resource"] = forged["resources"][0]
+
+    with pytest.raises(
+        CompanionContentError,
+        match="does not match",
+    ):
+        _verify_cached_reference_materials(
+            {
+                "references": [
+                    {"cached_material": forged}
+                ]
+            },
+            cache_root=tmp_path / "paper-cache",
+        )
 
 
 def test_cached_document_parse_failure_is_not_downgraded(
@@ -677,13 +782,10 @@ def test_review_remove_publishes_ordered_subset_without_retry(
 
 
 @pytest.mark.parametrize(
-    ("contract", "candidate_kind", "expected_calls"),
-    [
-        (AUTHOR_IDENTITY_PROMPT_VERSION, "author", 2),
-        (LITERATURE_REQUEST_PROMPT_VERSION, "requests", 2),
-        (EVIDENCE_RESEARCH_PROMPT_VERSION, "evidence", 2),
-        (LITERATURE_SURVEY_PROMPT_VERSION, "survey", 2),
-        (CHAPTER_PLAN_PROMPT_VERSION, "plan", 3),
+        ("contract", "candidate_kind", "expected_calls"),
+        [
+            (AUTHOR_IDENTITY_PROMPT_VERSION, "author", 2),
+            (CHAPTER_PLAN_PROMPT_VERSION, "plan", 3),
     ],
 )
 def test_schema_valid_semantic_error_gets_one_fresh_retry(
@@ -696,14 +798,10 @@ def test_schema_valid_semantic_error_gets_one_fresh_retry(
     chapter_id = plan_source_chapters(document)[0].chapter_id
     candidate_ids = {
         "author": "identity/author.json",
-        "requests": "planning/literature-requests.json",
-        "evidence": "planning/evidence-research.json",
-        "survey": "planning/literature-survey.json",
         "plan": f"chapters/{chapter_id}/plan.json",
     }
     tasks = FakeGuideTasks(
-        select_evidence=contract == LITERATURE_SURVEY_PROMPT_VERSION,
-        semantic_invalid_contract=contract,
+            semantic_invalid_contract=contract,
     )
     service = CompanionService(tmp_path / "jobs")
 
@@ -807,7 +905,9 @@ def test_invalid_terminal_revision_reports_program_owned_candidate(
     assert failed.error.details["chapter_id"] == chapters[1].chapter_id
     candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
     assert candidate["chapter_id"] == chapters[1].chapter_id
-    assert candidate["learning_units"][0]["unit_id"] == "unknown-unit"
+    assert candidate["learning_units"][0]["anchor_block_ids"] == [
+        "unknown-block"
+    ]
     store = ImmutableArtifactStore(
         service.repository.run_directory(failed.run_id),
         repository_root=service.repository.root,
@@ -819,7 +919,9 @@ def test_invalid_terminal_revision_reports_program_owned_candidate(
         f"chapters/{chapters[1].chapter_id}/guide-accepted"
     ) is None
 
-    candidate["learning_units"][0]["unit_id"] = "intuition"
+    candidate["learning_units"][0]["anchor_block_ids"] = [
+        chapters[1].block_ids[0]
+    ]
     candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
     guide_calls = tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION]
 
@@ -832,88 +934,6 @@ def test_invalid_terminal_revision_reports_program_owned_candidate(
 
     assert recovered.status is RunStatus.SUCCEEDED
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == guide_calls
-
-
-def test_malformed_evidence_retries_once_then_pauses_for_candidate_edit(
-    tmp_path: Path,
-) -> None:
-    document = _document(tmp_path)
-    tasks = FakeGuideTasks(malformed_evidence=True)
-    translation = FakeTranslationAdapter(mode="skipped")
-    service = CompanionService(tmp_path / "jobs")
-
-    paused = service.build(
-        CompanionBuildRequest(document, target_language="en"),
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=translation,
-    )
-
-    assert paused.status is RunStatus.PAUSED
-    assert paused.awaiting is not None
-    assert paused.awaiting.reason is ResumeReason.SUPERVISION_REQUIRED
-    assert paused.awaiting.input_required is False
-    assert paused.awaiting.details["automatic_retry_exhausted"] is True
-    assert paused.awaiting.details["output_attempts"] == 2
-    candidate_paths = [
-        Path(str(item))
-        for item in paused.awaiting.details["candidate_paths"]
-    ]
-    assert candidate_paths == [
-        service.repository.run_directory(paused.run_id)
-        / "working/candidates/planning/evidence-research.json",
-        service.repository.run_directory(paused.run_id)
-        / (
-            "working/candidates/planning/"
-            "evidence-research.semantic-retry.json"
-        ),
-    ]
-    first_raw = json.loads(
-        candidate_paths[0].read_text(encoding="utf-8")
-    )
-    raw = json.loads(candidate_paths[1].read_text(encoding="utf-8"))
-    raw["responses"][0]["candidates"].append(
-        {
-            "evidence_id": "candidate-20",
-            "title": "Candidate 20",
-            "content": "Inspected but not selected.",
-            "source": "fixture:20",
-        }
-    )
-    candidate_paths[1].write_text(
-        json.dumps(raw), encoding="utf-8"
-    )
-    evidence_calls = tasks.counts[EVIDENCE_RESEARCH_PROMPT_VERSION]
-    assert evidence_calls == 2
-
-    recovered = service.resume(
-        paused.run_id,
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=translation,
-    )
-
-    assert recovered.status is RunStatus.SUCCEEDED
-    assert tasks.counts[EVIDENCE_RESEARCH_PROMPT_VERSION] == evidence_calls
-    assert json.loads(
-        candidate_paths[0].read_text(encoding="utf-8")
-    ) == first_raw
-
-
-def test_evidence_research_propagates_native_arc_llm_host_turn_pause(
-    tmp_path: Path,
-) -> None:
-    service = CompanionService(tmp_path / "jobs")
-
-    paused = service.build(
-        CompanionBuildRequest(_document(tmp_path), target_language="en"),
-        task_service=_HostTurnEvidenceTasks(),  # type: ignore[arg-type]
-        translation_adapter=FakeTranslationAdapter(mode="skipped"),
-    )
-
-    assert paused.status is RunStatus.PAUSED
-    assert paused.awaiting is not None
-    assert paused.awaiting.resume_key == "arc-llm-host-turn"
-    assert paused.awaiting.response_contract == "arc.llm.resume_input.v3"
-    assert paused.awaiting.details == {"code": "host_broker_required"}
 
 
 @pytest.mark.parametrize("value", [0, 201, True])

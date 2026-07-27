@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from arc_llm import ModelSelection
@@ -19,30 +18,20 @@ from arc_paper import (
 import arc_companion.request_contracts as request_contracts
 from arc_companion import __all__ as public_names
 from arc_companion.build import CompanionBuildHandler
-from arc_companion._build_support import (
-    frozen_evidence,
-    validate_evidence_research,
-)
 from arc_companion.contracts import AcceptedBook, AcceptedChapter, SourceAnchor
 from arc_companion.generation_validation import (
     CompanionContentError,
-    apply_safe_guide_review,
     validate_author_identity,
     validate_chapter_guide,
     validate_chapter_plan,
-    validate_literature_request_plan,
 )
 from arc_companion.prompts import (
     AUTHOR_IDENTITY_SCHEMA,
     CHAPTER_PLAN_SCHEMA,
-    EVIDENCE_RESEARCH_SCHEMA,
-    LITERATURE_REQUEST_PLAN_SCHEMA,
     author_identity_prompt,
     chapter_guide_prompt,
     chapter_guide_review_prompt,
     chapter_plan_prompt,
-    evidence_research_prompt,
-    literature_request_prompt,
 )
 from arc_companion.request_contracts import (
     NEUTRAL_TEXTBOOK_INTENT,
@@ -60,7 +49,7 @@ from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
-    assert CompanionBuildHandler.name == "arc.companion.build.v6"
+    assert CompanionBuildHandler.name == "arc.companion.build.v7"
     assert not any(name.startswith("Legacy") for name in public_names)
     for module_name in (
         "arc_companion.build_v2",
@@ -99,25 +88,15 @@ def test_companion_provider_enum_nodes_declare_string_types() -> None:
         "anchor_block_ids",
         "placement",
         "purpose",
-        "evidence_ids",
     }
     assert planned_unit["properties"]["placement"]["type"] == "string"
     reader_profile = CHAPTER_PLAN_SCHEMA["properties"]["reader_profile"]
     assert reader_profile["properties"]["source_type"]["type"] == "string"
     reader_need = CHAPTER_PLAN_SCHEMA["properties"]["reader_needs"]["items"]
     assert reader_need["properties"]["needs_companion"]["type"] == "boolean"
-    evidence = LITERATURE_REQUEST_PLAN_SCHEMA["properties"]["requests"]["items"]
-    assert evidence["properties"]["kind"]["type"] == "string"
-    assert LITERATURE_REQUEST_PLAN_SCHEMA["properties"]["requests"][
-        "minItems"
-    ] == 1
 
 
-def test_evidence_first_prompts_encode_selective_value_contract() -> None:
-    request = literature_request_prompt(
-        block_ids=["b1"],
-        intent="Explain only useful omissions.",
-    )
+def test_chapter_prompt_encodes_selective_value_contract() -> None:
     plan = chapter_plan_prompt(
         chapter_id="chapter",
         title="Chapter",
@@ -126,14 +105,6 @@ def test_evidence_first_prompts_encode_selective_value_contract() -> None:
         intent="Explain only useful omissions.",
     )
 
-    assert "at least 20 distinct candidates" in request
-    for category in (
-        "sources explicitly named by the document",
-        "important prior history",
-        "later work central to the main debates",
-    ):
-        assert category in request
-    assert "not an inclusion quota" in request
     assert "Do not add" in plan
     for prohibited in (
         "paraphrase",
@@ -169,116 +140,6 @@ def test_evidence_first_prompts_encode_selective_value_contract() -> None:
     ):
         assert phrase in plan
     assert "reader question" not in plan.casefold()
-
-
-def _research_output(source: str = "https://example.test/source") -> dict:
-    return {
-        "responses": [
-            {
-                "request_id": "request",
-                "candidates": [
-                    {
-                        "evidence_id": f"evidence-{index}",
-                        "title": f"Evidence {index}",
-                        "content": "目标语言证据说明。",
-                        "source": (
-                            source
-                            if index == 1
-                            else f"https://example.test/{index}"
-                        ),
-                    }
-                    for index in range(1, 21)
-                ],
-                "selected_evidence_ids": ["evidence-1"],
-                "selection_rationale": "该来源直接支持读者理解。",
-            }
-        ]
-    }
-
-
-def test_evidence_research_prompt_and_schema_use_direct_agent_contract() -> None:
-    prompt = evidence_research_prompt(
-        target_language="zh-CN",
-        intent="Explain the source.",
-    )
-
-    assert set(EVIDENCE_RESEARCH_SCHEMA["properties"]) == {"responses"}
-    for phrase in (
-        "search, web, paper",
-        "standard arc-llm host-turn contract",
-        "at least 20 distinct candidates",
-        "Only en.wikipedia.org",
-        "Translate any English quotation",
-        "keeping the English page title",
-    ):
-        assert phrase in prompt
-
-
-def test_evidence_research_accepts_only_english_wikipedia() -> None:
-    requests = [{"request_id": "request"}]
-    result = validate_evidence_research(
-        _research_output(
-            "https://en.wikipedia.org/wiki/Noether%27s_theorem"
-        ),
-        requests=requests,
-    )
-    assert result["selected_evidence"][0]["title"] == "Evidence 1"
-
-    for hostname in ("zh.wikipedia.org", "fr.wikipedia.org", "wikipedia.org"):
-        with pytest.raises(
-            CompanionContentError, match="en.wikipedia.org"
-        ):
-            validate_evidence_research(
-                _research_output(f"https://{hostname}/wiki/Test"),
-                requests=requests,
-            )
-
-
-def test_evidence_research_requires_global_candidate_and_request_coverage() -> None:
-    requests = [{"request_id": "request"}, {"request_id": "second"}]
-    missing = _research_output()
-    with pytest.raises(
-        CompanionContentError, match="exactly cover every planned request"
-    ):
-        validate_evidence_research(missing, requests=requests)
-
-    too_few = _research_output()
-    too_few["responses"][0]["candidates"] = too_few["responses"][0][
-        "candidates"
-    ][:19]
-    with pytest.raises(
-        CompanionContentError, match="at least 20 distinct candidates"
-    ):
-        validate_evidence_research(
-            too_few, requests=[{"request_id": "request"}]
-        )
-
-
-def test_legacy_frozen_evidence_replays_without_research_call() -> None:
-    research = _research_output()
-    selected = validate_evidence_research(
-        research, requests=[{"request_id": "request"}]
-    )["selected_evidence"]
-    document = {
-        "schema_version": "arc.companion.evidence_response.v2",
-        "research_log": research["responses"],
-        "selected_evidence": list(selected),
-    }
-
-    class _Artifacts:
-        def find(self, artifact_id: str):
-            return artifact_id if artifact_id == "planning/evidence" else None
-
-        def read_bytes(self, _ref) -> bytes:
-            return json.dumps(document).encode("utf-8")
-
-    replayed = frozen_evidence(
-        SimpleNamespace(artifacts=_Artifacts()),  # type: ignore[arg-type]
-        {"requests": [{"request_id": "request"}]},
-    )
-
-    assert replayed is not None
-    assert replayed["selected_evidence"] == selected
 
 
 def test_prior_companion_is_reference_context_not_a_template() -> None:
@@ -366,7 +227,6 @@ def _planned_unit(
         "anchor_block_ids": anchors,
         "placement": "inline",
         "purpose": "Supplies missing context.",
-        "evidence_ids": [],
     }
 
 
@@ -503,7 +363,7 @@ def test_reader_need_requires_unit_anchored_to_covered_block() -> None:
         )
 
 
-def test_review_cannot_remove_final_required_reader_need_cover() -> None:
+def test_final_guide_must_cover_required_reader_need() -> None:
     plan = validate_chapter_plan(
         {
             "chapter_id": "chapter",
@@ -521,39 +381,16 @@ def test_review_cannot_remove_final_required_reader_need_cover() -> None:
         chapter_id="chapter",
         block_ids=("b1",),
     )
-    draft = validate_chapter_guide(
-        {
-            "chapter_id": "chapter",
-            "learning_units": [
-                {
-                    "unit_id": "unit",
-                    "title": "Context",
-                    "content_markdown": "The missing context.",
-                }
-            ],
-        },
-        plan=plan,
-    )
-    removed, _audit = apply_safe_guide_review(
-        draft,
-        {
-            "decisions": [
-                {
-                    "unit_id": "unit",
-                    "decision": "remove",
-                    "replacement_title": None,
-                    "replacement_markdown": None,
-                    "reason": "Attempt to remove coverage.",
-                }
-            ]
-        },
-    )
-
     with pytest.raises(
-        CompanionContentError, match="final learning unit"
+        CompanionContentError, match="cover every required"
     ):
         validate_chapter_guide(
-            removed, plan=plan, allow_removed=True
+            {
+                "chapter_id": "chapter",
+                "learning_units": [],
+                "references": [],
+            },
+            plan=plan,
         )
 
 
@@ -570,48 +407,50 @@ def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
         glossary=[],
         target_language="zh-CN",
         language_result={"language_tag": "en"},
-        evidence=[],
     )
     review = chapter_guide_review_prompt(
         plan=plan,
-        draft={"chapter_id": "chapter", "learning_units": []},
+        draft={
+            "chapter_id": "chapter",
+            "learning_units": [],
+            "references": [],
+        },
         block_ids=[],
         glossary=[],
-        evidence=[],
     )
 
-    assert "do not manufacture a prior reader belief" in guide
+    assert "never manufacture a prior reader belief" in guide.casefold()
     assert "Translate English excerpts" in guide
     assert "Never recommend removing the final useful unit" in review
     assert "Treat unsupported corrective framing as a material defect" in review
     assert "Do not criticize merely to demonstrate reviewer activity" in review
     assert "accept it by choosing `stop`" in review
     assert "valuable new Companion idea" in review
-    assert "within an existing planned unit" in review
-    assert "Never invent a unit, source, or evidence identifier" in review
-
-
-def test_literature_plan_rejects_empty_research_log() -> None:
-    with pytest.raises(
-        CompanionContentError,
-        match="must inspect candidate evidence",
-    ):
-        validate_literature_request_plan(
-            {"requests": []},
-            block_ids=("b1",),
-        )
+    assert "add a new unit" in review
+    assert "minimum or maximum reference count" in guide
+    assert "minimum or maximum reference count" in review
+    assert "capability-matching download tool" in guide
+    assert "Actively consider" in review
+    assert "merely to make the review look more thorough" in review
 
 
 def test_guide_validation_decodes_model_escaped_paragraphs() -> None:
     plan = {
         "chapter_id": "chapter",
+        "reader_needs": [
+            {
+                "block_id": "b1",
+                "needs_companion": True,
+                "reason": "A connection is omitted.",
+                "learning_unit_ids": ["unit"],
+            }
+        ],
         "learning_units": [
             {
                 "unit_id": "unit",
                 "anchor_block_ids": ["b1"],
                 "placement": "inline",
                 "purpose": "Adds an omitted conceptual connection.",
-                "evidence_ids": [],
             }
         ],
     }
@@ -621,9 +460,13 @@ def test_guide_validation_decodes_model_escaped_paragraphs() -> None:
             {
                 "unit_id": "unit",
                 "title": "A distinction rather than a question",
+                "anchor_block_ids": ["b1"],
+                "placement": "inline",
+                "purpose": "Adds an omitted conceptual connection.",
                 "content_markdown": r"First paragraph.\n\nSecond paragraph.",
             }
         ],
+        "references": [],
     }
 
     validated = validate_chapter_guide(guide, plan=plan)
@@ -637,57 +480,54 @@ def test_guide_validation_decodes_model_escaped_paragraphs() -> None:
     )
 
 
-def test_guide_review_can_replace_title_and_markdown_only() -> None:
-    draft = {
+def test_chapter_references_allow_only_english_wikipedia() -> None:
+    plan = {
         "chapter_id": "chapter",
-        "learning_units": [
+        "reader_needs": [
             {
-                "unit_id": "unit",
-                "anchor_block_ids": ["b1"],
-                "placement": "chapter",
-                "purpose": "Distinguishes two source positions.",
-                "evidence_ids": ["e1"],
-                "title": "Initial title",
-                "content_markdown": "Initial prose [@e1].",
+                "block_id": "b1",
+                "needs_companion": True,
+                "reason": "Context is missing.",
+                "learning_unit_ids": [],
             }
         ],
+        "learning_units": [],
     }
 
-    reviewed, audit = apply_safe_guide_review(
-        draft,
-        {
-            "decisions": [
+    def guide(source: str) -> dict:
+        return {
+            "chapter_id": "chapter",
+            "learning_units": [
                 {
-                    "unit_id": "unit",
-                    "decision": "replace",
-                    "replacement_title": "A sharper distinction",
-                    "replacement_markdown": "Replacement prose [@e1].",
-                    "reason": "The revision improves the distinction.",
+                    "unit_id": "added",
+                    "title": "Context",
+                    "anchor_block_ids": ["b1"],
+                    "placement": "inline",
+                    "purpose": "Supplies missing context.",
+                    "content_markdown": "Context [@wiki].",
                 }
-            ]
-        },
-    )
+            ],
+            "references": [
+                {
+                    "reference_id": "wiki",
+                    "title": "English page title",
+                    "source": source,
+                    "dois": [],
+                    "arxiv_ids": [],
+                    "cached_document": None,
+                    "cached_material": None,
+                }
+            ],
+        }
 
-    assert reviewed["learning_units"][0] == {
-        **draft["learning_units"][0],
-        "title": "A sharper distinction",
-        "content_markdown": "Replacement prose [@e1].",
-    }
-    assert audit[0]["decision"] == "replace"
-    with pytest.raises(CompanionContentError, match="null replacement"):
-        apply_safe_guide_review(
-            draft,
-            {
-                "decisions": [
-                    {
-                        "unit_id": "unit",
-                        "decision": "keep",
-                        "replacement_title": "Not allowed",
-                        "replacement_markdown": None,
-                        "reason": "Unsafe mutation.",
-                    }
-                ]
-            },
+    assert validate_chapter_guide(
+        guide("https://en.wikipedia.org/wiki/Test"),
+        plan=plan,
+    )["references"]
+    with pytest.raises(CompanionContentError, match="English Wikipedia"):
+        validate_chapter_guide(
+            guide("zh.wikipedia.org/wiki/Test"),
+            plan=plan,
         )
 
 
@@ -892,7 +732,7 @@ def test_provider_model_and_prompt_contract_change_run_identity(
     recipe_input = semantic_input["generation_recipe"]
     assert (
         recipe_input["schema_version"]
-            == "arc.companion.generation_recipe.v9"
+            == "arc.companion.generation_recipe.v10"
     )
     assert recipe_input["chapter_guide_max_rounds"] == 3
     assert recipe_input["chapter_guide_review_final_round"] is False
@@ -900,49 +740,6 @@ def test_provider_model_and_prompt_contract_change_run_identity(
         recipe_input["author_identity_prompt"]
         == auto.author_identity_prompt
     )
-    assert (
-        recipe_input["literature_request_prompt"]
-        == auto.literature_request_prompt
-    )
-    assert (
-        recipe_input["evidence_research_prompt"]
-        == auto.evidence_research_prompt
-    )
-    assert (
-        recipe_input["literature_survey_prompt"]
-        == auto.literature_survey_prompt
-    )
-
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            request_contracts,
-            "LITERATURE_REQUEST_PROMPT_VERSION",
-            "arc.companion.literature-request-prompt.test-next",
-        )
-        next_literature_request = CompanionGenerationRecipe(
-            literature_request_prompt=(
-                "arc.companion.literature-request-prompt.test-next"
-            )
-        )
-        assert companion_run_id(
-            request, next_literature_request
-        ) != companion_run_id(request, auto)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            request_contracts,
-            "LITERATURE_SURVEY_PROMPT_VERSION",
-            "arc.companion.literature-survey-prompt.test-next",
-        )
-        next_literature_survey = CompanionGenerationRecipe(
-            literature_survey_prompt=(
-                "arc.companion.literature-survey-prompt.test-next"
-            )
-        )
-        assert companion_run_id(
-            request, next_literature_survey
-        ) != companion_run_id(request, auto)
-
     with monkeypatch.context() as patch:
         patch.setattr(
             request_contracts,
