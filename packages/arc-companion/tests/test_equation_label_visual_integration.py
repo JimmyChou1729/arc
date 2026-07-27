@@ -99,23 +99,10 @@ class _GuideTasks:
                 "anchor_block_ids": [],
             }
         elif "chapter-plan-prompt" in contract:
-            index_input = next(
-                item
-                for item in request.inputs
-                if item.input_id == "companion-source-index"
-            )
-            index_ref = _context.artifacts.find(
-                index_input.source.source_artifact_id
-            )
-            assert index_ref is not None
-            source_index = json.loads(
-                _context.artifacts.read_bytes(index_ref)
-            )
             self.plan_labels.extend(
                 str(block["equation_label"])
-                for block in source_index["blocks"]
-                if block["block_id"] in payload["block_ids"]
-                and block["kind"] == "equation"
+                for block in payload["block_access"]
+                if block["kind"] == "equation"
             )
             value = {
                 "chapter_id": payload["chapter_id"],

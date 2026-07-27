@@ -503,10 +503,8 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
         for _contract, _task_id, prompt in tasks.requests
     )
     for contract, input_ids in tasks.request_input_ids:
-        assert input_ids[:2] == (
-            "companion-source-index",
-            "companion-source",
-        ), contract
+        assert input_ids[0] == "companion-source-index", contract
+        assert "companion-source" not in input_ids, contract
     plan_inputs = next(
         inputs
         for contract, inputs in tasks.request_input_ids
@@ -526,6 +524,8 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     assert source_index_ref is not None
     source_index = json.loads(run_store.read_bytes(source_index_ref))
     assert source_index["cache_relationship"] == "exact"
+    assert "blocks" not in source_index
+    assert "chapters" not in source_index
     assert source_index["cached_document"]["source_sha256"] == (
         document.source.artifact_digest
     )

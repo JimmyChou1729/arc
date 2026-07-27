@@ -10,7 +10,7 @@ from arc_paper import RichBlock, RichBlockKind, RichDocument
 from .source_planning import SourceChapter, equation_label_provenance
 
 
-MODEL_SOURCE_INDEX_SCHEMA = "arc.companion.model_source_index.v1"
+MODEL_SOURCE_INDEX_SCHEMA = "arc.companion.model_source_index.v2"
 
 
 def model_source_view(
@@ -69,16 +69,7 @@ def model_source_index(
     }:
         raise ValueError("unsupported model source cache relationship")
     chapter_by_block: dict[str, str] = {}
-    chapter_documents: list[dict[str, Any]] = []
-    for ordinal, chapter in enumerate(chapters):
-        chapter_documents.append(
-            {
-                "chapter_id": chapter.chapter_id,
-                "ordinal": ordinal,
-                "title": chapter.title,
-                "block_ids": list(chapter.block_ids),
-            }
-        )
+    for chapter in chapters:
         for block_id in chapter.block_ids:
             if block_id in chapter_by_block:
                 raise ValueError("model source block belongs to multiple chapters")
@@ -88,40 +79,6 @@ def model_source_index(
     ):
         raise ValueError("model source chapters do not exactly cover the document")
 
-    blocks: list[dict[str, Any]] = []
-    for block in document.blocks:
-        provenance = equation_label_provenance(document, block.block_id)
-        blocks.append(
-            {
-                "block_id": block.block_id,
-                "ordinal": block.ordinal,
-                "kind": block.kind.value,
-                "chapter_id": chapter_by_block[block.block_id],
-                "section_path": list(block.section_path),
-                "locator": {
-                    "source_format": block.locator.source_format.value,
-                    "line_start": block.locator.line_start,
-                    "line_end": block.locator.line_end,
-                    "selector": block.locator.selector,
-                    "source_id": block.locator.source_id,
-                },
-                "equation_label_provenance": (
-                    dict(provenance) if provenance is not None else None
-                ),
-                "equation_label": (
-                    str(
-                        (
-                            provenance.get("effective_label")
-                            if provenance is not None
-                            else None
-                        )
-                        or block.payload["label"]
-                    )
-                    if block.kind is RichBlockKind.EQUATION
-                    else None
-                ),
-            }
-        )
     return {
         "schema_version": MODEL_SOURCE_INDEX_SCHEMA,
         "source": {
@@ -147,9 +104,45 @@ def model_source_index(
             if cache_document is not None
             else {}
         ),
-        "chapters": chapter_documents,
-        "blocks": blocks,
+        "chapter_count": len(chapters),
+        "block_count": len(document.blocks),
     }
+
+
+def model_chapter_block_index(
+    document: RichDocument,
+    chapter: SourceChapter,
+) -> list[dict[str, Any]]:
+    """Return locator metadata only for the chapter handled by one model task."""
+
+    by_id = {item.block_id: item for item in document.blocks}
+    output: list[dict[str, Any]] = []
+    for block_id in chapter.block_ids:
+        block = by_id[block_id]
+        provenance = equation_label_provenance(document, block.block_id)
+        output.append(
+            {
+                "block_id": block.block_id,
+                "ordinal": block.ordinal,
+                "kind": block.kind.value,
+                "line_start": block.locator.line_start,
+                "line_end": block.locator.line_end,
+                "selector": block.locator.selector,
+                "equation_label": (
+                    str(
+                        (
+                            provenance.get("effective_label")
+                            if provenance is not None
+                            else None
+                        )
+                        or block.payload["label"]
+                    )
+                    if block.kind is RichBlockKind.EQUATION
+                    else None
+                ),
+            }
+        )
+    return output
 
 
 def validate_model_source_index(
@@ -172,31 +165,10 @@ def validate_model_source_index(
         raise ValueError("model source index source identity differs")
     if value.get("effective_document_sha256") != document.document_digest:
         raise ValueError("model source index effective document differs")
-    raw_chapters = value.get("chapters")
-    if not isinstance(raw_chapters, list):
-        raise ValueError("model source index chapters must be an array")
-    actual_chapters = tuple(
-        (
-            item.get("chapter_id"),
-            tuple(item.get("block_ids", ())),
-        )
-        for item in raw_chapters
-        if isinstance(item, Mapping)
-    )
-    expected_chapters = tuple(
-        (item.chapter_id, item.block_ids) for item in chapters
-    )
-    if actual_chapters != expected_chapters:
-        raise ValueError("model source index chapter coverage differs")
-    raw_blocks = value.get("blocks")
-    if not isinstance(raw_blocks, list):
-        raise ValueError("model source index blocks must be an array")
-    if tuple(
-        item.get("block_id")
-        for item in raw_blocks
-        if isinstance(item, Mapping)
-    ) != tuple(item.block_id for item in document.blocks):
-        raise ValueError("model source index block order differs")
+    if value.get("chapter_count") != len(chapters):
+        raise ValueError("model source index chapter count differs")
+    if value.get("block_count") != len(document.blocks):
+        raise ValueError("model source index block count differs")
 
 
 def _block_markdown(
@@ -283,6 +255,7 @@ def _longest_run(value: str, character: str) -> int:
 
 __all__ = [
     "MODEL_SOURCE_INDEX_SCHEMA",
+    "model_chapter_block_index",
     "model_source_index",
     "model_source_view",
     "validate_model_source_index",

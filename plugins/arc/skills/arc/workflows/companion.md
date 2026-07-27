@@ -92,14 +92,14 @@ Companion detects source language once. It skips translation only for a known
 matching primary language; mixed or unknown source is translated. Chapters are
 derived from headings and cover every source block exactly once.
 
-Whole-document model tasks receive a compact chapter/block index plus a
-verified text-only workspace view, not a prompt JSON copy of the source body.
-In direct mode, inspect the index first and prefer its exact, cache-only
-`arc-paper` document operations, reading only relevant sections or search
-results. Use the text-only view when those operations are unavailable. Do not
-open source image or media assets for reading; deterministic assembly restores
-them later. Models author semantic JSON, while Companion injects routing
-identities such as chapter IDs.
+Model tasks receive a small cache-identity manifest, while each chapter task
+receives only that chapter's block locators in its task payload. With an exact
+`arc-paper` cached document, agents use cache-only section, range, and search
+operations; Companion does not duplicate the whole source into every agent
+workspace. A verified text-only whole-source input exists only when cache
+access could not be established. Do not open source image or media assets for
+reading; deterministic assembly restores them later. Models author semantic
+JSON, while Companion injects routing identities such as chapter IDs.
 
 Do not run a document-wide literature survey before planning. Planning first
 audits reader needs and supplies seed units; references are discovered on

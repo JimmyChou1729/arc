@@ -16,6 +16,7 @@ from arc_paper import (
 )
 
 from arc_companion.model_source import (
+    model_chapter_block_index,
     model_source_index,
     model_source_view,
     validate_model_source_index,
@@ -142,8 +143,14 @@ def test_model_source_index_has_identity_and_no_body_or_asset_metadata() -> None
     assert "A difficult sentence." not in encoded
     assert "secret/image.png" not in encoded
     assert "a" * 64 not in encoded
+    assert "blocks" not in index
+    assert "chapters" not in index
+    assert index["chapter_count"] == len(chapters)
+    assert index["block_count"] == len(document.blocks)
     equation = next(
-        item for item in index["blocks"] if item["block_id"] == "equation"
+        item
+        for item in model_chapter_block_index(document, chapters[0])
+        if item["block_id"] == "equation"
     )
     assert equation["equation_label"] == "2"
     assert index["cached_document"] == cached

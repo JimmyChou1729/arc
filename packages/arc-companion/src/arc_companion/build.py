@@ -98,6 +98,7 @@ from .llm_runtime import (
     run_error_from_failure,
 )
 from .model_source import (
+    model_chapter_block_index,
     model_source_index,
     model_source_view,
     validate_model_source_index,
@@ -136,10 +137,11 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v7"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v8"
 COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
     {
         COMPANION_BUILD_HANDLER,
+        "arc.companion.build.v7",
         "arc.companion.build.v5",
         "arc.companion.build.v4",
         "arc.companion.build.v3",
@@ -420,20 +422,6 @@ class CompanionBuildHandler:
                 else "equation_label_overlay"
             )
         )
-        source_text = model_source_view(source, chapters).encode("utf-8")
-        source_ref = context.artifacts.find(_MODEL_SOURCE_VIEW_ARTIFACT)
-        if source_ref is None:
-            source_ref = context.artifacts.publish_bytes(
-                _MODEL_SOURCE_VIEW_ARTIFACT,
-                source_text,
-                media_type="text/markdown",
-            )
-        elif context.artifacts.read_bytes(source_ref) != source_text:
-            raise CompanionContentError(
-                "model_source_view_mismatch",
-                "Frozen model source view differs from the effective source.",
-            )
-
         index = model_source_index(
             source,
             chapters,
@@ -457,10 +445,27 @@ class CompanionBuildHandler:
                     "model_source_index_mismatch",
                     "Frozen model source index differs from current cache identity.",
                 )
-        return (
-            _llm_input(context, "companion-source-index", index_ref),
-            _llm_input(context, "companion-source", source_ref),
-        )
+        inputs = [
+            _llm_input(context, "companion-source-index", index_ref)
+        ]
+        if cached_document is None:
+            source_text = model_source_view(source, chapters).encode("utf-8")
+            source_ref = context.artifacts.find(_MODEL_SOURCE_VIEW_ARTIFACT)
+            if source_ref is None:
+                source_ref = context.artifacts.publish_bytes(
+                    _MODEL_SOURCE_VIEW_ARTIFACT,
+                    source_text,
+                    media_type="text/markdown",
+                )
+            elif context.artifacts.read_bytes(source_ref) != source_text:
+                raise CompanionContentError(
+                    "model_source_view_mismatch",
+                    "Frozen model source view differs from the effective source.",
+                )
+            inputs.append(
+                _llm_input(context, "companion-source", source_ref)
+            )
+        return tuple(inputs)
 
     def _authors(
         self,
@@ -764,6 +769,9 @@ class CompanionBuildHandler:
                         item.title for item in chapters
                     ],
                     block_ids=chapter.block_ids,
+                    block_access=model_chapter_block_index(
+                        source, chapter
+                    ),
                     target_language=self.request.target_language,
                     intent=self.request.effective_intent,
                     has_prior_companion=prior_companion is not None,
@@ -976,6 +984,7 @@ class CompanionBuildHandler:
                 "language_result": language_identity,
                 "plan": dict(plan),
                 "block_ids": list(chapter.block_ids),
+                "block_access": model_chapter_block_index(source, chapter),
                 "glossary": list(chapter_entries[chapter.chapter_id]),
                 "has_prior_companion": prior_companion is not None,
             }

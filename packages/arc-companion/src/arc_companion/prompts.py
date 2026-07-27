@@ -7,11 +7,11 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v8"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v9"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v8"
+    "arc.companion.chapter-learning-review-prompt.v9"
 )
-CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v9"
+CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v10"
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v2"
 
 
@@ -270,6 +270,7 @@ def chapter_plan_prompt(
     document_title: str | None = None,
     document_outline: Sequence[str] = (),
     block_ids: Sequence[str],
+    block_access: Sequence[Mapping[str, Any]] = (),
     target_language: str,
     intent: str,
     has_prior_companion: bool = False,
@@ -354,6 +355,7 @@ def chapter_plan_prompt(
             "target_language": target_language,
             "intent": intent,
             "block_ids": list(block_ids),
+            "block_access": [dict(item) for item in block_access],
             "source_inputs": _source_input_manifest(
                 has_prior_companion=has_prior_companion,
             ),
@@ -420,10 +422,11 @@ A cache miss or cache write failure may remain local to your research process.
 
 The source body is not embedded in the loop context. Inspect the
 `companion-source-index` workspace input first and use its exact cache-only
-paper operations when available, passing the cached reference unchanged. Read
-only the chapter sections or search results needed for this loop. Otherwise
-read the verified text-only `companion-source` workspace input. Never open
-image or media assets. The index is authoritative for chapter and block IDs
+paper operations when available, passing the cached reference unchanged. Use
+this loop's `block_access` line ranges and selectors to read only the chapter
+sections or search results needed for this loop. A verified text-only
+`companion-source` input exists only in fallback-only mode. Never open image
+or media assets. The loop context is authoritative for chapter and block IDs
 and for effective equation labels.
 """
 
@@ -467,9 +470,10 @@ misconception. Otherwise request direct affirmative prose. A prior Companion
 is optional reference material, not a template or authority.
 
 Inspect the `companion-source-index` workspace input first and use its exact
-cache-only paper operations when available. Otherwise use the verified
-text-only `companion-source` input. Read only the passages required for this
-chapter and never open image or media assets.
+cache-only paper operations with this loop's `block_access` line ranges and
+selectors. A verified text-only `companion-source` input exists only in
+fallback-only mode. Read only the passages required for this chapter and never
+open image or media assets.
 """
 
 
@@ -491,6 +495,7 @@ def chapter_guide_prompt(
     *,
     plan: Mapping[str, Any],
     block_ids: Sequence[str],
+    block_access: Sequence[Mapping[str, Any]] = (),
     glossary: Sequence[Mapping[str, Any]],
     target_language: str,
     language_result: Mapping[str, Any],
@@ -504,6 +509,7 @@ def chapter_guide_prompt(
             "language_result": dict(language_result),
             "plan": dict(plan),
             "block_ids": list(block_ids),
+            "block_access": [dict(item) for item in block_access],
             "glossary": list(glossary),
             "source_inputs": _source_input_manifest(
                 has_prior_companion=has_prior_companion
@@ -517,6 +523,7 @@ def chapter_guide_review_prompt(
     plan: Mapping[str, Any],
     draft: Mapping[str, Any],
     block_ids: Sequence[str],
+    block_access: Sequence[Mapping[str, Any]] = (),
     glossary: Sequence[Mapping[str, Any]],
     has_prior_companion: bool = False,
 ) -> str:
@@ -527,6 +534,7 @@ def chapter_guide_review_prompt(
             "plan": dict(plan),
             "draft": dict(draft),
             "block_ids": list(block_ids),
+            "block_access": [dict(item) for item in block_access],
             "glossary": list(glossary),
             "source_inputs": _source_input_manifest(
                 has_prior_companion=has_prior_companion
@@ -571,24 +579,27 @@ def _source_input_manifest(
 
     inputs = [
         "companion-source-index",
-        "companion-source",
         *additional,
     ]
     if has_prior_companion:
         inputs.append("prior-companion")
     return {
         "input_ids": inputs,
+        "conditional_input_ids": [
+            "companion-source when cache_relationship is fallback_only"
+        ],
         "instructions": (
             "Inspect companion-source-index first. In direct mode, prefer the "
             "exact cache-only arc-paper operations listed there and pass its "
-            "cached document reference unchanged; read only relevant sections "
-            "or search results. If cache access is unavailable, read the "
-            "verified text-only companion-source input. Never open image or "
-            "media assets. The index is authoritative for chapter IDs, block "
-            "IDs, and effective equation labels. Other named inputs are "
-            "verified JSON files. In restricted or unknown mode, use the "
-            "text-only fallback rather than requesting a host turn solely to "
-            "read the same source."
+            "cached document reference unchanged. For chapter tasks, use the "
+            "task's block_access line ranges and selectors to read only the "
+            "current chapter or relevant search results. A verified text-only "
+            "companion-source input is present only when cache_relationship is "
+            "fallback_only. Never open image or media assets. The task payload "
+            "is authoritative for chapter and block IDs and effective equation "
+            "labels. Other named inputs are verified JSON files. In restricted "
+            "or unknown mode, use an available text-only fallback rather than "
+            "requesting a host turn solely to read the same source."
         ),
     }
 
