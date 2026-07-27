@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from arc_jobs import canonical_json_bytes
-from arc_paper import RichBlock, RichBlockKind, RichDocument, rich_block_to_document
+from arc_paper import (
+    DocumentStructureNodeKind,
+    DocumentStructureOverlay,
+    RichBlock,
+    RichBlockKind,
+    RichDocument,
+    rich_block_to_document,
+)
 
 from .source_identity import resolve_document_identity
 
@@ -18,12 +25,20 @@ class SourceChapter:
     chapter_id: str
     title: str
     block_ids: tuple[str, ...]
+    section_block_ids: tuple[str, ...] = ()
+    section_titles: tuple[str, ...] = ()
+    structure_section_id: str | None = None
+    generate_guide: bool = True
 
     def __post_init__(self) -> None:
         if not self.chapter_id or not self.title or not self.block_ids:
             raise ValueError("source chapter requires identity, title, and blocks")
         if len(set(self.block_ids)) != len(self.block_ids):
             raise ValueError("source chapter contains duplicate blocks")
+        if len(self.section_block_ids) != len(self.section_titles):
+            raise ValueError("section identities and titles differ")
+        if any(item not in self.block_ids for item in self.section_block_ids):
+            raise ValueError("section heading is outside its source chapter")
 
 
 def plan_source_chapters(document: RichDocument) -> tuple[SourceChapter, ...]:
@@ -77,6 +92,117 @@ def plan_source_chapters(document: RichDocument) -> tuple[SourceChapter, ...]:
     return tuple(output)
 
 
+def plan_structured_source_chapters(
+    document: RichDocument,
+    overlay: DocumentStructureOverlay,
+    *,
+    companion_section_ids: Sequence[str] | None = None,
+) -> tuple[SourceChapter, ...]:
+    """Partition a source using an arc-paper structure overlay.
+
+    Structure chooses display and generation boundaries without changing any
+    rich block identity. Unselected gaps remain deterministic display chapters
+    and never create model loops.
+    """
+
+    entries = tuple(overlay.entries)
+    by_id = {item.section_id: item for item in entries}
+    if companion_section_ids is None:
+        selected = [
+            item
+            for item in entries
+            if item.kind is DocumentStructureNodeKind.CONTENT
+            and not any(
+                ancestor.kind is DocumentStructureNodeKind.CONTENT
+                for ancestor in _ancestors(item, by_id)
+            )
+        ]
+    else:
+        requested = tuple(companion_section_ids)
+        if len(requested) != len(set(requested)):
+            raise ValueError("companion section IDs must be unique")
+        missing = [item for item in requested if item not in by_id]
+        if missing:
+            raise ValueError(
+                "companion section IDs are absent from the structure overlay"
+            )
+        selected = [by_id[item] for item in requested]
+    selected.sort(key=lambda item: item.source_line_start)
+    for left, right in zip(selected, selected[1:]):
+        if left.source_line_end >= right.source_line_start:
+            raise ValueError("selected Companion structure sections overlap")
+
+    block_ranges: list[tuple[int, int, Any]] = []
+    for item in selected:
+        indices = [
+            index
+            for index, block in enumerate(document.blocks)
+            if _block_in_lines(
+                block,
+                item.source_line_start,
+                item.source_line_end,
+            )
+        ]
+        if not indices:
+            raise ValueError("structure section contains no rich source blocks")
+        block_ranges.append((min(indices), max(indices) + 1, item))
+
+    chapters: list[SourceChapter] = []
+    cursor = 0
+    for start, end, item in block_ranges:
+        if start < cursor:
+            raise ValueError("structured Companion chapters overlap")
+        if start > cursor:
+            chapters.append(
+                _display_chapter(document, document.blocks[cursor:start])
+            )
+        chapter_blocks = document.blocks[start:end]
+        descendant_headings = [
+            candidate
+            for candidate in entries
+            if candidate.section_id != item.section_id
+            and _is_descendant(candidate, item.section_id, by_id)
+            and candidate.kind
+            in {
+                DocumentStructureNodeKind.INTERNAL,
+                DocumentStructureNodeKind.CONTENT,
+            }
+        ]
+        section_blocks: list[RichBlock] = []
+        section_titles: list[str] = []
+        for section in sorted(
+            descendant_headings, key=lambda value: value.source_line_start
+        ):
+            heading = next(
+                (
+                    block
+                    for block in chapter_blocks
+                    if block.kind is RichBlockKind.HEADING
+                    and block.locator.line_start == section.heading_line
+                ),
+                None,
+            )
+            if heading is not None:
+                section_blocks.append(heading)
+                section_titles.append(section.title)
+        chapters.append(
+            _chapter(
+                document,
+                title=item.title,
+                blocks=chapter_blocks,
+                section_blocks=tuple(section_blocks),
+                section_titles=tuple(section_titles),
+                structure_section_id=item.section_id,
+                generate_guide=True,
+            )
+        )
+        cursor = end
+    if cursor < len(document.blocks):
+        chapters.append(_display_chapter(document, document.blocks[cursor:]))
+    validate_chapter_coverage(document, tuple(chapters))
+    return tuple(chapters)
+
+
 def validate_chapter_coverage(
     document: RichDocument, chapters: tuple[SourceChapter, ...]
 ) -> None:
@@ -118,8 +244,25 @@ def equation_label_provenance(
 
 
 def _chapter(
-    document: RichDocument, *, title: str, blocks: tuple[RichBlock, ...]
+    document: RichDocument,
+    *,
+    title: str,
+    blocks: tuple[RichBlock, ...],
+    section_blocks: tuple[RichBlock, ...] = (),
+    section_titles: tuple[str, ...] = (),
+    structure_section_id: str | None = None,
+    generate_guide: bool = True,
 ) -> SourceChapter:
+    if not section_blocks:
+        headings = tuple(
+            item for item in blocks if item.kind is RichBlockKind.HEADING
+        )
+        if headings and headings[0] == blocks[0]:
+            headings = headings[1:]
+        section_blocks = headings
+        section_titles = tuple(
+            str(item.payload["text"]).strip() for item in headings
+        )
     material = {
         "document_digest": document.document_digest,
         "block_ids": [block.block_id for block in blocks],
@@ -129,6 +272,54 @@ def _chapter(
         chapter_id=f"chapter-{digest}",
         title=title or "Document",
         block_ids=tuple(block.block_id for block in blocks),
+        section_block_ids=tuple(block.block_id for block in section_blocks),
+        section_titles=section_titles,
+        structure_section_id=structure_section_id,
+        generate_guide=generate_guide,
+    )
+
+
+def _display_chapter(
+    document: RichDocument, blocks: tuple[RichBlock, ...]
+) -> SourceChapter:
+    heading = next(
+        (item for item in blocks if item.kind is RichBlockKind.HEADING),
+        None,
+    )
+    title = (
+        str(heading.payload["text"]).strip()
+        if heading is not None
+        else _document_title(document)
+    )
+    return _chapter(
+        document,
+        title=title,
+        blocks=blocks,
+        generate_guide=False,
+    )
+
+
+def _block_in_lines(block: RichBlock, start: int, end: int) -> bool:
+    line = block.locator.line_start
+    return isinstance(line, int) and start <= line <= end
+
+
+def _ancestors(item: Any, by_id: Mapping[str, Any]) -> tuple[Any, ...]:
+    output = []
+    parent_id = item.parent_id
+    while parent_id is not None:
+        parent = by_id[parent_id]
+        output.append(parent)
+        parent_id = parent.parent_id
+    return tuple(output)
+
+
+def _is_descendant(
+    item: Any, ancestor_id: str, by_id: Mapping[str, Any]
+) -> bool:
+    return any(
+        parent.section_id == ancestor_id
+        for parent in _ancestors(item, by_id)
     )
 
 
@@ -141,5 +332,6 @@ __all__ = [
     "block_prompt_document",
     "equation_label_provenance",
     "plan_source_chapters",
+    "plan_structured_source_chapters",
     "validate_chapter_coverage",
 ]

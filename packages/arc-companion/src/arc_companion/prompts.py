@@ -7,9 +7,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v9"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v10"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v9"
+    "arc.companion.chapter-learning-review-prompt.v10"
 )
 CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v10"
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
@@ -100,128 +100,41 @@ CHAPTER_PLAN_SCHEMA = _closed(
         "learning_units",
     ),
 )
-_CACHED_RESOURCE = _closed(
-    {
-        "resource_sha256": {"type": "string", "minLength": 64},
-        "resource_size": {"type": "integer", "minimum": 0},
-        "media_type": _NONEMPTY,
-        "source_locator": {"type": "string"},
-        "filename": {"type": "string"},
-    },
-    (
-        "resource_sha256",
-        "resource_size",
-        "media_type",
-        "source_locator",
-        "filename",
-    ),
-)
-_REFERENCE_IDENTITY = _closed(
-    {
-        "arxiv_id": {"type": "string"},
-        "dois": _STRING_IDS,
-        "urls": _STRING_IDS,
-        "title": {"type": "string"},
-        "inspire_recid": {"type": "string"},
-    },
-    ("arxiv_id", "dois", "urls", "title", "inspire_recid"),
-)
-_CACHED_MATERIAL = _closed(
-    {
-        "identity": _REFERENCE_IDENTITY,
-        "resources": {
-            "type": "array",
-            "items": _CACHED_RESOURCE,
-            "minItems": 1,
-        },
-        "readable_resource": {
-            "anyOf": [_CACHED_RESOURCE, {"type": "null"}],
-        },
-    },
-    ("identity", "resources", "readable_resource"),
-)
 _REFERENCE = _closed(
-    {
-        "reference_id": _NONEMPTY,
-        "title": _NONEMPTY,
-        "source": _NONEMPTY,
-        "dois": _STRING_IDS,
-        "arxiv_ids": _STRING_IDS,
-        "cached_document": {
-            "type": ["object", "null"],
-            "properties": {
-                "source_format": {
-                    "type": "string",
-                    "enum": ["html", "markdown", "tex", "pdf"],
-                },
-                "source_sha256": {"type": "string", "minLength": 64},
-                "source_size": {"type": "integer", "minimum": 0},
-                "media_type": _NONEMPTY,
-                "parser_contract": _NONEMPTY,
-                "parsed_document_sha256": {
-                    "type": "string",
-                    "minLength": 64,
-                },
-            },
-            "required": [
-                "source_format",
-                "source_sha256",
-                "source_size",
-                "media_type",
-                "parser_contract",
-                "parsed_document_sha256",
-            ],
-            "additionalProperties": False,
-        },
-        "cached_material": {
-            "anyOf": [_CACHED_MATERIAL, {"type": "null"}],
-        },
-    },
-    (
-        "reference_id",
-        "title",
-        "source",
-        "dois",
-        "arxiv_ids",
-        "cached_document",
-        "cached_material",
-    ),
+    {"title": _NONEMPTY, "source": _NONEMPTY},
+    ("title", "source"),
 )
-_LEARNING_UNIT = _closed(
+_GUIDE_TEXT = _closed(
     {
-        "unit_id": _NONEMPTY,
         "title": _NONEMPTY,
-        "anchor_block_ids": _BLOCK_IDS,
-        "placement": {
-            "type": "string",
-            "enum": ["inline", "chapter"],
-        },
-        "purpose": _NONEMPTY,
         "content_markdown": _NONEMPTY,
     },
-    (
-        "unit_id",
-        "title",
-        "anchor_block_ids",
-        "placement",
-        "purpose",
-        "content_markdown",
-    ),
+    ("title", "content_markdown"),
 )
-CHAPTER_GUIDE_SCHEMA = _closed(
+_SECTION_GUIDE = _closed(
     {
-        "chapter_id": _NONEMPTY,
-        "learning_units": {"type": "array", "items": _LEARNING_UNIT},
-        "references": {"type": "array", "items": _REFERENCE},
+        "section_number": {"type": "integer", "minimum": 1},
+        "title": _NONEMPTY,
+        "content_markdown": _NONEMPTY,
     },
-    ("chapter_id", "learning_units", "references"),
+    ("section_number", "title", "content_markdown"),
+)
+_COMPANION = _closed(
+    {
+        "after_part": {"type": "integer", "minimum": 1},
+        "title": _NONEMPTY,
+        "content_markdown": _NONEMPTY,
+    },
+    ("after_part", "title", "content_markdown"),
 )
 CHAPTER_GUIDE_PROPOSAL_SCHEMA = _closed(
     {
-        "learning_units": {"type": "array", "items": _LEARNING_UNIT},
+        "chapter_guide": _GUIDE_TEXT,
+        "section_guides": {"type": "array", "items": _SECTION_GUIDE},
+        "companions": {"type": "array", "items": _COMPANION},
         "references": {"type": "array", "items": _REFERENCE},
     },
-    ("learning_units", "references"),
+    ("chapter_guide", "section_guides", "companions", "references"),
 )
 AUTHOR_IDENTITY_SCHEMA = _closed(
     {
@@ -235,32 +148,7 @@ AUTHOR_IDENTITY_SCHEMA = _closed(
     },
     ("authors", "confidence", "basis", "anchor_block_ids"),
 )
-CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA = _closed(
-    {
-        "reader_needs_satisfied": {"type": "boolean"},
-        "grounding_sufficient": {"type": "boolean"},
-        "remaining_issues": {
-            "type": "array",
-            "items": _NONEMPTY,
-            "uniqueItems": True,
-        },
-        "suggested_learning_units": {
-            "type": "array",
-            "items": _PLANNED_UNIT,
-        },
-        "suggested_references": {
-            "type": "array",
-            "items": _REFERENCE,
-        },
-    },
-    (
-        "reader_needs_satisfied",
-        "grounding_sufficient",
-        "remaining_issues",
-        "suggested_learning_units",
-        "suggested_references",
-    ),
-)
+CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA = _closed({}, ())
 
 
 def chapter_plan_prompt(
@@ -364,79 +252,72 @@ def chapter_plan_prompt(
 
 
 _CHAPTER_GUIDE_INSTRUCTION = """
-Write the chapter's useful learning units. ARC supplies source context,
-anchors, and recoverable work state; it does not constrain your creative
-form. Treat planned units as seeds, not a frozen list: preserve a useful
-seed's identity when revising it, and add or remove units when this materially
-improves the Companion. Every final unit must use exact chapter block anchors,
-and the final set must cover every block marked `needs_companion`. A unit may
-cover several blocks. Choose the form that makes its increment clearest.
-Questions, close reading, distinctions, argument maps, history,
-counterexamples, objections, connections, and reading paths are
-non-exhaustive inspirations, not a taxonomy or quota. Do not add paraphrase,
-same-meaning rewrite, repeated reasoning, or generic summary.
+Write the Companion for the current real chapter. The program owns chapter,
+section, block, learning-unit, and reference identities. Fill only the simple
+semantic template supplied in the loop context: one `chapter_guide`, sparse
+`section_guides` selected by `section_number`, sparse local `companions`
+selected by `after_part`, and `references` containing only `title` and
+`source`.
 
-Write titles and Markdown in the target language. Cite each externally
-grounded claim nearby as `[@reference-id]` and include compact metadata for
-that proposal-local ID in `references`. When a reference was admitted to the
-shared reference-material cache, return its actual canonical `cached_material`
-handle; do not claim caching without that handle. ARC will deterministically assign the
-published reference identity and inject the chapter identity. References may
-be absent or arbitrarily numerous. Include only references actually cited by
-a learning unit. Proposal references contain metadata and an optional shared
-paper-cache handle, never a copied reference body. Preserve every DOI and
-arXiv identifier found for a cited source. A translation lane runs
-independently; use the supplied chapter glossary consistently. A prior
-Companion is optional reference material, not a template or accepted source.
+The chapter guide appears before the body and helps the reader enter the
+chapter as a whole. A section guide appears after that section's translated
+heading and before its body. A companion appears after its selected source
+part and translation. Add section guides and companions only where useful;
+there is no quota. If one explanation covers several consecutive parts, place
+it after the last relevant part. Do not paraphrase, repeat the source's
+reasoning, or add generic summary.
 
-Write for the resolved reader profile. Concentrate first on making difficult
-or compressed source material understandable: provide missing background for
-an isolated quotation or named work, supply skipped derivation steps, bridge
-a real logical gap, and explain prerequisite material the reader should not be
-assumed to command confidently. When inspected references support it, add
-later corrections, disputes, doubts, unexpectedly important developments, or
-the historical significance of the passage or work. These are priorities, not
-a taxonomy, form, or quantity quota.
+Write titles and Markdown in the target language. Cite an externally grounded
+claim nearby using the reference's one-based array position, for example
+`[@1]` or `[@2]`. Include only cited references. ARC assigns publication
+identities and enriches cache metadata deterministically. References may be
+absent or arbitrarily numerous. The translation lane runs independently; use
+the supplied chapter glossary consistently. A prior Companion is optional
+reference material, not a template or accepted source.
+
+Use the reader background specified in the user intent. Otherwise, for
+popular, directional, or weakly specialized writing assume an adult with
+average general literacy and no specialist training. For a research paper,
+assume a professional student who completed the relevant foundational
+courses. For a textbook, assume a student who completed standard prerequisite
+courses, but do not assume difficult prerequisite concepts are confidently
+mastered.
+
+Concentrate first on making difficult or compressed material understandable:
+provide missing background for isolated quotations or named works, supply
+skipped derivation steps, bridge real logical gaps, and explain prerequisite
+material the reader should not be assumed to command. When references support
+it, add later corrections, disputes, doubts, unexpectedly important
+developments, or historical significance. These are priorities, not a
+taxonomy or quota.
 
 Prefer direct affirmative explanation. Use “not X but Y” or another corrective
-contrast only when the source, user intent, or an inspected reference
-establishes that the misconception actually exists. Never manufacture a prior
-reader belief merely to make prose sound explanatory.
+contrast only when the source, user intent, or an inspected reference shows
+that X is a live misconception. Never manufacture a prior reader belief.
 
 Translate English excerpts or quotations into the target language while
 preserving and citing the source's English title and URL. English Wikipedia is
-an optional ordinary source. If Wikipedia is used, only `en.wikipedia.org` is
-allowed; use the English page and translate the relevant explanation rather
-than citing another language edition.
+an optional ordinary source; only `en.wikipedia.org` is allowed.
 
-Research locally and economically. Prefer an exact source already available
-through the shared paper cache for a DOI, arXiv identifier, or URL. Search for
-a source when it could materially improve explanation, historical context, or
-later-information accuracy. Actively consider whether a useful reference is
-missing, including when the seed plan names none. There is no minimum or
-maximum reference count: do not search, cite, or add material merely to create
-the appearance of research. If acquisition is required, discover and use any
-currently available, authorized, capability-matching download tool. Do not
-assume that such a capability exists or insist when authorization is absent.
-A cache miss or cache write failure may remain local to your research process.
+Research when it materially improves the Companion. Prefer a source already
+available through the shared paper cache. There is no reference-count limit,
+and no minimum. If acquisition is required, use any currently available and
+authorized capability-matching tool; do not assume one exists or insist on
+authorization that was not granted.
 
-The source body is not embedded in the loop context. Inspect the
-`companion-source-index` workspace input first and use its exact cache-only
-paper operations when available, passing the cached reference unchanged.
-Prefer this loop's `block_access` line ranges and selectors. If those excerpts
-do not provide enough context, you may inspect the complete current chapter.
-Avoid reading the whole book when chapter-scoped or narrower access is enough.
-A verified text-only `companion-source` input exists only in fallback-only
-mode. Never open image or media assets. The loop context is authoritative for
-chapter and block IDs and for effective equation labels.
+The source body is not embedded in the loop context. Run the supplied
+`arc_commands` directly for exact numbered parts, complete current sections,
+the complete current chapter, search, and research. Do not explore ARC source
+code or cache directories to rediscover these commands. If exact parts are
+insufficient, inspect the complete chapter. Avoid reading the whole book when
+narrower access is enough. Never open image or media assets.
 """
 
 
 _CHAPTER_GUIDE_REVIEW_INSTRUCTION = """
-Review every proposed learning unit against its purpose, source anchors,
-references, reader profile, and reader-needs audit. ARC provides context and
-recovery, not a prescribed creative form. Judge all useful explanatory forms
-by the same value standard; none is a quota.
+Review the chapter guide, sparse section guides, sparse post-part companions,
+and references against the actual current chapter. ARC provides context and
+recovery, not a prescribed creative form.
 
 Do not criticize merely to demonstrate reviewer activity or present a
 stylistic preference as a defect. If the proposal already satisfies reader
@@ -444,13 +325,11 @@ needs, is well grounded, and has no concrete path to meaningful improvement,
 accept it by choosing `stop`. Choose `continue` only for a specific achievable
 gain. Feedback must say what to preserve, what to change, and how.
 
-When you discover a valuable new Companion idea, return a constructive
-suggestion with exact source anchors so the next proposer can add a new unit
-or improve an existing one. You may suggest a newly inspected reference with
-compact metadata and an optional shared paper-cache handle. Never copy a
-reference body into the payload or invent a block ID, source, DOI, arXiv
-identifier, or URL. Empty suggestion arrays are correct when no addition is
-worth making.
+When you discover a valuable new Companion idea, describe it constructively
+in feedback using a supplied local section or part number so the next proposer
+can add or improve it. Suggest newly inspected references when useful. The
+Companion-specific review payload must be `{}`. Never copy a reference body or
+invent a source, DOI, arXiv identifier, or URL.
 
 Actively consider and, when it could materially improve the Companion, inspect
 a reference the proposer missed. Both roles may introduce useful new source
@@ -462,20 +341,16 @@ skipped derivation steps, logical gaps, prerequisite knowledge the reader may
 not command, and reference-grounded later corrections, disputes, doubts,
 unexpected developments, or historical significance. Remove or replace
 paraphrase, repeated reasoning, generic summary, and unsupported claims.
-Require nearby `[@reference-id]` citations for externally grounded claims.
-Never recommend removing the final useful unit covering a required block.
+Require nearby positional `[@N]` citations for externally grounded claims.
 
 Treat unsupported corrective framing as a material defect. A “not X but Y”
 contrast is justified only when supplied material shows that X is a live
 misconception. Otherwise request direct affirmative prose. A prior Companion
 is optional reference material, not a template or authority.
 
-Inspect the `companion-source-index` workspace input first and use its exact
-cache-only paper operations. Prefer this loop's `block_access` line ranges and
-selectors; if they are insufficient, you may inspect the complete current
-chapter. Avoid reading the whole book when chapter-scoped or narrower access
-is enough. A verified text-only `companion-source` input exists only in
-fallback-only mode. Never open image or media assets.
+Use the loop's executable `arc_commands` directly. If exact numbered parts are
+insufficient, inspect the complete current section or chapter. Avoid reading
+the whole book when narrower access is enough. Never open image or media assets.
 """
 
 
@@ -646,7 +521,6 @@ __all__ = [
     "CHAPTER_GUIDE_PROPOSAL_SCHEMA",
     "CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA",
     "CHAPTER_GUIDE_REVIEW_PROMPT_VERSION",
-    "CHAPTER_GUIDE_SCHEMA",
     "CHAPTER_PLAN_PROMPT_VERSION",
     "CHAPTER_PLAN_SCHEMA",
     "author_identity_prompt",

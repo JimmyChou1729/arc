@@ -10,11 +10,18 @@ import pytest
 
 from arc_jobs import (
     ImmutableArtifactStore,
+    RunEngine,
     RunRepository,
     RunStatus,
 )
 from arc_llm import LLMCompleted
 from arc_paper import (
+    ArcPaperService,
+    CachedDocumentRef,
+    DocumentStructureCache,
+    DocumentStructureEntry,
+    DocumentStructureNodeKind,
+    DocumentStructureOverlay,
     ReferenceIdentity,
     ReferenceMaterialCache,
     RichDocumentParserService,
@@ -28,6 +35,7 @@ from arc_paper import (
 from arc_companion.build import (
     COMPANION_BUILD_HANDLER,
     CompanionBuildHandler,
+    _attach_cached_reference_materials,
     _verify_cached_reference_materials,
 )
 from arc_companion.contracts import CompanionContentCodec
@@ -113,147 +121,41 @@ class FakeGuideTasks:
                 "basis": "The fixture contains no confirmed author.",
                 "anchor_block_ids": [],
             }
-        elif contract == CHAPTER_PLAN_PROMPT_VERSION:
-            block_id = payload["block_ids"][0]
-            units = [
-                {
-                    "unit_id": "intuition",
-                    "anchor_block_ids": [block_id],
-                    "placement": "inline",
-                    "purpose": "Makes one implicit connection explicit.",
-                }
-            ]
-            if self.remove_second_unit:
-                units.append(
-                    {
-                        "unit_id": "redundant",
-                        "anchor_block_ids": [block_id],
-                        "placement": "chapter",
-                        "purpose": "Claims to repeat the source.",
-                    }
-                )
-            if self.empty_seed:
-                units = []
-            value = {
-                "chapter_id": "model-supplied-title-not-routing-identity",
-                "reader_profile": {
-                    "source_type": "popular_or_directional",
-                    "assumed_background": (
-                        "An adult reader without specialist training."
-                    ),
-                    "basis": "The short fixture is explanatory prose.",
-                },
-                "reader_needs": [
-                    {
-                        "block_id": block_id,
-                        "needs_companion": index == 0,
-                        "reason": (
-                            "The first block benefits from one connection."
-                            if index == 0
-                            else "This block is simple and self-contained."
-                        ),
-                        "learning_unit_ids": (
-                            (
-                                []
-                                if self.empty_seed
-                                else ["intuition"]
-                            )
-                            if index == 0
-                            else []
-                        ),
-                    }
-                    for index, block_id in enumerate(payload["block_ids"])
-                ],
-                "learning_units": units,
-            }
         elif contract == CHAPTER_GUIDE_PROMPT_VERSION:
-            self.guide_glossaries[str(payload["plan"]["chapter_id"])] = list(
-                payload["glossary"]
-            )
+            self.guide_glossaries[request.task_id] = list(payload["glossary"])
             if self.guide_started is not None:
                 self.guide_started.set()
             if self.translation_started is not None:
                 assert self.translation_started.is_set()
             round_task = payload["_round_task"]
             revised = round_task["kind"] == "revised_proposal"
-            proposal_units = payload["plan"]["learning_units"] or [
-                {
-                    "unit_id": "proposer-added",
-                    "anchor_block_ids": [
-                        payload["plan"]["reader_needs"][0]["block_id"]
-                    ],
-                    "placement": "inline",
-                    "purpose": "Supply the missing connection.",
-                }
-            ]
+            text = (
+                "A focused source-anchored explanation [@1]."
+                if self.with_reference
+                else "A focused source-anchored explanation."
+            )
             value = {
-                "learning_units": [
-                    {
-                        "unit_id": item["unit_id"],
-                        "title": (
-                            f"Question for {payload['plan']['chapter_id']}"
-                            if item["unit_id"] == "intuition"
-                            else "Restatement"
-                        ),
-                        "anchor_block_ids": list(
-                            item["anchor_block_ids"]
-                        ),
-                        "placement": item["placement"],
-                        "purpose": item["purpose"],
-                        "content_markdown": (
-                            "A focused source-anchored explanation "
-                            "[@fixture-reference]."
-                            if self.with_reference
-                            else "A focused source-anchored explanation."
-                            if item["unit_id"] == "intuition"
-                            else "The source says the same thing again."
-                        ),
-                    }
-                    for item in proposal_units
-                    if not (
-                        revised
-                        and self.remove_second_unit
-                        and item["unit_id"] == "redundant"
-                    )
-                ],
+                "chapter_guide": {
+                    "title": f"Guide to {payload['chapter']['title']}",
+                    "content_markdown": text,
+                },
+                "section_guides": [],
+                "companions": (
+                    [{
+                        "after_part": 1,
+                        "title": "Local companion",
+                        "content_markdown": "A useful local explanation.",
+                    }]
+                    if self.remove_second_unit and not revised
+                    else []
+                ),
                 "references": (
                     [
                         {
-                            "reference_id": "fixture-reference",
                             "title": "An English Reference",
-                            "source": "https://example.test/reference",
-                            "dois": ["10.1000/FIXTURE"],
-                            "arxiv_ids": ["2401.00001"],
-                            "cached_document": None,
-                            "cached_material": None,
-                            **(
-                                {
-                                    "cached_material": {
-                                        "identity": {
-                                            "arxiv_id": "2401.00001",
-                                            "dois": ["10.1000/fixture"],
-                                            "urls": [
-                                                "https://example.test/reference"
-                                            ],
-                                            "title": "An English Reference",
-                                            "inspire_recid": "",
-                                        },
-                                        "resources": [
-                                            {
-                                                "resource_sha256": "f" * 64,
-                                                "resource_size": 10,
-                                                "media_type": "text/plain",
-                                                "source_locator": (
-                                                    "https://example.test/reference"
-                                                ),
-                                                "filename": "reference.txt",
-                                            }
-                                        ],
-                                        "readable_resource": None,
-                                    }
-                                }
-                                if self.invalid_cached_material
-                                else {}
+                            "source": (
+                                "https://example.test/reference "
+                                "doi:10.1000/FIXTURE arXiv:2401.00001"
                             ),
                         }
                     ]
@@ -284,17 +186,7 @@ class FakeGuideTasks:
                         "redundant unit; keep the same source anchor."
                     )
                 },
-                "payload": {
-                    "reader_needs_satisfied": action == "stop",
-                    "grounding_sufficient": True,
-                    "remaining_issues": (
-                        []
-                        if action == "stop"
-                        else ["Remove any redundant restatement."]
-                    ),
-                    "suggested_learning_units": [],
-                    "suggested_references": [],
-                },
+                "payload": {},
             }
         else:
             raise AssertionError(f"unexpected guide contract: {contract}")
@@ -322,10 +214,14 @@ def _semantically_invalid_value(contract: str, value: dict) -> dict:
                 "anchor_block_ids": [],
             }
         )
-    elif contract == CHAPTER_PLAN_PROMPT_VERSION:
-        invalid["reader_needs"][0]["block_id"] = "unknown-block"
     elif contract == CHAPTER_GUIDE_PROMPT_VERSION:
-        invalid["learning_units"][0]["anchor_block_ids"] = ["unknown-block"]
+        invalid["companions"] = [
+            {
+                "after_part": 9999,
+                "title": "Bad anchor",
+                "content_markdown": "Bad.",
+            }
+        ]
     else:
         raise AssertionError(f"unsupported invalid contract: {contract}")
     return invalid
@@ -495,7 +391,7 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     assert completed.status is RunStatus.SUCCEEDED
     assert translation.calls[0:2] == ["language", "glossary"]
     assert translation.approx_counts == [73]
-    assert tasks.counts[CHAPTER_PLAN_PROMPT_VERSION] == 2
+    assert tasks.counts[CHAPTER_PLAN_PROMPT_VERSION] == 0
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 6
     assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 4
     assert all(
@@ -505,13 +401,29 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     for contract, input_ids in tasks.request_input_ids:
         assert input_ids[0] == "companion-source-index", contract
         assert "companion-source" not in input_ids, contract
-    plan_inputs = next(
-        inputs
-        for contract, inputs in tasks.request_input_ids
-        if contract == CHAPTER_PLAN_PROMPT_VERSION
-    )
-    assert "literature-survey" not in plan_inputs
-    assert "selected-evidence" not in plan_inputs
+    guide_payloads = [
+        _request_payload(prompt)[1]
+        for contract, _task_id, prompt in tasks.requests
+        if contract == CHAPTER_GUIDE_PROMPT_VERSION
+    ]
+    assert guide_payloads
+    assert all("arc_commands" in item for item in guide_payloads)
+    assert all("block_ids" not in item for item in guide_payloads)
+    for payload in guide_payloads:
+        commands = payload["arc_commands"]
+        assert commands["availability"] == "exact"
+        assert any(
+            item["command_id"] == "complete-current-chapter"
+            for item in commands["source"]
+        )
+        assert all(
+            item["shell"] and item["argv"][0] == "arc-paper"
+            for item in commands["source"]
+        )
+        assert all(
+            "A quantum field appears here." not in item["shell"]
+            for item in commands["source"]
+        )
     assert tasks.runtime_environments
     assert {
         item["ARC_PAPER_CACHE"] for item in tasks.runtime_environments
@@ -530,16 +442,13 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
         document.source.artifact_digest
     )
     planned_chapters = plan_source_chapters(document)
+    assert not (
+        service.repository.run_directory(completed.run_id)
+        / "working/candidates/chapters"
+        / planned_chapters[0].chapter_id
+        / "plan.json"
+    ).exists()
     for chapter in planned_chapters:
-        candidate = json.loads(
-            (
-                service.repository.run_directory(completed.run_id)
-                / "working/candidates/chapters"
-                / chapter.chapter_id
-                / "plan.json"
-            ).read_text(encoding="utf-8")
-        )
-        assert candidate["chapter_id"] == chapter.chapter_id
         final_guide = json.loads(
             (
                 service.repository.run_directory(completed.run_id)
@@ -548,14 +457,16 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
                 / "guide-final.json"
             ).read_text(encoding="utf-8")
         )
-        assert final_guide["chapter_id"] == chapter.chapter_id
+        assert set(final_guide) == {
+            "chapter_guide",
+            "section_guides",
+            "companions",
+            "references",
+        }
     assert {
-        chapter_id: [item["term"] for item in values]
-        for chapter_id, values in tasks.guide_glossaries.items()
-    } == {
-        planned_chapters[0].chapter_id: ["quantum field"],
-        planned_chapters[1].chapter_id: ["relativity"],
-    }
+        tuple(item["term"] for item in values)
+        for values in tasks.guide_glossaries.values()
+    } == {("quantum field",), ("relativity",)}
 
     book = service.accepted_book(completed.run_id)
     assert book.translation_mode == "enabled"
@@ -566,6 +477,90 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     ] == [
         item.block_id for item in document.blocks
     ]
+
+
+def test_structural_display_chapter_skips_loop_but_translates_and_augments(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path)
+    paper = ArcPaperService(cache_root=tmp_path / "paper")
+    cached = paper.cache_document(document.source)
+    pdf = CachedDocumentRef(
+        SourceFormat.PDF,
+        "f" * 64,
+        1,
+        "application/pdf",
+        "test.pdf",
+        "e" * 64,
+    )
+    overlay = DocumentStructureOverlay(
+        cached,
+        pdf,
+        (
+            DocumentStructureEntry(
+                "real-chapter",
+                "Relativity",
+                1,
+                None,
+                0,
+                5,
+                5,
+                7,
+                1,
+                1,
+                DocumentStructureNodeKind.CONTENT,
+                "fixture",
+            ),
+        ),
+    )
+    structure_ref = DocumentStructureCache(tmp_path / "paper").store(overlay)
+    request = CompanionBuildRequest(
+        document,
+        target_language="zh-CN",
+        structure_ref=structure_ref,
+        companion_section_ids=("real-chapter",),
+    )
+    tasks = FakeGuideTasks()
+    translation = FakeTranslationAdapter(mode="enabled")
+    service = CompanionService(tmp_path / "jobs")
+    prepared = service.prepare(request)
+
+    class NoteHandler(CompanionBuildHandler):
+        def _augment_chapter_candidate(self, chapter, candidate):
+            value = super()._augment_chapter_candidate(chapter, candidate)
+            if not chapter.generate_guide:
+                value["companions"] = [
+                    {
+                        "after_part": 1,
+                        "title": "译者注",
+                        "content_markdown": "译者注：固定说明。",
+                    }
+                ]
+            return value
+
+    spec = service.repository.read_spec(prepared.run_id)
+    snapshot = RunEngine(service.repository).execute(
+        spec,
+        NoteHandler(
+            request,
+            execution=CompanionExecutionOptions(
+                workers=1,
+                paper_cache_root=tmp_path / "paper",
+            ),
+            task_service=tasks,  # type: ignore[arg-type]
+            translation_adapter=translation,
+        ),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 3
+    book = service.accepted_book(snapshot.run_id)
+    assert len(book.chapters) == 2
+    assert sum(len(item.translations) for item in book.chapters) == len(
+        document.blocks
+    )
+    assert book.chapters[0].learning_units[0].placement == "inline"
+    assert "固定说明" in book.chapters[0].learning_units[0].content_markdown
     assert book.glossary[0].term == "quantum field"
     assert book.glossary[0].translated_term == "量子场"
     assert book.glossary[0].definition == "量子场的定义"
@@ -657,7 +652,7 @@ def test_program_names_and_publishes_only_cited_chapter_references(
     )
 
 
-def test_forged_cached_material_reports_program_owned_candidate(
+def test_minimal_reference_contract_does_not_accept_model_cache_handles(
     tmp_path: Path,
 ) -> None:
     tasks = FakeGuideTasks(
@@ -676,10 +671,7 @@ def test_forged_cached_material_reports_program_owned_candidate(
         translation_adapter=FakeTranslationAdapter(mode="skipped"),
     )
 
-    assert failed.status is RunStatus.FAILED
-    assert failed.error is not None
-    assert failed.error.code == "chapter_reference_cache_invalid"
-    assert Path(failed.error.details["candidate_path"]).is_file()
+    assert failed.status is RunStatus.SUCCEEDED
 
 
 def test_cached_material_rejects_mismatched_identity_and_resources(
@@ -730,6 +722,44 @@ def test_cached_material_rejects_mismatched_identity_and_resources(
         )
 
 
+def test_program_attaches_already_admitted_reference_material(
+    tmp_path: Path,
+) -> None:
+    cache = ReferenceMaterialCache(tmp_path / "paper-cache")
+    resource = cache.store_resource(
+        b"reference",
+        media_type="text/plain",
+        source_locator="https://example.test/reference",
+    )
+    cache.store_material(
+        ReferenceIdentity(
+            dois=("10.1000/fixture",),
+            title="Fixture",
+        ),
+        (resource,),
+        readable_resource=resource,
+    )
+
+    attached = _attach_cached_reference_materials(
+        {
+            "references": [
+                {
+                    "reference_id": "reference-fixture",
+                    "title": "Fixture",
+                    "source": "doi:10.1000/fixture",
+                    "dois": ["10.1000/fixture"],
+                    "arxiv_ids": [],
+                    "cached_document": None,
+                    "cached_material": None,
+                }
+            ]
+        },
+        cache_root=tmp_path / "paper-cache",
+    )
+
+    assert attached["references"][0]["cached_material"] is not None
+
+
 def test_cached_document_parse_failure_is_not_downgraded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -775,18 +805,16 @@ def test_review_remove_publishes_ordered_subset_without_retry(
     assert completed.status is RunStatus.SUCCEEDED
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 6
     assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 4
-    assert [
-        [unit.unit_id for unit in chapter.learning_units]
+    assert all(
+        len(chapter.learning_units) == 1
+        and chapter.learning_units[0].unit_id.startswith("unit-")
         for chapter in service.accepted_book(completed.run_id).chapters
-    ] == [["intuition"], ["intuition"]]
+    )
 
 
 @pytest.mark.parametrize(
         ("contract", "candidate_kind", "expected_calls"),
-        [
-            (AUTHOR_IDENTITY_PROMPT_VERSION, "author", 2),
-            (CHAPTER_PLAN_PROMPT_VERSION, "plan", 3),
-    ],
+        [(AUTHOR_IDENTITY_PROMPT_VERSION, "author", 2)],
 )
 def test_schema_valid_semantic_error_gets_one_fresh_retry(
     tmp_path: Path,
@@ -798,7 +826,6 @@ def test_schema_valid_semantic_error_gets_one_fresh_retry(
     chapter_id = plan_source_chapters(document)[0].chapter_id
     candidate_ids = {
         "author": "identity/author.json",
-        "plan": f"chapters/{chapter_id}/plan.json",
     }
     tasks = FakeGuideTasks(
             semantic_invalid_contract=contract,
@@ -904,10 +931,7 @@ def test_invalid_terminal_revision_reports_program_owned_candidate(
     assert failed.error.details["candidate_path"] == str(candidate_path)
     assert failed.error.details["chapter_id"] == chapters[1].chapter_id
     candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
-    assert candidate["chapter_id"] == chapters[1].chapter_id
-    assert candidate["learning_units"][0]["anchor_block_ids"] == [
-        "unknown-block"
-    ]
+    assert candidate["companions"][0]["after_part"] == 9999
     store = ImmutableArtifactStore(
         service.repository.run_directory(failed.run_id),
         repository_root=service.repository.root,
@@ -919,9 +943,7 @@ def test_invalid_terminal_revision_reports_program_owned_candidate(
         f"chapters/{chapters[1].chapter_id}/guide-accepted"
     ) is None
 
-    candidate["learning_units"][0]["anchor_block_ids"] = [
-        chapters[1].block_ids[0]
-    ]
+    candidate["companions"][0]["after_part"] = 1
     candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
     guide_calls = tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION]
 

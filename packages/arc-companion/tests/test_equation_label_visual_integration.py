@@ -98,48 +98,31 @@ class _GuideTasks:
                 "basis": "No author is confirmed by this fixture.",
                 "anchor_block_ids": [],
             }
-        elif "chapter-plan-prompt" in contract:
-            self.plan_labels.extend(
-                str(block["equation_label"])
-                for block in payload["block_access"]
-                if block["kind"] == "equation"
-            )
-            value = {
-                "chapter_id": payload["chapter_id"],
-                "reader_profile": {
-                    "source_type": "research_paper",
-                    "assumed_background": (
-                        "A student who completed relevant foundational courses."
-                    ),
-                    "basis": "The fixture has numbered research equations.",
-                },
-                "reader_needs": [
-                    {
-                        "block_id": block_id,
-                        "needs_companion": False,
-                        "reason": "The visual-label fixture is self-contained.",
-                        "learning_unit_ids": [],
-                    }
-                    for block_id in payload["block_ids"]
-                ],
-                "learning_units": [],
-            }
         elif "chapter-learning-review-prompt" in contract:
             value = {
                 "schema_version": "arc.proposer_reviewer.review.v1",
                 "action": "stop",
-                "reason": "The self-contained fixture needs no additions.",
+                "reason": "The proposal is sufficient.",
                 "feedback": {"guide-proposer": "No revision is needed."},
-                "payload": {
-                    "reader_needs_satisfied": True,
-                    "grounding_sufficient": True,
-                    "remaining_issues": [],
-                    "suggested_learning_units": [],
-                    "suggested_references": [],
-                },
+                "payload": {},
             }
         elif "chapter-learning-prompt" in contract:
-            value = {"learning_units": [], "references": []}
+            self.plan_labels.extend(
+                str(part["equation_label"])
+                for part in payload["chapter"]["parts"]
+                if part["kind"] == "equation"
+            )
+            value = {
+                "chapter_guide": {
+                    "title": "Reading guide",
+                    "content_markdown": (
+                        "The fixture demonstrates equation-label provenance."
+                    ),
+                },
+                "section_guides": [],
+                "companions": [],
+                "references": [],
+            }
         else:  # pragma: no cover - the visual service is replaced in these tests
             raise AssertionError(f"unexpected task contract: {contract}")
         return LLMCompleted(value, "fake", "fake", None, None)

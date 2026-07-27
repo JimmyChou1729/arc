@@ -10,8 +10,11 @@ from typing import Any, Mapping
 
 from arc_llm import LLMExecutionOptions, ModelSelection
 from arc_paper import (
+    CachedDocumentStructureRef,
     EQUATION_LABEL_VISUAL_PROMPT_VERSION,
     RichDocument,
+    cached_document_structure_ref_from_document,
+    cached_document_structure_ref_to_document,
     rich_document_from_document,
     rich_document_to_document,
 )
@@ -25,13 +28,19 @@ from .prompts import (
 from .reader_labels import resolve_reader_labels
 
 
-COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v5"
+COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v6"
+_LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V5 = (
+    "arc.companion.build_request.v5"
+)
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4 = (
     "arc.companion.build_request.v4"
 )
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3 = "arc.companion.build_request.v3"
 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2 = "arc.companion.build_request.v2"
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v12"
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v13"
+_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12 = (
+    "arc.companion.generation_recipe.v12"
+)
 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11 = (
     "arc.companion.generation_recipe.v11"
 )
@@ -76,6 +85,8 @@ class CompanionBuildRequest:
     translation_reuse_digest: str | None = None
     authors: tuple[str, ...] = ()
     reader_labels: Mapping[str, str] | None = None
+    structure_ref: CachedDocumentStructureRef | None = None
+    companion_section_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, RichDocument):
@@ -155,6 +166,41 @@ class CompanionBuildRequest:
             tuple(author.strip() for author in authors),
         )
         object.__setattr__(self, "reader_labels", labels)
+        if self.structure_ref is not None and not isinstance(
+            self.structure_ref, CachedDocumentStructureRef
+        ):
+            raise ValueError(
+                "structure_ref must be a CachedDocumentStructureRef or null"
+            )
+        if self.structure_ref is not None and (
+            self.structure_ref.document.source_sha256
+            != self.source.source.artifact_digest
+            or self.structure_ref.document.source_size
+            != self.source.source.size
+        ):
+            raise ValueError(
+                "structure_ref document differs from the Companion source"
+            )
+        if self.structure_ref is None and self.companion_section_ids is not None:
+            raise ValueError(
+                "companion_section_ids requires structure_ref"
+            )
+        section_ids = (
+            None
+            if self.companion_section_ids is None
+            else tuple(self.companion_section_ids)
+        )
+        if section_ids is not None and (
+            any(
+                not isinstance(item, str) or not item.strip()
+                for item in section_ids
+            )
+            or len(section_ids) != len(set(section_ids))
+        ):
+            raise ValueError(
+                "companion_section_ids must be unique non-empty strings or null"
+            )
+        object.__setattr__(self, "companion_section_ids", section_ids)
 
     @property
     def effective_intent(self) -> str:
@@ -168,6 +214,7 @@ class CompanionGenerationRecipe:
     model: ModelSelection = field(default_factory=ModelSelection)
     approx_term_count: int = 50
     author_identity_prompt: str = AUTHOR_IDENTITY_PROMPT_VERSION
+    # Legacy decode surface only; current builds do not execute this prompt.
     chapter_plan_prompt: str = CHAPTER_PLAN_PROMPT_VERSION
     chapter_guide_prompt: str = CHAPTER_GUIDE_PROMPT_VERSION
     chapter_guide_review_prompt: str = (
@@ -257,6 +304,16 @@ def encode_build_request(
             if request.reader_labels is not None
             else None
         ),
+        "structure_ref": (
+            cached_document_structure_ref_to_document(request.structure_ref)
+            if request.structure_ref is not None
+            else None
+        ),
+        "companion_section_ids": (
+            list(request.companion_section_ids)
+            if request.companion_section_ids is not None
+            else None
+        ),
     }
 
 
@@ -272,7 +329,6 @@ def encode_generation_recipe(
         },
         "approx_term_count": recipe.approx_term_count,
         "author_identity_prompt": recipe.author_identity_prompt,
-        "chapter_plan_prompt": recipe.chapter_plan_prompt,
         "chapter_guide_prompt": recipe.chapter_guide_prompt,
         "chapter_guide_review_prompt": (
             recipe.chapter_guide_review_prompt
@@ -311,6 +367,16 @@ def decode_build_request(
     }
     if schema_version in {
         COMPANION_BUILD_REQUEST_SCHEMA,
+    }:
+        fields = legacy_fields | {
+            "translation_reuse_digest",
+            "authors",
+            "reader_labels",
+            "structure_ref",
+            "companion_section_ids",
+        }
+    elif schema_version in {
+        _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V5,
         _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4,
     }:
         fields = legacy_fields | {
@@ -335,6 +401,7 @@ def decode_build_request(
     reader_labels: Mapping[str, str] | None = None
     if schema_version in {
         COMPANION_BUILD_REQUEST_SCHEMA,
+        _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V5,
         _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4,
     }:
         raw_authors = request["authors"]
@@ -368,6 +435,7 @@ def decode_build_request(
             if schema_version
             in {
                 COMPANION_BUILD_REQUEST_SCHEMA,
+                _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V5,
                 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4,
                 _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3,
             }
@@ -375,6 +443,23 @@ def decode_build_request(
         ),
         authors=authors,
         reader_labels=reader_labels,
+        structure_ref=(
+            cached_document_structure_ref_from_document(
+                _mapping(request["structure_ref"], "structure ref")
+            )
+            if schema_version == COMPANION_BUILD_REQUEST_SCHEMA
+            and request["structure_ref"] is not None
+            else None
+        ),
+        companion_section_ids=(
+            tuple(_string_sequence(
+                request["companion_section_ids"],
+                "companion_section_ids",
+            ))
+            if schema_version == COMPANION_BUILD_REQUEST_SCHEMA
+            and request["companion_section_ids"] is not None
+            else None
+        ),
     )
 
 
@@ -382,6 +467,17 @@ def decode_generation_recipe(
     document: Mapping[str, Any],
 ) -> CompanionGenerationRecipe:
     schema_version = document.get("schema_version")
+    current_fields = {
+        "schema_version",
+        "model",
+        "approx_term_count",
+        "author_identity_prompt",
+        "chapter_guide_prompt",
+        "chapter_guide_review_prompt",
+        "equation_label_visual_prompt",
+        "chapter_guide_max_rounds",
+        "chapter_guide_review_final_round",
+    }
     common_fields = {
         "schema_version",
         "model",
@@ -392,6 +488,8 @@ def decode_generation_recipe(
         "equation_label_visual_prompt",
     }
     if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA:
+        fields = current_fields
+    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12:
         fields = common_fields | {
             "author_identity_prompt",
             "chapter_guide_max_rounds",
@@ -458,14 +556,17 @@ def decode_generation_recipe(
     exact_model = model["model"]
     if exact_model is not None and not isinstance(exact_model, str):
         raise ValueError("model.model must be a string or null")
-    for key in common_fields - {
+    for key in fields - {
         "schema_version",
         "model",
         "approx_term_count",
+        "chapter_guide_max_rounds",
+        "chapter_guide_review_final_round",
     }:
         _string(raw_recipe, key)
     if schema_version not in {
         COMPANION_GENERATION_RECIPE_SCHEMA,
+        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
         _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V4,
@@ -503,8 +604,8 @@ def decode_generation_recipe(
         ),
         chapter_plan_prompt=(
             CHAPTER_PLAN_PROMPT_VERSION
-            if legacy_recipe
-            else _string(raw_recipe, "chapter_plan_prompt")
+            if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA
+            else CHAPTER_PLAN_PROMPT_VERSION
         ),
         chapter_guide_prompt=(
             CHAPTER_GUIDE_PROMPT_VERSION
@@ -520,6 +621,7 @@ def decode_generation_recipe(
             _integer(raw_recipe, "chapter_guide_max_rounds")
             if schema_version in {
                 COMPANION_GENERATION_RECIPE_SCHEMA,
+                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9,
@@ -533,6 +635,7 @@ def decode_generation_recipe(
             )
             if schema_version in {
                 COMPANION_GENERATION_RECIPE_SCHEMA,
+                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
                 _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9,
@@ -616,6 +719,14 @@ def _optional_string_mapping(
     ):
         raise ValueError(f"{description} must be an object of strings or null")
     return dict(value)
+
+
+def _string_sequence(value: Any, description: str) -> list[str]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise ValueError(f"{description} must be an array of non-empty strings")
+    return [item.strip() for item in value]
 
 
 __all__ = [

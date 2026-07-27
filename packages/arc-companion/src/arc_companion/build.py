@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
+import shlex
 import shutil
 import sys
 from collections.abc import Mapping, Sequence
@@ -37,6 +40,8 @@ from arc_llm import (
 from arc_paper import (
     ArcPaperService,
     CachedDocumentError,
+    CachedDocumentStructureRef,
+    DocumentStructureCache,
     EquationLabelReviewService,
     PdftoppmFullPageRenderer,
     RichDocument,
@@ -47,6 +52,7 @@ from arc_paper import (
     apply_visual_equation_labels,
     detect_suspicious_equation_labels,
     cached_document_ref_to_document,
+    cached_document_structure_ref_to_document,
     cached_reference_material_from_document,
     cached_reference_material_to_document,
     rich_document_from_document,
@@ -87,7 +93,6 @@ from .generation_validation import (
     CompanionContentError,
     validate_author_identity,
     validate_chapter_guide,
-    validate_chapter_plan,
 )
 from .llm_runtime import (
     CompanionLLMError,
@@ -109,11 +114,9 @@ from .prompts import (
     AUTHOR_IDENTITY_SCHEMA,
     CHAPTER_GUIDE_PROPOSAL_SCHEMA,
     CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA,
-    CHAPTER_PLAN_SCHEMA,
     author_identity_prompt,
     chapter_guide_proposer_instructions,
     chapter_guide_reviewer_instructions,
-    chapter_plan_prompt,
 )
 from .reader_labels import ReaderLabelError, resolve_reader_labels
 from .reading_order import first_visible_citation_ids
@@ -129,6 +132,7 @@ from .source_planning import (
     block_prompt_document,
     equation_label_provenance,
     plan_source_chapters,
+    plan_structured_source_chapters,
 )
 from .source_identity import resolve_document_identity
 from .translation_adapter import (
@@ -138,10 +142,11 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v9"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v10"
 COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
     {
         COMPANION_BUILD_HANDLER,
+        "arc.companion.build.v9",
         "arc.companion.build.v8",
         "arc.companion.build.v7",
         "arc.companion.build.v5",
@@ -206,7 +211,22 @@ class CompanionBuildHandler:
             if isinstance(prepared_source, Paused):
                 return prepared_source
             source = prepared_source
-            chapters = plan_source_chapters(source)
+            if self.request.structure_ref is None:
+                chapters = plan_source_chapters(source)
+            else:
+                paper = ArcPaperService(
+                    cache_root=self.execution.paper_cache_root
+                )
+                overlay = DocumentStructureCache(paper.cache_root).read(
+                    self.request.structure_ref
+                )
+                chapters = plan_structured_source_chapters(
+                    source,
+                    overlay,
+                    companion_section_ids=(
+                        self.request.companion_section_ids
+                    ),
+                )
             model_inputs = self._model_source_inputs(
                 context, source, chapters
             )
@@ -264,19 +284,6 @@ class CompanionBuildHandler:
                 (prior_input,) if prior_input is not None else ()
             )
 
-            plans = self._plans(
-                context,
-                resume_input,
-                source,
-                chapters,
-                blocks,
-                title,
-                prior_companion,
-                inputs=document_inputs,
-            )
-            if isinstance(plans, (Paused, Failed)):
-                return plans
-
             glossary: dict[str, Any]
             if translation_required:
                 glossary_outcome = self.translation_adapter.build_glossary(
@@ -304,7 +311,6 @@ class CompanionBuildHandler:
                 context,
                 resume_input,
                 chapters,
-                plans,
                 glossary,
                 blocks,
                 source=source,
@@ -368,6 +374,13 @@ class CompanionBuildHandler:
             return Succeeded(result_ref)
         except CompanionContentError as exc:
             return Failed(RunError(exc.code, str(exc)))
+        except CachedDocumentError as exc:
+            return Failed(
+                RunError(
+                    getattr(exc, "code", "document_structure_invalid"),
+                    str(exc),
+                )
+            )
         except RichTextError as exc:
             return Failed(RunError("learning_markdown_invalid", str(exc)))
         except CompanionLLMError as exc:
@@ -730,128 +743,11 @@ class CompanionBuildHandler:
         validate_build_diagnostics(document)
         context.artifacts.publish_json(_DIAGNOSTICS_ARTIFACT, document)
 
-    def _plans(
-        self,
-        context: RunContext,
-        resume_input: Any,
-        source: RichDocument,
-        chapters: tuple[SourceChapter, ...],
-        blocks: Mapping[str, Any],
-        document_title: str,
-        prior_companion: Mapping[str, Any] | None,
-        *,
-        inputs: tuple[LLMInputArtifact, ...],
-    ) -> tuple[dict[str, Any], ...] | Paused | Failed:
-        units = tuple(
-            WorkUnit(
-                chapter.chapter_id,
-                {
-                    "chapter_id": chapter.chapter_id,
-                    "block_ids": list(chapter.block_ids),
-                    "target_language": self.request.target_language,
-                    "intent": self.request.effective_intent,
-                    "content_contract": self.request.content_contract,
-                    "prompt_contract": self.recipe.chapter_plan_prompt,
-                    "prior_companion_digest": _optional_document_digest(
-                        prior_companion
-                    ),
-                },
-            )
-            for chapter in chapters
-        )
-        by_id = {item.chapter_id: item for item in chapters}
-
-        def worker(unit: WorkUnit):
-            chapter = by_id[unit.unit_id]
-            artifact_id = f"plans/{chapter.chapter_id}"
-            existing = context.artifacts.find(artifact_id)
-            if existing is not None:
-                return read_json(context, existing, "chapter plan")
-            request = LLMRequest(
-                task_id("plan", unit.semantic_input),
-                chapter_plan_prompt(
-                    chapter_id=chapter.chapter_id,
-                    title=chapter.title,
-                    document_title=document_title,
-                    document_outline=[
-                        item.title for item in chapters
-                    ],
-                    block_ids=chapter.block_ids,
-                    block_access=model_chapter_block_index(
-                        source, chapter
-                    ),
-                    target_language=self.request.target_language,
-                    intent=self.request.effective_intent,
-                    has_prior_companion=prior_companion is not None,
-                ),
-                JsonOutput(CHAPTER_PLAN_SCHEMA, repair="format"),
-                self.recipe.model,
-                inputs=inputs,
-            )
-            outcome = execute_semantically_validated_task(
-                self.task_service,
-                context,
-                request,
-                candidate_id=f"chapters/{chapter.chapter_id}/plan.json",
-                description=f"chapter plan {chapter.chapter_id}",
-                validate=lambda raw: validate_chapter_plan(
-                    raw,
-                    chapter_id=chapter.chapter_id,
-                    block_ids=chapter.block_ids,
-                ),
-                # Caller-owned routing identity is a deterministic repair, not
-                # model-authored scientific content.
-                normalize=lambda raw: {
-                    **raw,
-                    "chapter_id": chapter.chapter_id,
-                },
-                resume_input=resume_input,
-                options=self.llm_options,
-            )
-            if isinstance(outcome, Paused):
-                return outcome
-            if isinstance(outcome, LLMFailed):
-                return UnitResult(
-                    unit.unit_id,
-                    "failed",
-                    error=run_error_from_failure(outcome),
-                )
-            assert isinstance(outcome, SemanticTaskCompleted)
-            value = outcome.value
-            context.artifacts.publish_json(artifact_id, value)
-            return value
-
-        result = context.run_group(
-            "chapter-plans",
-            units,
-            worker,
-            max_workers=self.execution.workers,
-            failure_mode=FailureMode.FAIL_FAST,
-        )
-        if isinstance(result, Paused):
-            return result
-        assert isinstance(result, GroupResult)
-        failure = next(
-            (item for item in result.units if item.status != "succeeded"),
-            None,
-        )
-        if failure is not None:
-            return Failed(
-                failure.error
-                or RunError("chapter_plan_failed", "chapter plan failed")
-            )
-        by_result = {
-            item.unit_id: mapping(item.value, "chapter plan")
-            for item in result.units
-        }
-        return tuple(by_result[item.chapter_id] for item in chapters)
-
     def _chapter_lanes(
         self,
         context: RunContext,
         resume_input: Any,
         chapters: tuple[SourceChapter, ...],
-        plans: Sequence[Mapping[str, Any]],
         glossary: Mapping[str, Any],
         blocks: Mapping[str, Any],
         *,
@@ -862,7 +758,6 @@ class CompanionBuildHandler:
         model_inputs: tuple[LLMInputArtifact, ...],
     ) -> tuple[AcceptedChapter, ...] | Paused | Failed:
         by_chapter = {item.chapter_id: item for item in chapters}
-        by_plan = {str(item["chapter_id"]): item for item in plans}
         entries = _glossary_entries(glossary)
         chapter_entries = {
             chapter.chapter_id: _literal_glossary_entries(
@@ -982,20 +877,56 @@ class CompanionBuildHandler:
                     context, existing, "accepted chapter guide"
                 )
                 continue
-            plan = by_plan[chapter.chapter_id]
+            if not chapter.generate_guide:
+                program_candidate = self._augment_chapter_candidate(
+                    chapter,
+                    {
+                        "chapter_guide": None,
+                        "section_guides": [],
+                        "companions": [],
+                        "references": [],
+                    },
+                )
+                empty_guide = validate_chapter_guide(
+                    program_candidate,
+                    chapter_id=chapter.chapter_id,
+                    block_ids=chapter.block_ids,
+                    section_block_ids=chapter.section_block_ids,
+                    allow_empty_chapter_guide=True,
+                )
+                empty_guide = _attach_cached_reference_materials(
+                    empty_guide,
+                    cache_root=self.execution.paper_cache_root,
+                )
+                _verify_cached_reference_materials(
+                    empty_guide,
+                    cache_root=self.execution.paper_cache_root,
+                )
+                if existing is None:
+                    context.artifacts.publish_json(artifact_id, empty_guide)
+                elif read_json(
+                    context, existing, "accepted structural guide"
+                ) != empty_guide:
+                    return Failed(
+                        RunError(
+                            "chapter_guide_replay_mismatch",
+                            "structural chapter guide changed on replay",
+                        )
+                    )
+                completed_results[f"guide-{chapter.chapter_id}"] = empty_guide
+                continue
             if existing is not None:
                 completed_results[f"guide-{chapter.chapter_id}"] = read_json(
                     context, existing, "accepted chapter guide"
                 )
-            guide_context = {
-                "target_language": self.request.target_language,
-                "language_result": language_identity,
-                "plan": dict(plan),
-                "block_ids": list(chapter.block_ids),
-                "block_access": model_chapter_block_index(source, chapter),
-                "glossary": list(chapter_entries[chapter.chapter_id]),
-                "has_prior_companion": prior_companion is not None,
-            }
+            guide_context = self._chapter_model_context(
+                context,
+                source,
+                chapter,
+                language_identity=language_identity,
+                glossary=chapter_entries[chapter.chapter_id],
+                has_prior_companion=prior_companion is not None,
+            )
             guide_contexts[chapter.chapter_id] = guide_context
             guide_loops.append(
                 LoopSpec(
@@ -1089,14 +1020,10 @@ class CompanionBuildHandler:
                 )
                 candidate_id = f"chapters/{chapter_id}/guide-final.json"
                 candidate_path = context.working.find_candidate(candidate_id)
+                chapter = by_chapter[chapter_id]
                 if candidate_path is None:
-                    candidate = _normalize_chapter_reference_ids(
-                        {
-                            **proposal,
-                            # Routing identity is deterministic caller data,
-                            # not model-authored semantic content.
-                            "chapter_id": chapter_id,
-                        }
+                    candidate = self._augment_chapter_candidate(
+                        chapter, proposal
                     )
                     candidate_path = context.working.write_candidate_json(
                         candidate_id, candidate
@@ -1105,11 +1032,8 @@ class CompanionBuildHandler:
                     stored_candidate = context.working.read_candidate_json(
                         candidate_id
                     )
-                    candidate = _normalize_chapter_reference_ids(
-                        {
-                            **stored_candidate,
-                            "chapter_id": chapter_id,
-                        }
+                    candidate = self._augment_chapter_candidate(
+                        chapter, stored_candidate
                     )
                     if candidate != stored_candidate:
                         candidate_path = (
@@ -1120,7 +1044,13 @@ class CompanionBuildHandler:
                 try:
                     accepted_guide = validate_chapter_guide(
                         candidate,
-                        plan=mapping(guide_context["plan"], "chapter plan"),
+                        chapter_id=chapter_id,
+                        block_ids=chapter.block_ids,
+                        section_block_ids=chapter.section_block_ids,
+                    )
+                    accepted_guide = _attach_cached_reference_materials(
+                        accepted_guide,
+                        cache_root=self.execution.paper_cache_root,
                     )
                     _verify_cached_reference_materials(
                         accepted_guide,
@@ -1159,6 +1089,72 @@ class CompanionBuildHandler:
                 )
             )
         return joined
+
+    def _augment_chapter_candidate(
+        self,
+        chapter: SourceChapter,
+        candidate: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Task-local hook for verified deterministic proposal additions."""
+
+        return dict(candidate)
+
+    def _chapter_model_context(
+        self,
+        context: RunContext,
+        source: RichDocument,
+        chapter: SourceChapter,
+        *,
+        language_identity: Mapping[str, Any],
+        glossary: Sequence[Mapping[str, Any]],
+        has_prior_companion: bool,
+    ) -> dict[str, Any]:
+        access = model_chapter_block_index(source, chapter)
+        sections = [
+            {
+                "section_number": index,
+                "title": title,
+                "part_number": chapter.block_ids.index(block_id) + 1,
+            }
+            for index, (block_id, title) in enumerate(
+                zip(
+                    chapter.section_block_ids,
+                    chapter.section_titles,
+                    strict=True,
+                ),
+                1,
+            )
+        ]
+        parts = [
+            {
+                "part_number": index,
+                "kind": item["kind"],
+                "line_start": item["line_start"],
+                "line_end": item["line_end"],
+                "selector": item["selector"],
+                "equation_label": item["equation_label"],
+            }
+            for index, item in enumerate(access, 1)
+        ]
+        return {
+            "target_language": self.request.target_language,
+            "language_result": dict(language_identity),
+            "intent": self.request.effective_intent,
+            "chapter": {
+                "title": chapter.title,
+                "sections": sections,
+                "parts": parts,
+            },
+            "arc_commands": _chapter_arc_commands(
+                context,
+                chapter,
+                access,
+                cache_root=self.execution.paper_cache_root,
+                structure_ref=self.request.structure_ref,
+            ),
+            "glossary": list(glossary),
+            "has_prior_companion": has_prior_companion,
+        }
 
     def _publish_completed_chapters(
         self,
@@ -1249,73 +1245,237 @@ class CompanionBuildHandler:
         return tuple(accepted)
 
 
-def _normalize_chapter_reference_ids(
-    value: Mapping[str, Any],
+def _chapter_arc_commands(
+    context: RunContext,
+    chapter: SourceChapter,
+    access: Sequence[Mapping[str, Any]],
+    *,
+    cache_root: Path | None,
+    structure_ref: CachedDocumentStructureRef | None,
 ) -> dict[str, Any]:
-    """Assign stable publication IDs while preserving model-authored metadata."""
+    """Return filled, executable source commands plus research syntax."""
 
-    result = dict(value)
-    references = mapping_list(result.get("references"), "chapter references")
-    local_to_published: dict[str, str] = {}
-    normalized_by_id: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
-    for reference in references:
-        local_id = str(reference.get("reference_id") or "").strip()
-        identity = {
-            "title": str(reference.get("title") or "").strip(),
-            "source": str(reference.get("source") or "").strip(),
-            "dois": sorted(
-                {
-                    str(item).strip().casefold()
-                    for item in reference.get("dois", [])
-                    if isinstance(item, str) and item.strip()
-                }
-            ),
-            "arxiv_ids": sorted(
-                {
-                    str(item).strip().casefold()
-                    for item in reference.get("arxiv_ids", [])
-                    if isinstance(item, str) and item.strip()
-                }
-            ),
-        }
-        published_id = (
-            "reference-"
-            + hashlib.sha256(canonical_json_bytes(identity)).hexdigest()[:20]
+    index_ref = context.artifacts.find(_MODEL_SOURCE_INDEX_ARTIFACT)
+    if index_ref is None:
+        raise CompanionContentError(
+            "model_source_index_missing",
+            "chapter commands require the frozen model source index",
         )
-        local_to_published[local_id] = published_id
-        normalized = {
-            **reference,
-            "reference_id": published_id,
-            "dois": identity["dois"],
-            "arxiv_ids": identity["arxiv_ids"],
+    index = read_json(context, index_ref, "model source index")
+    cached = index.get("cached_document")
+    if not isinstance(cached, Mapping):
+        return {
+            "availability": "fallback_only",
+            "instructions": (
+                "Use the verified text-only companion-source workspace input; "
+                "no exact cached source command is available."
+            ),
+            "source": [],
+            "research_examples": _research_command_examples(),
         }
-        existing = normalized_by_id.get(published_id)
-        if existing is not None and existing != normalized:
-            raise CompanionContentError(
-                "chapter_reference_identity_collision",
-                "references with the same publication identity disagree",
-            )
-        if existing is None:
-            order.append(published_id)
-            normalized_by_id[published_id] = normalized
+    paper = ArcPaperService(cache_root=cache_root)
+    document_json = json.dumps(
+        dict(cached),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    structure_json = (
+        json.dumps(
+            cached_document_structure_ref_to_document(structure_ref),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if structure_ref is not None
+        else None
+    )
 
-    units = []
-    for raw in mapping_list(result.get("learning_units"), "learning units"):
-        unit = dict(raw)
-        markdown = str(unit.get("content_markdown") or "")
-        for local_id, published_id in local_to_published.items():
-            markdown = markdown.replace(
-                f"[@{local_id}]",
-                f"[@{published_id}]",
+    def source_range(start: int, end: int) -> list[str]:
+        return [
+            "arc-paper",
+            "read-cached-source-range",
+            "--document-ref",
+            document_json,
+            "--cache-root",
+            str(paper.cache_root),
+            str(start),
+            str(end),
+        ]
+
+    source_commands: list[dict[str, Any]] = []
+    for part_number, item in enumerate(access, 1):
+        start = item.get("line_start")
+        end = item.get("line_end")
+        if isinstance(start, int) and isinstance(end, int):
+            argv = source_range(start, end)
+            source_commands.append(
+                _command(
+                    f"part-{part_number}",
+                    argv,
+                    part_numbers=[part_number],
+                )
             )
-        unit["content_markdown"] = markdown
-        units.append(unit)
-    result["learning_units"] = units
-    result["references"] = [
-        normalized_by_id[reference_id] for reference_id in order
+    section_starts = [
+        chapter.block_ids.index(block_id)
+        for block_id in chapter.section_block_ids
     ]
-    return result
+    for section_index, start_index in enumerate(section_starts, 1):
+        end_index = (
+            section_starts[section_index]
+            if section_index < len(section_starts)
+            else len(access)
+        )
+        section_access = access[start_index:end_index]
+        section_lines = [
+            (item.get("line_start"), item.get("line_end"))
+            for item in section_access
+            if isinstance(item.get("line_start"), int)
+            and isinstance(item.get("line_end"), int)
+        ]
+        if section_lines:
+            source_commands.append(
+                _command(
+                    f"section-{section_index}-complete",
+                    source_range(
+                        min(item[0] for item in section_lines),
+                        max(item[1] for item in section_lines),
+                    ),
+                    part_numbers=list(
+                        range(start_index + 1, end_index + 1)
+                    ),
+                )
+            )
+    lines = [
+        (item.get("line_start"), item.get("line_end"))
+        for item in access
+        if isinstance(item.get("line_start"), int)
+        and isinstance(item.get("line_end"), int)
+    ]
+    if lines:
+        source_commands.append(
+            _command(
+                "complete-current-chapter",
+                source_range(
+                    min(item[0] for item in lines),
+                    max(item[1] for item in lines),
+                ),
+                part_numbers=list(range(1, len(access) + 1)),
+            )
+        )
+    selector = chapter.structure_section_id or next(
+        (
+            str(item["selector"])
+            for item in access
+            if item.get("selector")
+        ),
+        None,
+    )
+    if selector:
+        section_argv = [
+            "arc-paper",
+            "get-cached-section",
+            "--document-ref",
+            document_json,
+            "--cache-root",
+            str(paper.cache_root),
+        ]
+        if structure_json is not None:
+            section_argv.extend(["--structure-ref", structure_json])
+        section_argv.append(selector)
+        source_commands.append(
+            _command(
+                "current-section",
+                section_argv,
+            )
+        )
+    toc_argv = [
+        "arc-paper",
+        "get-cached-table-of-contents",
+        "--document-ref",
+        document_json,
+        "--cache-root",
+        str(paper.cache_root),
+    ]
+    if structure_json is not None:
+        toc_argv.extend(["--structure-ref", structure_json])
+    source_commands.extend(
+        (
+            _command(
+                "table-of-contents",
+                toc_argv,
+            ),
+            _command(
+                "search-current-title",
+                [
+                    "arc-paper",
+                    "search-cached-document",
+                    "--document-ref",
+                    document_json,
+                    "--cache-root",
+                    str(paper.cache_root),
+                    chapter.title,
+                ],
+            ),
+        )
+    )
+    return {
+        "availability": "exact",
+        "instructions": (
+            "Run these commands directly. Prefer exact parts; use the complete "
+            "chapter when more context is needed."
+        ),
+        "source": source_commands,
+        "research_examples": _research_command_examples(),
+    }
+
+
+def _command(
+    command_id: str,
+    argv: Sequence[str],
+    *,
+    part_numbers: Sequence[int] = (),
+) -> dict[str, Any]:
+    return {
+        "command_id": command_id,
+        "argv": list(argv),
+        "shell": shlex.join(argv),
+        "part_numbers": list(part_numbers),
+    }
+
+
+def _research_command_examples() -> list[dict[str, Any]]:
+    return [
+        _command(
+            "lookup-reference-by-doi",
+            ["arc-paper", "lookup-reference", "--doi", "<doi>"],
+        ),
+        _command(
+            "acquire-reference-by-url",
+            ["arc-paper", "acquire-reference", "--url", "<url>"],
+        ),
+        _command(
+            "admit-downloaded-reference",
+            [
+                "arc-paper",
+                "admit-reference",
+                "<downloaded-file>",
+                "--url",
+                "<url>",
+            ],
+        ),
+        _command(
+            "materialize-cached-reference",
+            [
+                "arc-paper",
+                "materialize-reference",
+                "--resource-ref",
+                "<CachedResourceRef JSON>",
+                "--output",
+                "<agent-workspace-file>",
+            ],
+        ),
+    ]
 
 
 def _verify_cached_reference_materials(
@@ -1361,6 +1521,53 @@ def _verify_cached_reference_materials(
                 "cached_material does not match the material admitted to the "
                 "configured shared cache",
             )
+
+
+def _attach_cached_reference_materials(
+    guide: Mapping[str, Any],
+    *,
+    cache_root: Path | None,
+) -> dict[str, Any]:
+    """Attach an already-admitted shared handle without model bookkeeping."""
+
+    cache = ReferenceMaterialCache(cache_root)
+    value = dict(guide)
+    references: list[dict[str, Any]] = []
+    for raw in mapping_list(
+        guide.get("references"), "chapter references"
+    ):
+        reference = dict(raw)
+        material = None
+        try:
+            dois = reference.get("dois") or []
+            arxiv_ids = reference.get("arxiv_ids") or []
+            urls = _reference_urls(str(reference.get("source") or ""))
+            if dois:
+                material = cache.lookup(doi=str(dois[0]))
+            elif arxiv_ids:
+                material = cache.lookup(arxiv_id=str(arxiv_ids[0]))
+            elif urls:
+                material = cache.lookup(url=urls[0])
+            else:
+                material = cache.lookup(title=str(reference["title"]))
+        except (OSError, ReferenceCacheError, TypeError, ValueError):
+            # Cache reuse is an optimization. A valid citation remains
+            # publishable when no shared material is available.
+            material = None
+        if material is not None:
+            reference["cached_material"] = (
+                cached_reference_material_to_document(material)
+            )
+        references.append(reference)
+    value["references"] = references
+    return value
+
+
+def _reference_urls(source: str) -> list[str]:
+    return [
+        item.rstrip(".,;)")
+        for item in re.findall(r"https?://[^\s<>()\]]+", source)
+    ]
 
 
 def _chapter_reference_contracts(

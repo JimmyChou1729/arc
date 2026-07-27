@@ -194,7 +194,7 @@ def test_request_identity_encodes_authors_and_complete_reader_labels(
     encoded = encode_build_request(supplied)
     decoded = decode_build_request(encoded)
 
-    assert encoded["schema_version"] == "arc.companion.build_request.v5"
+    assert encoded["schema_version"] == "arc.companion.build_request.v6"
     assert encoded["authors"] == ["First Author", "Second Author"]
     assert encoded["reader_labels"]["notes"] == "自定义伴读"
     assert decoded.authors == supplied.authors
@@ -220,7 +220,13 @@ def test_request_decoder_accepts_v2_and_v3_defaults(
     legacy_fields = {
         key: value
         for key, value in current.items()
-        if key not in {"authors", "reader_labels"}
+        if key
+        not in {
+            "authors",
+            "reader_labels",
+            "structure_ref",
+            "companion_section_ids",
+        }
     }
     v3 = {
         **legacy_fields,
@@ -248,6 +254,8 @@ def test_request_decoder_accepts_v4_source_page_label(
         CompanionBuildRequest(document, reader_labels=labels)
     )
     current["schema_version"] = "arc.companion.build_request.v4"
+    current.pop("structure_ref")
+    current.pop("companion_section_ids")
     current["reader_labels"]["source_page"] = "原文第 {page} 页"
 
     decoded = decode_build_request(current)
@@ -274,12 +282,14 @@ def test_recipe_identity_reserves_author_prompt_and_decodes_v5(
         }
     }
     legacy["schema_version"] = "arc.companion.generation_recipe.v5"
+    legacy["chapter_plan_prompt"] = "legacy.chapter-plan"
     legacy["literature_request_prompt"] = "legacy.literature-request"
     legacy["literature_survey_prompt"] = "legacy.literature-survey"
 
     decoded = decode_generation_recipe(legacy)
 
-    assert encoded["schema_version"] == "arc.companion.generation_recipe.v12"
+    assert encoded["schema_version"] == "arc.companion.generation_recipe.v13"
+    assert "chapter_plan_prompt" not in encoded
     assert encoded["author_identity_prompt"] == recipe.author_identity_prompt
     assert decoded.author_identity_prompt == recipe.author_identity_prompt
 
@@ -345,6 +355,7 @@ def test_recipe_identity_decodes_v6_without_evidence_prompt() -> None:
         }
     }
     legacy["schema_version"] = "arc.companion.generation_recipe.v6"
+    legacy["chapter_plan_prompt"] = "legacy.chapter-plan"
     legacy["literature_request_prompt"] = "legacy.literature-request"
     legacy["literature_survey_prompt"] = "legacy.literature-survey"
 
@@ -365,6 +376,7 @@ def test_recipe_identity_decodes_v7_with_terminal_revision_defaults() -> None:
         }
     }
     legacy["schema_version"] = "arc.companion.generation_recipe.v7"
+    legacy["chapter_plan_prompt"] = "legacy.chapter-plan"
     legacy["literature_request_prompt"] = "legacy.literature-request"
     legacy["evidence_research_prompt"] = "legacy.evidence-research"
     legacy["literature_survey_prompt"] = "legacy.literature-survey"

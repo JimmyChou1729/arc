@@ -7,6 +7,11 @@ from pathlib import Path
 import pytest
 from arc_llm import ModelSelection
 from arc_paper import (
+    ArcPaperService,
+    CachedDocumentRef,
+    DocumentStructureEntry,
+    DocumentStructureNodeKind,
+    DocumentStructureOverlay,
     RichBlockKind,
     RichDocumentParserService,
     SourceFormat,
@@ -27,6 +32,7 @@ from arc_companion.generation_validation import (
 )
 from arc_companion.prompts import (
     AUTHOR_IDENTITY_SCHEMA,
+    CHAPTER_GUIDE_PROPOSAL_SCHEMA,
     CHAPTER_PLAN_SCHEMA,
     author_identity_prompt,
     chapter_guide_prompt,
@@ -44,12 +50,13 @@ from arc_companion.service import companion_run_id
 from arc_companion.source_planning import (
     block_prompt_document,
     plan_source_chapters,
+    plan_structured_source_chapters,
 )
 from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
-    assert CompanionBuildHandler.name == "arc.companion.build.v9"
+    assert CompanionBuildHandler.name == "arc.companion.build.v10"
     assert not any(name.startswith("Legacy") for name in public_names)
     for module_name in (
         "arc_companion.build_v2",
@@ -81,6 +88,71 @@ def _prompt_payload(prompt: str) -> dict:
     return json.loads(payload)
 
 
+def test_structure_overlay_rebuilds_real_chapters_and_display_gaps(
+    tmp_path: Path,
+) -> None:
+    document = _document(
+        tmp_path,
+        "# Part I\n\n"
+        "# Chapter One\n\nFirst.\n\n"
+        "# Inside One\n\nDetail.\n\n"
+        "# Interlude\n\n"
+        "# Chapter Two\n\nSecond.\n",
+    )
+    cached = ArcPaperService(cache_root=tmp_path / "paper").cache_document(
+        document.source
+    )
+    pdf = CachedDocumentRef(
+        SourceFormat.PDF,
+        "f" * 64,
+        1,
+        "application/pdf",
+        "test.pdf",
+        "e" * 64,
+    )
+    entries = (
+        DocumentStructureEntry(
+            "part-1", "Part I", 1, None, 0, 1, 1, 15, 1, 4,
+            DocumentStructureNodeKind.CONTAINER, "fixture",
+        ),
+        DocumentStructureEntry(
+            "chapter-1", "Chapter One", 2, "part-1", 1, 3, 3, 9, 1, 2,
+            DocumentStructureNodeKind.CONTENT, "fixture",
+        ),
+        DocumentStructureEntry(
+            "inside-1", "Inside One", 3, "chapter-1", 2, 7, 7, 9, 2, 2,
+            DocumentStructureNodeKind.INTERNAL, "fixture",
+        ),
+        DocumentStructureEntry(
+            "interlude", "Interlude", 2, "part-1", 3, 11, 11, 11, 3, 3,
+            DocumentStructureNodeKind.STRUCTURAL, "fixture",
+        ),
+        DocumentStructureEntry(
+            "chapter-2", "Chapter Two", 2, "part-1", 4, 13, 13, 15, 4, 4,
+            DocumentStructureNodeKind.CONTENT, "fixture",
+        ),
+    )
+    overlay = DocumentStructureOverlay(cached, pdf, entries)
+
+    chapters = plan_structured_source_chapters(
+        document,
+        overlay,
+        companion_section_ids=("chapter-1", "chapter-2"),
+    )
+
+    assert [item.generate_guide for item in chapters] == [
+        False,
+        True,
+        False,
+        True,
+    ]
+    assert chapters[1].title == "Chapter One"
+    assert chapters[1].section_titles == ("Inside One",)
+    assert tuple(
+        block_id for chapter in chapters for block_id in chapter.block_ids
+    ) == tuple(item.block_id for item in document.blocks)
+
+
 def test_companion_provider_enum_nodes_declare_string_types() -> None:
     planned_unit = CHAPTER_PLAN_SCHEMA["properties"]["learning_units"]["items"]
     assert set(planned_unit["properties"]) == {
@@ -94,6 +166,12 @@ def test_companion_provider_enum_nodes_declare_string_types() -> None:
     assert reader_profile["properties"]["source_type"]["type"] == "string"
     reader_need = CHAPTER_PLAN_SCHEMA["properties"]["reader_needs"]["items"]
     assert reader_need["properties"]["needs_companion"]["type"] == "boolean"
+    assert set(CHAPTER_GUIDE_PROPOSAL_SCHEMA["properties"]) == {
+        "chapter_guide",
+        "section_guides",
+        "companions",
+        "references",
+    }
 
 
 def test_chapter_prompt_encodes_selective_value_contract() -> None:
@@ -421,15 +499,14 @@ def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
 
     assert "never manufacture a prior reader belief" in guide.casefold()
     assert "Translate English excerpts" in guide
-    assert "Never recommend removing the final useful unit" in review
     assert "Treat unsupported corrective framing as a material defect" in review
     assert "Do not criticize merely to demonstrate reviewer activity" in review
     assert "accept it by choosing `stop`" in review
     assert "valuable new Companion idea" in review
-    assert "add a new unit" in review
-    assert "minimum or maximum reference count" in guide
-    assert "minimum or maximum reference count" in review
-    assert "capability-matching download tool" in guide
+    assert "local section or part number" in review
+    assert "no reference-count limit" in guide
+    assert "no minimum or maximum reference count" in review
+    assert "capability-matching tool" in guide
     assert "Actively consider" in review
     assert "merely to make the review look more thorough" in review
 
@@ -478,6 +555,80 @@ def test_guide_validation_decodes_model_escaped_paragraphs() -> None:
     assert validated["learning_units"][0]["purpose"] == (
         "Adds an omitted conceptual connection."
     )
+
+
+def test_minimal_guide_is_mapped_to_program_owned_units_and_citations() -> None:
+    validated = validate_chapter_guide(
+        {
+            "chapter_guide": {
+                "title": "章导读",
+                "content_markdown": r"总领。\n\n背景见 [@1]。",
+            },
+            "section_guides": [
+                {
+                    "section_number": 1,
+                    "title": "节导读",
+                    "content_markdown": "进入本节。",
+                }
+            ],
+            "companions": [
+                {
+                    "after_part": 3,
+                    "title": "伴读",
+                    "content_markdown": "补足推理。",
+                }
+            ],
+            "references": [
+                {
+                    "title": "Reference",
+                    "source": "https://example.test doi:10.1000/Test",
+                }
+            ],
+        },
+        chapter_id="chapter-program-owned",
+        block_ids=("b1", "b2", "b3"),
+        section_block_ids=("b2",),
+    )
+
+    units = validated["learning_units"]
+    assert [item["placement"] for item in units] == [
+        "chapter",
+        "inline",
+        "inline",
+    ]
+    assert [item["anchor_block_ids"] for item in units] == [
+        ["b1"],
+        ["b2"],
+        ["b3"],
+    ]
+    assert all(item["unit_id"].startswith("unit-") for item in units)
+    reference = validated["references"][0]
+    assert reference["reference_id"].startswith("reference-")
+    assert reference["dois"] == ["10.1000/test"]
+    assert f"[@{reference['reference_id']}]" in units[0]["content_markdown"]
+
+
+def test_minimal_guide_rejects_out_of_range_local_location() -> None:
+    with pytest.raises(CompanionContentError, match="outside"):
+        validate_chapter_guide(
+            {
+                "chapter_guide": {
+                    "title": "Guide",
+                    "content_markdown": "Guide.",
+                },
+                "section_guides": [],
+                "companions": [
+                    {
+                        "after_part": 2,
+                        "title": "Bad",
+                        "content_markdown": "Bad.",
+                    }
+                ],
+                "references": [],
+            },
+            chapter_id="chapter",
+            block_ids=("b1",),
+        )
 
 
 def test_chapter_references_allow_only_english_wikipedia() -> None:
@@ -744,7 +895,7 @@ def test_provider_model_and_prompt_contract_change_run_identity(
     recipe_input = semantic_input["generation_recipe"]
     assert (
         recipe_input["schema_version"]
-            == "arc.companion.generation_recipe.v12"
+            == "arc.companion.generation_recipe.v13"
     )
     assert recipe_input["chapter_guide_max_rounds"] == 3
     assert recipe_input["chapter_guide_review_final_round"] is False
