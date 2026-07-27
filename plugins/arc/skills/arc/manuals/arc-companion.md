@@ -1,10 +1,9 @@
 # ARC Companion Quick Start
 
 `arc-companion` builds a source-anchored reading companion with translation,
-guides, searchable PDF, and Web reader. Use this manual for package commands.
-
-Build and resume require public `arc-translate`, proposer-reviewer, paper, LLM,
-and jobs dependencies; incomplete runtimes return `runtime_dependency_missing`.
+guides, searchable PDF, and Web reader. Build and resume require public
+`arc-translate`, proposer-reviewer, paper, LLM, and jobs dependencies;
+incomplete runtimes return `runtime_dependency_missing`.
 
 ## Build from a Local Rich Source
 
@@ -33,8 +32,7 @@ reported; otherwise use `unknown`. Reuse it for every resume. For `restricted`
 or `unknown` host requests, follow `manuals/arc-llm.md`.
 
 Companion preserves unrelated root files. It claims only `.arc/companion/`,
-`releases/`, `companion.pdf`, and `companion.html`; command JSON must not use
-those managed paths.
+`releases/`, `companion.pdf`, and `companion.html`; command JSON must avoid them.
 
 For a remote arXiv paper, let ARC fetch the PDF validator:
 
@@ -52,12 +50,16 @@ artifacts. After the `arc-translate` glossary barrier, translation completes
 before reviewed guide generation. Each guide receives only glossary entries
 deterministically matched to its chapter. The glossary size is approximate.
 
-Before planning, Companion researches at least 20 candidates across named
-sources, prior history, and central later debates. This is an inspection floor,
-not a citation target. It is a standard `arc-llm` task: unrestricted models use
-research tools directly; other modes use native host turns. Companion has no
-evidence resume input. Only English Wikipedia is accepted, and target-language
-notes retain English page titles and URLs.
+Companion does not run a document-wide literature survey before planning.
+Instead, each chapter proposer and reviewer may research for a concrete need
+and add useful references, with no minimum or maximum reference count. Agents
+prefer cached `arc-paper` resources, admit newly acquired DOI, arXiv, URL,
+local-file, book, and other resources when possible, and may use currently
+available, authorized host research or download tools without requiring new
+installation, connection, or authorization. Model JSON carries handles and
+semantic results, while bodies remain in the cache or text-only workspace.
+Only English Wikipedia is accepted; translated notes and excerpts retain the
+English page title and URL.
 
 Paragraph-local and cross-paragraph units have equal status and no quota.
 Retain distinct explanatory value; remove generic summary, paraphrase, and
@@ -70,10 +72,11 @@ textbooks target students with prerequisites without presuming hard topics are
 mastered. Required needs remain covered; no count quota applies. Corrective
 contrast requires a misconception established by source or evidence.
 
-`arc-proposer-reviewer` accepts immediately when no concrete improvement
-exists, or gives constructive feedback for at most two complete revisions,
-including worthwhile anchored, evidence-backed ideas. The maximum sequence is
-proposer-reviewer-proposer-reviewer-proposer; no unused final review follows.
+Every chapter proposal, including an empty proposal, enters
+`arc-proposer-reviewer`. The reviewer accepts immediately when no concrete
+improvement exists, or gives constructive feedback for at most two complete
+revisions, including useful new anchored ideas and references. The maximum is
+proposer-reviewer-proposer-reviewer-proposer, with no unused final review;
 Companion injects the chapter ID.
 
 Without `--paper-cache-root`, Companion uses ARC's shared paper cache. Durable
@@ -106,9 +109,6 @@ release. Use `render` after renderer, font, style, or validator changes;
 Open `<project-dir>/companion.pdf` or `companion.html`. The PDF is exact; HTML
 is standalone with local assets embedded and external source links preserved.
 The release manifest and CLI artifacts are authoritative.
-
-Companion freezes required source figures so completed projects remain
-renderable after shared paper-cache removal.
 
 ## Help
 

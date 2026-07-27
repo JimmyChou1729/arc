@@ -592,6 +592,30 @@ def test_translate_docs_define_standalone_approximate_workflows() -> None:
     assert "glossary size is approximate" in companion
 
 
+def test_companion_docs_define_on_demand_unbounded_reference_research() -> None:
+    manual = (SKILL / "manuals/arc-companion.md").read_text(encoding="utf-8")
+    workflow = (WF / "companion.md").read_text(encoding="utf-8")
+    compact_manual = " ".join(manual.split())
+    compact_workflow = " ".join(workflow.split())
+
+    assert "does not run a document-wide literature survey" in compact_manual
+    assert "no minimum or maximum reference count" in compact_manual
+    assert "each chapter proposer and reviewer may research" in compact_manual
+    assert "currently available, authorized host research or download tools" in (
+        compact_manual
+    )
+    assert "every chapter enters it even when the initial proposal is empty" in (
+        compact_workflow
+    )
+    assert "Both proposer and reviewer may research during their own turns" in (
+        compact_workflow
+    )
+    assert "requiring installation, connection, or additional authority" in (
+        compact_workflow
+    )
+    assert "not copies of whole works" in compact_workflow
+
+
 def test_arc_paper_quick_start_defers_cache_administration_to_help() -> None:
     manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
     compact = " ".join(manual.split())
