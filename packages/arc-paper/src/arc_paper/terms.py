@@ -900,10 +900,18 @@ def _structured_keyword_chapters(
             raise ValueError("section_ids must contain non-empty IDs")
         if len(set(requested)) != len(requested):
             raise ValueError("section_ids must be unique")
+    allowed_kinds = (
+        {DocumentStructureNodeKind.CONTENT}
+        if requested is None
+        else {
+            DocumentStructureNodeKind.CONTENT,
+            DocumentStructureNodeKind.INTERNAL,
+        }
+    )
     content = tuple(
         item
         for item in structure.entries
-        if item.kind is DocumentStructureNodeKind.CONTENT
+        if item.kind in allowed_kinds
         and not _is_explicit_term_title(item.title)
         and (requested is None or item.section_id in requested)
     )
@@ -911,7 +919,8 @@ def _structured_keyword_chapters(
         requested
     ):
         raise ValueError(
-            "section_ids must identify content entries in the structure overlay"
+            "section_ids must identify content or internal entries in the "
+            "structure overlay"
         )
 
     values: list[KeywordTextUnit] = []

@@ -476,6 +476,32 @@ def test_structure_overlay_groups_flat_headings_without_full_document_inputs(
     )
 
 
+def test_explicit_internal_structure_ranges_can_supply_keywords() -> None:
+    document, structure = _structured_rich_document()
+
+    sections = keyword_chapters(
+        document,
+        structure=structure,
+        section_ids=("chapter-1-detail", "chapter-2"),
+    )
+
+    assert tuple(item.section_id for item in sections) == (
+        "chapter-1-detail",
+        "chapter-2",
+    )
+    assert sections[0].text == "Alpha detail."
+    assert sections[1].text == "Beta chapter concept.\nBeta detail."
+    with pytest.raises(
+        ValueError,
+        match="content or internal entries",
+    ):
+        keyword_chapters(
+            document,
+            structure=structure,
+            section_ids=("part",),
+        )
+
+
 def test_explicit_windows_are_auditable_and_result_is_frequency_projection(
     tmp_path: Path,
 ) -> None:
