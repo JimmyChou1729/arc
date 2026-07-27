@@ -625,6 +625,41 @@ def test_same_language_skips_all_translation_owned_steps(
     assert book.chapters[0].translations == ()
 
 
+def test_cached_document_parse_failure_uses_verified_text_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _document(tmp_path)
+    monkeypatch.setattr(
+        "arc_companion.build.ArcPaperService.cache_document",
+        lambda _self, _source: (_ for _ in ()).throw(
+            ValueError("parsed document contains duplicate math span IDs")
+        ),
+    )
+    service = CompanionService(tmp_path / "jobs")
+
+    completed = service.build(
+        CompanionBuildRequest(document, target_language="en"),
+        execution=CompanionExecutionOptions(
+            workers=1,
+            paper_cache_root=tmp_path / "paper",
+        ),
+        task_service=FakeGuideTasks(),  # type: ignore[arg-type]
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    store = ImmutableArtifactStore(
+        service.repository.run_directory(completed.run_id),
+        repository_root=service.repository.root,
+    )
+    ref = store.find("source/model-index")
+    assert ref is not None
+    index = json.loads(store.read_bytes(ref))
+    assert index["cache_relationship"] == "fallback_only"
+    assert index["cached_document"] is None
+
+
 def test_review_remove_publishes_ordered_subset_without_retry(
     tmp_path: Path,
 ) -> None:

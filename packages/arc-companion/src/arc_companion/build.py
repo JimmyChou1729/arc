@@ -439,7 +439,12 @@ class CompanionBuildHandler:
             cached_document = cached_document_ref_to_document(
                 paper.cache_document(source.source)
             )
-        except (CachedDocumentError, SourceRepositoryError, OSError):
+        except (
+            CachedDocumentError,
+            SourceRepositoryError,
+            OSError,
+            ValueError,
+        ):
             # The verified text projection remains sufficient for model work.
             # Cache access is an optimization and must not create a host turn.
             cached_document = None
