@@ -57,81 +57,107 @@ def _load_runner_module():
         sys.path.remove(str(SCRIPTS))
 
 
-def _config(tmp_path: Path) -> dict[str, Any]:
+def _config(
+    tmp_path: Path,
+    *,
+    package_count: int = 1,
+) -> dict[str, Any]:
     project = tmp_path / "project"
     state = project / ".arc" / "domain"
     packages = state / "packages"
     packages.mkdir(parents=True)
     (packages / "brief.md").write_text("# Brief\n", encoding="utf-8")
-    seed = "arXiv:2401.00001"
-    provenance = {
-        "schema_version": "arc.workflow.domain_seed_provenance.v1",
-        "requested_seed_mappings": [{
+    package_entries = []
+    requested_seed_mappings = []
+    build_origins = []
+    seeds = [
+        f"arXiv:2401.{index:05d}"
+        for index in range(1, package_count + 1)
+    ]
+    for index, seed in enumerate(seeds, start=1):
+        package_id = f"domain-{index}"
+        summary_path = f".arc/domain/packages/{package_id}.json"
+        package_entries.append({
+            "domain_package_id": package_id,
+            "seed_paper": seed,
+            "summary_json_path": summary_path,
+        })
+        requested_seed_mappings.append({
             "requested_seed": seed,
             "build_seed": seed,
-            "domain_id": "single",
+            "domain_id": package_id,
             "resolution": "explicit_seed",
-        }],
-        "build_origins": [{
-            "domain_id": "single",
+        })
+        build_origins.append({
+            "domain_id": package_id,
             "build_seed": seed,
-            "origin_selection": {"mode": "explicit_seed", "requested_seed": seed},
-        }],
+            "origin_selection": {
+                "mode": "explicit_seed",
+                "requested_seed": seed,
+            },
+        })
+        (packages / f"{package_id}.json").write_text(
+            json.dumps(_domain_summary(seed)),
+            encoding="utf-8",
+        )
+    provenance = {
+        "schema_version": "arc.workflow.domain_seed_provenance.v1",
+        "requested_seed_mappings": requested_seed_mappings,
+        "build_origins": build_origins,
         "deduplications": [],
     }
     (state / "seed-provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
-    groups = [{
-        "field_id": "field-single",
-        "domain_package_ids": ["single"],
-        "field_card": {
-            "seed_papers": [seed],
-            "summary_json_paths": [".arc/domain/packages/single.json"],
-            "summary_markdown_paths": [".arc/domain/packages/brief.md"],
-            "paper_json_pack_paths": [".arc/domain/packages/single-papers.json"],
-            "task_focus": {},
-            "methodology": [],
-        },
-    }]
-    (state / "field-grouping.json").write_text(
-        json.dumps({"schema_version": "arc.workflow.domain_field_grouping.v1", "field_groups": groups}),
-        encoding="utf-8",
-    )
+    pair_classifications = [
+        {
+            "package_a": package_entries[left]["domain_package_id"],
+            "package_b": package_entries[right]["domain_package_id"],
+            "classification": "uncertain",
+            "confidence": 0.45,
+            "reason": "The relationship is advisory test evidence.",
+            "evidence": {
+                "shared_concepts": ["controlled calculation"],
+                "distinctive_concepts_a": [],
+                "distinctive_concepts_b": [],
+            },
+        }
+        for left in range(package_count)
+        for right in range(left + 1, package_count)
+    ]
+    domain_relationships = {
+        "status": (
+            "not_applicable"
+            if package_count == 1
+            else "available"
+        ),
+        "method": "llm_pairwise_advisory_v1",
+        "pair_classifications": pair_classifications,
+        "warnings": [],
+    }
     (state / "domain-manifest.json").write_text(
         json.dumps({
-            "schema_version": "arc.workflow.domain_manifest.v3",
-            "research_scope": "single_domain",
-            "requested_seed_papers": [seed],
+            "schema_version": "arc.workflow.domain_manifest.v4",
+            "user_intent": "Find a controlled calculation.",
+            "requested_seed_papers": seeds,
             "seed_provenance_artifact": {
                 "path": ".arc/domain/seed-provenance.json",
                 "sha256": hashlib.sha256(canonical_json_bytes(provenance)).hexdigest(),
                 "schema_version": "arc.workflow.domain_seed_provenance.v1",
             },
-            "package_count": 1,
-            "field_count": 1,
-            "grouping_artifact": ".arc/domain/field-grouping.json",
-            "domain_packages": [{
-                "domain_package_id": "single",
-                "seed_paper": seed,
-                "summary_json_path": ".arc/domain/packages/single.json",
-            }],
-            "field_groups": groups,
-            "grouping_warnings": [],
+            "package_count": package_count,
+            "domain_packages": package_entries,
+            "domain_relationships": domain_relationships,
+            "duplicates": [],
         }),
         encoding="utf-8",
     )
-    (packages / "single.json").write_text(
-        json.dumps(_domain_summary(seed)),
-        encoding="utf-8",
-    )
     return {
-        "schema_version": "arc.workflow.ideas.config.v2",
+        "schema_version": "arc.workflow.ideas.config.v3",
         "run_id": "ideas-test",
         "run_dir": str(project / ".arc" / "ideas"),
         "project_dir": str(project),
         "user_intent": "Find a controlled calculation.",
         "variant_config_dir": str(WORKFLOW_JSON),
-        "variant_glob": "ideas-domain.variant.json",
-        "loops_per_variant": 1,
+        "variant_glob": "ideas-general.variant.json",
     }
 
 
@@ -183,6 +209,11 @@ class _FakeLLM:
         if "one proposer" in request.prompt:
             return LLMCompleted(
                 {
+                    "scientific_route": {
+                        "description": "Direct controlled calculation",
+                        "domain_package_ids_used": [],
+                        "rationale": "The shortest sufficient route is direct.",
+                    },
                     "title": "controlled idea",
                     "idea_summary": "summary",
                     "motivation": "motivation",
@@ -236,24 +267,32 @@ class _FakeLLM:
         )
 
 
-def _portfolio_value() -> dict[str, Any]:
+def _portfolio_value(
+    candidate_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    candidate_ids = candidate_ids or [
+        "general_idea_001",
+        "general_idea_002",
+        "general_idea_003",
+    ]
     return {
         "schema_version": "arc.ideas.portfolio_assessment.v1",
         "overall_assessment": (
-            "The portfolio contains one bounded candidate history."
+            "The portfolio contains bounded candidate histories."
         ),
         "cross_candidate_findings": [
             {
                 "topic": "shared baseline",
                 "finding": "The calculation has a minimal controlled baseline.",
-                "candidate_ids": ["domain_idea_001"],
+                "candidate_ids": candidate_ids,
             }
         ],
         "candidate_notes": [
             {
-                "candidate_id": "domain_idea_001",
+                "candidate_id": candidate_id,
                 "note": "The committed revision keeps one coherent nucleus.",
             }
+            for candidate_id in candidate_ids
         ],
         "missing_or_underrepresented_directions": [
             {
@@ -268,7 +307,9 @@ def _portfolio_value() -> dict[str, Any]:
         "research_strategy": [
             "Complete the bounded baseline before optional extensions."
         ],
-        "limitations": ["Only one candidate loop was available."],
+        "limitations": [
+            f"Only {len(candidate_ids)} candidate loops were available."
+        ],
     }
 
 
@@ -282,8 +323,11 @@ class _FakePortfolioRunner:
         self.requests.append(request)
         self.run_roots.append(run_root)
         self.options.append(options)
+        candidate_ids = request.output.schema["properties"][
+            "candidate_notes"
+        ]["items"]["properties"]["candidate_id"]["enum"]
         return LLMCompleted(
-            _portfolio_value(),
+            _portfolio_value(candidate_ids),
             "fake",
             "fake-model",
             None,
@@ -362,8 +406,11 @@ def test_dry_run_has_closed_workers_and_direct_research_policy(tmp_path: Path) -
     runner = _load_runner_module()
     result = runner.run_ideas(_config(tmp_path), dry_run=True)
     worker = result["batch_request"]["loops"][0]["proposers"][0]
-    assert result["schema_version"] == "arc.workflow.ideas.result.v4"
+    assert result["schema_version"] == "arc.workflow.ideas.result.v5"
     assert result["status"] == "dry_run"
+    assert result["generation_mode"] == "model_selected_route"
+    assert result["proposal_count"] == 3
+    assert result["reviewer_call_count"] == 9
     assert result["portfolio_assessment"] == {
         "status": "not_run",
         "input_digest": None,
@@ -381,12 +428,20 @@ def test_dry_run_has_closed_workers_and_direct_research_policy(tmp_path: Path) -
     assert set(worker) == {"worker_id", "instructions", "output_schema", "model"}
     assert "shared paper cache" in worker["instructions"]
     assert "resolver" not in worker["instructions"].lower()
+    assert all(
+        loop["max_rounds"] == 3
+        for loop in result["batch_request"]["loops"]
+    )
+    assert {
+        loop["context"]["variant_id"]
+        for loop in result["batch_request"]["loops"]
+    } == {"general"}
     assert result["batch_request"]["loops"][0]["context"][
         "exploration_profile"
     ]["profile_id"] == "domain_axis_001"
 
 
-def test_single_domain_loops_receive_distinct_stable_summary_profiles(
+def test_general_loops_receive_distinct_stable_summary_profiles(
     tmp_path: Path,
 ) -> None:
     runner = _load_runner_module()
@@ -411,7 +466,7 @@ def test_single_domain_loops_receive_distinct_stable_summary_profiles(
     assert len({profile["mission"] for profile in first_profiles}) == 5
 
 
-def test_single_domain_explicit_profiles_require_exact_loop_count(
+def test_general_explicit_profiles_require_exact_loop_count(
     tmp_path: Path,
 ) -> None:
     runner = _load_runner_module()
@@ -426,10 +481,10 @@ def test_single_domain_explicit_profiles_require_exact_loop_count(
     except ValueError as exc:
         assert "exactly one profile per loop" in str(exc)
     else:
-        raise AssertionError("mismatched single-domain profiles must fail")
+        raise AssertionError("mismatched general profiles must fail")
 
 
-def test_single_domain_explicit_profiles_are_used_in_order(
+def test_general_explicit_profiles_are_used_in_order(
     tmp_path: Path,
 ) -> None:
     runner = _load_runner_module()
@@ -470,7 +525,7 @@ def test_explicit_profiles_reject_duplicate_missions_with_distinct_ids(
         raise AssertionError("duplicate explicit profile missions must fail")
 
 
-def test_single_domain_uses_general_lenses_and_rejects_excess_loops(
+def test_general_variant_uses_route_neutral_lenses_and_rejects_excess_loops(
     tmp_path: Path,
 ) -> None:
     runner = _load_runner_module()
@@ -481,7 +536,7 @@ def test_single_domain_uses_general_lenses_and_rejects_excess_loops(
         / ".arc"
         / "domain"
         / "packages"
-        / "single.json"
+        / "domain-1.json"
     )
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     summary["open_axes_for_new_work"] = []
@@ -505,11 +560,108 @@ def test_single_domain_uses_general_lenses_and_rejects_excess_loops(
     try:
         runner.run_ideas(config, dry_run=True)
     except ValueError as exc:
-        assert "Automatic single-domain exploration profiles are insufficient" in str(
-            exc
-        )
+        assert "Automatic exploration profiles are insufficient" in str(exc)
     else:
         raise AssertionError("automatic profiles must not be reused by ID")
+
+
+def test_one_or_multiple_domain_cards_use_the_same_general_variant(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+
+    one = runner.run_ideas(
+        _config(tmp_path / "one", package_count=1),
+        dry_run=True,
+    )
+    multiple = runner.run_ideas(
+        _config(tmp_path / "multiple", package_count=2),
+        dry_run=True,
+    )
+
+    for result, expected_count in ((one, 1), (multiple, 2)):
+        assert result["proposal_count"] == 3
+        assert {
+            loop["context"]["variant_id"]
+            for loop in result["batch_request"]["loops"]
+        } == {"general"}
+        assert all(
+            len(loop["context"]["domain_cards"]) == expected_count
+            for loop in result["batch_request"]["loops"]
+        )
+        assert all(
+            loop["context"]["generation_mode"] == "model_selected_route"
+            for loop in result["batch_request"]["loops"]
+        )
+
+
+def test_every_loop_receives_all_cards_and_advisory_relationships(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    result = runner.run_ideas(
+        _config(tmp_path, package_count=2),
+        dry_run=True,
+    )
+    loops = result["batch_request"]["loops"]
+
+    assert len(loops) == 3
+    for loop in loops:
+        context = loop["context"]
+        assert [
+            card["domain_package_id"]
+            for card in context["domain_cards"]
+        ] == ["domain-1", "domain-2"]
+        relationships = context["domain_relationships"]
+        assert relationships["status"] == "available"
+        assert relationships["method"] == "llm_pairwise_advisory_v1"
+        assert relationships["pair_classifications"] == [
+            {
+                "package_a": "domain-1",
+                "package_b": "domain-2",
+                "classification": "uncertain",
+                "confidence": 0.45,
+                "reason": "The relationship is advisory test evidence.",
+                "evidence": {
+                    "shared_concepts": ["controlled calculation"],
+                    "distinctive_concepts_a": [],
+                    "distinctive_concepts_b": [],
+                },
+            }
+        ]
+
+
+def test_proposer_scientific_route_is_free_form_and_direct_route_is_valid(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner_module()
+    result = runner.run_ideas(
+        _config(tmp_path, package_count=2),
+        dry_run=True,
+    )
+    schema = result["batch_request"]["loops"][0]["proposers"][0][
+        "output_schema"
+    ]
+    route_schema = schema["properties"]["scientific_route"]
+
+    assert "scientific_route" in schema["required"]
+    assert "enum" not in route_schema["properties"]["description"]
+    assert Draft202012Validator(schema).is_valid({
+        "title": "Direct calculation",
+        "scientific_route": {
+            "description": "A direct route outside any closed taxonomy",
+            "domain_package_ids_used": [],
+            "rationale": (
+                "Multiple advisory cards do not require a cross-domain transfer."
+            ),
+        },
+        "idea_summary": "Calculate the minimal observable directly.",
+        "motivation": "This isolates the scientific nucleus.",
+        "novelty_checks": ["A focused search found no direct precedent."],
+        "calculation_plan": "Evaluate the simplest controlled case.",
+        "validation_checks": ["Recover a known limit."],
+        "risks": ["The literature search may be incomplete."],
+    })
 
 
 def test_dry_run_does_not_read_workspace_input_bytes(
@@ -570,7 +722,7 @@ def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(
         portfolio_assessment_runner=portfolio,
     )
 
-    assert first["schema_version"] == "arc.workflow.ideas.result.v4"
+    assert first["schema_version"] == "arc.workflow.ideas.result.v5"
     assert first["status"] == "succeeded"
     assessment = first["portfolio_assessment"]
     assert assessment["status"] == "available"
@@ -585,22 +737,23 @@ def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(
     assert output_properties["cross_candidate_findings"]["items"][
         "properties"
     ]["candidate_ids"]["items"]["enum"] == [
-        "domain_idea_001",
-        "domain_idea_002",
+        "general_idea_001",
+        "general_idea_002",
     ]
     assert output_properties["candidate_notes"]["items"]["properties"][
         "candidate_id"
-    ]["enum"] == ["domain_idea_001", "domain_idea_002"]
+    ]["enum"] == ["general_idea_001", "general_idea_002"]
     assert len(output_properties["candidate_notes"]["allOf"]) == 2
-    invalid_unknown = _portfolio_value()
+    candidate_ids = ["general_idea_001", "general_idea_002"]
+    invalid_unknown = _portfolio_value(candidate_ids)
     invalid_unknown["candidate_notes"][0]["candidate_id"] = "unknown"
     assert not Draft202012Validator(request.output.schema).is_valid(
         invalid_unknown
     )
-    invalid_duplicate = _portfolio_value()
+    invalid_duplicate = _portfolio_value(candidate_ids)
     invalid_duplicate["candidate_notes"].append(
         {
-            "candidate_id": "domain_idea_001",
+            "candidate_id": "general_idea_001",
             "note": "A distinct note must not bypass ID uniqueness.",
         }
     )
@@ -608,10 +761,10 @@ def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(
         invalid_duplicate
     )
     assert json.dumps(config["user_intent"]) in request.prompt
-    assert '"candidate_id": "domain_idea_001"' in request.prompt
+    assert '"candidate_id": "general_idea_001"' in request.prompt
     assert request.prompt.index(
-        '"candidate_id": "domain_idea_001"'
-    ) < request.prompt.index('"candidate_id": "domain_idea_002"')
+        '"candidate_id": "general_idea_001"'
+    ) < request.prompt.index('"candidate_id": "general_idea_002"')
     assert '"round": 1' in request.prompt
     assert request.prompt.count('"round":') == first["reviewer_call_count"]
     assert "reviewer_benchmark" in request.prompt
@@ -636,7 +789,7 @@ def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(
     )
     assert loaded["status"] == "available"
     assert loaded["ref"] == assessment["ref"]
-    assert loaded["content"] == _portfolio_value()
+    assert loaded["content"] == _portfolio_value(candidate_ids)
     incomplete_ranking = {
         **ranked,
         "ranking": ranked["ranking"][:1],

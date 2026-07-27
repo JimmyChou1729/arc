@@ -24,7 +24,7 @@ from _arc_workflows.ideas_ranking import (
 from _arc_workflows.ideas_models import IdeaPlan
 
 
-IDEAS_RESULT_SCHEMA = "arc.workflow.ideas.result.v4"
+IDEAS_RESULT_SCHEMA = "arc.workflow.ideas.result.v5"
 
 
 def observed_result(
@@ -121,7 +121,10 @@ def observed_result(
         "status": status,
         "run_id": config.run_id,
         "run_root": str(repository.root),
-        "research_scope": config.research_scope,
+        "generation_mode": "model_selected_route",
+        "domain_package_count": len(
+            config.domain_manifest["domain_packages"]
+        ),
         "domain_manifest_path": str(config.domain_manifest_path),
         "warnings": warnings,
         "proposal_count": len(ideas),
@@ -162,7 +165,10 @@ def dry_run_result(
         "status": "dry_run",
         "run_id": config.run_id,
         "run_root": str(config.run_dir.resolve()),
-        "research_scope": config.research_scope,
+        "generation_mode": "model_selected_route",
+        "domain_package_count": len(
+            config.domain_manifest["domain_packages"]
+        ),
         "domain_manifest_path": str(config.domain_manifest_path),
         "warnings": warnings,
         "proposal_count": len(ideas),

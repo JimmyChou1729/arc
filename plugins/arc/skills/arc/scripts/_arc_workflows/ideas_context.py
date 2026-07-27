@@ -16,11 +16,10 @@ from _arc_workflows.ideas_marking import (
     marking_scheme_for_context,
 )
 from _arc_workflows.ideas_models import IdeaPlan
-from _arc_workflows.ideas_policy import cross_domain_profile
 from _arc_workflows.ideas_template_io import read_json, replace_placeholders
 
 
-DEFAULT_SINGLE_DOMAIN_LENSES = [
+DEFAULT_EXPLORATION_LENSES = [
     {
         "profile_id": "general_controlled_limit",
         "mission": (
@@ -65,7 +64,7 @@ def caller_context(
     variant: VariantConfig,
     idea_id: str,
     idea_index: int,
-    single_profiles: list[dict[str, str]] | None = None,
+    general_profiles: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], tuple[Path, ...]]:
     loop_template = read_json(variant.loop_template)
     result = copy.deepcopy(loop_template.get("caller_context", {}))
@@ -83,34 +82,29 @@ def caller_context(
     result["marking_scheme"] = marking_scheme_for_context(
         load_marking_scheme(variant.marking_scheme)
     )
-    if variant.research_scope == "cross_domain":
-        result["generation_mode"] = "cross_domain"
-        cards = domain_cards(config)
-        result["domain_cards"] = cards
-        result["exploration_profile"] = cross_domain_profile(
-            config,
-            idea_index=idea_index,
+    result["generation_mode"] = "model_selected_route"
+    result["domain_cards"] = domain_cards(config)
+    result["domain_relationships"] = copy.deepcopy(
+        config.domain_manifest["domain_relationships"]
+    )
+    profiles = (
+        config.exploration_profiles
+        or (
+            general_profiles
+            if general_profiles is not None
+            else general_exploration_profiles(config)
         )
-    else:
-        result["generation_mode"] = "single_domain"
-        profiles = (
-            config.exploration_profiles
-            or (
-                single_profiles
-                if single_profiles is not None
-                else single_domain_profiles(config)
-            )
+    )
+    try:
+        result["exploration_profile"] = copy.deepcopy(
+            profiles[idea_index - 1]
         )
-        try:
-            result["exploration_profile"] = copy.deepcopy(
-                profiles[idea_index - 1]
-            )
-        except IndexError as exc:
-            raise ConfigError(
-                "Automatic single-domain exploration profiles are insufficient "
-                f"for {config.loops_per_variant} loops; provide exactly "
-                "loops_per_variant exploration_profiles"
-            ) from exc
+    except IndexError as exc:
+        raise ConfigError(
+            "Automatic exploration profiles are insufficient "
+            f"for {config.loops_per_variant} loops; provide exactly "
+            "loops_per_variant exploration_profiles"
+        ) from exc
     workspace_input_paths: tuple[Path, ...] = ()
     if variant.context_policy.include_domain_markdown_workspace_input:
         domain_package_dir = (
@@ -132,8 +126,8 @@ def caller_context(
     return result, workspace_input_paths
 
 
-def single_domain_profiles(config: IdeasConfig) -> list[dict[str, str]]:
-    """Derive stable, distinct exploration routes from validated summaries."""
+def general_exploration_profiles(config: IdeasConfig) -> list[dict[str, str]]:
+    """Derive stable route-neutral exploration lenses from domain summaries."""
 
     profiles: list[dict[str, str]] = []
     seen_missions: set[str] = set()
@@ -200,7 +194,7 @@ def single_domain_profiles(config: IdeasConfig) -> list[dict[str, str]]:
                 profile_id=f"domain_problem_{len(seen_problems):03d}",
                 mission=mission,
             )
-    for lens in DEFAULT_SINGLE_DOMAIN_LENSES:
+    for lens in DEFAULT_EXPLORATION_LENSES:
         _append_distinct_profile(
             profiles,
             seen_missions,
@@ -209,7 +203,7 @@ def single_domain_profiles(config: IdeasConfig) -> list[dict[str, str]]:
         )
     if len(profiles) < config.loops_per_variant:
         raise ConfigError(
-            "Automatic single-domain exploration profiles are insufficient "
+            "Automatic exploration profiles are insufficient "
             f"for {config.loops_per_variant} loops; provide exactly "
             "loops_per_variant exploration_profiles"
         )
@@ -249,81 +243,59 @@ def caller_context_warnings(ideas: list[IdeaPlan]) -> list[str]:
 def domain_cards(config: IdeasConfig) -> list[dict[str, Any]]:
     manifest = config.domain_manifest
     if not isinstance(manifest, Mapping):
-        raise ConfigError("cross-domain ideas require a domain manifest")
-    groups = manifest.get("field_groups")
+        raise ConfigError("ideas require a domain manifest")
     packages = manifest.get("domain_packages")
-    if not isinstance(groups, list) or not isinstance(packages, list):
+    if not isinstance(packages, list) or not packages:
         raise ConfigError(
-            f"{config.domain_manifest_path}.field_groups must be an array"
+            f"{config.domain_manifest_path}.domain_packages must be a "
+            "non-empty array"
         )
-    by_id = {
-        str(item.get("domain_package_id", "")): item
-        for item in packages
-        if isinstance(item, Mapping)
-    }
     cards: list[dict[str, Any]] = []
-    for index, group in enumerate(groups):
-        if not isinstance(group, Mapping):
+    for index, package in enumerate(packages):
+        if not isinstance(package, Mapping):
             raise ConfigError(
-                f"{config.domain_manifest_path}.field_groups[{index}] must be an object"
+                f"{config.domain_manifest_path}.domain_packages[{index}] "
+                "must be an object"
             )
-        field_id = str(group.get("field_id", "")).strip()
-        field_card = group.get("field_card")
-        if not field_id or not isinstance(field_card, Mapping):
+        package_id = str(package.get("domain_package_id", "")).strip()
+        if not package_id:
             raise ConfigError(
-                f"{config.domain_manifest_path}.field_groups[{index}] requires "
-                "field_id and field_card"
+                f"{config.domain_manifest_path}.domain_packages[{index}] "
+                "requires domain_package_id"
             )
-        opportunities: list[Any] = []
-        for package_index, package_id in enumerate(
-            group.get("domain_package_ids", [])
-        ):
-            package = by_id.get(str(package_id))
-            if not isinstance(package, Mapping):
-                raise ConfigError(
-                    f"field {field_id!r} references unknown package {package_id!r}"
-                )
-            summary_path = domain_summary_path(
-                config,
-                entry=package,
-                index=package_index,
+        summary_path = domain_summary_path(
+            config,
+            entry=package,
+            index=index,
+        )
+        summary = read_json(summary_path)
+        version = str(summary.get("schema_version", "")).strip()
+        if version != "arc.domain_summary.v5":
+            raise ConfigError(
+                f"{summary_path}.schema_version must be arc.domain_summary.v5"
             )
-            summary = read_json(summary_path)
-            version = str(summary.get("schema_version", "")).strip()
-            if version != "arc.domain_summary.v5":
-                raise ConfigError(
-                    f"{summary_path}.schema_version must be arc.domain_summary.v5"
-                )
-            if "domain_id" in summary:
-                raise ConfigError(
-                    f"{summary_path} arc.domain_summary.v5 must not contain domain_id"
-                )
-            raw = summary.get("mathematical_opportunities")
-            validation_error = mathematical_opportunities_validation_error(raw)
-            if validation_error is not None:
-                raise ConfigError(
-                    f"{summary_path}.mathematical_opportunities is invalid "
-                    f"for v5: {validation_error}"
-                )
-            opportunities.extend(
-                copy.deepcopy(raw.get("well_defined_problems", []))
+        if "domain_id" in summary:
+            raise ConfigError(
+                f"{summary_path} arc.domain_summary.v5 must not contain domain_id"
             )
-        card = copy.deepcopy(dict(field_card))
+        opportunities = summary.get("mathematical_opportunities")
+        validation_error = mathematical_opportunities_validation_error(
+            opportunities
+        )
+        if validation_error is not None:
+            raise ConfigError(
+                f"{summary_path}.mathematical_opportunities is invalid "
+                f"for v5: {validation_error}"
+            )
+        card = copy.deepcopy(dict(package))
         card.update(
             {
-                "field_id": field_id,
-                "domain_package_ids": list(group.get("domain_package_ids", [])),
+                "domain_package_id": package_id,
                 "summary_capabilities": {"mathematical_opportunities": True},
-                "mathematical_opportunities": {
-                    "well_defined_problems": opportunities
-                },
+                "mathematical_opportunities": copy.deepcopy(opportunities),
             }
         )
         cards.append(card)
-    if len(cards) < 2:
-        raise ConfigError(
-            "cross-domain ideas require at least two distinct field cards"
-        )
     return cards
 
 
@@ -336,12 +308,14 @@ def domain_summary_path(
     raw = str(entry.get("summary_json_path") or "").strip()
     if not raw:
         raise ConfigError(
-            f"{config.domain_manifest_path}.domains[{index}] requires summary_json_path"
+            f"{config.domain_manifest_path}.domain_packages[{index}] "
+            "requires summary_json_path"
         )
     candidate = Path(raw).expanduser()
     if candidate.is_absolute():
         raise ConfigError(
-            f"{config.domain_manifest_path}.domains[{index}].summary_json_path "
+            f"{config.domain_manifest_path}.domain_packages[{index}]."
+            "summary_json_path "
             "must be project-relative"
         )
     project_root = config.project_dir.expanduser().resolve()
@@ -350,7 +324,8 @@ def domain_summary_path(
         path.relative_to(project_root)
     except ValueError as exc:
         raise ConfigError(
-            f"{config.domain_manifest_path}.domains[{index}].summary_json_path "
+            f"{config.domain_manifest_path}.domain_packages[{index}]."
+            "summary_json_path "
             "must stay inside project_dir"
         ) from exc
     if not path.is_file():

@@ -22,23 +22,19 @@ from _arc_workflows.ideas_marking import (
     score_fields,
 )
 from _arc_workflows.ideas_policy import (
-    cross_scientific_readiness,
-    is_cross_domain_context,
     loop_requires_idea_assessment,
-    normalized_central_mechanism,
     scientific_run_status,
-    single_domain_scientific_readiness,
+    scientific_readiness,
 )
 from _arc_workflows.ideas_portfolio_assessment import (
     load_portfolio_assessment,
 )
 from _arc_workflows.ideas_report import (
-    cross_diagnostics,
-    single_domain_diagnostics,
+    ideas_diagnostics,
 )
 
-SELECTED_ROUNDS_SCHEMA = "arc.ideas.selected_rounds.v7"
-PARTIAL_SELECTED_ROUNDS_SCHEMA = "arc.ideas.partial_selected_rounds.v3"
+SELECTED_ROUNDS_SCHEMA = "arc.ideas.selected_rounds.v8"
+PARTIAL_SELECTED_ROUNDS_SCHEMA = "arc.ideas.partial_selected_rounds.v4"
 
 
 class _RoundExclusion(ValueError):
@@ -75,30 +71,10 @@ def rank_run(
         ) from None
 
     contexts = {loop.loop_id: _loop_context(loop) for loop in request.loops}
-    cross_contexts = {
-        loop_id: context
-        for loop_id, context in contexts.items()
-        if is_cross_domain_context(context)
+    assessment_contracts = {
+        loop.loop_id: loop_requires_idea_assessment(loop)
+        for loop in request.loops
     }
-    cross_domain = bool(cross_contexts)
-    single_contexts = (
-        {}
-        if cross_domain
-        else {
-            loop.loop_id: {
-                **contexts[loop.loop_id],
-                "requires_idea_assessment": loop_requires_idea_assessment(loop),
-            }
-            for loop in request.loops
-        }
-    )
-    single_domain_assessment_enabled = any(
-        context.get("requires_idea_assessment") is True
-        for context in single_contexts.values()
-    )
-    single_domain_without_assessment = (
-        bool(single_contexts) and not single_domain_assessment_enabled
-    )
     selected: list[dict[str, Any]] = []
     excluded_loops: list[dict[str, str]] = []
     excluded_rounds: list[dict[str, Any]] = []
@@ -142,12 +118,7 @@ def rank_run(
                     loop,
                     committed,
                     scheme=scheme,
-                    cross_context=loop_context if cross_domain else None,
-                    single_context=(
-                        single_contexts.get(loop.loop_id)
-                        if single_contexts
-                        else None
-                    ),
+                    assessment_required=assessment_contracts[loop.loop_id],
                 )
             except _RoundExclusion as exc:
                 excluded_rounds.append(
@@ -222,15 +193,20 @@ def rank_run(
         )
     top_three = ranking[:3]
     if len(top_three) < 3:
-        kind = "cross-domain" if cross_domain else "single-domain"
         warnings.append(
-            f"WARNING: only {len(top_three)} {kind} candidates with valid "
+            f"WARNING: only {len(top_three)} candidates with valid "
             "committed rounds are available."
         )
-    if single_domain_without_assessment:
+    legacy_without_assessment = [
+        loop_id
+        for loop_id, required in assessment_contracts.items()
+        if not required
+    ]
+    if legacy_without_assessment:
         warnings.append(
-            "WARNING: single-domain reviews do not contain idea_assessment; "
-            "ranking used the no_assessment policy."
+            "WARNING: legacy reviews do not contain idea_assessment; "
+            "ranking retained their marks with unassessed readiness: "
+            + ", ".join(legacy_without_assessment)
         )
     for index, entry in enumerate(ranking, start=1):
         entry["rank"] = index
@@ -253,6 +229,7 @@ def rank_run(
         "run_revision": inspection.run_revision,
         "loop_revisions": dict(trace.loop_revisions),
         "user_intent": _run_user_intent(contexts),
+        "generation_mode": _generation_mode(contexts),
         "marking_scheme": _representative_marking_scheme(contexts),
         "ranking": ranking,
         "top_three": top_three,
@@ -298,30 +275,12 @@ def rank_run(
                 "WARNING: PORTFOLIO ASSESSMENT "
                 f"{assessment_status.upper()}{suffix}"
             )
-    if cross_domain:
-        payload.update(
-            {
-                "cross_domain": True,
-                "diagnostics": cross_diagnostics(
-                    run_id,
-                    ranking=ranking,
-                    top_three=top_three,
-                    warnings=warnings,
-                ),
-            }
-        )
-    elif single_domain_assessment_enabled:
-        payload.update(
-            {
-                "single_domain_assessment": True,
-                "diagnostics": single_domain_diagnostics(
-                    run_id,
-                    ranking=ranking,
-                    top_three=top_three,
-                    warnings=warnings,
-                ),
-            }
-        )
+    payload["diagnostics"] = ideas_diagnostics(
+        run_id,
+        ranking=ranking,
+        top_three=top_three,
+        warnings=warnings,
+    )
     return payload
 
 
@@ -392,8 +351,7 @@ def _round_entry(
     committed: Any,
     *,
     scheme: Mapping[str, Any],
-    cross_context: Mapping[str, Any] | None = None,
-    single_context: Mapping[str, Any] | None = None,
+    assessment_required: bool,
 ) -> dict[str, Any]:
     proposer_id = next(
         (
@@ -425,6 +383,7 @@ def _round_entry(
             "loop_id": loop.loop_id,
             "round": committed.round_number,
             "title": title.strip(),
+            "scientific_route": _scientific_route(proposer_output),
             "marks": marks,
             "evidence_checked": _string_list(payload.get("evidence_checked")),
             "tool_queries_used": _string_list(payload.get("tool_queries_used")),
@@ -449,62 +408,107 @@ def _round_entry(
         }
     except (AttributeError, KeyError, TypeError):
         raise _RoundExclusion("invalid_artifact_reference") from None
-    if cross_context is not None:
-        assessment = payload.get("cross_domain_assessment", {})
-        readiness, warnings, signature, compatibility = (
-            cross_scientific_readiness(
-                proposer_output,
-                assessment,
-                cross_context=cross_context,
-            )
-        )
-        entry.update(
-            {
-                "scientific_readiness": readiness,
-                "scientific_warnings": warnings,
-                "cross_domain_assessment": (
-                    assessment if isinstance(assessment, dict) else {}
-                ),
-                "compatibility_classification": compatibility,
-                "normalized_transfer_signature": signature,
-                "normalized_central_mechanism": normalized_central_mechanism(
-                    assessment.get("transfer_signature")
-                    if isinstance(assessment, Mapping)
-                    else None
-                ),
-            }
-        )
-    elif single_context is not None:
-        assessment = payload.get("idea_assessment")
-        readiness, warnings, feasibility = (
-            single_domain_scientific_readiness(assessment)
-        )
-        entry.update(
-            {
-                "scientific_readiness": readiness,
-                "scientific_warnings": warnings,
-                "scientific_readiness_policy": (
-                    "reviewer_assessment_diagnostic"
-                    if (
-                        single_context.get("requires_idea_assessment") is True
-                        or isinstance(assessment, Mapping)
-                    )
-                    else "single_domain_no_assessment"
-                ),
-                "idea_assessment": (
-                    assessment if isinstance(assessment, dict) else {}
-                ),
-                "feasibility_classification": feasibility,
-            }
-        )
-    else:
-        entry.update(
-            {
-                "scientific_readiness": "unassessed",
-                "scientific_warnings": ["missing_idea_assessment"],
-            }
-        )
+    assessment = payload.get("idea_assessment")
+    readiness, warnings, feasibility = scientific_readiness(assessment)
+    legacy_assessment = payload.get("cross_domain_assessment")
+    legacy_scientific_context = _legacy_scientific_context(
+        legacy_assessment
+    )
+    entry.update(
+        {
+            "scientific_readiness": readiness,
+            "scientific_warnings": warnings,
+            "scientific_readiness_policy": (
+                "reviewer_assessment_diagnostic"
+                if assessment_required or isinstance(assessment, Mapping)
+                else "legacy_no_common_assessment"
+            ),
+            "idea_assessment": (
+                dict(assessment) if isinstance(assessment, Mapping) else {}
+            ),
+            "legacy_scientific_context": legacy_scientific_context,
+            "feasibility_classification": feasibility,
+        }
+    )
     return entry
+
+
+def _legacy_scientific_context(raw: Any) -> dict[str, Any]:
+    """Preserve old cross-domain caveats without reviving route gates."""
+    if not isinstance(raw, Mapping):
+        return {}
+    novelty = raw.get("novelty_coverage")
+    return {
+        "source_domain": str(raw.get("source_field_id", "")).strip(),
+        "target_domain": str(raw.get("target_field_id", "")).strip(),
+        "transfer_status": str(raw.get("transfer_status", "")).strip(),
+        "target_contribution_status": str(
+            raw.get("target_contribution_status", "")
+        ).strip(),
+        "source_ingredient_validity": str(
+            raw.get("source_ingredient_validity", "")
+        ).strip(),
+        "target_adaptation_validity": str(
+            raw.get("target_adaptation_validity", "")
+        ).strip(),
+        "feasibility_status": str(
+            raw.get("feasibility_status", "")
+        ).strip(),
+        "resulting_new_capability": str(
+            raw.get("resulting_new_capability", "")
+        ).strip(),
+        "blocking_compatibility_failures": _string_list(
+            raw.get("blocking_compatibility_failures")
+        ),
+        "manageable_compatibility_risks": _string_list(
+            raw.get("manageable_compatibility_risks")
+        ),
+        "novelty_coverage": (
+            {
+                scope: novelty.get(scope)
+                for scope in (
+                    "source_domain",
+                    "target_domain",
+                    "intersection",
+                )
+                if isinstance(novelty.get(scope), bool)
+            }
+            if isinstance(novelty, Mapping)
+            else {}
+        ),
+        "critical_concerns": _string_list(
+            raw.get("critical_concerns")
+            if raw.get("critical_concerns") is not None
+            else raw.get("disqualifying_reasons")
+        ),
+        "recommended_action": str(
+            raw.get("recommended_action", "")
+        ).strip(),
+    }
+
+
+def _scientific_route(
+    proposer_output: Mapping[str, Any],
+) -> dict[str, Any]:
+    raw = proposer_output.get("scientific_route")
+    if not isinstance(raw, Mapping):
+        return {}
+    description = raw.get("description")
+    rationale = raw.get("rationale")
+    package_ids = raw.get("domain_package_ids_used")
+    return {
+        "description": (
+            description.strip()
+            if isinstance(description, str)
+            else ""
+        ),
+        "domain_package_ids_used": _string_list(package_ids),
+        "rationale": (
+            rationale.strip()
+            if isinstance(rationale, str)
+            else ""
+        ),
+    }
 
 
 def _reviewer_benchmark(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -578,6 +582,21 @@ def _run_user_intent(
         if isinstance(intent, str) and intent.strip():
             return intent.strip()
     return ""
+
+
+def _generation_mode(
+    contexts: Mapping[str, Mapping[str, Any]],
+) -> str:
+    modes = {
+        str(context.get("generation_mode", "")).strip()
+        for context in contexts.values()
+        if str(context.get("generation_mode", "")).strip()
+    }
+    if modes == {"model_selected_route"}:
+        return "model_selected_route"
+    if len(modes) == 1:
+        return next(iter(modes))
+    return "legacy_or_mixed"
 
 
 def _representative_marking_scheme(

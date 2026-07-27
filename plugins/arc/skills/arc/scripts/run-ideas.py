@@ -115,7 +115,7 @@ def run_ideas(
             max_concurrent=max_concurrent,
             request=request,
         ),
-        *ideas_config.routing_warnings,
+        *ideas_config.context_warnings,
         *model_tier_warnings(request),
         *caller_context_warnings(ideas),
     ]

@@ -1,8 +1,10 @@
 # Ideas Workflow
 
-Use this workflow for Case 2 idea generation. It selects the single-domain or
-cross-domain variant from the project domain manifest, then runs concurrent
-proposer-reviewer loops. Each loop has exactly one proposer and exactly one
+Use this workflow for Case 2 idea generation. It gives every proposer all
+available domain cards and advisory relationship evidence, then lets that
+proposer choose the scientific formulation for its own idea. One batch may
+therefore contain direct, single-domain, overlapping-domain, cross-domain, or
+other well-motivated routes. Each loop has exactly one proposer and exactly one
 reviewer; the reviewer serves only that proposer and may commit up to the
 template's three rounds by default.
 
@@ -32,30 +34,30 @@ Step 3: Replace `<run-id>`, `<project-dir>`, `<user_intent>`, and
 `<skill-workflow-json-dir>`.
 
 Set `domain_manifest_path` to
-`<project-dir>/.arc/domain/domain-manifest.json`. Current manifest v3, including
-its validated `arc.workflow.domain_seed_provenance.v1` artifact, routes by
-`field_count`: one field, including multiple seed-specific packages, uses the
-single-domain prompts; two or more fields use cross-domain prompts, directed
-transfer profiles as optional lenses, and reviewer scientific assessment.
-Cross-domain cards and source/target roles use `field_id`. A missing,
-unsupported, or invalid manifest must be regenerated before any ideas work.
+`<project-dir>/.arc/domain/domain-manifest.json`. Current manifest v4 includes
+its validated `arc.workflow.domain_seed_provenance.v1` artifact, every
+package-level domain card, and `domain_relationships`. Pair classifications,
+confidence, and warnings are scientific context, not routing instructions.
+An unavailable relationship analysis leaves all package cards usable and does
+not block Ideas. A missing, unsupported, or invalid manifest must be
+regenerated before any ideas work.
 
 Proceed only when the domain-build handoff status is `completed` or `degraded`.
 For a degraded handoff, print its warnings and use only the verified domain
 material; a failed or paused handoff must be resolved before idea generation.
 
 Step 4: Keep `variant_glob` as `ideas-*.variant.json`. The release package
-runs only enabled variants, then selects only the enabled variant applicable
-to the manifest; it must not run both the single-domain and cross-domain
-variants for the same request.
+ships one enabled `general` variant. Do not add a second variant that
+pre-selects a scientific route before the proposer has formed its idea
+nucleus.
 
 Step 5: Keep the shipped proposer and reviewer `model_tier` values at `high`
 for normal idea generation unless the user requests another quality/cost tier.
 
-Step 6: Keep `loops_per_variant` at `5` unless the run should use a different
-number of concurrent instances for each setup. Cross-domain runs ship with
-five distinct exploration profiles. Single-domain runs derive distinct routes
-in stable manifest, package, and list order: first from validated
+Step 6: Keep `loops_per_variant` at `3` unless the run should use a different
+number of concurrent instances. The three loops run in parallel and each may
+commit up to three proposer-reviewer rounds. General runs derive distinct
+exploration lenses in stable manifest, package, and list order: first from validated
 `open_axes_for_new_work`, then from deduplicated
 `mathematical_opportunities.well_defined_problems`, then from a finite set of
 general theoretical-physics exploration lenses. Each route is passed to the
@@ -70,9 +72,8 @@ well-defined, feasible, testable, genuinely novel, and consequential. Separable
 methods, validations, observables, and applications become optional follow-ons.
 The reviewer continues to use the common marking scheme. If an explicit set is
 used, top-level `exploration_profiles` must contain exactly one profile object
-per loop for either research scope. If the automatic single-domain sources
-cannot supply enough distinct routes, provide an explicit set; never create
-duplicate loops that differ only by ID.
+per loop. If the automatic sources cannot supply enough distinct routes,
+provide an explicit set; never create duplicate loops that differ only by ID.
 
 ### Phase 2: Run Ideas
 
@@ -165,9 +166,10 @@ replacement for broader web search, INSPIRE metadata search, shared-cache
 search, scientific comparison, or other appropriate prior-art checks. Complete
 those broader checks regardless of whether the citation scan is complete or
 finds a direct hit, and base novelty and confidence on the combined evidence.
-A no-hit citation result alone must not raise either score. For cross-domain
-ideas, the broader review still requires independent source-domain,
-target-domain, and intersection checks.
+A no-hit citation result alone must not raise either score. When an idea
+actually relies on a cross-domain transfer, the broader review also checks the
+source domain, target domain, and intersection. Direct ideas do not acquire
+that bureaucracy merely because multiple cards were supplied.
 
 For each new idea nucleus, the first reviewer round performs a bounded INSPIRE
 citation-neighborhood audit. Select one canonical paper that defines the
@@ -209,30 +211,26 @@ and any explicit broker; the LLM service selects the corresponding safe mode.
 
 Final ranked ideas must come from `run-ideas.py`'s public committed batch data
 and the read-only ranking helper, not ad-hoc agent judgment. Keep every
-trace-verified candidate visible with its marks, assessment, limitations, and
-revision feedback. In cross-domain mode, the reviewer distinguishes genuine,
-substantive transfers from decorative or currently under-specified ones, but a
-fixable translation, setup, or execution error remains actionable feedback
-rather than erasing the direction. Recommend replacement only when no
-minimally sufficient repair preserves a genuine and consequential transfer.
-The source domain may contribute a mature method or mechanism without itself
-receiving a new result.
+trace-verified candidate visible with its marks, free-form `scientific_route`,
+assessment, limitations, and revision feedback. The reviewer may recommend a
+more direct, single-domain, overlapping-domain, cross-domain, or otherwise
+stronger formulation, and the proposer may revise that route in a later round
+without replacing the idea nucleus. These are non-exhaustive scientific
+possibilities, not a program taxonomy.
 
-In single-domain mode, prioritize an important target-domain problem that is
-mathematically well-defined and has an executable systematic route.
 Cross-disciplinary transfer is entirely optional: a proposer may consider or
-use a mature method from another field when it is scientifically useful, but no
-idea, loop, or batch is required to include one, there is no interdisciplinary
-quota, and interdisciplinary framing receives no ranking reward. Judge
-same-domain and cross-disciplinary candidates by the same scientific criteria.
-If a proposal does import an external method, make its structure, required
-adaptation, applicability conditions, validation checks, and kill criterion
-concrete; only then should the reviewer validate the source area, target
-domain, intersection, and shortlisted source papers. Otherwise record the
-external method as not used and do not request cross-disciplinary evidence.
-Judge feasibility and problem importance explicitly in marks, assessment, and
-revision feedback. A repairable error in an otherwise substantive nucleus
-should produce a concrete next-round fix, while a convenient but low-value
+use a mature method from another field when it is scientifically useful, but
+no idea, loop, or batch is required to include one, there is no interdisciplinary
+quota, and interdisciplinary framing receives no ranking reward. Judge all
+candidates by the same scientific criteria. If a proposal does import an
+external method, make its structure, required adaptation, applicability
+conditions, validation checks, and kill criterion concrete; only then should
+the reviewer validate the source area, target domain, intersection, and
+shortlisted source papers. Otherwise record the external method as not used
+and do not request cross-disciplinary evidence. Judge feasibility and problem
+importance explicitly in marks, assessment, and revision feedback. A
+repairable error in an otherwise substantive nucleus should produce a concrete
+next-round fix, while a convenient but low-value
 exercise or an important problem without any feasible minimally sufficient
 formulation should score accordingly.
 
@@ -270,9 +268,9 @@ helper remains read-only: it does not invoke this assessment, mutate the batch,
 or reinterpret its results. It may only preserve or render advisory content
 that the completed run supplies through its public handoff.
 
-The run result contract is `arc.workflow.ideas.result.v4`. The formal JSON
-ranking contract is `arc.ideas.selected_rounds.v7`; partial rankings use
-`arc.ideas.partial_selected_rounds.v3`. Read scientific `status`
+The run result contract is `arc.workflow.ideas.result.v5`. The formal JSON
+ranking contract is `arc.ideas.selected_rounds.v8`; partial rankings use
+`arc.ideas.partial_selected_rounds.v4`. Read scientific `status`
 separately from `durable_lifecycle`: a durable batch may finish successfully
 while the scientific status is `degraded` because one or more loops failed.
 The current contracts have no `run_lifecycle` alias.
@@ -341,17 +339,13 @@ Render the handoff text as normal Markdown paragraphs, not a fenced code block.
 Follow `rules/math_typeset.md` for math and TeX snippets. Use PDF-friendly
 wrapping for long titles and proposer text; avoid wide tables with long prose.
 
-For cross-domain runs, use the abbreviations and score columns declared by the
-selected cross-domain marking scheme. List all trace-verified candidates in
-formal ranking order and preserve transfer-quality concerns and concrete repair
-advice without changing score, rank, or visibility.
-
-For new single-domain runs, formal ranking likewise keeps every trace-verified
-candidate visible. Preserve mathematical-definition and feasibility problems
-as assessment and revision feedback; distinguish nucleus-breaking failures
-from errors repairable in another round. No-assessment single-domain variants
-remain visibly marked as using the `no_assessment` policy; do not infer an
-alternate artifact layout.
+Use the one common marking scheme for every route. List all trace-verified
+candidates in formal ranking order, display each selected round's
+`scientific_route`, and preserve route, transfer, mathematical-definition, and
+feasibility concerns as scientific assessment and concrete repair advice
+without changing score, rank, or visibility. Historical runs without the
+common assessment remain visibly `unassessed`; do not infer an alternate
+artifact layout.
 
 Step 2: Attempt both visible PDFs from Step 1 before claiming PDF delivery. On
 rendering failure, print `WARNING:` with the exact error and preserve the

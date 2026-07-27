@@ -1,0 +1,17 @@
+{
+  "schema_version": "arc.workflow.ideas.variant.v2",
+  "variant_id": "general",
+  "description": "Model-selected scientific routes using all available domain cards and advisory relationship evidence.",
+  "loop_template": "ideas-loop.template.json",
+  "proposer_template": "ideas-proposer.template.json",
+  "reviewer_template": "ideas-reviewer.template.json",
+  "reviewer_output_schema": "ideas-reviewer-output.schema.json",
+  "marking_scheme": "ideas-marking-scheme.json",
+  "context_policy": {
+    "domain_markdown_workspace_input_required": false,
+    "include_domain_markdown_workspace_input": true
+  },
+  "proposer": {
+    "model_tier": "high"
+  }
+}

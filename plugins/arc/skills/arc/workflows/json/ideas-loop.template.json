@@ -3,7 +3,11 @@
   "max_rounds": 3,
   "early_stop": {"enabled": false},
   "caller_context": {
-    "user_intent": "<user_intent>"
+    "user_intent": "<user_intent>",
+    "generation_mode": "model_selected_route",
+    "domain_cards": [],
+    "domain_relationships": {},
+    "exploration_profile": {}
   },
   "proposers": [],
   "reviewers": []

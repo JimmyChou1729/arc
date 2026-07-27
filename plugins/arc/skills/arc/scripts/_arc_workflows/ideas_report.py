@@ -8,19 +8,7 @@ from typing import Any, Mapping
 from _arc_workflows.ideas_marking import report_columns
 
 
-CROSS_REPORT_COLUMNS = [
-    ("IR", "user_intent_relevance"),
-    ("TR", "cross_domain_transfer_quality"),
-    ("TC", "substantive_target_contribution"),
-    ("N", "novelty"),
-    ("CN", "confidence_of_novelty"),
-    ("SV", "scientific_value"),
-    ("F", "calculation_feasibility"),
-    ("WD", "problem_well_definedness"),
-    ("T", "total_score"),
-]
-
-SINGLE_REPORT_COLUMNS = [
+COMMON_REPORT_COLUMNS = [
     ("IR", "user_intent_relevance", "intent relevance"),
     ("N", "novelty", "novelty"),
     ("CN", "confidence_of_novelty", "confidence of novelty"),
@@ -46,72 +34,14 @@ def _readiness_counts(
     }
 
 
-def cross_diagnostics(
+def ideas_diagnostics(
     run_id: str,
     *,
     ranking: list[dict[str, Any]],
     top_three: list[dict[str, Any]],
     warnings: list[str],
 ) -> dict[str, Any]:
-    """Build non-gating v2 cross-domain diagnostics."""
-    top_keys = {(entry["loop_id"], entry["round"]) for entry in top_three}
-    candidates = [
-        {
-            "loop_id": entry["loop_id"],
-            "round": entry["round"],
-            "title": entry["title"],
-            "scientific_readiness": entry.get(
-                "scientific_readiness", "unassessed"
-            ),
-            "scientific_warnings": entry.get("scientific_warnings", []),
-            "compatibility_classification": entry.get(
-                "compatibility_classification", {}
-            ),
-            "transfer_signature": entry.get(
-                "normalized_transfer_signature", ""
-            ),
-            "central_mechanism": entry.get(
-                "normalized_central_mechanism", ""
-            ),
-            "top_three": (
-                entry["loop_id"],
-                entry["round"],
-            )
-            in top_keys,
-            "marks": entry["marks"],
-        }
-        for entry in ranking
-    ]
-    return {
-        "schema_version": "arc.ideas.cross_domain_diagnostics.v2",
-        "run_id": run_id,
-        "candidate_count": len(ranking),
-        **_readiness_counts(candidates),
-        "top_three_count": len(top_three),
-        "distinct_transfer_signatures": len(
-            {
-                signature
-                for entry in ranking
-                if (
-                    signature := entry.get(
-                        "normalized_transfer_signature", ""
-                    )
-                )
-            }
-        ),
-        "warnings": warnings,
-        "candidates": candidates,
-    }
-
-
-def single_domain_diagnostics(
-    run_id: str,
-    *,
-    ranking: list[dict[str, Any]],
-    top_three: list[dict[str, Any]],
-    warnings: list[str],
-) -> dict[str, Any]:
-    """Build non-gating v2 single-domain diagnostics."""
+    """Build route-neutral, non-gating diagnostics."""
     top_keys = {(entry["loop_id"], entry["round"]) for entry in top_three}
     candidates = []
     for entry in ranking:
@@ -121,6 +51,7 @@ def single_domain_diagnostics(
                 "loop_id": entry["loop_id"],
                 "round": entry["round"],
                 "title": entry["title"],
+                "scientific_route": entry.get("scientific_route", {}),
                 "scientific_readiness": entry.get(
                     "scientific_readiness", "unassessed"
                 ),
@@ -143,6 +74,9 @@ def single_domain_diagnostics(
                 "feasibility_classification": entry.get(
                     "feasibility_classification", {}
                 ),
+                "legacy_scientific_context": entry.get(
+                    "legacy_scientific_context", {}
+                ),
                 "top_three": (
                     entry["loop_id"],
                     entry["round"],
@@ -152,7 +86,7 @@ def single_domain_diagnostics(
             }
         )
     return {
-        "schema_version": "arc.ideas.single_domain_diagnostics.v2",
+        "schema_version": "arc.ideas.diagnostics.v3",
         "run_id": run_id,
         "candidate_count": len(ranking),
         **_readiness_counts(candidates),
@@ -200,10 +134,8 @@ def markdown_table(payload: dict[str, Any]) -> str:
 
 
 def _summary_table(payload: dict[str, Any]) -> str:
-    if payload.get("cross_domain"):
-        return _cross_summary_table(payload)
-    representative = _representative_single_entry(payload)
-    columns = _single_report_columns(representative)
+    representative = _representative_entry(payload)
+    columns = _report_columns(representative)
     abbreviations = ", ".join(
         f"{label}={description}"
         for label, _field, description in columns
@@ -236,6 +168,7 @@ def _round_marks_summary_section(entry: dict[str, Any]) -> list[str]:
         _heading_text(entry["title"]),
         "",
         *_partial_metadata_lines(entry),
+        *_scientific_route_lines(entry),
         *_scientific_caveat_lines(entry),
         "",
         _compact_round_marks_table(entry),
@@ -245,7 +178,7 @@ def _round_marks_summary_section(entry: dict[str, Any]) -> list[str]:
 def _compact_round_marks_table(entry: dict[str, Any]) -> str:
     columns = [
         (label, field)
-        for label, field, _description in _single_report_columns(entry)
+        for label, field, _description in _report_columns(entry)
     ]
     headers = " | ".join(label for label, _field in columns)
     separators = "|".join("---:" for _ in columns)
@@ -260,48 +193,6 @@ def _compact_round_marks_table(entry: dict[str, Any]) -> str:
         )
         lines.append(f"| {round_entry['round']} | {mark_values} |")
     return "\n".join(lines)
-
-
-def _cross_summary_table(payload: dict[str, Any]) -> str:
-    lines = [
-        (
-            "## Provisional Ideas"
-            if payload.get("mode") == "partial"
-            else "# Ideas"
-        ),
-        "",
-    ]
-    portfolio = _portfolio_assessment_lines(payload)
-    if portfolio:
-        lines.extend([*portfolio, ""])
-    lines.extend(
-        [
-            "Abbreviations:",
-            "",
-            "IR=intent relevance, TR=transfer quality, TC=target contribution, N=novelty, "
-            "CN=confidence of novelty, SV=scientific value, F=feasibility, WD=well-definedness, T=total.",
-        ]
-    )
-    for warning in payload.get("warnings", []):
-        lines.extend(["", str(warning)])
-    for entry in payload.get("ranking", []):
-        lines.extend(["", *_round_marks_summary_section_cross(entry)])
-    return "\n".join(lines)
-
-
-def _round_marks_summary_section_cross(
-    entry: dict[str, Any],
-) -> list[str]:
-    return [
-        f"## `{entry['loop_id']}`",
-        "",
-        _heading_text(entry["title"]),
-        "",
-        *_partial_metadata_lines(entry),
-        *_scientific_caveat_lines(entry),
-        "",
-        _compact_cross_marks_table(entry),
-    ]
 
 
 def _portfolio_assessment_lines(
@@ -446,20 +337,6 @@ def _portfolio_assessment_lines(
     return lines
 
 
-def _compact_cross_marks_table(entry: dict[str, Any]) -> str:
-    headers = " | ".join(label for label, _field in CROSS_REPORT_COLUMNS)
-    separators = "|".join("---:" for _ in CROSS_REPORT_COLUMNS)
-    lines = [f"| Round | {headers} |", f"|---:|{separators}|"]
-    for round_entry in entry.get("rounds", []):
-        marks = round_entry["marks"]
-        values = " | ".join(
-            _format_mark(marks.get(field))
-            for _label, field in CROSS_REPORT_COLUMNS
-        )
-        lines.append(f"| {round_entry['round']} | {values} |")
-    return "\n".join(lines)
-
-
 def _appendix_section(entry: dict[str, Any]) -> list[str]:
     proposer_artifact = entry["proposer_artifact"]
     review_artifact = entry["review_artifact"]
@@ -469,6 +346,7 @@ def _appendix_section(entry: dict[str, Any]) -> list[str]:
         f"- Loop: `{entry['loop_id']}`",
         f"- Selected round: `{entry['round']}`",
         *_partial_metadata_lines(entry),
+        *_scientific_route_lines(entry),
         (
             "- Proposer artifact: "
             f"`{proposer_artifact['artifact_id']}` "
@@ -546,7 +424,7 @@ def _scientific_taste_section(entry: Mapping[str, Any]) -> list[str]:
     return lines
 
 
-def _representative_single_entry(
+def _representative_entry(
     payload: Mapping[str, Any],
 ) -> Mapping[str, Any] | None:
     entries = payload.get("ranking")
@@ -560,7 +438,7 @@ def _representative_single_entry(
     return None
 
 
-def _single_report_columns(
+def _report_columns(
     entry: Mapping[str, Any] | None,
 ) -> list[tuple[str, str, str]]:
     scheme = entry.get("marking_scheme") if isinstance(entry, Mapping) else None
@@ -578,13 +456,22 @@ def _single_report_columns(
             configured_fields.add(str(total.get("field", "")))
     if not configured_fields:
         configured_fields = {
-            field for _label, field, _description in SINGLE_REPORT_COLUMNS
+            field for _label, field, _description in COMMON_REPORT_COLUMNS
         }
-    return [
+    known = [
         column
-        for column in SINGLE_REPORT_COLUMNS
+        for column in COMMON_REPORT_COLUMNS
         if column[1] in configured_fields
     ]
+    known_fields = {field for _label, field, _description in known}
+    if isinstance(scheme, Mapping):
+        for column in report_columns(scheme):
+            field = column["field"]
+            if field not in known_fields:
+                label = column["label"]
+                known.append((label, field, label.casefold()))
+                known_fields.add(field)
+    return known
 
 
 def _partial_metadata_lines(entry: Mapping[str, Any]) -> list[str]:
@@ -600,6 +487,43 @@ def _partial_metadata_lines(entry: Mapping[str, Any]) -> list[str]:
         if pause_reason
         else "- Pause reason: none recorded"
     )
+    return [*lines, ""]
+
+
+def _scientific_route_lines(entry: Mapping[str, Any]) -> list[str]:
+    route = entry.get("scientific_route")
+    if not isinstance(route, Mapping):
+        return []
+    description = str(route.get("description", "") or "").strip()
+    rationale = str(route.get("rationale", "") or "").strip()
+    package_ids = route.get("domain_package_ids_used")
+    ids = (
+        [
+            str(package_id).strip()
+            for package_id in package_ids
+            if str(package_id).strip()
+        ]
+        if isinstance(package_ids, list)
+        else []
+    )
+    if not description and not rationale and not ids:
+        return []
+    lines = [
+        "- Scientific route: "
+        + (_math_markdown_text(description) if description else "not described"),
+        (
+            "- Domain packages used: "
+            + (
+                ", ".join(f"`{package_id}`" for package_id in ids)
+                if ids
+                else "none recorded"
+            )
+        ),
+    ]
+    if rationale:
+        lines.append(
+            "- Route rationale: " + _math_markdown_text(rationale)
+        )
     return [*lines, ""]
 
 
@@ -625,17 +549,58 @@ def _scientific_caveat_lines(entry: Mapping[str, Any]) -> list[str]:
         lines.extend(f"  - {warning}" for warning in warnings)
     else:
         lines.append("  - None recorded.")
+    legacy = entry.get("legacy_scientific_context")
+    if isinstance(legacy, Mapping) and legacy:
+        lines.extend(_legacy_scientific_context_lines(legacy))
+    return lines
+
+
+def _legacy_scientific_context_lines(
+    context: Mapping[str, Any],
+) -> list[str]:
+    """Render historical reviewer evidence as advisory scientific context."""
+    lines = ["- Historical cross-domain review context (advisory):"]
+    scalar_fields = (
+        ("Source domain", "source_domain"),
+        ("Target domain", "target_domain"),
+        ("Transfer status", "transfer_status"),
+        ("Target contribution", "target_contribution_status"),
+        ("Source ingredient validity", "source_ingredient_validity"),
+        ("Target adaptation validity", "target_adaptation_validity"),
+        ("Feasibility", "feasibility_status"),
+        ("Resulting capability", "resulting_new_capability"),
+        ("Recommended action", "recommended_action"),
+    )
+    for label, field in scalar_fields:
+        value = str(context.get(field, "") or "").strip()
+        if value:
+            lines.append(f"  - {label}: {_math_markdown_text(value)}")
+    novelty = context.get("novelty_coverage")
+    if isinstance(novelty, Mapping) and novelty:
+        rendered = ", ".join(
+            f"{scope}={'checked' if checked else 'not checked'}"
+            for scope, checked in novelty.items()
+            if isinstance(checked, bool)
+        )
+        if rendered:
+            lines.append(f"  - Novelty coverage: {rendered}")
+    for label, field in (
+        ("Blocking compatibility failure", "blocking_compatibility_failures"),
+        ("Manageable compatibility risk", "manageable_compatibility_risks"),
+        ("Critical concern", "critical_concerns"),
+    ):
+        values = context.get(field)
+        if isinstance(values, list):
+            lines.extend(
+                f"  - {label}: {_math_markdown_text(str(value))}"
+                for value in values
+                if str(value).strip()
+            )
     return lines
 
 
 def _round_marks_table(entry: dict[str, Any]) -> str:
-    if "cross_domain_assessment" in entry:
-        columns = [
-            {"label": label, "field": field}
-            for label, field in CROSS_REPORT_COLUMNS
-        ]
-    else:
-        columns = report_columns(entry["marking_scheme"])
+    columns = report_columns(entry["marking_scheme"])
     mark_headers = " | ".join(column["label"] for column in columns)
     mark_separator = "|".join("---:" for _ in columns)
     lines = [

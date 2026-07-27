@@ -76,7 +76,7 @@ def _taste_scheme() -> dict[str, Any]:
         / "arc"
         / "workflows"
         / "json"
-        / "ideas-domain-marking-scheme.json"
+        / "ideas-marking-scheme.json"
     )
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -181,49 +181,24 @@ def test_report_normalizes_latex_delimiters_without_mangling_commands() -> None:
     assert r"\$" not in rendered
 
 
-def test_compatibility_classification_requires_current_fields() -> None:
-    old_dont_write_bytecode = sys.dont_write_bytecode
-    old_path = list(sys.path)
-    sys.dont_write_bytecode = True
-    sys.path.insert(0, str(SCRIPT.parent))
-    try:
-        from _arc_workflows.ideas_policy import (
-            compatibility_classification,
-        )
-    finally:
-        sys.dont_write_bytecode = old_dont_write_bytecode
-        sys.path[:] = old_path
-
-    with pytest.raises(
-        ValueError,
-        match="requires blocking_compatibility_failures",
-    ):
-        compatibility_classification(
-            {
-                "compatibility_failures": ["old field"],
-                "feasibility_status": "feasible",
-            }
-        )
-
-
 def test_scientific_readiness_uses_four_non_gating_states() -> None:
     _load_rank_module()
     policy = sys.modules["_arc_workflows.ideas_policy"]
 
     readiness, warnings, _classification = (
-        policy.single_domain_scientific_readiness(None)
+        policy.scientific_readiness(None)
     )
     assert readiness == "unassessed"
     assert warnings == ["missing_idea_assessment"]
 
     readiness, warnings, _classification = (
-        policy.single_domain_scientific_readiness(_single_assessment())
+        policy.scientific_readiness(_single_assessment())
     )
     assert readiness == "ready"
     assert warnings == []
 
     readiness, warnings, _classification = (
-        policy.single_domain_scientific_readiness(
+        policy.scientific_readiness(
             _single_assessment(
                 mathematical_well_definedness="partially_defined",
                 manageable_risks=["A regulator dependence must be bounded."],
@@ -240,7 +215,7 @@ def test_scientific_readiness_uses_four_non_gating_states() -> None:
     assert "external_method_status_is_uncertain" in warnings
 
     readiness, warnings, _classification = (
-        policy.single_domain_scientific_readiness(
+        policy.scientific_readiness(
             _single_assessment(
                 blocking_failures=["The observable is not defined."],
             )
@@ -252,30 +227,6 @@ def test_scientific_readiness_uses_four_non_gating_states() -> None:
         in warnings
     )
 
-    legacy_assessment = _cross_assessment()
-    legacy_assessment.pop("critical_concerns")
-    legacy_assessment["disqualifying_reasons"] = [
-        "Legacy reviewer concern remains unresolved."
-    ]
-    readiness, warnings, _signature, _compatibility = (
-        policy.cross_scientific_readiness(
-            _proposal("Legacy bridge", cross=True),
-            legacy_assessment,
-            cross_context={
-                "domain_cards": [
-                    {"field_id": "field-a"},
-                    {"field_id": "field-b"},
-                ]
-            },
-        )
-    )
-    assert readiness == "ready_with_risk"
-    assert "reviewer_reported_critical_concerns" in warnings
-    assert (
-        "reviewer_critical_concern: "
-        "Legacy reviewer concern remains unresolved."
-    ) in warnings
-    assert not any("disqualifying" in warning for warning in warnings)
 
 
 @pytest.mark.parametrize(
@@ -313,28 +264,6 @@ def test_scientific_status_is_separate_from_durable_lifecycle(
         )
         == expected
     )
-
-
-def _cross_scheme() -> dict[str, Any]:
-    marks = [
-        ("user_intent_relevance", "Intent Relevance"),
-        ("cross_domain_transfer_quality", "Transfer"),
-        ("substantive_target_contribution", "Target Contribution"),
-        ("novelty", "Novelty"),
-        ("confidence_of_novelty", "Confidence"),
-        ("scientific_value", "Scientific Value"),
-        ("calculation_feasibility", "Feasibility"),
-        ("problem_well_definedness", "Well-definedness"),
-    ]
-    return {
-        "schema_version": "arc.workflow.ideas.marking_scheme.v1",
-        "marks": [
-            {"field": field, "label": label, "minimum": 0, "maximum": 20}
-            for field, label in marks
-        ],
-        "total_score": {"field": "total_score", "label": "Total"},
-        "tie_break_order": ["total_score", "substantive_target_contribution"],
-    }
 
 
 def _single_marks(total: int) -> dict[str, int]:
@@ -401,50 +330,25 @@ def _single_assessment(
     }
 
 
-def _cross_marks(total: int) -> dict[str, int]:
+def _legacy_cross_assessment() -> dict[str, Any]:
     return {
-        "user_intent_relevance": 12,
-        "cross_domain_transfer_quality": 12,
-        "substantive_target_contribution": 16,
-        "novelty": 8,
-        "confidence_of_novelty": 7,
-        "scientific_value": 8,
-        "calculation_feasibility": 7,
-        "problem_well_definedness": 7,
-        "total_score": total,
-    }
-
-
-def _cross_assessment(
-    *,
-    transfer_status: str = "genuine",
-    feasibility_status: str = "feasible",
-    blocking_failures: list[str] | None = None,
-    manageable_risks: list[str] | None = None,
-    critical_concerns: list[str] | None = None,
-) -> dict[str, Any]:
-    return {
-        "source_field_id": "field-a",
-        "target_field_id": "field-b",
-        "transfer_status": transfer_status,
+        "source_field_id": "source-a",
+        "target_field_id": "target-b",
+        "transfer_status": "partial",
         "target_contribution_status": "substantial",
         "source_ingredient_validity": "valid",
-        "target_adaptation_validity": "valid",
-        "feasibility_status": feasibility_status,
-        "blocking_compatibility_failures": blocking_failures or [],
-        "manageable_compatibility_risks": manageable_risks or [],
+        "target_adaptation_validity": "uncertain",
+        "resulting_new_capability": "A target-domain consistency check.",
+        "feasibility_status": "feasible_with_named_risk",
+        "blocking_compatibility_failures": ["Match the boundary data."],
+        "manageable_compatibility_risks": ["Control the regulator."],
         "novelty_coverage": {
             "source_domain": True,
-            "target_domain": True,
+            "target_domain": False,
             "intersection": True,
         },
-        "critical_concerns": critical_concerns or [],
-        "transfer_signature": {
-            "direction": "field-a to field-b",
-            "transferred_ingredient": "a controlled asymptotic expansion",
-            "target_result": "a target-domain bound",
-            "first_calculation": "evaluate the leading coefficient",
-        },
+        "critical_concerns": ["The map may be non-invertible."],
+        "recommended_action": "refine_current",
     }
 
 
@@ -457,7 +361,8 @@ def _single_loop(
 ) -> LoopSpec:
     context = {
         "user_intent": "Find a well-defined theoretical-physics research direction.",
-        "variant_id": "domain",
+        "variant_id": "general",
+        "generation_mode": "model_selected_route",
         "marking_scheme": dict(scheme or _single_scheme()),
     }
     reviewer_schema = {
@@ -475,29 +380,6 @@ def _single_loop(
         proposers=(WorkerSpec(f"{loop_id}-p", "Propose an idea.", PROPOSAL_SCHEMA),),
         reviewer=WorkerSpec(f"{loop_id}-r", "Review the idea.", reviewer_schema),
         max_rounds=max_rounds,
-        allow_early_stop=False,
-    )
-
-
-def _cross_loop(loop_id: str) -> LoopSpec:
-    context = {
-        "user_intent": "Find a substantive cross-domain theoretical-physics direction.",
-        "variant_id": "cross_domain",
-        "generation_mode": "cross_domain",
-        "domain_cards": [{"field_id": "field-a"}, {"field_id": "field-b"}],
-        "marking_scheme": _cross_scheme(),
-    }
-    reviewer_schema = {
-        "type": "object",
-        "required": ["marks", "cross_domain_assessment"],
-        "additionalProperties": True,
-    }
-    return LoopSpec(
-        loop_id=loop_id,
-        context=context,
-        proposers=(WorkerSpec(f"{loop_id}-p", "Propose a bridge.", PROPOSAL_SCHEMA),),
-        reviewer=WorkerSpec(f"{loop_id}-r", "Review the bridge.", reviewer_schema),
-        max_rounds=1,
         allow_early_stop=False,
     )
 
@@ -590,18 +472,22 @@ def _request(*loops: LoopSpec) -> BatchRequest:
     )
 
 
-def _proposal(title: str, *, cross: bool = False) -> dict[str, Any]:
-    proposal = {
+def _proposal(
+    title: str,
+    *,
+    route: str = "Direct controlled calculation",
+    package_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
         "title": title,
+        "scientific_route": {
+            "description": route,
+            "domain_package_ids_used": package_ids or ["domain-a"],
+            "rationale": "This is the shortest sufficient formulation.",
+        },
         "idea_summary": "A concrete, evidence-aware proposal.",
         "calculation_plan": "Evaluate the bounded leading-order calculation.",
     }
-    if cross:
-        proposal["domain_roles"] = {
-            "source_field_id": "field-a",
-            "target_field_id": "field-b",
-        }
-    return proposal
 
 
 def test_ranker_uses_committed_review_payload_and_best_completed_round(
@@ -647,7 +533,7 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v7"
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v8"
     assert payload["status"] == "succeeded"
     assert payload["durable_lifecycle"] == "succeeded"
     assert "run_lifecycle" not in payload
@@ -730,47 +616,38 @@ def test_single_report_uses_embedded_scheme_for_new_and_legacy_columns(
     assert "#### Scientific Taste Review" not in legacy_report
 
 
-def test_cross_scientific_caveats_do_not_gate_or_diversify_score_order(
+def test_mixed_routes_share_one_ranking_and_route_caveats_do_not_gate(
     tmp_path: Path,
 ) -> None:
     ranker = _load_rank_module()
-    genuine = _cross_loop("genuine")
-    decorative = _cross_loop("decorative")
-    low_mark = _cross_loop("low-mark")
-    duplicate = _cross_loop("duplicate")
-    low_mark_marks = {
-        **_cross_marks(95),
-        "cross_domain_transfer_quality": 1,
-    }
+    direct = _single_loop("direct", max_rounds=1)
+    transfer = _single_loop("transfer", max_rounds=1)
     repository = _execute(
         tmp_path / "runs",
-        _request(genuine, decorative, low_mark, duplicate),
+        _request(direct, transfer),
         _ScriptedLLM(
             proposals={
-                ("genuine", 1): _proposal("Genuine lower score", cross=True),
-                ("decorative", 1): _proposal("Decorative high score", cross=True),
-                ("low-mark", 1): _proposal("Low component score", cross=True),
-                ("duplicate", 1): _proposal("Duplicate mechanism", cross=True),
+                ("direct", 1): _proposal("Direct higher score"),
+                ("transfer", 1): _proposal(
+                    "Transfer lower score",
+                    route="Cross-domain transfer",
+                    package_ids=["domain-a", "domain-b"],
+                ),
             },
             reviews={
-                ("genuine", 1): {
-                    "marks": _cross_marks(76),
-                    "cross_domain_assessment": _cross_assessment(),
-                },
-                ("decorative", 1): {
-                    "marks": _cross_marks(96),
-                    "cross_domain_assessment": _cross_assessment(
-                        transfer_status="decorative",
-                        critical_concerns=["The mapping remains fragile."],
+                ("direct", 1): {
+                    "marks": _single_marks(92),
+                    "idea_assessment": _single_assessment(
+                        manageable_risks=[
+                            "The direct approximation needs one bounded check."
+                        ]
                     ),
                 },
-                ("low-mark", 1): {
-                    "marks": low_mark_marks,
-                    "cross_domain_assessment": _cross_assessment(),
-                },
-                ("duplicate", 1): {
-                    "marks": _cross_marks(90),
-                    "cross_domain_assessment": _cross_assessment(),
+                ("transfer", 1): {
+                    "marks": _single_marks(78),
+                    "idea_assessment": _single_assessment(
+                        external_method_status="uncertain",
+                    ),
                 },
             },
         ),
@@ -778,43 +655,28 @@ def test_cross_scientific_caveats_do_not_gate_or_diversify_score_order(
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v7"
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v8"
+    assert payload["generation_mode"] == "model_selected_route"
     assert [entry["title"] for entry in payload["ranking"]] == [
-        "Decorative high score",
-        "Low component score",
-        "Duplicate mechanism",
-        "Genuine lower score",
-    ]
-    assert [entry["title"] for entry in payload["top_three"]] == [
-        "Decorative high score",
-        "Low component score",
-        "Duplicate mechanism",
+        "Direct higher score",
+        "Transfer lower score",
     ]
     assert "unqualified" not in payload
     assert "portfolio_excluded" not in payload
-    caveated = payload["ranking"][0]
-    assert caveated["scientific_readiness"] == "ready_with_risk"
-    assert "transfer_status_must_be_genuine" in caveated[
-        "scientific_warnings"
-    ]
-    assert "reviewer_critical_concern: The mapping remains fragile." in caveated[
-        "scientific_warnings"
-    ]
-    assert not any(
-        "_below_" in warning
-        for entry in payload["ranking"]
-        for warning in entry["scientific_warnings"]
+    assert payload["ranking"][0]["scientific_route"]["description"] == (
+        "Direct controlled calculation"
     )
+    assert payload["ranking"][1]["scientific_route"][
+        "domain_package_ids_used"
+    ] == ["domain-a", "domain-b"]
     diagnostics = payload["diagnostics"]
-    assert diagnostics["schema_version"] == (
-        "arc.ideas.cross_domain_diagnostics.v2"
-    )
-    assert diagnostics["candidate_count"] == 4
-    assert diagnostics["ready_with_risk_count"] == 1
-    assert diagnostics["distinct_transfer_signatures"] == 1
+    assert diagnostics["schema_version"] == "arc.ideas.diagnostics.v3"
+    assert diagnostics["candidate_count"] == 2
+    assert diagnostics["ready_with_risk_count"] == 2
     report = ranker.markdown_table(payload)
     assert "Scientific readiness: `ready_with_risk`" in report
-    assert "reviewer_critical_concern: The mapping remains fragile." in report
+    assert "Scientific route: Direct controlled calculation" in report
+    assert "Scientific route: Cross-domain transfer" in report
     assert "Unqualified" not in report
     assert "Portfolio-Excluded" not in report
 
@@ -850,7 +712,7 @@ def test_single_scientific_not_ready_round_can_win_on_score(
 
     payload = ranker.rank_run(repository.root, "ideas-run")
 
-    assert payload["schema_version"] == "arc.ideas.selected_rounds.v7"
+    assert payload["schema_version"] == "arc.ideas.selected_rounds.v8"
     selected = payload["ranking"][0]
     assert selected["title"] == "High-score blocked idea"
     assert selected["scientific_readiness"] == "not_ready"
@@ -864,9 +726,7 @@ def test_single_scientific_not_ready_round_can_win_on_score(
     assert "unqualified" not in payload
     assert payload["top_three"] == [selected]
     diagnostics = payload["diagnostics"]
-    assert diagnostics["schema_version"] == (
-        "arc.ideas.single_domain_diagnostics.v2"
-    )
+    assert diagnostics["schema_version"] == "arc.ideas.diagnostics.v3"
     assert diagnostics["candidate_count"] == 1
     assert diagnostics["not_ready_count"] == 1
     assert diagnostics["candidates"][0]["feasibility_classification"][
@@ -916,7 +776,7 @@ def test_no_assessment_report_uses_canonical_ranking(tmp_path: Path) -> None:
     )
     assert "summary_order" not in payload
     assert any(
-        "no_assessment policy" in warning
+        "legacy reviews do not contain idea_assessment" in warning
         for warning in payload["warnings"]
     )
     assert any(
@@ -929,6 +789,51 @@ def test_no_assessment_report_uses_canonical_ranking(tmp_path: Path) -> None:
     assert "Evidence checked:" in report
     assert "Tool queries used:" in report
     assert "Unresolved reviewer limitations:" in report
+
+
+def test_legacy_cross_caveats_remain_visible_without_affecting_rank(
+    tmp_path: Path,
+) -> None:
+    ranker = _load_rank_module()
+    loop = _single_loop(
+        "legacy-cross",
+        max_rounds=1,
+        requires_assessment=False,
+    )
+    repository = _execute(
+        tmp_path / "runs",
+        _request(loop),
+        _ScriptedLLM(
+            proposals={
+                ("legacy-cross", 1): _proposal("Historical bridge idea")
+            },
+            reviews={
+                ("legacy-cross", 1): {
+                    "marks": _single_marks(83),
+                    "cross_domain_assessment": _legacy_cross_assessment(),
+                }
+            },
+        ),
+    )
+
+    payload = ranker.rank_run(repository.root, "ideas-run")
+
+    selected = payload["ranking"][0]
+    assert selected["marks"]["total_score"] == 83
+    assert selected["scientific_readiness"] == "unassessed"
+    context = selected["legacy_scientific_context"]
+    assert context["source_domain"] == "source-a"
+    assert context["target_domain"] == "target-b"
+    assert context["novelty_coverage"]["target_domain"] is False
+    assert payload["diagnostics"]["candidates"][0][
+        "legacy_scientific_context"
+    ] == context
+    report = ranker.markdown_table(payload)
+    assert "Historical cross-domain review context (advisory)" in report
+    assert "Transfer status: partial" in report
+    assert "target_domain=not checked" in report
+    assert "Blocking compatibility failure: Match the boundary data." in report
+    assert "Critical concern: The map may be non-invertible." in report
 
 
 def test_portfolio_assessment_is_attached_and_rendered_without_reranking(
@@ -1035,7 +940,7 @@ def test_ranker_excludes_failed_and_incomplete_lifecycle_states(tmp_path: Path) 
     )
 
     completed_payload = ranker.rank_run(repository.root, "ideas-run")
-    assert completed_payload["schema_version"] == "arc.ideas.selected_rounds.v7"
+    assert completed_payload["schema_version"] == "arc.ideas.selected_rounds.v8"
     assert completed_payload["status"] == "degraded"
     assert completed_payload["durable_lifecycle"] == "succeeded"
     assert "run_lifecycle" not in completed_payload
@@ -1099,7 +1004,7 @@ def test_partial_ranker_uses_complete_rounds_from_paused_loops(
     partial = ranker.rank_run(repository.root, "ideas-run", mode="partial")
 
     assert formal["ranking"] == []
-    assert partial["schema_version"] == "arc.ideas.partial_selected_rounds.v3"
+    assert partial["schema_version"] == "arc.ideas.partial_selected_rounds.v4"
     assert partial["status"] == "provisional"
     assert partial["formal"] is False
     assert partial["provisional"] is True

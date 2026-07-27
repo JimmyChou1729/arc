@@ -53,6 +53,7 @@ ASSESSMENT_ARTIFACT_PREFIX = "ideas/portfolio-assessments/v1"
 
 _PROPOSAL_CORE_FIELDS = (
     "title",
+    "scientific_route",
     "idea_summary",
     "motivation",
     "domain_roles",

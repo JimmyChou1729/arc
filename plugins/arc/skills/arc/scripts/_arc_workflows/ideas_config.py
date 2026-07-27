@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import itertools
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,10 +24,9 @@ from _arc_workflows.workflow_io import (
 from _arc_workflows.source_checkout import validate_strict_checkout_path
 
 
-IDEAS_CONFIG_SCHEMA = "arc.workflow.ideas.config.v2"
-IDEAS_VARIANT_SCHEMA = "arc.workflow.ideas.variant.v1"
-DOMAIN_MANIFEST_SCHEMA = "arc.workflow.domain_manifest.v3"
-RESEARCH_SCOPES = {"single_domain", "cross_domain"}
+IDEAS_CONFIG_SCHEMA = "arc.workflow.ideas.config.v3"
+IDEAS_VARIANT_SCHEMA = "arc.workflow.ideas.variant.v2"
+DOMAIN_MANIFEST_SCHEMA = "arc.workflow.domain_manifest.v4"
 
 
 class ConfigError(ValueError):
@@ -48,7 +48,6 @@ class VariantConfig:
     reviewer_template: Path
     reviewer_output_schema: Path
     marking_scheme: Path
-    research_scope: str
     context_policy: ContextPolicy
     proposer_overrides: dict[str, Any]
     description: str
@@ -67,9 +66,8 @@ class IdeasConfig:
     variants: list[VariantConfig]
     domain_manifest_path: Path
     domain_manifest: dict[str, Any]
-    research_scope: str
     exploration_profiles: list[dict[str, str]]
-    routing_warnings: list[str]
+    context_warnings: list[str]
 
 
 def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
@@ -109,35 +107,24 @@ def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
     variant_glob = str(data.get("variant_glob", "ideas-*.variant.json") or "").strip()
     if not variant_glob:
         raise ConfigError("variant_glob is required")
-    loops_per_variant = _positive_int(data.get("loops_per_variant", 5), "loops_per_variant")
+    loops_per_variant = _positive_int(data.get("loops_per_variant", 3), "loops_per_variant")
     domain_manifest_path = _configured_manifest_path(
         data, project_dir=project_dir
     )
-    domain_manifest, research_scope, routing_warnings = _load_domain_manifest(
+    domain_manifest, context_warnings = _load_domain_manifest(
         domain_manifest_path,
         project_dir=project_dir,
     )
-    variants = [
-        variant
-        for variant in _discover_variants(variant_config_dir, variant_glob)
-        if variant.research_scope == research_scope
-    ]
+    variants = _discover_variants(variant_config_dir, variant_glob)
     if not variants:
         raise ConfigError(
-            f"No enabled {research_scope} ideas variants found in {variant_config_dir} with {variant_glob}"
+            f"No enabled ideas variants found in {variant_config_dir} with {variant_glob}"
         )
     exploration_profiles = _exploration_profiles(data.get("exploration_profiles"))
     if exploration_profiles and len(exploration_profiles) != loops_per_variant:
         raise ConfigError(
             "exploration_profiles must contain exactly one profile per loop"
         )
-    if research_scope == "cross_domain":
-        if not exploration_profiles and loops_per_variant != 5:
-            raise ConfigError(
-                "cross-domain ideas use five default exploration profiles; provide exactly loops_per_variant "
-                "exploration_profiles when loops_per_variant is not 5"
-            )
-
     return IdeasConfig(
         schema_version=schema_version,
         run_id=run_id,
@@ -150,9 +137,8 @@ def load_ideas_config(payload: Mapping[str, Any]) -> IdeasConfig:
         variants=variants,
         domain_manifest_path=domain_manifest_path,
         domain_manifest=domain_manifest,
-        research_scope=research_scope,
         exploration_profiles=exploration_profiles,
-        routing_warnings=routing_warnings,
+        context_warnings=context_warnings,
     )
 
 
@@ -194,6 +180,23 @@ def _discover_variants(root: Path, pattern: str) -> list[VariantConfig]:
 
 
 def _parse_variant(payload: Mapping[str, Any], *, path: Path) -> VariantConfig | None:
+    _reject_unknown_fields(
+        payload,
+        {
+            "schema_version",
+            "enabled",
+            "variant_id",
+            "description",
+            "loop_template",
+            "proposer_template",
+            "reviewer_template",
+            "reviewer_output_schema",
+            "marking_scheme",
+            "context_policy",
+            "proposer",
+        },
+        str(path),
+    )
     schema_version = str(payload.get("schema_version", "")).strip()
     if not schema_version:
         raise ConfigError(f"{path}.schema_version is required")
@@ -211,9 +214,6 @@ def _parse_variant(payload: Mapping[str, Any], *, path: Path) -> VariantConfig |
         str(payload.get("reviewer_output_schema", "ideas-reviewer-output.schema.json")),
     )
     marking_scheme = _relative_path(base, str(payload.get("marking_scheme", "ideas-marking-scheme.json")))
-    research_scope = str(payload.get("research_scope", "single_domain")).strip()
-    if research_scope not in RESEARCH_SCOPES:
-        raise ConfigError(f"{path}.research_scope must be one of {sorted(RESEARCH_SCOPES)}")
     if not loop_template.exists():
         raise ConfigError(f"loop_template does not exist: {loop_template}")
     if not proposer_template.exists():
@@ -232,7 +232,6 @@ def _parse_variant(payload: Mapping[str, Any], *, path: Path) -> VariantConfig |
         reviewer_template=reviewer_template,
         reviewer_output_schema=reviewer_output_schema,
         marking_scheme=marking_scheme,
-        research_scope=research_scope,
         context_policy=_parse_context_policy(payload.get("context_policy", {}), path=path),
         proposer_overrides=_dict(payload.get("proposer", {}), f"{path}.proposer"),
         description=str(payload.get("description", "")),
@@ -264,7 +263,7 @@ def _load_domain_manifest(
     path: Path,
     *,
     project_dir: Path,
-) -> tuple[dict[str, Any], str, list[str]]:
+) -> tuple[dict[str, Any], list[str]]:
     if not path.is_file():
         raise ConfigError(f"domain_manifest_path does not exist: {path}")
     try:
@@ -274,12 +273,13 @@ def _load_domain_manifest(
     except NonObjectJsonError as exc:
         raise ConfigError(f"domain manifest must be an object: {path}") from exc
     if payload.get("schema_version") != DOMAIN_MANIFEST_SCHEMA:
-        raise ConfigError(f"{path}.schema_version must be {DOMAIN_MANIFEST_SCHEMA}")
-    packages, groups = payload.get("domain_packages"), payload.get("field_groups")
+        raise ConfigError(
+            f"{path}.schema_version must be {DOMAIN_MANIFEST_SCHEMA}; "
+            "regenerate the domain manifest before running Ideas"
+        )
+    packages = payload.get("domain_packages")
     if not isinstance(packages, list) or not packages:
         raise ConfigError(f"{path}.domain_packages must be a non-empty array")
-    if not isinstance(groups, list) or not groups:
-        raise ConfigError(f"{path}.field_groups must be a non-empty array")
     package_seeds: dict[str, str] = {}
     for index, item in enumerate(packages):
         if not isinstance(item, dict):
@@ -314,50 +314,109 @@ def _load_domain_manifest(
         package_seeds=package_seeds,
         project_dir=project_dir,
     )
-    field_ids, covered = [], []
-    for index, group in enumerate(groups):
-        if not isinstance(group, dict): raise ConfigError(f"{path}.field_groups[{index}] must be an object")
-        field_id, members = str(group.get("field_id", "")).strip(), group.get("domain_package_ids")
-        if not field_id or field_id in field_ids: raise ConfigError(f"{path}.field_groups[{index}].field_id must be unique")
-        if not isinstance(members, list) or not members: raise ConfigError(f"{path}.field_groups[{index}].domain_package_ids must be non-empty")
-        field_card = group.get("field_card")
-        if not isinstance(field_card, dict):
-            raise ConfigError(f"{path}.field_groups[{index}].field_card must be an object")
-        for key in ("seed_papers", "summary_json_paths", "summary_markdown_paths", "paper_json_pack_paths"):
-            if not isinstance(field_card.get(key), list) or not field_card[key]:
-                raise ConfigError(f"{path}.field_groups[{index}].field_card.{key} must be a non-empty array")
-        field_ids.append(field_id); covered.extend(str(item) for item in members)
-    if len(covered) != len(set(covered)) or set(covered) != set(package_ids):
-        raise ConfigError(f"{path}.field_groups must partition all domain_packages exactly once")
-    if payload.get("field_count") != len(groups): raise ConfigError(f"{path}.field_count is inconsistent")
-    expected_scope = "cross_domain" if len(groups) >= 2 else "single_domain"
-    if payload.get("research_scope") != expected_scope:
-        raise ConfigError(f"{path}.research_scope must be {expected_scope} for {len(groups)} field group(s)")
-    grouping_raw = str(payload.get("grouping_artifact", "")).strip()
-    if not grouping_raw:
-        raise ConfigError(f"{path}.grouping_artifact is required")
-    grouping_path = _project_artifact_path(
-        project_dir,
-        grouping_raw,
-        field_name=f"{path}.grouping_artifact",
+    relationships = payload.get("domain_relationships")
+    if not isinstance(relationships, dict):
+        raise ConfigError(f"{path}.domain_relationships must be an object")
+    if set(relationships) != {
+        "status",
+        "method",
+        "pair_classifications",
+        "warnings",
+    }:
+        raise ConfigError(
+            f"{path}.domain_relationships must contain exactly status, "
+            "method, pair_classifications, and warnings"
+        )
+    status = str(relationships.get("status", "")).strip()
+    if status not in {"available", "not_applicable", "unavailable"}:
+        raise ConfigError(
+            f"{path}.domain_relationships.status is invalid"
+        )
+    method = str(relationships.get("method", "")).strip()
+    pairs = relationships.get("pair_classifications")
+    warnings = relationships.get("warnings")
+    if not method:
+        raise ConfigError(
+            f"{path}.domain_relationships.method is required"
+        )
+    if not isinstance(pairs, list):
+        raise ConfigError(
+            f"{path}.domain_relationships.pair_classifications must be an array"
+        )
+    if not isinstance(warnings, list) or any(
+        not isinstance(item, str) for item in warnings
+    ):
+        raise ConfigError(
+            f"{path}.domain_relationships.warnings must be an array of strings"
+        )
+    _validate_domain_relationships(
+        path,
+        pairs=pairs,
+        package_ids=package_ids,
+        status=status,
     )
-    if not grouping_path.is_file():
-        raise ConfigError(f"{path}.grouping_artifact does not exist: {grouping_path}")
-    try:
-        grouping = read_json_object(grouping_path)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ConfigError(f"Could not read grouping artifact {grouping_path}: {exc}") from exc
-    except NonObjectJsonError:
-        grouping = {}
-    if grouping.get("schema_version") != "arc.workflow.domain_field_grouping.v1":
-        raise ConfigError(f"{grouping_path} has the wrong schema_version")
-    grouping_groups = grouping.get("field_groups")
-    if not isinstance(grouping_groups, list) or {
-        str(item.get("field_id", "")) for item in grouping_groups if isinstance(item, dict)
-    } != set(field_ids):
-        raise ConfigError(f"{grouping_path}.field_groups is inconsistent with the domain manifest")
-    warnings = payload.get("grouping_warnings", [])
-    return payload, expected_scope, [str(item) for item in warnings]
+    return payload, [str(item) for item in warnings]
+
+
+def _validate_domain_relationships(
+    path: Path,
+    *,
+    pairs: list[Any],
+    package_ids: list[str],
+    status: str,
+) -> None:
+    expected = set(itertools.combinations(sorted(package_ids), 2))
+    found: set[tuple[str, str]] = set()
+    for index, item in enumerate(pairs):
+        if not isinstance(item, dict):
+            raise ConfigError(
+                f"{path}.domain_relationships.pair_classifications"
+                f"[{index}] must be an object"
+            )
+        pair = tuple(
+            sorted(
+                (
+                    str(item.get("package_a", "")).strip(),
+                    str(item.get("package_b", "")).strip(),
+                )
+            )
+        )
+        confidence = item.get("confidence")
+        if (
+            pair not in expected
+            or pair in found
+            or item.get("classification")
+            not in {"same_field", "distinct_field", "uncertain"}
+            or isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not 0 <= float(confidence) <= 1
+            or not isinstance(item.get("evidence"), dict)
+        ):
+            raise ConfigError(
+                f"{path}.domain_relationships.pair_classifications"
+                f"[{index}] is invalid"
+            )
+        found.add(pair)
+    if status == "available" and found != expected:
+        raise ConfigError(
+            f"{path}.domain_relationships available evidence must classify "
+            "every package pair"
+        )
+    if status != "available" and pairs:
+        raise ConfigError(
+            f"{path}.domain_relationships pair classifications require "
+            "status=available"
+        )
+    if len(package_ids) == 1 and status != "not_applicable":
+        raise ConfigError(
+            f"{path}.domain_relationships requires "
+            "status=not_applicable for one domain package"
+        )
+    if status == "not_applicable" and len(package_ids) != 1:
+        raise ConfigError(
+            f"{path}.domain_relationships status=not_applicable requires "
+            "one domain package"
+        )
 
 
 def _validate_seed_provenance_artifact(

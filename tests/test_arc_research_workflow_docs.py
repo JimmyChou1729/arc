@@ -1245,179 +1245,129 @@ def test_ideas_reviewer_comments_turn_marks_into_scientific_guidance() -> None:
 
 
 def test_all_ideas_workers_share_soft_scientific_taste_guidance() -> None:
-    proposer_names = (
-        "ideas-proposer.template.json",
-        "ideas-no-info-proposer.template.json",
-        "ideas-cross-domain-proposer.template.json",
-    )
-    reviewer_names = (
-        "ideas-reviewer.template.json",
-        "ideas-domain-reviewer.template.json",
-        "ideas-cross-domain-reviewer.template.json",
-    )
+    proposer = json.loads(
+        (WJ / "ideas-proposer.template.json").read_text(encoding="utf-8")
+    )["prompt"]["template"]
+    reviewer = json.loads(
+        (WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8")
+    )["prompt"]["template"]
 
-    for name in proposer_names:
-        template = json.loads((WJ / name).read_text(encoding="utf-8"))["prompt"][
-            "template"
-        ]
-        assert "minimal direct" in template
-        assert "genuinely novel and consequential result" in template
-        assert "more physically meaningful" in template
-        assert "simpler formulation is valuable only if it remains new" in template
-        assert "optional, non-exhaustive lens" in template
-        assert "minimal direct" in template
-        assert "removal counterfactual" in template
-        assert "shortest minimally sufficient setup" in template
-        assert "optional follow-on" in template
-        assert "repairable formulation error" in template
+    assert "minimal direct" in proposer
+    assert "genuinely novel and consequential result" in proposer
+    assert "more physically meaningful" in proposer
+    assert "simpler formulation is valuable only if it remains new" in proposer
+    assert "optional, non-exhaustive lens" in proposer
+    assert "removal counterfactual" in proposer
+    assert "shortest minimally sufficient setup" in proposer
+    assert "optional follow-on" in proposer
+    assert "repairable formulation error" in proposer
 
-    for name in reviewer_names:
-        template = json.loads((WJ / name).read_text(encoding="utf-8"))["prompt"][
-            "template"
-        ]
-        assert "scientific taste" in template
-        assert "how broadly its core result applies" in template
-        assert "optional, non-exhaustive lens" in template
-        assert "removal counterfactual" in template
-        assert "shortest minimally sufficient direct" in template
-        assert "top-level targeted feedback" in template
-        assert "actionable feedback" in template
+    assert "scientific taste" in reviewer
+    assert "how broadly its core result applies" in reviewer
+    assert "optional, non-exhaustive lens" in reviewer
+    assert "removal counterfactual" in reviewer
+    assert "shortest minimally sufficient direct" in reviewer
+    assert "top-level targeted feedback" in reviewer
+    assert "actionable feedback" in reviewer
 
 
 def test_all_ideas_reviewers_require_bounded_citation_neighborhood_audits() -> None:
-    reviewer_names = (
-        "ideas-reviewer.template.json",
-        "ideas-domain-reviewer.template.json",
-        "ideas-cross-domain-reviewer.template.json",
-    )
+    template = json.loads(
+        (WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8")
+    )["prompt"]["template"]
 
-    for name in reviewer_names:
-        template = json.loads((WJ / name).read_text(encoding="utf-8"))["prompt"][
-            "template"
-        ]
-        assert "every new idea nucleus" in template
-        assert "first reviewer round" in template
-        assert "one canonical paper" in template
-        assert "no more than two prior-art papers" in template
-        assert "outside domain seeds" in template
-        assert "do not scan every proposer citation" in template
-        assert template.index("arc-paper get-citer-count") < template.index(
-            "arc-paper search-citers"
-        )
-        assert "--scan-limit 1000 --limit 50" in template
-        assert "background, mechanism, and observable" in template
-        assert "Read shortlist abstracts" in template
-        assert "only for suspected direct overlap" in template
-        assert "Reuse completed scans in later rounds" in template
-        assert "idea nucleus, baseline paper, and novelty delta" in template
-        assert "total citer count, scanned count, completeness" in template
-        assert "matched papers" in template
-        assert "reasons for excluding matches" in template
-        assert "exact ARC commands and terms" in template
-        assert "no direct precedent found in this citation neighborhood" in template
-        assert "never treat it as proof of novelty" in template
-        assert "INSPIRE is unavailable" in template
-        assert "exceeds 1000 citers" in template
-        assert "abstracts are missing" in template
-        assert "lower novelty confidence" in template
-        assert "never let this audit remove or hide the idea" in template
-        assert "supplementary evidence signal" in template
-        assert "does not change scores, ranks, or visibility" in template
+    assert "every new idea nucleus" in template
+    assert "first reviewer round" in template
+    assert "one canonical paper" in template
+    assert "no more than two prior-art papers" in template
+    assert "outside domain seeds" in template
+    assert "do not scan every proposer citation" in template
+    assert template.index("arc-paper get-citer-count") < template.index(
+        "arc-paper search-citers"
+    )
+    assert "--scan-limit 1000 --limit 50" in template
+    assert "background, mechanism, and observable" in template
+    assert "Read shortlist abstracts" in template
+    assert "only for suspected direct overlap" in template
+    assert "Reuse completed scans in later rounds" in template
+    assert "idea nucleus, baseline paper, and novelty delta" in template
+    assert "total citer count, scanned count, completeness" in template
+    assert "matched papers" in template
+    assert "reasons for excluding matches" in template
+    assert "exact ARC commands and terms" in template
+    assert "no direct precedent found in this citation neighborhood" in template
+    assert "never treat it as proof of novelty" in template
+    assert "INSPIRE is unavailable" in template
+    assert "exceeds 1000 citers" in template
+    assert "abstracts are missing" in template
+    assert "lower novelty confidence" in template
+    assert "never let this audit remove or hide the idea" in template
+    assert "supplementary evidence signal" in template
+    assert "does not change scores, ranks, or visibility" in template
 
 
 def test_all_ideas_reviewers_keep_broader_novelty_checks_primary() -> None:
-    reviewer_names = (
-        "ideas-reviewer.template.json",
-        "ideas-domain-reviewer.template.json",
-        "ideas-cross-domain-reviewer.template.json",
-    )
+    prompt = json.loads(
+        (WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8")
+    )["prompt"]
+    system = prompt["system"]
+    instructions = f"{system}\n\n{prompt['template']}"
 
-    for name in reviewer_names:
-        prompt = json.loads((WJ / name).read_text(encoding="utf-8"))["prompt"]
-        system = prompt["system"]
-        instructions = f"{system}\n\n{prompt['template']}"
-
-        assert "required supplementary signal" in system
-        assert "never a replacement for the broader novelty review" in system
-        assert "web, INSPIRE metadata, shared-cache" in system
-        assert "regardless of the citation outcome" in system
-        assert "base novelty and confidence on the combined evidence" in system
-        assert "never raise either from a no-hit citation result alone" in system
-        assert "both evidence classes and their actual queries" in system
-        assert "existing evidence_checked and tool_queries_used arrays" in system
-        assert instructions.index("broader novelty review") < instructions.index(
-            "perform a citation-neighborhood audit"
-        )
-
-    cross_domain = json.loads(
-        (WJ / "ideas-cross-domain-reviewer.template.json").read_text(
-            encoding="utf-8"
-        )
-    )["prompt"]["system"]
-    assert (
-        "independent source-domain, target-domain, and intersection novelty checks"
-        in cross_domain
+    assert "required supplementary signal" in system
+    assert "never a replacement for the broader novelty review" in system
+    assert "web, INSPIRE metadata, shared-cache" in system
+    assert "regardless of the citation outcome" in system
+    assert "base novelty and confidence on the combined evidence" in system
+    assert "never raise either from a no-hit citation result alone" in system
+    assert "both evidence classes and their actual queries" in system
+    assert "existing evidence_checked and tool_queries_used arrays" in system
+    assert "If the idea actually relies on a cross-domain transfer" in system
+    assert "source/target/intersection literature" in system
+    assert instructions.index("broader novelty review") < instructions.index(
+        "perform a citation-neighborhood audit"
     )
 
 
-def test_cross_domain_scoring_marks_remain_specialized_without_hard_selection() -> None:
-    scheme = json.loads(
-        (WJ / "ideas-cross-domain-marking-scheme.json").read_text(encoding="utf-8")
-    )
-    maxima = {item["field"]: item["maximum"] for item in scheme["marks"]}
-
-    assert maxima == {
-        "user_intent_relevance": 15,
-        "cross_domain_transfer_quality": 15,
-        "substantive_target_contribution": 20,
-        "novelty": 10,
-        "confidence_of_novelty": 10,
-        "scientific_value": 10,
-        "calculation_feasibility": 10,
-        "problem_well_definedness": 10,
-    }
-    assert "simplicity" not in maxima
-    assert "generality" not in maxima
-    guidance = {item["field"]: item["guidance"] for item in scheme["marks"]}
-    assert "shortest minimally sufficient route" in guidance["calculation_feasibility"]
-    assert "shortest minimally sufficient" in guidance["problem_well_definedness"]
-    assert "hard gate" not in scheme["total_score"]["guidance"]
-    assert "eligibility" not in scheme["total_score"]["guidance"].lower()
-
-    reviewer_schema = json.loads(
-        (WJ / "ideas-cross-domain-reviewer-output.schema.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert "reviewer_benchmark" in reviewer_schema["required"]
-    cross_assessment = reviewer_schema["properties"]["cross_domain_assessment"]
-    assert "critical_concerns" in cross_assessment["required"]
-    assert "disqualifying_reasons" not in cross_assessment["properties"]
-
+def test_all_ideas_routes_use_one_common_marking_scheme_without_a_route_gate() -> None:
     variant = json.loads(
-        (WJ / "ideas-cross-domain.variant.json").read_text(encoding="utf-8")
+        (WJ / "ideas-general.variant.json").read_text(encoding="utf-8")
     )
-    assert "optional exploration lenses" in variant["description"]
-    assert "hard" not in variant["description"].lower()
+    reviewer = json.loads(
+        (WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8")
+    )
+    scheme = json.loads(
+        (WJ / "ideas-marking-scheme.json").read_text(encoding="utf-8")
+    )
+
+    assert variant["variant_id"] == "general"
+    assert variant["marking_scheme"] == "ideas-marking-scheme.json"
+    assert "Model-selected scientific routes" in variant["description"]
+    assert "one common scientific scale" in reviewer["prompt"]["system"]
+    assert "Domain cards and pairwise relationship classifications are advisory evidence" in reviewer[
+        "prompt"
+    ]["system"]
+    assert "never a qualification gate" in reviewer["prompt"]["system"]
+    assert "Rank ideas by total_score on one common scale" in scheme["total_score"][
+        "guidance"
+    ]
+
+    proposer = json.loads(
+        (WJ / "ideas-proposer.template.json").read_text(encoding="utf-8")
+    )
+    proposer_prompt = proposer["prompt"]["template"]
+    assert "all supplied domain cards" in proposer_prompt
+    assert "never an instruction to use a single-domain or cross-domain formulation" in proposer_prompt
+    assert "Choose the scientifically strongest and shortest sufficient route" in proposer_prompt
+    assert "These examples are non-exhaustive and carry no quota or preference" in proposer_prompt
 
 
 def test_ideas_marks_score_minimal_core_not_bundled_outputs() -> None:
-    for name in (
-        "ideas-marking-scheme.json",
-        "ideas-domain-marking-scheme.json",
-        "ideas-cross-domain-marking-scheme.json",
-    ):
-        scheme = json.loads((WJ / name).read_text(encoding="utf-8"))
-        guidance = {
-            item["field"]: item["guidance"]
-            for item in scheme["marks"]
-        }
-        assert "minimal" in guidance["novelty"]
-        assert "bundling" in guidance["novelty"]
-        assert "minimal core result" in guidance["scientific_value"]
-        assert "sum of optional outputs or extensions" in guidance[
-            "scientific_value"
-        ]
+    scheme = json.loads((WJ / "ideas-marking-scheme.json").read_text(encoding="utf-8"))
+    guidance = {item["field"]: item["guidance"] for item in scheme["marks"]}
+    assert "minimal" in guidance["novelty"]
+    assert "bundling" in guidance["novelty"]
+    assert "minimal core result" in guidance["scientific_value"]
+    assert "sum of optional outputs or extensions" in guidance["scientific_value"]
 
 
 def test_ideas_workflow_uses_post_batch_advisory_not_global_reviewer_worker() -> None:
@@ -1491,7 +1441,8 @@ def test_ideas_workflow_forbids_citation_only_novelty_reviews() -> None:
     assert "regardless of whether the citation scan is complete or finds a direct hit" in compact
     assert "base novelty and confidence on the combined evidence" in compact
     assert "no-hit citation result alone must not raise either score" in compact
-    assert "independent source-domain, target-domain, and intersection checks" in compact
+    assert "source domain, target domain, and intersection" in compact
+    assert "Direct ideas do not acquire that bureaucracy" in compact
     assert "same existing arrays" in compact
     assert "do not report a citation-only audit as a completed novelty review" in compact
     assert "continues with the other available novelty checks" in compact
@@ -1546,21 +1497,21 @@ def test_ideas_selection_keeps_fixable_candidates_visible() -> None:
     compact = " ".join(ideas.split())
     owned_json = (
         "ideas-marking-scheme.json",
-        "ideas-domain-marking-scheme.json",
-        "ideas-cross-domain-marking-scheme.json",
-        "ideas-cross-domain.variant.json",
+        "ideas-general.variant.json",
+        "ideas-proposer.template.json",
+        "ideas-reviewer.template.json",
     )
 
-    assert "fixable translation, setup, or execution error remains actionable feedback" in compact
+    assert "preserve route, transfer, mathematical-definition, and feasibility concerns as scientific assessment and concrete repair advice" in compact
     assert "Keep every trace-verified candidate visible" in compact
     assert "List all trace-verified candidates in formal ranking order" in compact
-    assert "formal ranking likewise keeps every trace-verified candidate visible" in compact
     assert "hard gate" not in ideas.lower()
     assert "qualification gate" not in ideas.lower()
     for name in owned_json:
         value = (WJ / name).read_text(encoding="utf-8").lower()
         assert "hard gate" not in value
-        assert "qualification gate" not in value
+    reviewer = (WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8")
+    assert "never a qualification gate" in reviewer
 
 
 def test_agents_treats_profiles_as_lenses_and_fixable_errors_as_feedback() -> None:
@@ -1578,7 +1529,7 @@ def test_agents_treats_profiles_as_lenses_and_fixable_errors_as_feedback() -> No
     assert "Reserve hard stops for conditions under which reasoning cannot" in compact
 
 
-def test_single_domain_ideas_profiles_follow_verified_summary_routes() -> None:
+def test_general_ideas_profiles_are_optional_lenses_for_model_selected_routes() -> None:
     text = (WF / "ideas.md").read_text(encoding="utf-8")
     compact = " ".join(text.split())
 
@@ -1592,6 +1543,8 @@ def test_single_domain_ideas_profiles_follow_verified_summary_routes() -> None:
     assert "may leave its lens when a stronger minimal direct route lies elsewhere" in compact
     assert "apply a removal counterfactual" in compact
     assert "shortest minimally sufficient setup and core calculation" in compact
+    assert "lets that proposer choose the scientific formulation for its own idea" in compact
+    assert "One batch may therefore contain direct, single-domain, overlapping-domain, cross-domain" in compact
 
 
 def test_ideas_reviewer_template_uses_direct_research_policy() -> None:
@@ -1617,7 +1570,7 @@ def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
         sys.dont_write_bytecode = old_dont_write_bytecode
         sys.path.remove(str(SCRIPTS))
 
-    variant_path = WJ / "ideas-domain.variant.json"
+    variant_path = WJ / "ideas-general.variant.json"
     variant = config_module._parse_variant(
         json.loads(variant_path.read_text(encoding="utf-8")),
         path=variant_path,
@@ -1665,10 +1618,12 @@ def test_ideas_reviewer_uses_hundred_point_marking_scheme() -> None:
 
 def test_ideas_config_template_has_no_global_reviewer() -> None:
     config = json.loads((WJ / "ideas.config.template.json").read_text(encoding="utf-8"))
+    loop = json.loads((WJ / "ideas-loop.template.json").read_text(encoding="utf-8"))
 
     assert "reviewer" not in config
     assert "artifact_options" not in config
-    assert config["loops_per_variant"] == 5
+    assert config["loops_per_variant"] == 3
+    assert loop["max_rounds"] == 3
     assert config["domain_manifest_path"] == "<project-dir>/.arc/domain/domain-manifest.json"
 
 
@@ -1680,9 +1635,9 @@ def test_ideas_workflow_has_no_typed_evidence_accounting() -> None:
     assert "paper-operation allowlist" in compact
     assert "does not assume a production universal broker" in compact
     assert "generic host broker" not in compact
-    assert "`arc.workflow.ideas.result.v4`" in ideas
-    assert "`arc.ideas.selected_rounds.v7`" in ideas
-    assert "`arc.ideas.partial_selected_rounds.v3`" in ideas
+    assert "`arc.workflow.ideas.result.v5`" in ideas
+    assert "`arc.ideas.selected_rounds.v8`" in ideas
+    assert "`arc.ideas.partial_selected_rounds.v4`" in ideas
     assert "scientific `status` separately from `durable_lifecycle`" in compact
     assert "no `run_lifecycle` alias" in compact
     assert "focused novelty audit" in compact
@@ -1701,23 +1656,25 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     domain = (WF / "domain.md").read_text(encoding="utf-8")
     ideas = (WF / "ideas.md").read_text(encoding="utf-8")
     manual = (SKILL / "manuals/arc-domain.md").read_text(encoding="utf-8")
+    compact_domain = " ".join(domain.split())
+    compact_ideas = " ".join(ideas.split())
 
     assert "write-domain-manifest.py" in domain
-    assert "arc.workflow.domain_manifest.v3" in domain
+    assert "arc.workflow.domain_manifest.v4" in domain
     assert "arc.workflow.domain_seed_provenance.v1" in domain
-    assert "field_count" in domain
-    assert "field_id" in domain
+    assert "preserving every\nseed-specific domain package as its own evidence card" in domain
+    assert "domain_relationships.status" in domain
     assert "LLMClient.generate" in domain
-    assert "field-grouping-llm" in domain
-    assert "typed LLM pause, failure,\nor stop" in domain
+    assert "domain-relationships-llm" in domain
+    assert "typed pause, failure, or stop" in compact_domain
     assert "run_json" not in domain
     assert "LLMAbortScope" not in domain
-    assert "arc.workflow.domain_manifest.v3" in manual
+    assert "arc.workflow.domain_manifest.v4" in manual
     assert "arc.workflow.domain_seed_provenance.v1" in manual
     assert "domain_manifest_path" in ideas
-    assert "two or more fields use cross-domain prompts" in ideas
-    assert "source domain may contribute a mature method" in ideas
-    compact_domain = " ".join(domain.split())
+    assert "Pair classifications, confidence, and warnings are scientific context, not routing instructions" in compact_ideas
+    assert "one enabled `general` variant" in ideas
+    assert "pre-selects a scientific route" in ideas
     assert "paper JSON pack's `domain_id` is the authoritative" in compact_domain
     assert "v5 does not carry that identity field" in compact_domain
     assert "match in both directions" in compact_domain
@@ -1727,14 +1684,15 @@ def test_domain_and_ideas_workflows_use_explicit_domain_manifest() -> None:
     assert "package-owned typed domain view" in compact_domain
     assert "only the current closed v5 summary contract" in compact_domain
     assert "Unsupported summary schemas" in compact_domain
-    assert "`.arc/domain/field-groupings/`" in compact_domain
+    assert "do not route, rank, merge, delete, or disqualify ideas" in compact_domain
+    assert "still publishes the package-complete manifest" in compact_domain
     assert "publishes `.arc/domain/domain-manifest.json` last" in compact_domain
     assert "manifest output must remain inside the project" in compact_domain
-    assert "Input/package validation errors" in compact_domain
-    assert "leave existing published artifacts unchanged" in compact_domain
+    assert "Input/package validation and publication-integrity errors" in compact_domain
+    assert "no usable manifest can be established" in compact_domain
 
 
-def test_single_domain_ideas_document_optional_interdisciplinary_discovery() -> None:
+def test_general_ideas_document_optional_interdisciplinary_discovery() -> None:
     ideas = (WF / "ideas.md").read_text(encoding="utf-8")
     compact = " ".join(ideas.split()).lower()
 
@@ -1742,7 +1700,7 @@ def test_single_domain_ideas_document_optional_interdisciplinary_discovery() -> 
     assert "no idea, loop, or batch is required to include one" in compact
     assert "there is no interdisciplinary quota" in compact
     assert "receives no ranking reward" in compact
-    assert "judge same-domain and cross-disciplinary candidates by the same" in compact
+    assert "judge all candidates by the same scientific criteria" in compact
     assert "otherwise record the external method as not used" in compact
     assert "arc and web search are complementary research surfaces" in compact
     assert "shared arc paper cache" in compact
@@ -1765,12 +1723,12 @@ def test_retired_cross_domain_partner_selection_artifacts_are_absent() -> None:
 
 
 def test_ideas_worker_templates_default_to_high_model_tier() -> None:
-    domain_variant = json.loads((WJ / "ideas-domain.variant.json").read_text(encoding="utf-8"))
-    no_info_variant = json.loads((WJ / "ideas-no-info.variant.json").read_text(encoding="utf-8"))
+    general_variant = json.loads(
+        (WJ / "ideas-general.variant.json").read_text(encoding="utf-8")
+    )
     reviewer = json.loads((WJ / "ideas-reviewer.template.json").read_text(encoding="utf-8"))
 
-    assert domain_variant["proposer"]["model_tier"] == "high"
-    assert no_info_variant["proposer"]["model_tier"] == "high"
+    assert general_variant["proposer"]["model_tier"] == "high"
     assert reviewer["model_tier"] == "high"
 
 
@@ -1844,13 +1802,16 @@ def test_readme_preserves_arc_token_warning_and_citation() -> None:
 
 
 def test_ideas_full_info_template_includes_domain_and_direct_tool_context() -> None:
-    variant = json.loads((WJ / "ideas-domain.variant.json").read_text(encoding="utf-8"))
+    variant = json.loads((WJ / "ideas-general.variant.json").read_text(encoding="utf-8"))
     loop = json.loads((WJ / "ideas-loop.template.json").read_text(encoding="utf-8"))
     proposer = json.loads((WJ / "ideas-proposer.template.json").read_text(encoding="utf-8"))
 
     assert variant["loop_template"] == "ideas-loop.template.json"
     assert variant["proposer_template"] == "ideas-proposer.template.json"
     assert "workspace_input" not in loop["caller_context"]
+    assert loop["caller_context"]["generation_mode"] == "model_selected_route"
+    assert loop["caller_context"]["domain_cards"] == []
+    assert loop["caller_context"]["domain_relationships"] == {}
     prompt = proposer["prompt"]["template"]
     assert "available web and ARC tools" in prompt
     assert "shared paper cache" in prompt
@@ -1858,12 +1819,26 @@ def test_ideas_full_info_template_includes_domain_and_direct_tool_context() -> N
     assert "resolver" not in prompt.lower()
 
 
-def test_ideas_no_info_variant_is_optional_and_simple() -> None:
-    variant = json.loads((WJ / "ideas-no-info.variant.json").read_text(encoding="utf-8"))
-    description = variant["description"]
+def test_retired_ideas_route_variants_and_specialized_assets_are_absent() -> None:
+    retired = (
+        "ideas-domain.variant.json",
+        "ideas-cross-domain.variant.json",
+        "ideas-no-info.variant.json",
+        "ideas-domain-marking-scheme.json",
+        "ideas-cross-domain-marking-scheme.json",
+        "ideas-domain-reviewer.template.json",
+        "ideas-cross-domain-reviewer.template.json",
+        "ideas-domain-reviewer-output.schema.json",
+        "ideas-cross-domain-reviewer-output.schema.json",
+        "ideas-cross-domain-proposer.template.json",
+        "ideas-no-info-proposer.template.json",
+        "ideas-cross-domain-loop.template.json",
+        "ideas-no-info-loop.template.json",
+    )
 
-    assert variant["enabled"] is False
-    assert "without a domain briefing" in description
+    assert (WJ / "ideas-general.variant.json").is_file()
+    for name in retired:
+        assert not (WJ / name).exists()
 
 
 def test_readme_keeps_idea_capability_without_package_details() -> None:
@@ -1879,28 +1854,30 @@ def test_readme_keeps_idea_capability_without_package_details() -> None:
 def test_ideas_workflow_documents_enabled_variants_not_file_renaming() -> None:
     text = (WF / "ideas.md").read_text(encoding="utf-8")
 
-    assert "runs only enabled variants" in text
-    assert "domain variant" in text
+    assert "one enabled `general` variant" in text
+    assert "pre-selects a scientific route" in text
     assert "variant_inactivated" not in text
     assert "rename" not in text.lower()
 
 
 def test_ideas_proposer_templates_use_concise_scientific_policy() -> None:
-    for name in ["ideas-proposer.template.json", "ideas-no-info-proposer.template.json"]:
-        proposer = json.loads((WJ / name).read_text(encoding="utf-8"))
-        template = proposer["prompt"]["template"]
+    proposer = json.loads(
+        (WJ / "ideas-proposer.template.json").read_text(encoding="utf-8")
+    )
+    template = proposer["prompt"]["template"]
 
-        assert "marking scheme" in template
-        assert "available web and ARC tools" in template
-        assert "shared paper cache" in template
+    assert "marking scheme" in template
+    assert "available web and ARC tools" in template
+    assert "shared paper cache" in template
 
 
 def test_ideas_proposer_templates_request_report_ready_math() -> None:
-    for name in ["ideas-proposer.template.json", "ideas-no-info-proposer.template.json"]:
-        proposer = json.loads((WJ / name).read_text(encoding="utf-8"))
-        template = proposer["prompt"]["template"]
+    proposer = json.loads(
+        (WJ / "ideas-proposer.template.json").read_text(encoding="utf-8")
+    )
+    template = proposer["prompt"]["template"]
 
-        assert "report-ready Markdown math" in template
+    assert "report-ready Markdown math" in template
 
 
 def test_ideas_proposer_schemas_are_codex_strict() -> None:
@@ -1910,7 +1887,17 @@ def test_ideas_proposer_schemas_are_codex_strict() -> None:
     assert schema["type"] == "object"
     assert schema["additionalProperties"] is False
     assert "title" in schema["required"]
+    assert "scientific_route" in schema["required"]
     assert "calculation_plan" in schema["required"]
+    scientific_route = schema["properties"]["scientific_route"]
+    assert scientific_route["type"] == "object"
+    assert scientific_route["additionalProperties"] is False
+    assert scientific_route["required"] == [
+        "description",
+        "domain_package_ids_used",
+        "rationale",
+    ]
+    assert "enum" not in scientific_route["properties"]["description"]
 
 
 def test_build_domain_report_instructions_include_mathematical_opportunities() -> None:
@@ -1950,7 +1937,7 @@ def test_arc_skill_preserves_seed_domain_anchor_in_user_intent() -> None:
 
 
 def test_ideas_uses_optional_domain_markdown_workspace_inputs_not_single_paper_summaries() -> None:
-    variant = json.loads((WJ / "ideas-domain.variant.json").read_text(encoding="utf-8"))
+    variant = json.loads((WJ / "ideas-general.variant.json").read_text(encoding="utf-8"))
     loop = json.loads((WJ / "ideas-loop.template.json").read_text(encoding="utf-8"))
 
     assert variant["context_policy"]["domain_markdown_workspace_input_required"] is False
@@ -2040,7 +2027,7 @@ def test_docs_do_not_advertise_retired_job_or_companion_commands() -> None:
         assert retired not in companion
 
 
-def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> None:
+def test_domain_and_ideas_docs_use_advisory_relationships_and_frozen_recency() -> None:
     skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     domain = (WF / "domain.md").read_text(encoding="utf-8")
     manual = (SKILL / "manuals/arc-domain.md").read_text(encoding="utf-8")
@@ -2052,13 +2039,14 @@ def test_domain_and_ideas_docs_route_by_semantic_fields_and_frozen_recency() -> 
         assert "corresponding" in text and "two" in text
     assert "recent_window_days" in manual
     assert "as_of_date" in manual
-    assert "arc.workflow.domain_manifest.v3" in domain
-    assert "arc.workflow.domain_manifest.v3" in manual
+    assert "arc.workflow.domain_manifest.v4" in domain
+    assert "arc.workflow.domain_manifest.v4" in manual
     assert "arc.workflow.domain_seed_provenance.v1" in domain
     assert "arc.workflow.domain_seed_provenance.v1" in manual
-    assert "field_count" in ideas
-    assert "multiple seed-specific packages" in ideas
-    assert "field_id" in ideas
+    assert "every\npackage-level domain card" in ideas
+    assert "`domain_relationships`" in ideas
+    assert "scientific context, not routing instructions" in ideas
+    assert "does\nnot block Ideas" in ideas
     assert "lifecycle is `succeeded`" in ideas
     assert "failed, pending, running, paused" in ideas
     for text in (skill,):

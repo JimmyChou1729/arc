@@ -9,7 +9,7 @@ from _arc_workflows.ideas_config import IdeasConfig
 from _arc_workflows.ideas_context import (
     caller_context,
     caller_context_warnings,
-    single_domain_profiles,
+    general_exploration_profiles,
     workspace_input_paths,
 )
 from _arc_workflows.ideas_models import IdeaPlan
@@ -19,11 +19,10 @@ from _arc_workflows.ideas_worker_templates import idea_loop_spec
 
 def materialize_ideas(config: IdeasConfig) -> list[IdeaPlan]:
     ideas: list[IdeaPlan] = []
-    single_profiles = (
-        single_domain_profiles(config)
-        if config.research_scope == "single_domain"
-        and not config.exploration_profiles
-        else []
+    general_profiles = (
+        general_exploration_profiles(config)
+        if not config.exploration_profiles
+        else config.exploration_profiles
     )
     for variant in config.variants:
         for idea_index in range(1, config.loops_per_variant + 1):
@@ -33,7 +32,7 @@ def materialize_ideas(config: IdeasConfig) -> list[IdeaPlan]:
                 variant=variant,
                 idea_id=idea_id,
                 idea_index=idea_index,
-                single_profiles=single_profiles,
+                general_profiles=general_profiles,
             )
             ideas.append(
                 IdeaPlan(

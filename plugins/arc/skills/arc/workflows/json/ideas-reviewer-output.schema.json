@@ -3,6 +3,7 @@
   "additionalProperties": false,
   "required": [
     "marks",
+    "idea_assessment",
     "reviewer_benchmark",
     "improvement_comments",
     "evidence_checked",
@@ -12,6 +13,50 @@
     "marks": {
       "type": "object",
       "$comment": "Generated from ideas-marking-scheme.json by run-ideas.py."
+    },
+    "idea_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "problem_importance",
+        "importance_rationale",
+        "mathematical_well_definedness",
+        "feasibility_status",
+        "bounded_first_calculation_ready",
+        "blocking_feasibility_failures",
+        "manageable_feasibility_risks",
+        "external_method_status",
+        "external_method_rationale"
+      ],
+      "properties": {
+        "problem_importance": {
+          "type": "string",
+          "enum": ["high", "substantive", "limited", "unclear"]
+        },
+        "importance_rationale": {"type": "string"},
+        "mathematical_well_definedness": {
+          "type": "string",
+          "enum": ["well_defined", "partially_defined", "not_well_defined"]
+        },
+        "feasibility_status": {
+          "type": "string",
+          "enum": ["feasible", "feasible_with_named_risk", "infeasible"]
+        },
+        "bounded_first_calculation_ready": {"type": "boolean"},
+        "blocking_feasibility_failures": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "manageable_feasibility_risks": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "external_method_status": {
+          "type": "string",
+          "enum": ["not_used", "valid", "uncertain", "invalid"]
+        },
+        "external_method_rationale": {"type": "string"}
+      }
     },
     "reviewer_benchmark": {
       "type": "object",
