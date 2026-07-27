@@ -56,13 +56,15 @@ arc-llm status \
 Persist the returned run ID and read the typed result body. The run root is
 caller-owned durable state, not a temporary directory.
 
-For `repair: "format"`, ARC first applies its normal local/formatter recovery.
-If that still cannot produce a valid structured result, it preserves the raw
-candidate and formatter record and performs one complete fresh generation of
-the original task with validation feedback. A second invalid result pauses for
+Every invalid JSON result gets at most one complete fresh generation of the
+original task with validation feedback. For `repair: "format"`, ARC first
+applies its normal local/formatter recovery and regenerates only when that
+cannot produce a valid result. For `repair: "strict"` or `"local"`, it proceeds
+directly to the one fresh generation. A second invalid result pauses for
 supervision; it does not trigger another formatter or silently discard earlier
-workflow results. Provider authority, quota, and availability pauses remain
-separate from this bounded output recovery.
+workflow results. Raw candidates and any formatter record remain available.
+Provider authority, quota, and availability pauses remain separate from this
+bounded output recovery.
 
 Set `<host-authority>` once per run: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
