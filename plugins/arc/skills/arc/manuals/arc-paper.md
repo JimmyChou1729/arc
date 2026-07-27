@@ -28,8 +28,8 @@ arc-paper search-citers <paper-id> \
   --scan-limit 1000 --limit 50
 ```
 
-Matching is literal-OR after case, punctuation, and hyphen normalization. Large
-neighborhoods split the scan between recent and highly cited records and
+Matching is literal-OR after normalizing case, punctuation, and hyphens. Large
+neighborhoods split the scan between the most recent and most cited records and
 report `scan_complete: false`. Results identify the matching terms and fields;
 recent and highly cited controls help expose keyword blind spots. Missing
 matches are evidence about this neighborhood, not proof of novelty.
@@ -51,7 +51,8 @@ chapter source.
 
 ## Search Materialized Full Text
 
-Search only verified documents already in the ARC cache:
+Put specific multiword synonyms in one literal-OR request over verified cached
+documents:
 
 ```bash
 arc-paper search-cached-full-text \
@@ -59,7 +60,7 @@ arc-paper search-cached-full-text \
   --limit 100 --context-lines 0
 ```
 
-Broad results return `refinement_required` with exact counts and up to 50
+Broad results return `refinement_required` with exact counts and up to 50 paper
 titles, not abstracts. `rg_unavailable` means install `rg`; do not replace the
 operation with ad hoc physical-cache inspection.
 
@@ -96,8 +97,9 @@ arc-paper extract-keywords <source> \
 Use `unrestricted` only when explicitly granted; otherwise use `unknown`, and
 reuse the value on resume. Restricted/unknown host requests follow
 `manuals/arc-llm.md`. The count is approximate: chapter-selected terms are
-deduplicated and machine-counted, without padding. Explicit indexes receive
-model review. `matched_sentences` are grounding hits, not definitions.
+deduplicated and labeled with machine-counted occurrence frequency, without
+padding. Explicit indexes receive model review. `matched_sentences` are
+grounding hits, never definitions.
 
 Keyword extraction is durable. Resume with the returned descriptor and the
 same project/run identity; use `arc-jobs` for generic lifecycle operations.
@@ -109,5 +111,6 @@ arc-paper --help
 arc-paper <command> --help
 ```
 
-Remote failures do not invalidate verified cache entries. Parsing and search
-failures are typed; do not bypass them by reading physical cache paths.
+Use command help for cache administration and exact flags. Remote failures do
+not invalidate verified cache entries. Parsing and search failures are typed;
+do not bypass them by reading physical cache paths.
