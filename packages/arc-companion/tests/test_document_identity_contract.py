@@ -288,7 +288,7 @@ def test_recipe_identity_reserves_author_prompt_and_decodes_v5(
 
     decoded = decode_generation_recipe(legacy)
 
-    assert encoded["schema_version"] == "arc.companion.generation_recipe.v13"
+    assert encoded["schema_version"] == "arc.companion.generation_recipe.v14"
     assert "chapter_plan_prompt" not in encoded
     assert encoded["author_identity_prompt"] == recipe.author_identity_prompt
     assert decoded.author_identity_prompt == recipe.author_identity_prompt
@@ -337,6 +337,19 @@ def test_generation_recipe_v11_decodes_to_advisory_source_access() -> None:
     )
     legacy["chapter_guide_review_prompt"] = (
         "arc.companion.chapter-learning-review-prompt.v9"
+    )
+
+    assert decode_generation_recipe(legacy) == CompanionGenerationRecipe()
+
+
+def test_generation_recipe_v13_decodes_to_current_review_contract() -> None:
+    legacy = encode_generation_recipe(CompanionGenerationRecipe())
+    legacy["schema_version"] = "arc.companion.generation_recipe.v13"
+    legacy["chapter_guide_prompt"] = (
+        "arc.companion.chapter-learning-prompt.v10"
+    )
+    legacy["chapter_guide_review_prompt"] = (
+        "arc.companion.chapter-learning-review-prompt.v10"
     )
 
     assert decode_generation_recipe(legacy) == CompanionGenerationRecipe()

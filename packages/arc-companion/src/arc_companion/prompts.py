@@ -7,9 +7,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v10"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v11"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v10"
+    "arc.companion.chapter-learning-review-prompt.v11"
 )
 CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v10"
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
@@ -148,7 +148,23 @@ AUTHOR_IDENTITY_SCHEMA = _closed(
     },
     ("authors", "confidence", "basis", "anchor_block_ids"),
 )
-CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA = _closed({}, ())
+_POSITIVE_INTEGERS = {
+    "type": "array",
+    "items": {"type": "integer", "minimum": 1},
+    "uniqueItems": True,
+}
+CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA = _closed(
+    {
+        "checked_complete_chapter": {"const": True},
+        "checked_part_numbers": _POSITIVE_INTEGERS,
+        "checked_section_numbers": _POSITIVE_INTEGERS,
+    },
+    (
+        "checked_complete_chapter",
+        "checked_part_numbers",
+        "checked_section_numbers",
+    ),
+)
 
 
 def chapter_plan_prompt(
@@ -263,9 +279,30 @@ The chapter guide appears before the body and helps the reader enter the
 chapter as a whole. A section guide appears after that section's translated
 heading and before its body. A companion appears after its selected source
 part and translation. Add section guides and companions only where useful;
-there is no quota. If one explanation covers several consecutive parts, place
-it after the last relevant part. Do not paraphrase, repeat the source's
-reasoning, or add generic summary.
+there is no quota. Each local companion must have one primary target part and
+must directly explain material at that location. Do not combine independent
+themes from different source locations merely to make one longer unit. Split
+them, or put genuinely chapter-wide synthesis in `chapter_guide`. In
+particular, do not move an explanation of an earlier title, quotation, work,
+or concept to a later date merely because the same unit mentions a later
+development. Work only on the current real chapter.
+
+Every unit must add a concrete increment of understanding that the nearby
+source does not itself supply. Missing context, an intermediate derivation,
+a logical bridge, prerequisite clarification, a later correction or
+development, historical significance, and a substantive connection across
+passages are non-exhaustive examples, not a taxonomy or quota. A brief source
+phrase may identify the explanation's target, but the body must then add new
+information. Reordered facts, same-meaning rewrite, generic summary,
+transitions such as “this shows”, or polished paraphrase do not qualify. If
+removing a proposed unit would leave the resolved reader's understanding
+essentially unchanged, omit it. Simple, self-contained source material needs
+no local companion.
+
+The structured `title` field is the unit's sole main title.
+`content_markdown` must begin with substantive prose, not another Markdown
+heading. Later internal headings are allowed only when the body genuinely
+needs structure.
 
 Write titles and Markdown in the target language. Cite an externally grounded
 claim nearby using the reference's one-based array position, for example
@@ -305,12 +342,22 @@ and no minimum. If acquisition is required, use any currently available and
 authorized capability-matching tool; do not assume one exists or insist on
 authorization that was not granted.
 
-The source body is not embedded in the loop context. Run the supplied
-`arc_commands` directly for exact numbered parts, complete current sections,
-the complete current chapter, search, and research. Do not explore ARC source
-code or cache directories to rediscover these commands. If exact parts are
-insufficient, inspect the complete chapter. Avoid reading the whole book when
-narrower access is enough. Never open image or media assets.
+When `arc_commands.availability` is `exact`, the source body is not embedded
+in the loop context: run the supplied commands for exact numbered parts,
+complete current sections, the complete current chapter, search, and
+research. Read the complete current chapter once before drafting, then use an
+exact part or section command to confirm every local placement. When
+availability is `fallback_only`, inspect the attached verified text-only
+Companion source using the supplied chapter part and line metadata instead.
+Do not explore ARC source code or cache directories to rediscover access
+methods. Avoid reading the whole book when the complete current chapter is
+enough. Never open image or media assets.
+
+On every revised proposal, use only part and section locations recorded as
+inspected in the preceding review payload. This is especially important for
+the terminal revision, which is published without another review. A reviewer
+who proposes a valuable addition at a new location must inspect and record
+that location first.
 """
 
 
@@ -328,8 +375,12 @@ gain. Feedback must say what to preserve, what to change, and how.
 When you discover a valuable new Companion idea, describe it constructively
 in feedback using a supplied local section or part number so the next proposer
 can add or improve it. Suggest newly inspected references when useful. The
-Companion-specific review payload must be `{}`. Never copy a reference body or
-invent a source, DOI, arXiv identifier, or URL.
+Companion-specific review payload records the source locations you inspected.
+Set `checked_complete_chapter` to true, list every exact part and section read
+in `checked_part_numbers` and `checked_section_numbers`, and include locations
+inspected for constructive additions as well as locations already used by the
+proposal. Never copy a reference body or invent a source, DOI, arXiv
+identifier, or URL.
 
 Actively consider and, when it could materially improve the Companion, inspect
 a reference the proposer missed. Both roles may introduce useful new source
@@ -341,6 +392,12 @@ skipped derivation steps, logical gaps, prerequisite knowledge the reader may
 not command, and reference-grounded later corrections, disputes, doubts,
 unexpected developments, or historical significance. Remove or replace
 paraphrase, repeated reasoning, generic summary, and unsupported claims.
+For every retained unit, identify a concrete understanding increment absent
+from the nearby source. Reordered source facts, same-meaning rewrite, a
+transition such as “this shows”, or prose whose removal would not change the
+reader's understanding is not an increment. A chapter guide may orient the
+reader with a conceptual map or reading path, but must not be merely a chapter
+summary.
 Require nearby positional `[@N]` citations for externally grounded claims.
 
 Treat unsupported corrective framing as a material defect. A “not X but Y”
@@ -348,9 +405,18 @@ contrast is justified only when supplied material shows that X is a live
 misconception. Otherwise request direct affirmative prose. A prior Companion
 is optional reference material, not a template or authority.
 
-Use the loop's executable `arc_commands` directly. If exact numbered parts are
-insufficient, inspect the complete current section or chapter. Avoid reading
-the whole book when narrower access is enough. Never open image or media assets.
+When `arc_commands.availability` is `exact`, run the supplied
+`complete-current-chapter` command before judging anything. Then run the exact
+`part-N` command for every local companion and `section-N-complete` for every
+section guide. When availability is `fallback_only`, inspect the corresponding
+complete chapter and exact locations in the attached verified text-only
+Companion source using the supplied part and line metadata. In either mode,
+compare each unit with the source at its proposed display location and record
+every inspected location in the review payload. If useful material is
+misplaced, request a move or split rather than deleting it automatically. If
+a proposed constructive addition uses another location, inspect and record
+that location too. Avoid reading the whole book when the complete current
+chapter is enough. Never open image or media assets.
 """
 
 

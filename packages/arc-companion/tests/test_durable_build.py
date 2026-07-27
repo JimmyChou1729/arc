@@ -12,6 +12,7 @@ from arc_jobs import (
     ImmutableArtifactStore,
     RunEngine,
     RunRepository,
+    RunSpec,
     RunStatus,
 )
 from arc_llm import LLMCompleted
@@ -51,7 +52,7 @@ from arc_companion.request_contracts import (
     CompanionExecutionOptions,
     CompanionGenerationRecipe,
 )
-from arc_companion.service import CompanionService
+from arc_companion.service import CompanionService, CompanionServiceError
 from arc_companion.source_planning import plan_source_chapters
 from arc_companion.translation_adapter import (
     ArcTranslateAdapter,
@@ -186,7 +187,17 @@ class FakeGuideTasks:
                         "redundant unit; keep the same source anchor."
                     )
                 },
-                "payload": {},
+                "payload": {
+                    "checked_complete_chapter": True,
+                    "checked_part_numbers": [
+                        int(item["part_number"])
+                        for item in payload["chapter"]["parts"]
+                    ],
+                    "checked_section_numbers": [
+                        int(item["section_number"])
+                        for item in payload["chapter"]["sections"]
+                    ],
+                },
             }
         else:
             raise AssertionError(f"unexpected guide contract: {contract}")
@@ -460,6 +471,17 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
         )
         assert all(
             item["shell"] and item["argv"][0] == "arc-paper"
+            for item in commands["source"]
+        )
+        ranged = [
+            item
+            for item in commands["source"]
+            if item["argv"][1] == "read-cached-source-range"
+        ]
+        assert ranged
+        assert all("--text-only" in item["argv"] for item in ranged)
+        assert all(
+            item["command_id"] != "current-section"
             for item in commands["source"]
         )
         assert all(
@@ -1133,3 +1155,25 @@ def test_default_adapter_preflight_requires_public_translate_facade(
     ) as exc_info:
         require_translation_runtime()
     assert exc_info.value.code == "runtime_dependency_missing"
+
+
+@pytest.mark.parametrize(
+    "handler",
+    ("arc.companion.build.v6", "arc.companion.build.v10"),
+)
+def test_unfinished_legacy_handlers_require_a_new_build(
+    tmp_path: Path,
+    handler: str,
+) -> None:
+    service = CompanionService(tmp_path / "jobs")
+    spec = RunSpec("legacy-run", handler, {})
+
+    with pytest.raises(CompanionServiceError) as exc_info:
+        service._handler(
+            spec,
+            execution=CompanionExecutionOptions(),
+            task_service=None,
+            translation_adapter=None,
+        )
+
+    assert exc_info.value.code == "legacy_run_requires_new_build"

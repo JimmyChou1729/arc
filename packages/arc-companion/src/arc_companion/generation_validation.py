@@ -161,7 +161,10 @@ def validate_chapter_guide(
     )
 
     def normalize_markdown(value: Any, description: str) -> tuple[str, list[str]]:
-        markdown = _model_prose(value, description)
+        markdown = _without_leading_heading(
+            _model_prose(value, description),
+            description=description,
+        )
         for position, reference_id in citation_map.items():
             markdown = markdown.replace(f"[@{position}]", f"[@{reference_id}]")
         if re.search(r"\[@\d+\]", markdown):
@@ -285,6 +288,79 @@ def validate_chapter_guide(
         "chapter_id": chapter_id,
         "learning_units": units,
         "references": normalized_references,
+    }
+
+
+def validate_chapter_guide_review_audit(
+    review: Any,
+    *,
+    proposal: Mapping[str, Any],
+    part_count: int,
+    section_count: int,
+) -> dict[str, Any]:
+    """Require the final proposal to use only reviewer-inspected locations."""
+
+    if not isinstance(review, Mapping):
+        raise CompanionContentError(
+            "chapter_guide_review_audit_invalid",
+            "chapter guide requires a completed source review",
+        )
+    payload = _exact(
+        review.get("payload"),
+        {
+            "checked_complete_chapter",
+            "checked_part_numbers",
+            "checked_section_numbers",
+        },
+        "chapter guide review audit",
+    )
+    if payload["checked_complete_chapter"] is not True:
+        raise CompanionContentError(
+            "chapter_guide_review_audit_invalid",
+            "reviewer must inspect the complete current chapter",
+        )
+    checked_parts = _positive_integer_ids(
+        payload["checked_part_numbers"],
+        maximum=part_count,
+        description="reviewed part numbers",
+    )
+    checked_sections = _positive_integer_ids(
+        payload["checked_section_numbers"],
+        maximum=section_count,
+        description="reviewed section numbers",
+    )
+    companions = _mapping_list(
+        proposal.get("companions"), "companions"
+    )
+    sections = _mapping_list(
+        proposal.get("section_guides"), "section guides"
+    )
+    required_parts = {
+        item.get("after_part")
+        for item in companions
+        if isinstance(item.get("after_part"), int)
+        and not isinstance(item.get("after_part"), bool)
+    }
+    required_sections = {
+        item.get("section_number")
+        for item in sections
+        if isinstance(item.get("section_number"), int)
+        and not isinstance(item.get("section_number"), bool)
+    }
+    if not required_parts.issubset(set(checked_parts)):
+        raise CompanionContentError(
+            "chapter_guide_review_audit_invalid",
+            "final companions use parts the reviewer did not inspect",
+        )
+    if not required_sections.issubset(set(checked_sections)):
+        raise CompanionContentError(
+            "chapter_guide_review_audit_invalid",
+            "final section guides use sections the reviewer did not inspect",
+        )
+    return {
+        "checked_complete_chapter": True,
+        "checked_part_numbers": checked_parts,
+        "checked_section_numbers": checked_sections,
     }
 
 
@@ -801,6 +877,62 @@ def _model_prose(value: Any, description: str) -> str:
     return re.sub(r"(?<!\\)\\n", "\n", text).strip()
 
 
+def _without_leading_heading(text: str, *, description: str) -> str:
+    """Keep the structured title as the sole leading unit heading."""
+
+    lines = text.splitlines()
+    first = next(
+        (index for index, line in enumerate(lines) if line.strip()),
+        None,
+    )
+    if first is None:
+        raise CompanionContentError(
+            "model_output_invalid", f"{description} must be non-empty"
+        )
+    remove_through: int | None = None
+    if re.fullmatch(r"\s{0,3}#{1,6}\s+\S.*", lines[first]):
+        remove_through = first
+    elif (
+        first + 1 < len(lines)
+        and lines[first].strip()
+        and re.fullmatch(r"\s{0,3}(?:=+|-+)\s*", lines[first + 1])
+    ):
+        remove_through = first + 1
+    if remove_through is None:
+        return text
+    body = "\n".join(lines[remove_through + 1 :]).strip()
+    if not body:
+        raise CompanionContentError(
+            "learning_markdown_invalid",
+            f"{description} contains only a duplicate heading",
+        )
+    return body
+
+
+def _positive_integer_ids(
+    value: Any,
+    *,
+    maximum: int,
+    description: str,
+) -> list[int]:
+    if (
+        not isinstance(value, list)
+        or any(
+            isinstance(item, bool)
+            or not isinstance(item, int)
+            or item < 1
+            or item > maximum
+            for item in value
+        )
+        or len(value) != len(set(value))
+    ):
+        raise CompanionContentError(
+            "chapter_guide_review_audit_invalid",
+            f"{description} must be unique locations in the current chapter",
+        )
+    return sorted(value)
+
+
 def _unique(
     values: Sequence[Mapping[str, Any]], key: str, description: str
 ) -> None:
@@ -857,5 +989,6 @@ __all__ = [
     "CompanionContentError",
     "validate_author_identity",
     "validate_chapter_guide",
+    "validate_chapter_guide_review_audit",
     "validate_chapter_plan",
 ]

@@ -104,7 +104,17 @@ class _GuideTasks:
                 "action": "stop",
                 "reason": "The proposal is sufficient.",
                 "feedback": {"guide-proposer": "No revision is needed."},
-                "payload": {},
+                "payload": {
+                    "checked_complete_chapter": True,
+                    "checked_part_numbers": [
+                        int(item["part_number"])
+                        for item in payload["chapter"]["parts"]
+                    ],
+                    "checked_section_numbers": [
+                        int(item["section_number"])
+                        for item in payload["chapter"]["sections"]
+                    ],
+                },
             }
         elif "chapter-learning-prompt" in contract:
             self.plan_labels.extend(

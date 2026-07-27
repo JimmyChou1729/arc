@@ -93,6 +93,7 @@ from .generation_validation import (
     CompanionContentError,
     validate_author_identity,
     validate_chapter_guide,
+    validate_chapter_guide_review_audit,
 )
 from .llm_runtime import (
     CompanionLLMError,
@@ -142,13 +143,15 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v10"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v11"
 COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
     {
         COMPANION_BUILD_HANDLER,
+        "arc.companion.build.v10",
         "arc.companion.build.v9",
         "arc.companion.build.v8",
         "arc.companion.build.v7",
+        "arc.companion.build.v6",
         "arc.companion.build.v5",
         "arc.companion.build.v4",
         "arc.companion.build.v3",
@@ -1049,6 +1052,12 @@ class CompanionBuildHandler:
                             )
                         )
                 try:
+                    validate_chapter_guide_review_audit(
+                        loop_result.final_review,
+                        proposal=candidate,
+                        part_count=len(chapter.block_ids),
+                        section_count=len(chapter.section_block_ids),
+                    )
                     accepted_guide = validate_chapter_guide(
                         candidate,
                         chapter_id=chapter_id,
@@ -1306,6 +1315,7 @@ def _chapter_arc_commands(
             document_json,
             "--cache-root",
             str(paper.cache_root),
+            "--text-only",
             str(start),
             str(end),
         ]
@@ -1368,32 +1378,6 @@ def _chapter_arc_commands(
                     max(item[1] for item in lines),
                 ),
                 part_numbers=list(range(1, len(access) + 1)),
-            )
-        )
-    selector = chapter.structure_section_id or next(
-        (
-            str(item["selector"])
-            for item in access
-            if item.get("selector")
-        ),
-        None,
-    )
-    if selector:
-        section_argv = [
-            "arc-paper",
-            "get-cached-section",
-            "--document-ref",
-            document_json,
-            "--cache-root",
-            str(paper.cache_root),
-        ]
-        if structure_json is not None:
-            section_argv.extend(["--structure-ref", structure_json])
-        section_argv.append(selector)
-        source_commands.append(
-            _command(
-                "current-section",
-                section_argv,
             )
         )
     toc_argv = [

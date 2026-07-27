@@ -28,11 +28,13 @@ from arc_companion.generation_validation import (
     CompanionContentError,
     validate_author_identity,
     validate_chapter_guide,
+    validate_chapter_guide_review_audit,
     validate_chapter_plan,
 )
 from arc_companion.prompts import (
     AUTHOR_IDENTITY_SCHEMA,
     CHAPTER_GUIDE_PROPOSAL_SCHEMA,
+    CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA,
     CHAPTER_PLAN_SCHEMA,
     author_identity_prompt,
     chapter_guide_prompt,
@@ -56,7 +58,7 @@ from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
-    assert CompanionBuildHandler.name == "arc.companion.build.v10"
+    assert CompanionBuildHandler.name == "arc.companion.build.v11"
     assert not any(name.startswith("Legacy") for name in public_names)
     for module_name in (
         "arc_companion.build_v2",
@@ -171,6 +173,11 @@ def test_companion_provider_enum_nodes_declare_string_types() -> None:
         "section_guides",
         "companions",
         "references",
+    }
+    assert set(CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA["properties"]) == {
+        "checked_complete_chapter",
+        "checked_part_numbers",
+        "checked_section_numbers",
     }
 
 
@@ -509,6 +516,17 @@ def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
     assert "capability-matching tool" in guide
     assert "Actively consider" in review
     assert "merely to make the review look more thorough" in review
+    assert "one primary target part" in guide
+    assert "concrete increment of understanding" in guide
+    assert "sole main title" in guide
+    assert "complete-current-chapter" in review
+    assert "part-N" in review
+    assert "section-N-complete" in review
+    assert "whose removal would not change" in review
+    assert "`fallback_only`" in guide
+    assert "`fallback_only`" in review
+    assert "terminal revision" in guide
+    assert "recorded as inspected" in guide
 
 
 def test_guide_validation_decodes_model_escaped_paragraphs() -> None:
@@ -606,6 +624,91 @@ def test_minimal_guide_is_mapped_to_program_owned_units_and_citations() -> None:
     assert reference["reference_id"].startswith("reference-")
     assert reference["dois"] == ["10.1000/test"]
     assert f"[@{reference['reference_id']}]" in units[0]["content_markdown"]
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    (
+        "### Duplicate title\n\nSubstantive body.",
+        "Duplicate title\n---\n\nSubstantive body.",
+    ),
+)
+def test_minimal_guide_keeps_structured_title_as_sole_leading_title(
+    markdown: str,
+) -> None:
+    validated = validate_chapter_guide(
+        {
+            "chapter_guide": {
+                "title": "Structured title",
+                "content_markdown": markdown,
+            },
+            "section_guides": [],
+            "companions": [],
+            "references": [],
+        },
+        chapter_id="chapter",
+        block_ids=("b1",),
+    )
+
+    assert validated["learning_units"][0]["title"] == "Structured title"
+    assert (
+        validated["learning_units"][0]["content_markdown"]
+        == "Substantive body."
+    )
+
+
+def test_reviewer_audit_must_cover_every_final_location() -> None:
+    proposal = {
+        "chapter_guide": {
+            "title": "Guide",
+            "content_markdown": "Guide body.",
+        },
+        "section_guides": [
+            {
+                "section_number": 2,
+                "title": "Section",
+                "content_markdown": "Section body.",
+            }
+        ],
+        "companions": [
+            {
+                "after_part": 3,
+                "title": "Companion",
+                "content_markdown": "Companion body.",
+            }
+        ],
+        "references": [],
+    }
+    review = {
+        "payload": {
+            "checked_complete_chapter": True,
+            "checked_part_numbers": [3, 1],
+            "checked_section_numbers": [2],
+        }
+    }
+
+    assert validate_chapter_guide_review_audit(
+        review,
+        proposal=proposal,
+        part_count=4,
+        section_count=2,
+    ) == {
+        "checked_complete_chapter": True,
+        "checked_part_numbers": [1, 3],
+        "checked_section_numbers": [2],
+    }
+
+    review["payload"]["checked_part_numbers"] = [1]
+    with pytest.raises(
+        CompanionContentError,
+        match="reviewer did not inspect",
+    ):
+        validate_chapter_guide_review_audit(
+            review,
+            proposal=proposal,
+            part_count=4,
+            section_count=2,
+        )
 
 
 def test_minimal_guide_rejects_out_of_range_local_location() -> None:
@@ -895,7 +998,7 @@ def test_provider_model_and_prompt_contract_change_run_identity(
     recipe_input = semantic_input["generation_recipe"]
     assert (
         recipe_input["schema_version"]
-            == "arc.companion.generation_recipe.v13"
+            == "arc.companion.generation_recipe.v14"
     )
     assert recipe_input["chapter_guide_max_rounds"] == 3
     assert recipe_input["chapter_guide_review_final_round"] is False
