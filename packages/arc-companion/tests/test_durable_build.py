@@ -1047,6 +1047,74 @@ def test_default_adapter_wires_keyword_provider_to_companion_cache(
     assert source.parsed is None
 
 
+def test_default_adapter_resolves_shared_cache_for_structure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import arc_paper
+    from arc_llm import LLMExecutionOptions, ModelSelection
+
+    captured = {}
+
+    class FakeStructureCache:
+        def __init__(self, root):
+            captured["root"] = root
+
+        def read(self, ref):
+            captured["ref"] = ref
+            return "overlay"
+
+    class FakeTermInventoryStore:
+        root = tmp_path / "shared-cache"
+
+    class FakeResult:
+        def to_document(self):
+            return {"result": "ok"}
+
+    class FakeWorkflow:
+        def build_glossary(self, _context, _source, **kwargs):
+            captured["kwargs"] = kwargs
+            return FakeResult()
+
+    adapter = ArcTranslateAdapter()
+    monkeypatch.setattr(arc_paper, "DocumentStructureCache", FakeStructureCache)
+    monkeypatch.setattr(arc_paper, "TermInventoryStore", FakeTermInventoryStore)
+    monkeypatch.setattr(
+        adapter,
+        "_service_and_source",
+        lambda source: (FakeWorkflow(), object()),
+    )
+    document = _document(tmp_path)
+    language = {
+        "schema_version": "arc.translate.language_result.v1",
+        "document_digest": document.document_digest,
+        "source_digest": document.source.artifact_digest,
+        "language_tag": "en",
+        "classification": "known",
+        "confidence": 1.0,
+        "target_language": "zh-CN",
+        "mode": "enabled",
+    }
+
+    result = adapter.build_glossary(
+        None,  # type: ignore[arg-type]
+        document,
+        language=language,
+        target_language="zh-CN",
+        structure_ref=object(),  # type: ignore[arg-type]
+        section_ids=("chapter",),
+        approx_count=5,
+        model=ModelSelection(),
+        execution=LLMExecutionOptions(),
+        resume_input=None,
+    )
+
+    assert result == {"result": "ok"}
+    assert captured["root"] == tmp_path / "shared-cache"
+    assert captured["kwargs"]["keyword_structure"] == "overlay"
+    assert captured["kwargs"]["keyword_section_ids"] == ("chapter",)
+
+
 def test_default_adapter_preflight_requires_public_translate_facade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

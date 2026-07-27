@@ -145,11 +145,13 @@ class ArcTranslateAdapter:
         resume_input: ResumeInput | None,
     ) -> TranslationStep:
         service, translation_source = self._service_and_source(source)
-        from arc_paper import DocumentStructureCache
+        from arc_paper import DocumentStructureCache, TermInventoryStore
         from arc_translate import LanguageResult
 
         keyword_structure = (
-            DocumentStructureCache(self.paper_cache_root).read(structure_ref)
+            DocumentStructureCache(
+                self.paper_cache_root or TermInventoryStore().root
+            ).read(structure_ref)
             if structure_ref is not None
             else None
         )
