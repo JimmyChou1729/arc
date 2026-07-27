@@ -875,8 +875,17 @@ def test_legacy_release_manifest_and_current_pointer_remain_readable(
     )
 
 
-def test_v2_delivery_release_remains_valid_after_standalone_delivery_upgrade(
+@pytest.mark.parametrize(
+    "delivery_recipe",
+    (
+        release_module._BASE_DELIVERY_RECIPE,
+        release_module._OLDER_DELIVERY_RECIPE,
+        release_module._PREVIOUS_DELIVERY_RECIPE,
+    ),
+)
+def test_prior_delivery_releases_remain_valid_after_render_upgrade(
     tmp_path: Path,
+    delivery_recipe: str,
 ) -> None:
     project = CompanionProjectPaths.open(tmp_path / "project")
     publisher = CompanionReleasePublisher(project, _FakeRenderer())  # type: ignore[arg-type]
@@ -886,7 +895,7 @@ def test_v2_delivery_release_remains_valid_after_standalone_delivery_upgrade(
     legacy_identity = release_module._release_identity_for_recipe(
         book,
         ("pdf", "web"),
-        release_module._BASE_DELIVERY_RECIPE,
+        delivery_recipe,
     )
     legacy_id = release_module._release_id(legacy_identity)
     legacy_directory = project.releases_root / legacy_id
@@ -911,7 +920,7 @@ def test_v2_delivery_release_remains_valid_after_standalone_delivery_upgrade(
         release_module._delivery_html_bytes(
             legacy_directory / "reader" / "index.html",
             legacy_id,
-            release_module._BASE_DELIVERY_RECIPE,
+            delivery_recipe,
         )
     )
     project.publish_current(

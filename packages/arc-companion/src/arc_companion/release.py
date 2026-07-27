@@ -29,15 +29,19 @@ _LEGACY_RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v1"
 RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v2"
 _LEGACY_DELIVERY_RECIPE = "arc.companion.delivery.v1"
 _BASE_DELIVERY_RECIPE = "arc.companion.delivery.v2"
-_PREVIOUS_DELIVERY_RECIPE = "arc.companion.delivery.v3"
-DELIVERY_RECIPE = "arc.companion.delivery.v4"
+_OLDER_DELIVERY_RECIPE = "arc.companion.delivery.v3"
+_PREVIOUS_DELIVERY_RECIPE = "arc.companion.delivery.v4"
+DELIVERY_RECIPE = "arc.companion.delivery.v5"
 _LEGACY_PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v9"
 _LEGACY_WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v7"
 _LEGACY_RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v4"
 _PREVIOUS_PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v10"
 _PREVIOUS_WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v8"
 _PREVIOUS_RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v5"
-RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v6"
+_LAST_PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v11"
+_LAST_WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v9"
+_LAST_RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v6"
+RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v7"
 _FULL_FORMATS = ("pdf", "web")
 _WEB_ONLY_FORMATS = ("web",)
 _WINDOWS = os.name == "nt"
@@ -529,10 +533,20 @@ def _release_identity_for_recipe(
     if delivery_recipe == _PREVIOUS_DELIVERY_RECIPE:
         return {
             "accepted_book_digest": book.content_digest,
+            "pdf_render_recipe": _LAST_PDF_RENDER_RECIPE,
+            "web_render_recipe": _LAST_WEB_RENDER_RECIPE,
+            "validator_version": _LAST_RENDER_VALIDATOR_VERSION,
+            "delivery_recipe": _PREVIOUS_DELIVERY_RECIPE,
+            "manifest_schema": RELEASE_MANIFEST_SCHEMA,
+            "available_formats": list(available_formats),
+        }
+    if delivery_recipe == _OLDER_DELIVERY_RECIPE:
+        return {
+            "accepted_book_digest": book.content_digest,
             "pdf_render_recipe": _LEGACY_PDF_RENDER_RECIPE,
             "web_render_recipe": _PREVIOUS_WEB_RENDER_RECIPE,
             "validator_version": _PREVIOUS_RENDER_VALIDATOR_VERSION,
-            "delivery_recipe": _PREVIOUS_DELIVERY_RECIPE,
+            "delivery_recipe": _OLDER_DELIVERY_RECIPE,
             "manifest_schema": RELEASE_MANIFEST_SCHEMA,
             "available_formats": list(available_formats),
         }
@@ -559,6 +573,7 @@ def _delivery_recipe_from_value(value: dict[str, Any], *, code: str) -> str:
     if recipe not in {
         _LEGACY_DELIVERY_RECIPE,
         _BASE_DELIVERY_RECIPE,
+        _OLDER_DELIVERY_RECIPE,
         _PREVIOUS_DELIVERY_RECIPE,
         DELIVERY_RECIPE,
     }:
@@ -702,7 +717,11 @@ def _snapshot_file(path: Path) -> _FileSnapshot:
 def _delivery_html_bytes(
     index: Path, release_id: str, delivery_recipe: str
 ) -> bytes:
-    if delivery_recipe == DELIVERY_RECIPE:
+    if delivery_recipe in {
+        DELIVERY_RECIPE,
+        _PREVIOUS_DELIVERY_RECIPE,
+        _OLDER_DELIVERY_RECIPE,
+    }:
         try:
             return standalone_html_bytes(index)
         except StandaloneHtmlError as exc:

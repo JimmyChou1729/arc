@@ -26,8 +26,8 @@ from . import rich_text
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v9"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v11"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v10"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v12"
 _SOURCE_DATE_EPOCH = "946684800"
 _GLOSSARY_PROTECTED_TEXT = re.compile(
     r"(?:https?://|mailto:)[^\s<>{}\[\]]+"
@@ -37,6 +37,45 @@ _GLOSSARY_PROTECTED_TEXT = re.compile(
     r"|\\\[[^\n]*?\\\]",
     re.IGNORECASE,
 )
+_READER_HTML_TAG = re.compile(
+    r"</?(?P<tag>a|article|aside|b|blockquote|br|details|div|em|figcaption|figure|"
+    r"footer|h[1-6]|header|hr|i|img|li|main|nav|ol|p|section|span|strong|"
+    r"sub|summary|sup|table|tbody|td|th|thead|tr|u|ul)"
+    r"(?:\s+[^<>\n]*?)?\s*/?>",
+    re.IGNORECASE,
+)
+_READER_BLOCK_HTML_TAGS = {
+    "article",
+    "aside",
+    "blockquote",
+    "br",
+    "div",
+    "figcaption",
+    "figure",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hr",
+    "li",
+    "main",
+    "nav",
+    "ol",
+    "p",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+}
 _AssetLoader = Callable[[str], bytes | None]
 
 
@@ -167,7 +206,35 @@ def _citation_numbers(book: AcceptedBook) -> dict[str, int]:
 
 
 def _unit_markdown(unit: LearningUnit) -> str:
-    return str(getattr(unit, "content_markdown", ""))
+    text = str(getattr(unit, "content_markdown", ""))
+    lines = text.splitlines()
+    first = next(
+        (index for index, line in enumerate(lines) if line.strip()),
+        None,
+    )
+    if first is None:
+        return text
+    remove_through: int | None = None
+    if re.fullmatch(r"\s{0,3}#{1,6}\s+\S.*", lines[first]):
+        remove_through = first
+    elif (
+        first + 1 < len(lines)
+        and re.fullmatch(r"\s{0,3}(?:=+|-+)\s*", lines[first + 1])
+    ):
+        remove_through = first + 1
+    return (
+        "\n".join(lines[remove_through + 1 :]).strip()
+        if remove_through is not None
+        else text
+    )
+
+
+def _translation_is_visible(anchor: SourceAnchor) -> bool:
+    """Structural figures have no reader-facing translated text layer."""
+
+    return anchor.kind != "figure" or bool(
+        str(anchor.payload.get("caption", "")).strip()
+    )
 
 
 def _unit_fallback_citation_ids(unit: LearningUnit) -> tuple[str, ...]:
@@ -576,7 +643,7 @@ def _render_html_chapter(
         translated = (
             f'<section class="translation-layer" lang="{escape_html(book.target_language)}">'
             f"<p>{_html_target_prose(translation.text, translation_matcher, labels)}</p></section>"
-            if translation is not None
+            if translation is not None and _translation_is_visible(anchor)
             else ""
         )
         units = "".join(
@@ -910,6 +977,7 @@ def _glossary_segments(
     value: str,
     matcher: GlossaryMatcher,
 ) -> tuple[tuple[str, tuple[Any, ...]], ...]:
+    value = _without_reader_html_tags(value)
     values: list[tuple[str, tuple[Any, ...]]] = []
     cursor = 0
     for protected in _GLOSSARY_PROTECTED_TEXT.finditer(value):
@@ -924,6 +992,35 @@ def _glossary_segments(
     if not values:
         values.extend(matcher.segments(value))
     return tuple(values)
+
+
+def _without_reader_html_tags(value: str) -> str:
+    """Hide authored markup tokens while preserving code, math, and URLs."""
+
+    text = str(value)
+    values: list[str] = []
+    cursor = 0
+
+    def without_tags(fragment: str) -> str:
+        return _READER_HTML_TAG.sub(
+            lambda match: (
+                " "
+                if match.group("tag").casefold() in _READER_BLOCK_HTML_TAGS
+                else ""
+            ),
+            fragment,
+        )
+
+    for protected in _GLOSSARY_PROTECTED_TEXT.finditer(text):
+        if protected.start() > cursor:
+            values.append(without_tags(text[cursor : protected.start()]))
+        values.append(protected.group(0))
+        cursor = protected.end()
+    if cursor < len(text):
+        values.append(without_tags(text[cursor:]))
+    if not values:
+        return without_tags(text)
+    return "".join(values)
 
 
 def _html_target_prose(
@@ -1050,7 +1147,10 @@ def _render_tex_chapter(
     )
     if chapter.guide:
         values.append(
+            rf"\begin{{tcolorbox}}[breakable,colback=LearningBg,colframe=LearningBg,"
+            rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
             rf"{_render_tex_prose(chapter.guide, model_generated=True, matcher=target_matcher, labels=labels)}"
+            rf"\end{{tcolorbox}}"
         )
     for unit in chapter.learning_units:
         if unit.placement == "chapter":
@@ -1075,7 +1175,7 @@ def _render_tex_chapter(
         # the main vertical list so it may split safely across pages.
         values.append(anchor_target + source + r"\par ")
         translation = translations.get(anchor.block_id)
-        if translation is not None:
+        if translation is not None and _translation_is_visible(anchor):
             translation_matcher = (
                 target_matcher
                 if anchor.kind not in {"code", "equation"}
@@ -1805,7 +1905,14 @@ a { color: inherit; text-decoration-color: #9aa3aa; text-decoration-thickness: 1
 .reader-label { font-weight: 700; }
 .chapter { margin: 3rem 0 5rem; }
 .chapter > h2 { font-size: clamp(1.45rem, 3vw, 2.25rem); }
-.chapter-guide { max-width: 70rem; padding: 1rem 1.2rem; border-left: .25rem solid #86a3ba; background: #edf3f7; }
+.chapter-guide, .chapter-learning {
+  max-width: 70rem;
+  margin: 1rem 0 1.5rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid #e9ddbd;
+  border-radius: .65rem;
+  background: var(--learning);
+}
 .source-anchor { position: relative; margin: 1.3rem 0; scroll-margin-top: 1rem; }
 .anchor-grid { display: grid; gap: .8rem; }
 .translation-layer, .learning-layer {

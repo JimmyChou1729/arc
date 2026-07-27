@@ -561,8 +561,8 @@ def test_accepted_book_v4_drops_legacy_source_page_label(
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
-    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v11"
-    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v9"
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v12"
+    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v10"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
         == r"first line\newline{} second line\par third paragraph"
@@ -740,6 +740,8 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
     visible_text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
     assert '@media (min-width: 900px)' in css
     assert '@media (max-width: 899px)' in css
+    assert ".chapter-guide, .chapter-learning {" in css
+    assert "background: var(--learning);" in css
     assert "grid-template-columns: minmax(0,1fr) minmax(0,1fr) minmax(18rem,.85fr)" in css
     assert css.index(".source-layer { order: 1;") < css.index(
         ".translation-layer { order: 2;"
@@ -780,6 +782,64 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
     ).resolve() == figure_asset.resolve()
     for forbidden in ("provider", "cache", "run_id", "schema_version", "warning"):
         assert forbidden not in html.casefold()
+
+
+def test_web_hides_structural_figure_translation_and_duplicate_unit_heading(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    figure = replace(
+        chapter.source_anchors[-1],
+        payload={
+            **dict(chapter.source_anchors[-1].payload),
+            "alt_text": "",
+            "caption": "",
+        },
+    )
+    units = tuple(
+        replace(
+            item,
+            content_markdown=(
+                "### Duplicate display title\n\n"
+                + item.content_markdown
+            ),
+        )
+        if item.unit_id == "intuition"
+        else item
+        for item in chapter.learning_units
+    )
+    translations = tuple(
+        replace(item, text="images/source-figure.png")
+        if item.block_id == figure.block_id
+        else item
+        for item in chapter.translations
+    )
+    book = replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                source_anchors=chapter.source_anchors[:-1] + (figure,),
+                translations=translations,
+                learning_units=units,
+            ),
+        ),
+    )
+
+    html = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    ).render_web(book, tmp_path / "reader").read_text(encoding="utf-8")
+    parsed = BeautifulSoup(html, "html.parser")
+    figure_anchor = parsed.select_one('[data-source-anchor="b-figure"]')
+    unit = parsed.select_one('[data-learning-unit="intuition"]')
+
+    assert figure_anchor is not None
+    assert not figure_anchor.select(".translation-layer")
+    assert "images/source-figure.png" not in parsed.get_text(" ", strip=True)
+    assert unit is not None
+    assert len(unit.select("h4")) == 1
+    assert not unit.select("h3")
+    assert "Duplicate display title" not in unit.get_text(" ", strip=True)
 
 
 def test_web_glossary_terms_cover_reader_layers_and_exclude_metadata(
@@ -1187,6 +1247,70 @@ def test_model_escaped_paragraphs_render_as_paragraphs(
     assert r"\n" not in visible
     assert "First paragraph. Second paragraph." in visible
     assert r"First paragraph.\par Second paragraph." in tex
+
+
+def test_reader_hides_authored_html_tags_but_preserves_code_blocks(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    raw = "<details> <summary>Author note</summary>Visible note.</details>"
+    intro = replace(
+        chapter.source_anchors[0],
+        payload=_plain_inline(raw),
+    )
+    code = replace(
+        chapter.source_anchors[3],
+        kind="code",
+        payload={"language": "html", "text": "<details>literal</details>"},
+    )
+    translations = tuple(
+        (
+            replace(item, text=raw)
+            if item.block_id == intro.block_id
+            else replace(item, text="<div>translated literal</div>")
+            if item.block_id == code.block_id
+            else item
+        )
+        for item in chapter.translations
+    )
+    book = replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                source_anchors=(
+                    intro,
+                    *chapter.source_anchors[1:3],
+                    code,
+                    *chapter.source_anchors[4:],
+                ),
+                translations=translations,
+            ),
+        ),
+    )
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+
+    html = renderer.render_web(
+        book, tmp_path / "html-tag-reader"
+    ).read_text(encoding="utf-8")
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
+    visible = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+
+    assert visible.count("Author note Visible note.") == 2
+    assert visible.count("<details>literal</details>") == 1
+    assert visible.count("<div>translated literal</div>") == 1
+    assert "&lt;details&gt;literal&lt;/details&gt;" in html
+    assert "&lt;div&gt;translated literal&lt;/div&gt;" in html
+    assert r"\textless{}" not in tex
+    assert r"<details>literal</details>" in tex
+    assert r"<div>translated literal</div>" in tex
+    assert "Author note Visible note." in tex
+    assert r"\textless{}details" not in tex
 
 
 def test_pdf_search_normalization_matches_unicode_and_line_wrapping() -> None:
