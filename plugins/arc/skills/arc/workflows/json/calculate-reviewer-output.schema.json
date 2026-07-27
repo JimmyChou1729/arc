@@ -1,255 +1,146 @@
 {
   "type": "object",
-  "required": ["consensus"],
+  "required": [
+    "calculator_assessments",
+    "review_reasoning",
+    "trusted_results",
+    "remarks",
+    "workflow_action"
+  ],
   "properties": {
-    "consensus": {
-          "type": "object",
-          "required": [
-            "status",
-            "accepted_result",
-            "agreed_proposer_ids",
-            "likely_wrong_proposer_ids",
-            "recalculate_proposer_ids",
-            "validity_scope",
-            "analysis",
-            "agreement_assessment",
-            "best_written_proposer_id",
-            "best_written_selection_reason",
-            "source_discrepancies",
-            "workflow_action"
-          ],
-          "properties": {
-            "status": {
-              "type": "string",
-              "enum": []
-            },
-            "accepted_result": {
-              "type": [
-                "object",
-                "null"
-              ],
-              "required": [
-                "summary",
-                "final_result",
-                "derivation",
-                "validity_scope",
-                "selected_proposer_id",
-                "reference_claim_status",
-                "source_proposer_id"
-              ],
-              "properties": {
-                "summary": {"type": "string", "minLength": 1},
-                "final_result": {"type": "string", "minLength": 1},
-                "derivation": {"type": "string", "minLength": 1},
-                "validity_scope": {"type": "string", "minLength": 1},
-                "selected_proposer_id": {"type": "string", "minLength": 1},
-                "reference_claim_status": {
-                  "type": "string",
-                  "enum": ["agrees", "disagrees", "not_applicable"]
-                },
-                "source_proposer_id": {"type": "string", "minLength": 1}
-              },
-              "additionalProperties": false
-            },
-            "agreed_proposer_ids": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": []
-              }
-            },
-            "likely_wrong_proposer_ids": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": []
-              }
-            },
-            "recalculate_proposer_ids": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": []
-              }
-            },
-            "validity_scope": {
-              "type": "string"
-            },
-            "analysis": {
-              "type": "string"
-            },
-            "best_written_proposer_id": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "enum": []
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "best_written_selection_reason": {
-              "type": "string"
-            },
-            "source_discrepancies": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "required": [
-                  "item_id",
-                  "status",
-                  "source_claim",
-                  "derived_result",
-                  "confidence_reason",
-                  "reviewer_says_no_human_convention_choice_needed",
-                  "decision_question"
-                ],
-                "properties": {
-                  "item_id": {
-                    "type": "string"
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "confirmed_source_error",
-                      "likely_source_error",
-                      "ambiguous_convention"
-                    ]
-                  },
-                  "source_claim": {
-                    "type": "string"
-                  },
-                  "derived_result": {
-                    "type": "string"
-                  },
-                  "confidence_reason": {
-                    "type": "string"
-                  },
-                  "reviewer_says_no_human_convention_choice_needed": {
-                    "type": "boolean"
-                  },
-                  "decision_question": {
-                    "type": "string"
-                  }
-                },
-                "additionalProperties": false
-              }
-            },
-            "workflow_action": {
-              "type": "object",
-              "required": [
-                "action",
-                "requires_human",
-                "issue_type",
-                "proposed_revision",
-                "reason"
-                ,"expert_question"
-              ],
-              "properties": {
-                "action": {
-                  "type": "string",
-                  "enum": [
-                    "continue",
-                    "pause_for_human",
-                    "revise_plan",
-                    "split_step",
-                    "retry"
-                  ]
-                },
-                "requires_human": {
-                  "type": "boolean"
-                },
-                "issue_type": {
-                  "type": "string",
-                  "enum": [
-                    "none",
-                    "work_note_inadequate",
-                    "work_note_conflict",
-                    "plan_wrong",
-                    "step_too_coarse",
-                    "target_ambiguous",
-                    "source_mapping_error",
-                    "calculation_disagreement",
-                    "reference_disagreement",
-                    "source_discrepancy",
-                    "worker_failure",
-                    "other"
-                  ]
-                },
-                "proposed_revision": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "reason": {
-                  "type": "string"
-                },
-                "expert_question": {
-                  "type": "string"
-                }
-              },
-              "additionalProperties": false
-            },
-            "agreement_assessment": {
-              "type": "object",
-              "required": [
-                "target_quantity_match",
-                "convention_match",
-                "declared_scope_match",
-                "agreement_covers_full_target",
-                "comparison_summary",
-                "accepted_by_reviewer_judgment",
-                "tool_checks",
-                "sanity_checks",
-                "special_limit_only",
-                "notes"
-              ],
-              "properties": {
-                "target_quantity_match": {
-                  "type": "boolean"
-                },
-                "convention_match": {
-                  "type": "boolean"
-                },
-                "declared_scope_match": {
-                  "type": "boolean"
-                },
-                "agreement_covers_full_target": {
-                  "type": "boolean"
-                },
-                "comparison_summary": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "accepted_by_reviewer_judgment": {
-                  "type": "boolean"
-                },
-                "tool_checks": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "sanity_checks": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "special_limit_only": {
-                  "type": "boolean"
-                },
-                "notes": {
-                  "type": "string"
-                }
-              },
-              "additionalProperties": false
-            }
+    "calculator_assessments": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["proposer_id", "assessment", "reason"],
+        "properties": {
+          "proposer_id": {"type": "string", "enum": []},
+          "assessment": {
+            "type": "string",
+            "enum": ["valid", "invalid", "indeterminate"]
           },
-          "additionalProperties": false
+          "reason": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "review_reasoning": {"type": "string", "minLength": 1},
+    "trusted_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "summary",
+          "final_result",
+          "derivation",
+          "validity_scope",
+          "supporting_proposer_ids",
+          "selected_proposer_id",
+          "comparison_reasoning"
+        ],
+        "properties": {
+          "summary": {"type": "string", "minLength": 1},
+          "final_result": {"type": "string", "minLength": 1},
+          "derivation": {"type": "string", "minLength": 1},
+          "validity_scope": {"type": "string", "minLength": 1},
+          "supporting_proposer_ids": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {"type": "string", "enum": []}
+          },
+          "selected_proposer_id": {"type": "string", "enum": []},
+          "comparison_reasoning": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "remarks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["status", "summary", "reason", "related_proposer_ids"],
+        "properties": {
+          "status": {"type": "string", "const": "untrusted"},
+          "summary": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1},
+          "related_proposer_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "enum": []}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "workflow_action": {
+      "type": "object",
+      "required": ["action", "reason", "proposed_revision", "expert_question"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["continue", "retry", "replan", "pause_for_human"]
+        },
+        "reason": {"type": "string", "minLength": 1},
+        "proposed_revision": {"type": ["string", "null"]},
+        "expert_question": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"workflow_action": {"properties": {"action": {"type": "string", "const": "continue"}}}},
+        "required": ["workflow_action"]
+      },
+      "then": {
+        "properties": {"trusted_results": {"minItems": 1}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"workflow_action": {"properties": {"action": {"type": "string", "const": "retry"}}}},
+        "required": ["workflow_action"]
+      },
+      "then": {
+        "properties": {"trusted_results": {"maxItems": 0}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"workflow_action": {"properties": {"action": {"type": "string", "const": "replan"}}}},
+        "required": ["workflow_action"]
+      },
+      "then": {
+        "properties": {
+          "workflow_action": {
+            "properties": {
+              "proposed_revision": {"type": "string", "minLength": 1, "pattern": "\\S"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"workflow_action": {"properties": {"action": {"type": "string", "const": "pause_for_human"}}}},
+        "required": ["workflow_action"]
+      },
+      "then": {
+        "properties": {
+          "workflow_action": {
+            "properties": {
+              "expert_question": {"type": "string", "minLength": 1, "pattern": "\\S"}
+            }
+          }
+        }
+      }
+    }
+  ],
   "additionalProperties": false
 }

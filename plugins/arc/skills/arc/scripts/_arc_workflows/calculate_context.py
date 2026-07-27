@@ -6,6 +6,7 @@ import copy
 from typing import Any, Mapping
 
 from _arc_workflows.calculate_config import (
+    CALCULATOR_IDS,
     CalculateConfig,
     CalculateStep,
     _integrity_reference,
@@ -35,8 +36,6 @@ def caller_context(
     step: CalculateStep,
     *,
     attempt_number: int,
-    active_proposer_ids: list[str],
-    locked_outputs: dict[str, Any],
     retry_feedback: list[dict[str, Any]],
     accepted_step_outputs: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -49,18 +48,17 @@ def caller_context(
         "step_acceptance_instruction": _STEP_ACCEPTANCE_INSTRUCTIONS[step.kind],
         "allowed_context": copy.deepcopy(step.allowed_context),
         "attempt_number": attempt_number,
-        "active_proposer_ids": list(active_proposer_ids),
-        "locked_outputs": copy.deepcopy(locked_outputs),
+        "calculator_ids": list(CALCULATOR_IDS),
         "retry_feedback": copy.deepcopy(retry_feedback),
         "accepted_prior_step_outputs": copy.deepcopy(dict(accepted_step_outputs)),
         "max_recalculations": config.max_recalculations,
         "integrity_reference": _integrity_reference(
             config.defaults.get("integrity_reference_path")
         ),
-        "consensus_instruction": (
-            "Work only on this calculation step. Respect "
-            "accepted_prior_step_outputs and locked_outputs as already accepted "
-            "unless explicitly asked to check them."
+        "calculation_instruction": (
+            "Work independently on exactly step_prompt. Treat only "
+            "accepted_prior_step_outputs as trusted prior results. Remarks and "
+            "other calculators' outputs are not accepted inputs."
         ),
     }
 

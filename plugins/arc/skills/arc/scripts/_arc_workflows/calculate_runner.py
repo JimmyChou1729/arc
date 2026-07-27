@@ -16,6 +16,7 @@ from arc_proposer_reviewer import (
 )
 
 from _arc_workflows.calculate_config import (
+    CALCULATOR_IDS,
     CALCULATE_RESULT_SCHEMA,
     CalculateConfig,
     CalculateStep,
@@ -26,17 +27,13 @@ from _arc_workflows.calculate_config import (
     load_calculation_config,
 )
 from _arc_workflows.calculate_consensus import (
-    _review_consensus,
+    _review_decision,
 )
-from _arc_workflows.calculate_consensus_policy import _valid_ids
 from _arc_workflows.calculate_step_results import (
+    _accepted_step_result,
+    _blocked_step_result,
     _failed_step_result,
-    _human_gate_blocked_step_result,
-    _next_active_for_two_agree,
-    _reference_disagrees_step_result,
     _retry_feedback_record,
-    _source_discrepancy_blocked_step_result,
-    _workflow_action_blocked_step_result,
 )
 from _arc_workflows.calculate_prompts import (
     _attempt_batch_request,
@@ -45,7 +42,6 @@ from _arc_workflows.calculate_prompts import (
 )
 
 
-RETRYABLE_CONSENSUS_STATUSES = {"reference_disagrees", "two_agree", "all_disagree", "unresolved"}
 BatchExecutor = Callable[[BatchRequest, Path, str], CommittedRound]
 
 
@@ -156,9 +152,8 @@ def _run_calculation_locked(
         "run_id": calculation.run_id,
         "run_root": str(run_root),
         "config_semantic_key_sha256": config_semantic_key_sha256,
-        "proposer_count": calculation.proposer_count,
+        "calculator_ids": list(CALCULATOR_IDS),
         "max_recalculations": calculation.max_recalculations,
-        "human_gate": copy.deepcopy(calculation.human_gate),
         "steps": step_results,
         "warnings_summary": _aggregate_warnings_summary(step_results),
     }
@@ -208,9 +203,7 @@ def _run_calculation_step(
     run_root: Path,
     accepted_step_outputs: Mapping[str, Any],
 ) -> dict[str, Any]:
-    all_proposer_ids = _proposer_ids(config.proposer_count)
-    active_proposer_ids = list(all_proposer_ids)
-    locked_outputs: dict[str, Any] = {}
+    calculator_ids = list(CALCULATOR_IDS)
     retry_feedback: list[dict[str, Any]] = []
     attempts: list[dict[str, Any]] = []
     max_attempts = config.max_recalculations + 1
@@ -221,13 +214,11 @@ def _run_calculation_step(
                 config,
                 step,
                 attempt_number=attempt_number,
-                active_proposer_ids=active_proposer_ids,
-                locked_outputs=locked_outputs,
                 retry_feedback=retry_feedback,
                 accepted_step_outputs=accepted_step_outputs,
             )
         except Exception as exc:
-            return _failed_step_result(config, step, attempts=attempts, error=str(exc))
+            return _failed_step_result(step, attempts=attempts, error=str(exc))
         attempt_id = _attempt_id(step.step_id, attempt_number)
         batch_run_id = _batch_run_id(config.run_id, attempt_id)
         try:
@@ -235,7 +226,7 @@ def _run_calculation_step(
         except Exception as exc:
             failed_attempt = {
                 "attempt_number": attempt_number,
-                "active_proposer_ids": list(active_proposer_ids),
+                "calculator_ids": list(calculator_ids),
                 "batch_run_id": batch_run_id,
                 "batch_loop_id": attempt_id,
                 "error": str(exc),
@@ -246,10 +237,10 @@ def _run_calculation_step(
                     exc.durable_frontier
                 )
             attempts.append(failed_attempt)
-            return _failed_step_result(config, step, attempts=attempts, error=str(exc))
+            return _failed_step_result(step, attempts=attempts, error=str(exc))
         attempt_record = {
             "attempt_number": attempt_number,
-            "active_proposer_ids": list(active_proposer_ids),
+            "calculator_ids": list(calculator_ids),
             "batch_run_id": batch_run_id,
             "batch_loop_id": attempt_id,
             "warnings_summary": _empty_warnings_summary(),
@@ -257,123 +248,57 @@ def _run_calculation_step(
 
         try:
             review = _review_from_committed_round(committed_round)
-            if set(committed_round.proposals) != set(active_proposer_ids):
+            if set(committed_round.proposals) != set(calculator_ids):
                 raise ValueError(
-                    "committed proposer outputs must exactly match active proposer ids"
+                    "committed calculator outputs must exactly match calculator ids"
                 )
-            proposer_outputs = dict(committed_round.proposals)
-            review_consensus = _review_consensus(
+            review_decision = _review_decision(
                 review,
-                active_proposer_ids=active_proposer_ids,
-                selectable_proposer_ids=list(
-                    dict.fromkeys([*active_proposer_ids, *[proposer_id for proposer_id in locked_outputs]])
-                ),
-                reviewer_reference_claim=step.reviewer_reference_claim,
+                active_proposer_ids=calculator_ids,
             )
         except Exception as exc:
             attempt_record["error"] = str(exc)
             attempts.append(attempt_record)
-            return _failed_step_result(config, step, attempts=attempts, error=str(exc))
-        attempt_record["consensus"] = review_consensus
+            return _failed_step_result(step, attempts=attempts, error=str(exc))
+        attempt_record["reviewer_decision"] = review_decision
         attempts.append(attempt_record)
 
-        status = str(review_consensus.get("status", "unresolved"))
-        retryable_status = status in RETRYABLE_CONSENSUS_STATUSES
+        action = str(review_decision["workflow_action"]["action"])
         retry_budget_available = attempt_number < max_attempts
 
-        if status == "all_agree":
-            source_discrepancy_block = _source_discrepancy_blocked_step_result(
+        if action == "continue":
+            return _accepted_step_result(
                 step,
                 attempts=attempts,
-                consensus=review_consensus,
+                decision=review_decision,
             )
-            if source_discrepancy_block is not None:
-                return source_discrepancy_block
-            workflow_action_block = _workflow_action_blocked_step_result(
-                step,
-                attempts=attempts,
-                consensus=review_consensus,
-            )
-            if workflow_action_block is not None:
-                return workflow_action_block
-            return {
-                "step_id": step.step_id,
-                "kind": step.kind,
-                "status": "accepted",
-                "attempts": attempts,
-                "accepted_output": copy.deepcopy(
-                    review_consensus["accepted_result"]
-                ),
-                "blocked_output": None,
-                "reviewer_consensus": review_consensus,
-            }
 
-        if retryable_status and retry_budget_available:
+        if action == "retry" and retry_budget_available:
             retry_feedback.append(
                 _retry_feedback_record(
-                    review,
-                    review_consensus,
+                    review_decision,
                     attempt_number=attempt_number,
                     blind_reference=step.reviewer_reference_claim is not None,
                 )
             )
-            if status == "two_agree":
-                next_active = _next_active_for_two_agree(review_consensus, all_proposer_ids)
-                if next_active is not None:
-                    agreed_ids = _valid_ids(review_consensus.get("agreed_proposer_ids", []), all_proposer_ids)
-                    for proposer_id in agreed_ids:
-                        if proposer_id in proposer_outputs:
-                            locked_outputs[proposer_id] = proposer_outputs[proposer_id]
-                    active_proposer_ids = next_active
-                    continue
-
-            active_proposer_ids = list(all_proposer_ids)
-            locked_outputs = {}
             continue
-
-        gated_block = _human_gate_blocked_step_result(
-            config,
-            step,
-            attempts=attempts,
-            consensus=review_consensus,
-            trigger_status=status,
-        )
-        if gated_block is not None:
-            return gated_block
-
-        if status == "reference_disagrees":
-            return _reference_disagrees_step_result(
+        if action == "retry":
+            error = (
+                "referee returned workflow_action=retry on the final attempt; "
+                "the final action must be replan or pause_for_human"
+            )
+            attempts[-1]["error"] = error
+            return _failed_step_result(
                 step,
                 attempts=attempts,
-                consensus=review_consensus,
+                error=error,
             )
 
-        if retryable_status and attempt_number >= max_attempts:
-            return {
-                "step_id": step.step_id,
-                "kind": step.kind,
-                "status": "blocked_for_user",
-                "attempts": attempts,
-                "accepted_output": None,
-                "blocked_output": {
-                    "analysis": str(review_consensus.get("analysis", "")),
-                    "last_consensus": review_consensus,
-                },
-                "reviewer_consensus": review_consensus,
-            }
-
-        if status == "two_agree":
-            next_active = _next_active_for_two_agree(review_consensus, all_proposer_ids)
-            if next_active is not None:
-                agreed_ids = _valid_ids(review_consensus.get("agreed_proposer_ids", []), all_proposer_ids)
-                for proposer_id in agreed_ids:
-                    if proposer_id in proposer_outputs:
-                        locked_outputs[proposer_id] = proposer_outputs[proposer_id]
-                active_proposer_ids = next_active
-                continue
-
-        active_proposer_ids = list(all_proposer_ids)
-        locked_outputs = {}
+        return _blocked_step_result(
+            step,
+            attempts=attempts,
+            decision=review_decision,
+        )
 
     raise AssertionError("unreachable calculation loop exit")
 
@@ -411,10 +336,6 @@ def _aggregate_warnings_summary(step_results: list[dict[str, Any]]) -> dict[str,
         "cache_warning_count": cache_count,
         "cache_warnings_paths": sorted(set(cache_paths)),
     }
-
-
-def _proposer_ids(count: int) -> list[str]:
-    return [f"proposer_{index:03d}" for index in range(1, count + 1)]
 
 
 def _execute_public_batch(
@@ -535,9 +456,8 @@ def _dry_run_result(
         "run_id": config.run_id,
         "run_root": str(run_root),
         "config_semantic_key_sha256": config_semantic_key_sha256,
-        "proposer_count": config.proposer_count,
+        "calculator_ids": list(CALCULATOR_IDS),
         "max_recalculations": config.max_recalculations,
-        "human_gate": copy.deepcopy(config.human_gate),
         "steps": [{"step_id": step.step_id, "kind": step.kind} for step in config.steps],
     }
 

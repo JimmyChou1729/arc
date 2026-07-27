@@ -1,363 +1,273 @@
-"""Validate reviewer consensus payloads for ARC calculations."""
+"""Validate the referee-owned scientific decision for one calculation attempt."""
 
 from __future__ import annotations
 
-import re
+import copy
 from typing import Any, Mapping
 
-from _arc_workflows.calculate_consensus_policy import (
-    _normalized_workflow_action,
-    _validate_source_discrepancies,
-    _valid_ids,
-)
+
+_PUBLIC_REVIEW_FIELDS = {
+    "schema_version",
+    "action",
+    "reason",
+    "feedback",
+    "payload",
+}
+_DECISION_FIELDS = {
+    "calculator_assessments",
+    "review_reasoning",
+    "trusted_results",
+    "remarks",
+    "workflow_action",
+}
+_ASSESSMENT_FIELDS = {"proposer_id", "assessment", "reason"}
+_TRUSTED_RESULT_FIELDS = {
+    "summary",
+    "final_result",
+    "derivation",
+    "validity_scope",
+    "supporting_proposer_ids",
+    "selected_proposer_id",
+    "comparison_reasoning",
+}
+_REMARK_FIELDS = {"status", "summary", "reason", "related_proposer_ids"}
+_WORKFLOW_ACTION_FIELDS = {
+    "action",
+    "reason",
+    "proposed_revision",
+    "expert_question",
+}
 
 
-def _review_consensus(
+def _review_decision(
     review: Mapping[str, Any],
     *,
     active_proposer_ids: list[str],
-    selectable_proposer_ids: list[str] | None = None,
-    reviewer_reference_claim: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if selectable_proposer_ids is None:
-        selectable_proposer_ids = active_proposer_ids
+    """Return a structurally valid referee decision without judging its science."""
+
+    if len(active_proposer_ids) != 2 or len(set(active_proposer_ids)) != 2:
+        raise ValueError("calculate review requires exactly two calculator ids")
+    _require_exact_fields(review, _PUBLIC_REVIEW_FIELDS, "review")
     if review.get("schema_version") != "arc.proposer_reviewer.review.v1":
         raise ValueError(
             "review must use the public proposer-reviewer review envelope"
         )
+    if review.get("action") not in {"continue", "stop"}:
+        raise ValueError("review.action must be continue or stop")
+    _nonempty_text(review.get("reason"), "review.reason")
+
     payload = review.get("payload")
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
         raise ValueError("review.payload must be an object")
-    consensus = payload.get("consensus")
-    if not isinstance(consensus, dict):
-        raise ValueError("review.payload.consensus must be an object")
-    status = consensus.get("status")
-    allowed_statuses = {
-        "all_agree",
-        "two_agree",
-        "all_disagree",
-        "unresolved",
-    }
-    if reviewer_reference_claim:
-        allowed_statuses.add("reference_disagrees")
-    if status not in allowed_statuses:
-        message = (
-            "consensus.status must be all_agree, two_agree, "
-            "all_disagree, or unresolved"
-        )
-        if reviewer_reference_claim:
-            message += ", or reference_disagrees"
-        raise ValueError(message)
-    consensus = dict(consensus)
-    _validate_consensus_proposer_ids(
-        consensus,
+    _require_exact_fields(payload, _DECISION_FIELDS, "review.payload")
+    decision = copy.deepcopy(dict(payload))
+
+    _validate_calculator_assessments(
+        decision.get("calculator_assessments"),
         active_proposer_ids=active_proposer_ids,
     )
-    _validate_source_discrepancies(consensus)
-    consensus["workflow_action"] = _normalized_workflow_action(
-        consensus.get("workflow_action"),
-        str(status),
+    _nonempty_text(
+        decision.get("review_reasoning"),
+        "review.payload.review_reasoning",
     )
-    if status == "all_agree":
-        _require_exact_agreement_set(
-            consensus,
-            active_proposer_ids=active_proposer_ids,
-            status="all_agree",
+    trusted_results = _validate_trusted_results(
+        decision.get("trusted_results"),
+        active_proposer_ids=active_proposer_ids,
+    )
+    _validate_remarks(
+        decision.get("remarks"),
+        active_proposer_ids=active_proposer_ids,
+    )
+    workflow_action = _validate_workflow_action(
+        decision.get("workflow_action")
+    )
+    action = workflow_action["action"]
+    if action == "continue" and not trusted_results:
+        raise ValueError(
+            "workflow_action=continue requires at least one trusted result"
         )
-        _validate_best_written_selection(
-            consensus,
-            active_proposer_ids=active_proposer_ids,
-            selectable_proposer_ids=selectable_proposer_ids,
+    if action == "retry" and trusted_results:
+        raise ValueError(
+            "workflow_action=retry requires trusted_results to be empty"
         )
-        _validate_accepted_result(
-            consensus,
-            selectable_proposer_ids=selectable_proposer_ids,
-            expected_reference_claim_status=(
-                "agrees" if reviewer_reference_claim else "not_applicable"
-            ),
-        )
-        _validate_all_agree_agreement_assessment(consensus)
-    if status == "reference_disagrees":
-        _require_exact_agreement_set(
-            consensus,
-            active_proposer_ids=active_proposer_ids,
-            status="reference_disagrees",
-        )
-        _validate_best_written_selection(
-            consensus,
-            active_proposer_ids=active_proposer_ids,
-            selectable_proposer_ids=selectable_proposer_ids,
-        )
-        _validate_accepted_result(
-            consensus,
-            selectable_proposer_ids=selectable_proposer_ids,
-            expected_reference_claim_status="disagrees",
-        )
-        _validate_reference_disagrees_agreement_assessment(
-            consensus,
-            active_proposer_ids=active_proposer_ids,
-        )
-    if (
-        status not in {"all_agree", "reference_disagrees"}
-        and consensus.get("accepted_result") is not None
-    ):
-        raise ValueError(f"{status} consensus requires accepted_result=null")
-    return consensus
+    return decision
 
 
-def _validate_consensus_proposer_ids(
-    consensus: dict[str, Any],
+def _validate_calculator_assessments(
+    raw: Any,
     *,
     active_proposer_ids: list[str],
 ) -> None:
-    allowed = set(active_proposer_ids)
-    for field in [
-        "agreed_proposer_ids",
-        "likely_wrong_proposer_ids",
-        "recalculate_proposer_ids",
-    ]:
-        raw = consensus.get(field)
-        if not isinstance(raw, list):
-            raise ValueError(f"{field} must be an array")
+    if not isinstance(raw, list) or len(raw) != 2:
+        raise ValueError("calculator_assessments must contain exactly two items")
+    assessed_ids: list[str] = []
+    for index, item in enumerate(raw):
+        field = f"calculator_assessments[{index}]"
+        if not isinstance(item, Mapping):
+            raise ValueError(f"{field} must be an object")
+        _require_exact_fields(item, _ASSESSMENT_FIELDS, field)
+        proposer_id = _nonempty_text(item.get("proposer_id"), f"{field}.proposer_id")
+        if proposer_id not in active_proposer_ids:
+            raise ValueError(
+                f"{field}.proposer_id must identify an active calculator"
+            )
+        if item.get("assessment") not in {
+            "valid",
+            "invalid",
+            "indeterminate",
+        }:
+            raise ValueError(f"{field}.assessment is invalid")
+        _nonempty_text(item.get("reason"), f"{field}.reason")
+        assessed_ids.append(proposer_id)
+    if len(set(assessed_ids)) != 2 or set(assessed_ids) != set(
+        active_proposer_ids
+    ):
+        raise ValueError(
+            "calculator_assessments must assess each active calculator once"
+        )
+
+
+def _validate_trusted_results(
+    raw: Any,
+    *,
+    active_proposer_ids: list[str],
+) -> list[Mapping[str, Any]]:
+    if not isinstance(raw, list):
+        raise ValueError("trusted_results must be an array")
+    for index, item in enumerate(raw):
+        field = f"trusted_results[{index}]"
+        if not isinstance(item, Mapping):
+            raise ValueError(f"{field} must be an object")
+        _require_exact_fields(item, _TRUSTED_RESULT_FIELDS, field)
+        for name in {
+            "summary",
+            "final_result",
+            "derivation",
+            "validity_scope",
+            "comparison_reasoning",
+        }:
+            _nonempty_text(item.get(name), f"{field}.{name}")
+        supporting_ids = item.get("supporting_proposer_ids")
+        if not isinstance(supporting_ids, list):
+            raise ValueError(
+                f"{field}.supporting_proposer_ids must be an array"
+            )
         if any(
-            not isinstance(item, str) or not item or item not in allowed
-            for item in raw
+            not isinstance(proposer_id, str)
+            or proposer_id not in active_proposer_ids
+            for proposer_id in supporting_ids
         ):
             raise ValueError(
-                f"{field} must contain only active proposer ids"
+                f"{field}.supporting_proposer_ids must contain only active "
+                "proposer ids"
             )
-        if len(raw) != len(set(raw)):
-            raise ValueError(f"{field} entries must be unique")
-        consensus[field] = list(raw)
-
-
-def _require_exact_agreement_set(
-    consensus: Mapping[str, Any],
-    *,
-    active_proposer_ids: list[str],
-    status: str,
-) -> None:
-    agreed_ids = consensus["agreed_proposer_ids"]
-    if set(agreed_ids) != set(active_proposer_ids):
-        raise ValueError(
-            f"{status} agreed_proposer_ids must exactly match "
-            "active proposer ids"
-        )
-
-
-def _validate_accepted_result(
-    consensus: Mapping[str, Any],
-    *,
-    selectable_proposer_ids: list[str],
-    expected_reference_claim_status: str,
-) -> None:
-    result = consensus.get("accepted_result")
-    if not isinstance(result, dict):
-        raise ValueError("accepted_result must be an object")
-    required = {
-        "summary",
-        "final_result",
-        "derivation",
-        "validity_scope",
-        "selected_proposer_id",
-        "reference_claim_status",
-        "source_proposer_id",
-    }
-    if set(result) != required:
-        raise ValueError(
-            "accepted_result must contain exactly the closed "
-            "accepted-result fields"
-        )
-    for field in [
-        "summary",
-        "final_result",
-        "derivation",
-        "validity_scope",
-        "selected_proposer_id",
-        "reference_claim_status",
-        "source_proposer_id",
-    ]:
-        if not isinstance(result[field], str) or not result[field].strip():
+        if len(supporting_ids) != len(set(supporting_ids)):
             raise ValueError(
-                f"accepted_result.{field} must be a non-empty string"
+                f"{field}.supporting_proposer_ids entries must be unique"
             )
-    best_written = consensus.get("best_written_proposer_id")
-    for field in ["selected_proposer_id", "source_proposer_id"]:
-        if result[field] not in selectable_proposer_ids:
+        if set(supporting_ids) != set(active_proposer_ids):
             raise ValueError(
-                f"accepted_result.{field} must identify an active or "
-                "locked proposer output"
+                f"{field}.supporting_proposer_ids must exactly match active "
+                "proposer ids"
             )
-        if result[field] != best_written:
+        selected = _nonempty_text(
+            item.get("selected_proposer_id"),
+            f"{field}.selected_proposer_id",
+        )
+        if selected not in active_proposer_ids:
             raise ValueError(
-                f"accepted_result.{field} must match "
-                "best_written_proposer_id"
+                f"{field}.selected_proposer_id must identify an active calculator"
             )
-    if result["reference_claim_status"] not in {
-        "agrees",
-        "disagrees",
-        "not_applicable",
-    }:
-        raise ValueError(
-            "accepted_result.reference_claim_status is invalid"
-        )
-    if result["reference_claim_status"] != expected_reference_claim_status:
-        raise ValueError(
-            "accepted_result.reference_claim_status must be "
-            f"{expected_reference_claim_status}"
-        )
+    return raw
 
 
-def _validate_best_written_selection(
-    consensus: Mapping[str, Any],
-    *,
-    active_proposer_ids: list[str],
-    selectable_proposer_ids: list[str],
-) -> None:
-    best_written = consensus.get("best_written_proposer_id")
-    if not isinstance(best_written, str) or not best_written.strip():
-        raise ValueError(
-            "best_written_proposer_id is required for all_agree consensus"
-        )
-    if best_written not in selectable_proposer_ids:
-        raise ValueError(
-            "best_written_proposer_id must identify an active or "
-            "locked proposer output"
-        )
-    agreed_ids = _valid_ids(
-        consensus.get("agreed_proposer_ids", []),
-        active_proposer_ids,
-    )
-    if best_written in active_proposer_ids and best_written not in agreed_ids:
-        raise ValueError(
-            "best_written_proposer_id must be one of agreed_proposer_ids "
-            "for all_agree consensus"
-        )
-    reason = consensus.get("best_written_selection_reason")
-    if not isinstance(reason, str) or not reason.strip():
-        raise ValueError(
-            "best_written_selection_reason is required for all_agree consensus"
-        )
-
-
-def _agreement_assessment(
-    consensus: Mapping[str, Any],
-    *,
-    status: str,
-    reject_special_limit_only: bool = True,
-) -> Mapping[str, Any]:
-    assessment = consensus.get("agreement_assessment")
-    if not isinstance(assessment, dict):
-        raise ValueError(
-            f"{status} requires payload.consensus.agreement_assessment"
-        )
-    summary = assessment.get("comparison_summary")
-    if not isinstance(summary, str) or not summary.strip():
-        raise ValueError(
-            f"{status} requires agreement_assessment.comparison_summary"
-        )
-    lowered_summary = summary.lower()
-    if _has_weak_reliance_marker(lowered_summary):
-        raise ValueError(
-            f"{status} cannot rely on formatting, spacing, visual similarity, "
-            "looks identical, or string equality"
-        )
-    if (
-        reject_special_limit_only
-        and assessment.get("special_limit_only") is True
-    ):
-        raise ValueError(
-            f"{status} cannot accept "
-            "agreement_assessment.special_limit_only=true"
-        )
-    return assessment
-
-
-def _has_weak_reliance_marker(lowered_summary: str) -> bool:
-    weak_reliance_patterns = [
-        r"\bby\s+visual\s+inspection\b",
-        r"\bbased\s+on\s+visual\s+inspection\b",
-        r"\brel(?:y|ies|ied|ying)\s+on\s+visual\s+inspection\b",
-        r"\blooks?\s+identical\b",
-        r"\bvisually\s+identical\b",
-        r"\bstring[-\s]+equality\b",
-        r"\bonly\s+spacing\b",
-        r"\bonly\s+formatting\b",
-        r"\bformatting\s+differences\b",
-    ]
-    for pattern in weak_reliance_patterns:
-        for match in re.finditer(pattern, lowered_summary):
-            if not _has_nearby_negation(lowered_summary, match.start()):
-                return True
-    return False
-
-
-def _has_nearby_negation(
-    lowered_summary: str,
-    match_start: int,
-) -> bool:
-    prefix = lowered_summary[max(0, match_start - 32) : match_start]
-    return (
-        re.search(
-            r"\b(?:not|do\s+not|does\s+not|without|never)\b"
-            r"(?:\W+\w+){0,3}\W*$",
-            prefix,
-        )
-        is not None
-    )
-
-
-def _validate_all_agree_agreement_assessment(
-    consensus: Mapping[str, Any],
-) -> None:
-    assessment = _agreement_assessment(consensus, status="all_agree")
-    for field in [
-        "target_quantity_match",
-        "convention_match",
-        "declared_scope_match",
-        "agreement_covers_full_target",
-        "accepted_by_reviewer_judgment",
-    ]:
-        if assessment.get(field) is not True:
-            raise ValueError(
-                f"all_agree requires agreement_assessment.{field}=true"
-            )
-
-
-def _validate_reference_disagrees_agreement_assessment(
-    consensus: Mapping[str, Any],
+def _validate_remarks(
+    raw: Any,
     *,
     active_proposer_ids: list[str],
 ) -> None:
-    assessment = _agreement_assessment(
-        consensus,
-        status="reference_disagrees",
-        reject_special_limit_only=False,
-    )
-    agreed_ids = _valid_ids(
-        consensus.get("agreed_proposer_ids", []),
-        active_proposer_ids,
-    )
-    if len(set(agreed_ids)) < 2:
-        raise ValueError(
-            "reference_disagrees requires two agreeing blind proposer ids"
-        )
-    if assessment.get("accepted_by_reviewer_judgment") is not False:
-        raise ValueError(
-            "reference_disagrees requires "
-            "agreement_assessment.accepted_by_reviewer_judgment=false"
-        )
-    mismatch_fields = [
-        "target_quantity_match",
-        "convention_match",
-        "declared_scope_match",
-        "agreement_covers_full_target",
-    ]
-    if not any(assessment.get(field) is False for field in mismatch_fields):
-        raise ValueError(
-            "reference_disagrees requires at least one "
-            "agreement_assessment match field=false"
-        )
+    if not isinstance(raw, list):
+        raise ValueError("remarks must be an array")
+    for index, item in enumerate(raw):
+        field = f"remarks[{index}]"
+        if not isinstance(item, Mapping):
+            raise ValueError(f"{field} must be an object")
+        _require_exact_fields(item, _REMARK_FIELDS, field)
+        if item.get("status") != "untrusted":
+            raise ValueError(f"{field}.status must be untrusted")
+        _nonempty_text(item.get("summary"), f"{field}.summary")
+        _nonempty_text(item.get("reason"), f"{field}.reason")
+        related_ids = item.get("related_proposer_ids")
+        if not isinstance(related_ids, list):
+            raise ValueError(f"{field}.related_proposer_ids must be an array")
+        if any(
+            not isinstance(item_id, str)
+            or item_id not in active_proposer_ids
+            for item_id in related_ids
+        ):
+            raise ValueError(
+                f"{field}.related_proposer_ids must contain only active "
+                "calculator ids"
+            )
+        if len(related_ids) != len(set(related_ids)):
+            raise ValueError(
+                f"{field}.related_proposer_ids entries must be unique"
+            )
 
 
-__all__ = ["_review_consensus"]
+def _validate_workflow_action(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise ValueError("workflow_action must be an object")
+    _require_exact_fields(raw, _WORKFLOW_ACTION_FIELDS, "workflow_action")
+    action = raw.get("action")
+    if action not in {"continue", "retry", "replan", "pause_for_human"}:
+        raise ValueError("workflow_action.action is invalid")
+    _nonempty_text(raw.get("reason"), "workflow_action.reason")
+    proposed_revision = _nullable_text(
+        raw.get("proposed_revision"),
+        "workflow_action.proposed_revision",
+    )
+    expert_question = _nullable_text(
+        raw.get("expert_question"),
+        "workflow_action.expert_question",
+    )
+    if action == "replan" and not proposed_revision:
+        raise ValueError(
+            "workflow_action=replan requires a non-empty proposed_revision"
+        )
+    if action == "pause_for_human" and not expert_question:
+        raise ValueError(
+            "workflow_action=pause_for_human requires a non-empty expert_question"
+        )
+    return copy.deepcopy(dict(raw))
+
+
+def _nullable_text(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string or null")
+    return value.strip() or None
+
+
+def _nonempty_text(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty string")
+    return value
+
+
+def _require_exact_fields(
+    value: Mapping[str, Any],
+    expected: set[str],
+    field: str,
+) -> None:
+    missing = sorted(expected - set(value))
+    if missing:
+        raise ValueError(f"{field} is missing required field: {missing[0]}")
+    unknown = sorted(set(value) - expected)
+    if unknown:
+        raise ValueError(f"{field} contains unsupported field: {unknown[0]}")
+
+
+__all__ = ["_review_decision"]

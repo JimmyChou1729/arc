@@ -1,12 +1,12 @@
 # Plan Workflow
 
 Use this workflow when a research task, planning request, or note-check handoff needs a human-readable calculation work note. `plan.md owns work-note structure`, `initial foundations`, `accepted-premise promotion`, `ready-step boundaries`, `rough-step planning`, and reviewer-only target placement.
-It does not own consensus execution; `calculate.md` owns current-step status/result recording. For Markdown or PDF note parsing, use `check.md`; for execution and result capture, use `calculate.md`. When another phase needs behavior outside these boundaries, refer to the owning workflow.
+It does not own calculation execution; `calculate.md` owns current-step status/result recording. For Markdown or PDF note parsing, use `check.md`; for execution and result capture, use `calculate.md`. When another phase needs behavior outside these boundaries, refer to the owning workflow.
 
 Heavy Workload Rule: This workflow can be long; heavy workload and many claims/equations are expected runtime facts. Workload size is not a stop condition.
 The agent must not skip mandatory phases or shorten requested coverage because work is heavy. Continue until requested coverage is complete, a concrete workflow stop condition applies, or the user explicitly stops the workflow.
 
-No JSON file is the source of truth for planning. Runtime JSON, consensus config, and execution records belong to the workflows and packages that own runtime execution.
+No JSON file is the source of truth for planning. Runtime JSON, calculation config, and execution records belong to the workflows and packages that own runtime execution.
 
 Read optional planning requests from:
 
@@ -39,6 +39,7 @@ Use this Work Note template:
 ## Notation And Conventions
 ## Axioms And Starting Points
 ## Accepted Derived Results
+## Calculation Remarks — Not Trusted Results
 ## Validation-Only References
 ## Detailed Steps Ready To Calculate
 ## Rough Steps For Later Planning
@@ -102,10 +103,9 @@ unstated theorems, or source-derived equations accepted only because they appear
 in the manuscript. Those remain validation-only, reviewer-only, accepted-derived,
 or blocked until properly checked.
 
-Step 3: Put checked reusable derivations in `## Accepted Derived Results`.
-`calculate.md` may propose a candidate reusable result through a planning
-request, but `plan.md` decides promotion into Accepted Derived Results, allowed
-premises, and future dependencies. This is accepted-premise promotion.
+Step 3: Put only referee-trusted results jointly supported by both independent calculators in `## Accepted Derived Results`. `calculate.md` may propose such a candidate through a planning request, but `plan.md` decides promotion into Accepted Derived Results, allowed premises, and future dependencies. This is accepted-premise promotion. Never promote a one-calculator result, a referee remark, a source discrepancy, or an unresolved alternative as a premise.
+
+Put every non-trusted calculation conclusion in `## Calculation Remarks — Not Trusted Results`, with its provenance and a clear `untrusted` label. Remarks may preserve useful alternatives, limitations, source mismatches, and unresolved questions, but never become allowed premises or accepted prior outputs.
 
 Step 4: Put cross-check formulas, benchmark cases, source claims being checked,
 and hidden answer targets in validation/reviewer sections. Validation-only
@@ -118,41 +118,40 @@ is trying to show, why each block follows, what assumptions are active, and how
 dependencies flow. Avoid turning extracted equations into a mechanical step
 list.
 
-Step 2: Choose ready-step boundaries. `## Detailed Steps Ready To Calculate` is the executable backlog; it contains only steps still intended for consensus execution.
+Step 2: Choose ready-step boundaries. `## Detailed Steps Ready To Calculate` is the executable backlog; it contains only steps still intended for two-calculator execution and referee review.
 Use the largest coherent chunks current agents can calculate and reviewers can check reliably. Split only when context, algebra, ambiguity, or target secrecy requires it; do not split by raw equation count.
 Accepted steps must live in `## Accepted Derived Results` plus status/history/journal trace, not in the ready-step section.
 
 Ordering rule: arrange derivation blocks by dependency/topological order. When multiple blocks have the same dependency priority, put the block with the earliest source anchor first: source line number if known, otherwise first target equation, page, or stable block id. Use this order for accepted results, detailed steps, and rough steps. Keep Journal and Revision History chronological.
 
-Step 3: For each detailed step, include this contract:
+Step 3: For each detailed step, include a free-text calculation prompt with
+this information:
 
 ```text
 id
 status: ready | accepted | blocked | pending
-target quantity
+calculation prompt
 calculation intent: new derivation | check known result | formal setup
-physical output basis
 allowed intermediate objects
-required eliminations/substitutions
-completion standard
 allowed premises
 forbidden inputs
 proposer-visible context
 reviewer-only target ids
-expected form without target formula
-acceptance standard
-source-discrepancy handling
 why follows
 ```
 
-At the end of every step, state calculate which quantity, in terms of which quantity, and what is forbidden as input. Do not disclose the exact expected expression or expected final formula; ask proposers to derive the target quantity in terms of named dependencies.
-For new derivations, `physical output basis` defaults to variables and parameters introduced in `## Notation And Conventions` and `## Axioms And Starting Points` unless another physical basis is explicitly named. Taking limits, changing variables, or defining helper symbols is not completion unless those objects are listed in `allowed intermediate objects` and permitted by `completion standard`.
+The free-text `calculation prompt` must explicitly state: the quantity to calculate; the required final representation, including the quantities it must be expressed in terms of; the conventions, validity regime, and approximation order; and the completion and scientific-agreement standard the referee must apply. It is prompt text for the calculators and referee, not a structured target contract for the program to parse. Do not disclose an exact expected expression or target formula; ask the calculators to derive the target quantity in terms of the named dependencies.
+
+For new derivations, the required final representation normally uses variables and parameters introduced in `## Notation And Conventions` and `## Axioms And Starting Points` unless another physical basis is explicitly named. Taking limits, changing variables, or defining helper symbols is not completion unless the prompt permits them and states the remaining required representation.
 If a step intentionally stops at Green functions, an integral representation, an asymptotic limit, or another formal object, set `calculation intent: formal setup` and add the downstream reduction task to ready or rough steps. For `check known result`, equivalence after limits or variable changes may be acceptable if the step says so explicitly.
-For note-check steps that may contradict the source, add `source-discrepancy handling`: say that `calculate.md` owns per-item source discrepancy classification, human gates, and markers.
+For note-check steps that may contradict a source, state in the calculation
+prompt whether the source is a reviewer-only reference. A source mismatch is
+recorded as an explicitly untrusted remark; it does not itself decide whether a
+jointly derived result is trusted.
 
 Step 4: Write deferred work in `## Rough Steps For Later Planning`. Rough-step
 planning records dependency order, likely inputs, risk, and expansion triggers.
-Rough steps are not executable consensus steps. Future planning may refine them
+Rough steps are not executable calculation steps. Future planning may refine them
 after accepted results, blocked reasons, reviewer reports, or observed agent
 ability are known.
 
@@ -175,7 +174,7 @@ This creates a blind reference check with reviewer-only reference claims.
 ## Phase 3: Status And Revision Recording
 
 Step 1: Use `## Calculation Status` only to summarize current step state:
-ready, accepted, blocked, or pending. `calculate.md` records consensus execution
+ready, accepted, blocked, or pending. `calculate.md` records calculation execution
 details and current-step result-status; plan.md updates structure only when a
 planning decision is needed.
 
@@ -189,13 +188,15 @@ execution notes, planning-request excerpts, PDF job ids, and reviewer decisions.
 Keep it factual and short.
 
 Step 4: Use `## Source Audit Trail` for every source that shaped the work note:
-paper ids, note paths, sections, equations, commands, MCP tools, URLs, consensus
+paper ids, note paths, sections, equations, commands, MCP tools, URLs, calculation
 artifact paths supporting any agent-added foundation, and why each source
 matters.
 
-Step 5: When preserving accepted or promoted note-check content, preserve any
-`calculate.md` source-discrepancy and human-resolution markers exactly. Do not
-define new marker semantics in `plan.md`.
+Step 5: Preserve any `[confirmed source issue]`, `[human-resolved]`, and
+`[foundation added by agent]` provenance markers exactly, together with the
+provenance and `untrusted` labels on calculation remarks. Do not promote
+remarks, including source mismatches and unresolved alternatives, into
+accepted derived results or allowed premises.
 
 ## Phase 4: Version And Export
 Step 1: Find the highest existing immutable version under
@@ -217,7 +218,7 @@ Step 1: Review the plan before execution. If the host and workflow permissions
 allow delegation, use an independent reviewer. Otherwise the main agent must
 perform the same review.
 
-Step 2: Check that foundations are separated from derived results, accepted derived results were actually accepted, agent-added foundations have proposer/reviewer/main-agent agreement plus validity scope and the `[foundation added by agent]` marker, validation-only references are not premises, ready steps have complete contracts including physical endpoint fields, new derivations have no implicit terminal variables, formal setup steps have a downstream reduction task or explicit stop condition, rough steps are not executable, target secrecy is preserved, no `status: accepted` entry remains in `## Detailed Steps Ready To Calculate`, no accepted/ready/blocked step is duplicated in `## Rough Steps For Later Planning`, all rough-step triggers are adjudicated, every parsed equation id is represented in the Equation Coverage Ledger, ready steps with disabled source tools have enough proposer-visible source excerpt or exact formula context, special PDF color markers are not inside code spans, math and TeX snippets follow `rules/math_typeset.md`, and source coverage is enough for the task.
+Step 2: Check that foundations are separated from derived results, accepted derived results were actually accepted, agent-added foundations have two-calculator support, referee trust, validity scope, and the `[foundation added by agent]` marker, validation-only references and Calculation Remarks are not premises, every ready-step free-text prompt explicitly gives its quantity, required representation in named quantities, conventions/regime/approximation order, and completion/agreement standard without leaking a target formula, new derivations have no implicit terminal variables, formal setup steps have a downstream reduction task or explicit stop condition, rough steps are not executable, target secrecy is preserved, no `status: accepted` entry remains in `## Detailed Steps Ready To Calculate`, no accepted/ready/blocked step is duplicated in `## Rough Steps For Later Planning`, all rough-step triggers are adjudicated, every parsed equation id is represented in the Equation Coverage Ledger, ready steps with disabled source tools have enough proposer-visible source excerpt or exact formula context, special PDF color markers are not inside code spans, math and TeX snippets follow `rules/math_typeset.md`, and source coverage is enough for the task.
 Step 3: If review finds gaps, build final content with the planned PDF export noted in
 the Journal, write a new immutable work-note version, mirror it to the hidden current source, and follow
 `manuals/arc-jobs.md` Markdown Report Export and replace

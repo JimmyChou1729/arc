@@ -11,12 +11,8 @@ from arc_proposer_reviewer import WorkerSpec
 from _arc_workflows.calculate_config import (
     CalculateConfig,
     ConfigError,
-    _bool_default,
     _dict,
     _read_template,
-)
-from _arc_workflows.calculate_consensus_policy import (
-    _human_gate_pause_statuses_from_mapping,
 )
 from _arc_workflows.calculate_reviewer_schema import reviewer_output_schema
 
@@ -48,10 +44,8 @@ def proposer_worker(
 def reviewer_worker(
     config: CalculateConfig,
     active_proposer_ids: list[str],
-    selectable_proposer_ids: list[str],
     *,
     reviewer_reference_claim: Mapping[str, Any] | None = None,
-    human_gate: Mapping[str, Any] | None = None,
 ) -> WorkerSpec:
     payload = _read_template(
         config.workflow_json_dir / "calculate-reviewer.template.json"
@@ -59,14 +53,10 @@ def reviewer_worker(
     prompt = _dict(payload.get("prompt"), "calculate-reviewer.template.prompt")
     replacements = {
         "{active_proposer_ids}": ", ".join(active_proposer_ids),
-        "{reviewer_status_instruction}": _reviewer_status_instruction(
-            allow_reference_disagrees=bool(reviewer_reference_claim)
-        ),
         "{reference_instruction}": _reviewer_reference_instruction(
             reviewer_reference_claim,
             active_proposer_ids=active_proposer_ids,
         ),
-        "{workflow_instruction}": _reviewer_workflow_instruction(human_gate or {}),
     }
     template = str(prompt.get("template", ""))
     for placeholder, value in replacements.items():
@@ -77,8 +67,6 @@ def reviewer_worker(
         output_schema=reviewer_output_schema(
             config,
             active_proposer_ids,
-            selectable_proposer_ids,
-            allow_reference_disagrees=bool(reviewer_reference_claim),
         ),
         model=_worker_model(config.defaults),
     )
@@ -89,8 +77,8 @@ def _proposer_source_policy(*, blind_reference: bool) -> str:
         return (
             "This is a blind-reference check. Do not seek, infer, or use the "
             "reviewer-only reference claim or any source that would disclose it. "
-            "Derive the result independently from caller_context, accepted locked "
-            "outputs, and your own calculation."
+            "Derive the result independently from caller_context and your own "
+            "calculation."
         )
     return (
         "Use available web and ARC tools, including the shared paper cache, when "
@@ -115,50 +103,14 @@ def _reviewer_reference_instruction(
     active_ids = ", ".join(active_proposer_ids)
     return (
         "Reviewer-only blind reference check is active. Do not reveal the reference "
-        "claim to proposers through the public feedback channel. Compare the final "
-        f"result from every active proposer ({active_ids}) and "
-        "reviewer_reference_claim. When every active blind proposer and the "
-        "reference agree, set status=all_agree. When every active blind proposer "
-        "agrees with the others but disagrees with the reference claim, set "
-        "status=reference_disagrees and set agreed_proposer_ids to the complete "
-        "active proposer id set, put the blind proposer result in accepted_result "
-        "with reference_claim_status='disagrees', set "
-        "agreement_assessment.accepted_by_reviewer_judgment=false, and set one or "
-        "more agreement_assessment match fields false according to the mismatch. "
-        "Then set workflow_action according to the workflow instruction below. If "
-        "blind proposers disagree, do not accept the reference claim merely because "
-        "one proposer matches it; set status=unresolved or all_disagree and request "
-        f"recalculation.\n\nreviewer_reference_claim:\n{claim_json}"
-    )
-
-
-def _reviewer_status_instruction(*, allow_reference_disagrees: bool) -> str:
-    statuses = ["all_agree", "two_agree", "all_disagree", "unresolved"]
-    if allow_reference_disagrees:
-        statuses.append("reference_disagrees")
-    status_text = ", ".join(statuses[:-1]) + f", or {statuses[-1]}"
-    return f"set status to {status_text}."
-
-
-def _reviewer_workflow_instruction(human_gate: Mapping[str, Any]) -> str:
-    if not _bool_default(human_gate.get("enabled", False), False):
-        return (
-            "workflow_action is still required. In normal mode, choose continue "
-            "for all_agree and reference_disagrees when the current acceptance "
-            "policy applies; for other statuses, choose retry or pause_for_human "
-            "with a concise expert_question."
-        )
-    pause_statuses = ", ".join(
-        _human_gate_pause_statuses_from_mapping(human_gate)
-    )
-    return (
-        "Human gate is active. Statuses that trigger a stop: "
-        f"{pause_statuses}. When a stop is triggered, workflow_action decides "
-        "whether the main agent should ask the human expert or revise project "
-        "artifacts. Use pause_for_human with requires_human=true unless all "
-        "proposers' assessments and your review agree on the same work-note or "
-        "plan revision. Only then use revise_plan or split_step with "
-        "requires_human=false."
+        "claim to calculators through the public feedback channel. Compare the "
+        f"results from both blind calculators ({active_ids}) with the reference "
+        "only after assessing both calculations independently. A reference/source "
+        "match does not make a result trusted, and a mismatch does not automatically "
+        "make a jointly supported result untrusted. Record every mismatch or "
+        "ambiguity as an explicitly untrusted remark and choose workflow_action "
+        "from your scientific judgment. Never copy the reference formula into "
+        f"calculator feedback.\n\nreviewer_reference_claim:\n{claim_json}"
     )
 
 

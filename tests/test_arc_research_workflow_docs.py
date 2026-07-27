@@ -800,7 +800,7 @@ def test_check_workflow_keeps_notes_out_of_proposer_context() -> None:
 
     assert "markdown or pdf research notes" in text
     assert "full note body" in text
-    assert "proposer agents" in text
+    assert "calculator agents" in text
     assert "claims to check" in text
     assert "blind reference check" in text
     assert "reviewer_reference_claim" in text
@@ -822,17 +822,20 @@ def test_plan_requires_review_after_drafting() -> None:
 
 
 def test_plan_requires_explicit_step_quantity_contracts() -> None:
-    text = (WF / "plan.md").read_text(encoding="utf-8").lower()
+    text = " ".join((WF / "plan.md").read_text(encoding="utf-8").lower().split())
 
-    assert "calculate which quantity" in text
-    assert "in terms of which quantity" in text
-    assert "end of every step" in text
+    assert "quantity to calculate" in text
+    assert "required final representation" in text
+    assert "quantities it must be expressed in terms of" in text
+    assert "conventions, validity regime, and approximation order" in text
+    assert "completion and scientific-agreement standard" in text
+    assert "not a structured target contract" in text
     assert "largest coherent chunks" in text
     assert "do not split by raw equation count" in text
     assert "at least 20 steps" not in text
-    assert "do not disclose the exact expected expression" in text
-    assert "derive the target quantity in terms of named dependencies" in text
-    assert "expected final formula" in text
+    assert "do not disclose an exact expected expression" in text
+    assert "derive the target quantity in terms of the named dependencies" in text
+    assert "target formula" in text
 
 
 def test_plan_routes_reference_equations_to_blind_checks() -> None:
@@ -914,6 +917,7 @@ def test_work_note_declares_required_sections() -> None:
         "## Notation And Conventions",
         "## Axioms And Starting Points",
         "## Accepted Derived Results",
+        "## Calculation Remarks — Not Trusted Results",
         "## Validation-Only References",
         "## Detailed Steps Ready To Calculate",
         "## Rough Steps For Later Planning",
@@ -993,7 +997,7 @@ def test_accepted_steps_leave_detailed_ready_section() -> None:
     calculate = " ".join((WF / "calculate.md").read_text(encoding="utf-8").lower().split())
     plan = " ".join((WF / "plan.md").read_text(encoding="utf-8").lower().split())
 
-    assert "accepted step result goes to `## accepted derived results`" in calculate
+    assert "only `trusted_results` go to `## accepted derived results`" in calculate
     assert "remove the accepted step block from `## detailed steps ready to calculate`" in calculate
     assert "no `status: accepted` step block may remain" in calculate
     assert "`## detailed steps ready to calculate` is the executable backlog" in plan
@@ -1008,16 +1012,16 @@ def test_accepted_steps_keep_trace_outside_ready_section() -> None:
     assert "revision history" in calculate
     assert "journal" in calculate
     assert "step id" in calculate
-    assert "reviewer status" in calculate
-    assert "source discrepancy status" in calculate
+    assert "referee action" in calculate
+    assert "both calculator ids" in calculate
     assert "batch run id" in calculate
     assert "verified public ref digests" in calculate
 
 
-def test_calculate_workflow_owns_consensus_results_only() -> None:
-    calculate = (WF / "calculate.md").read_text(encoding="utf-8").lower()
+def test_calculate_workflow_owns_execution_results_only() -> None:
+    calculate = " ".join((WF / "calculate.md").read_text(encoding="utf-8").lower().split())
 
-    assert "calculate.md owns consensus execution" in calculate
+    assert "calculate.md owns calculation execution" in calculate
     assert "current-step result-status" in calculate
     assert "candidate reusable result" in calculate
     assert "write a planning request" in calculate
@@ -1040,7 +1044,7 @@ def test_check_workflow_owns_note_parsing_only() -> None:
 
 
 def test_calculate_documents_public_batch_and_blind_reference_contract() -> None:
-    text = (WF / "calculate.md").read_text(encoding="utf-8").lower()
+    text = " ".join((WF / "calculate.md").read_text(encoding="utf-8").lower().split())
 
     assert "blind reference check" in text
     assert "reviewer_reference_claim" in text
@@ -1048,54 +1052,59 @@ def test_calculate_documents_public_batch_and_blind_reference_contract() -> None
     assert "batchrequest" in text
     assert "committed round" in text
     assert "arc paper tools or web research" in text
-    assert "redacts reviewer feedback" in text
+    assert "redacts referee feedback" in text
     assert "arc_paper_access" not in text
     assert "controller arc-paper access" not in text
-    assert "reference_disagrees" in text
+    assert "source or reference mismatch" in text
+    assert "explicitly untrusted remark" in text
+    assert "may coexist with a trusted jointly derived result" in text
     assert "new derivation after a check" in text
 
 
-def test_calculate_uses_two_total_consensus_attempts() -> None:
-    text = (WF / "calculate.md").read_text(encoding="utf-8").lower()
-    compact = " ".join(text.split())
+def test_calculate_uses_exactly_two_fresh_calculators_and_finite_retries() -> None:
+    text = " ".join((WF / "calculate.md").read_text(encoding="utf-8").lower().split())
+    compact = text
 
-    assert '"max_recalculations": 1' in text
-    assert "2 total attempts" in text
-    assert "1 initial attempt + 1 recalculation" in text
-    assert "3 total attempts" not in text
-    assert "higher finite value" in text
+    assert "exactly two calculators" in text
+    assert "two fresh, independent calculators" in text
+    assert "neither receives the other calculator's answer" in text
+    assert "locked output" not in text
+    assert "one selected proposer again" not in text
     assert "concrete new hypothesis, algorithm, or recovery path" in compact
     assert "unbounded retry loop" in text
 
 
 def test_calculate_uses_reviewer_judgment_not_mandatory_sympy_gate() -> None:
-    text = (WF / "calculate.md").read_text(encoding="utf-8").lower()
+    text = " ".join((WF / "calculate.md").read_text(encoding="utf-8").lower().split())
 
-    assert "reviewer judgment" in text
+    assert "referee owns scientific validity and semantic equivalence" in text
     assert "sympy" in text
     assert "wolfram" in text
     assert "optional" in text
     assert "mandatory a-b" not in text
-    assert "before `all_agree`, at least two" not in text
-    assert "special limits are sanity checks" in text
-    assert "not proof of full agreement" in text
+    assert "all_agree" not in text
+    assert "two_agree" not in text
+    assert "reference_disagrees" not in text
+    assert "limits and numerics can discriminate" in text
+    assert "not automatic proof" in text
 
 
 def test_calculate_pause_requires_explicit_human_expert_question() -> None:
-    text = (WF / "calculate.md").read_text(encoding="utf-8").lower()
+    text = " ".join((WF / "calculate.md").read_text(encoding="utf-8").lower().split())
 
     assert "human expert question:" in text
     assert "do not merely say that the workflow paused" in text
-    assert "name the step" in text
-    assert "unresolved equation or claim" in text
+    assert "atomic unresolved target" in text
+    assert "competing formulas or claims" in text
+    assert "available evidence" in text
     assert "user-facing response" in text
 
 
 def test_calculate_human_resolution_continues_until_stop_condition() -> None:
-    text = (WF / "calculate.md").read_text(encoding="utf-8").lower()
+    text = " ".join((WF / "calculate.md").read_text(encoding="utf-8").lower().split())
 
-    assert "human expert later resolves" in text
-    assert "unblocks the workflow" in text
+    assert "human expert may resolve a precise atomic question" in text
+    assert "thereby unblock the workflow" in text
     assert "continue with the next ready detailed step" in text
     assert "return to `plan.md`" in text
     assert "the user explicitly asks to pause or stop" in text
@@ -1121,45 +1130,34 @@ def test_arc_skill_case4_repeats_until_requested_calculation_complete() -> None:
     assert "requested calculation coverage is complete" in text
 
 
-def test_work_note_color_marking_only_colors_literal_markers() -> None:
+def test_referee_trust_policy_keeps_remarks_out_of_premises() -> None:
     calculate = " ".join((WF / "calculate.md").read_text(encoding="utf-8").lower().split())
     plan = " ".join((WF / "plan.md").read_text(encoding="utf-8").lower().split())
-    check = " ".join((WF / "check.md").read_text(encoding="utf-8").lower().split())
 
-    assert "specific human" in calculate
-    assert "expert answer" in calculate
-    assert "unresolved scientific acceptance" in calculate
-    assert "question" in calculate
-    assert "ordinary user task" in calculate
-    assert "only color" in calculate
-    assert "literal marker" in calculate
-    assert "`[confirmed source issue]`" in calculate
-    assert "`human-resolved`" in calculate
-    assert "do not color the surrounding prose" in calculate
-    assert "do not color the surrounding equations" in calculate
-    assert "color is stripped" in calculate or "color is unavailable" in calculate
-    assert "marker remains authoritative" in calculate
-    assert "exactly one of the below two cases" in calculate
-    assert "source_discrepancies" in calculate
-    assert "whole affected prose/equation block" not in calculate
-    assert "affected visible block in red" not in calculate
-
-    assert "`calculate.md` source-discrepancy" in plan
-    assert "do not define new marker semantics in `plan.md`" in plan
-    assert "`[confirmed source issue]`" not in plan
-    assert "`human-resolved` marker's background" not in plan
-
-    assert "marker-only color rule" in check
+    assert "only a result supported by both actual calculators and trusted by the referee" in calculate
+    assert "one-calculator result" in calculate
+    assert "remarks never become premises" in calculate
+    assert "calculation remarks — not trusted results" in calculate
+    assert "trusted common part" in calculate
+    assert "strictly smaller unresolved targets" in calculate
+    assert "dedicated adjudication round" in calculate
+    assert "calculation remarks — not trusted results" in plan
+    assert "never become allowed premises or accepted prior outputs" in plan
+    assert "structured target contract" in plan
+    assert "exact expected expression or target formula" in plan
 
 
-def test_calculate_workflow_uses_pdf_marker_colorbox_templates() -> None:
+def test_calculate_workflow_keeps_provenance_marker_templates() -> None:
     text = (WF / "calculate.md").read_text(encoding="utf-8")
 
     assert r"\definecolor{arcsourceissue}{HTML}{8B0000}" in text
     assert r"\definecolor{archumanresolved}{HTML}{003F8C}" in text
     assert r"\colorbox{arcsourceissue}{\textcolor{white}{[confirmed source issue]}}" in text
+    assert r"\colorbox{arcsourceissue}{\textcolor{white}{[foundation added by agent]}}" in text
     assert r"\colorbox{archumanresolved}{\textcolor{white}{[human-resolved]}}" in text
     assert "Do not use custom no-argument marker macros" in text
+    assert "not runner statuses" in text
+    assert "automatically pauses the workflow" in text
 
 
 def test_ideas_ranking_script_uses_durable_run_identifiers() -> None:

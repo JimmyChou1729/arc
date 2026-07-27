@@ -16,18 +16,14 @@ from _arc_workflows.workflow_io import (
 )
 
 
-CALCULATE_CONFIG_SCHEMA = "arc.workflow.calculate.config.v3"
-CALCULATE_RESULT_SCHEMA = "arc.workflow.calculate.result.v2"
+CALCULATE_CONFIG_SCHEMA = "arc.workflow.calculate.config.v4"
+CALCULATE_RESULT_SCHEMA = "arc.workflow.calculate.result.v3"
+CALCULATOR_IDS = ("proposer_001", "proposer_002")
 CALCULATION_STEP_KINDS = frozenset(
     {"new_derivation", "check_known_result", "formal_setup"}
 )
-DEFAULT_HUMAN_GATE_PAUSE_STATUSES = (
-    "reference_disagrees",
-    "two_agree",
-    "all_disagree",
-    "unresolved",
-    "failed",
-)
+
+
 class ConfigError(ValueError):
     """Invalid calculate-workflow configuration."""
 
@@ -47,9 +43,7 @@ class CalculateConfig:
     run_id: str
     run_dir: Path
     workflow_json_dir: Path
-    proposer_count: int
     max_recalculations: int
-    human_gate: dict[str, Any]
     defaults: dict[str, Any]
     steps: list[CalculateStep]
 
@@ -63,9 +57,7 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
             "run_id",
             "run_dir",
             "workflow_json_dir",
-            "proposer_count",
             "max_recalculations",
-            "human_gate",
             "defaults",
             "steps",
         },
@@ -86,9 +78,7 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
         field_name="workflow_json_dir",
         error_type=ConfigError,
     )
-    proposer_count = _positive_int(data.get("proposer_count", 2), "proposer_count")
     max_recalculations = _nonnegative_int(data.get("max_recalculations", 1), "max_recalculations")
-    human_gate = _parse_human_gate(data.get("human_gate", {}))
     defaults = _dict(data.get("defaults", {}), "defaults")
     _reject_unknown_fields(
         defaults,
@@ -133,19 +123,12 @@ def load_calculation_config(payload: Mapping[str, Any]) -> CalculateConfig:
                 ),
             )
         )
-    if proposer_count < 2 and any(
-        step.reviewer_reference_claim is not None for step in steps
-    ):
-        raise ConfigError("blind reference checks require at least two proposers")
-
     return CalculateConfig(
         schema_version=schema_version,
         run_id=run_id,
         run_dir=run_dir,
         workflow_json_dir=workflow_json_dir,
-        proposer_count=proposer_count,
         max_recalculations=max_recalculations,
-        human_gate=human_gate,
         defaults=defaults,
         steps=steps,
     )
@@ -239,16 +222,6 @@ def _safe_id(value: str, field_name: str) -> str:
     return require_safe_id(value, field_name, error_type=ConfigError)
 
 
-def _positive_int(value: Any, field_name: str) -> int:
-    try:
-        parsed = int(value)
-    except Exception as exc:
-        raise ConfigError(f"{field_name} must be a positive integer") from exc
-    if parsed <= 0:
-        raise ConfigError(f"{field_name} must be a positive integer")
-    return parsed
-
-
 def _nonnegative_int(value: Any, field_name: str) -> int:
     try:
         parsed = int(value)
@@ -267,46 +240,10 @@ def _dict(value: Any, field_name: str) -> dict[str, Any]:
     return copy.deepcopy(value)
 
 
-def _bool(value: Any, field_name: str) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text in {"1", "true", "yes", "on"}:
-            return True
-        if text in {"0", "false", "no", "off"}:
-            return False
-    raise ConfigError(f"{field_name} must be a boolean")
-
-
-def _bool_default(value: Any, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text in {"1", "true", "yes", "on"}:
-            return True
-        if text in {"0", "false", "no", "off"}:
-            return False
-    return default
-
-
 def _optional_dict(value: Any, field_name: str) -> dict[str, Any] | None:
     if value is None:
         return None
     return _dict(value, field_name)
-
-
-def _parse_human_gate(value: Any) -> dict[str, Any]:
-    data = _dict(value, "human_gate")
-    enabled = _bool(data.get("enabled", False), "human_gate.enabled")
-    pause_statuses = data.get("pause_on_statuses", DEFAULT_HUMAN_GATE_PAUSE_STATUSES)
-    if not isinstance(pause_statuses, (list, tuple)):
-        raise ConfigError("human_gate.pause_on_statuses must be a list")
-    return {
-        "enabled": enabled,
-        "pause_on_statuses": [str(item) for item in pause_statuses],
-    }
 
 
 def _jsonable(value: Any) -> Any:
@@ -324,12 +261,11 @@ def _jsonable(value: Any) -> Any:
 __all__ = [
     "CALCULATE_CONFIG_SCHEMA",
     "CALCULATE_RESULT_SCHEMA",
+    "CALCULATOR_IDS",
     "CALCULATION_STEP_KINDS",
-    "DEFAULT_HUMAN_GATE_PAUSE_STATUSES",
     "CalculateConfig",
     "CalculateStep",
     "ConfigError",
-    "_bool_default",
     "_dict",
     "_integrity_reference",
     "_jsonable",

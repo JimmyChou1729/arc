@@ -14,6 +14,7 @@ from arc_proposer_reviewer import (
 from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 
 from _arc_workflows.calculate_config import (
+    CALCULATOR_IDS,
     CalculateConfig,
     CalculateStep,
 )
@@ -29,23 +30,17 @@ def _attempt_batch_request(
     step: CalculateStep,
     *,
     attempt_number: int,
-    active_proposer_ids: list[str],
-    locked_outputs: dict[str, Any],
     retry_feedback: list[dict[str, Any]],
     accepted_step_outputs: Mapping[str, Any],
 ) -> BatchRequest:
     """Build one deterministic, independent public proposer-reviewer batch."""
 
     attempt_id = _attempt_id(step.step_id, attempt_number)
-    selectable_proposer_ids = list(
-        dict.fromkeys([*active_proposer_ids, *[proposer_id for proposer_id in locked_outputs]])
-    )
+    calculator_ids = list(CALCULATOR_IDS)
     context = caller_context(
         config,
         step,
         attempt_number=attempt_number,
-        active_proposer_ids=active_proposer_ids,
-        locked_outputs=locked_outputs,
         retry_feedback=retry_feedback,
         accepted_step_outputs=accepted_step_outputs,
     )
@@ -62,14 +57,12 @@ def _attempt_batch_request(
                         proposer_id,
                         blind_reference=bool(step.reviewer_reference_claim),
                     )
-                    for proposer_id in active_proposer_ids
+                    for proposer_id in calculator_ids
                 ),
                 reviewer=reviewer_worker(
                     config,
-                    active_proposer_ids,
-                    selectable_proposer_ids,
+                    calculator_ids,
                     reviewer_reference_claim=step.reviewer_reference_claim,
-                    human_gate=config.human_gate,
                 ),
                 max_rounds=1,
                 allow_early_stop=False,

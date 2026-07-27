@@ -21,7 +21,7 @@ workflows/calculate.md
 Keep this file note-specific. It does not define work-note structure,
 ready-step boundaries, reviewer-only target placement, runtime settings, or
 execution status rules. `plan.md` owns work-note planning and structure.
-`calculate.md` owns consensus execution and result recording. When another
+`calculate.md` owns two-calculator execution, referee trust decisions, and result recording. When another
 phase needs behavior outside note parsing and handoff, refer to the owning workflow.
 
 Heavy Workload Rule: This workflow can be long. Heavy workload and many
@@ -53,7 +53,7 @@ and equations with commands from `manuals/arc-paper.md`.
 
 ## Phase 2: Main-Agent Preflight
 
-Step 1: Inspect the notes directly before proposer-reviewer execution. List
+Step 1: Inspect the notes directly before two-calculator/referee execution. List
 obvious typos, inconsistent conventions, missing factors, sign mistakes,
 malformed equations, or target/source mapping problems.
 
@@ -95,11 +95,11 @@ may cover multiple equations, but each covered equation id or equation-id range
 must be explicit. Do not classify final premises, derived claims, or
 context-only items here; `plan.md` owns that separation.
 
-Do not pass the full note body to proposer agents. `plan.md` writes
-proposer-facing work-note context and reviewer-only target IDs. The work note
+Do not pass the full note body to calculator agents. `plan.md` writes
+calculator-facing work-note context and referee-only target IDs. The work note
 must be at least as clear as the original note prefix while hiding the target
-equation and later text from proposers. Source claims that need blind reference
-checking should be represented for reviewers as `reviewer_reference_claim`.
+equation and later text from calculators. Source claims that need blind reference
+checking should be represented for the referee as `reviewer_reference_claim`.
 When source tools are disabled for a calculation step, `source_anchor` alone is
 not enough: the ready-step packet should include `source_excerpt`, exact
 displayed formulas, or accepted prior derivations sufficient for proposers to
@@ -122,11 +122,11 @@ Step 1: Run `plan.md`. It reads
 hidden current work note plus the first immutable work-note version, then
 publishes `<project-dir>/work-note.pdf`.
 `plan.md` owns work-note structure, foundation boundary, ready-step planning,
-blind reference check placement, and proposer-visible secrecy rules.
+blind reference check placement, and calculator-visible secrecy rules.
 
 Step 2: Run `calculate.md`. It executes ready steps from the current work note
 and writes the next work-note version. `calculate.md` owns runtime execution,
-reviewer judgment, accepted/blocked current-step status, and result recording.
+referee judgment, accepted/blocked current-step status, and result recording.
 
 Step 3: Repeat Steps 1 and 2 until the requested note-check coverage is
 complete or a workflow stop condition applies. Do not stop only because one

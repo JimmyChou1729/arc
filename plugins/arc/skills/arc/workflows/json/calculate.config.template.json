@@ -1,13 +1,9 @@
 {
-  "schema_version": "arc.workflow.calculate.config.v3",
+  "schema_version": "arc.workflow.calculate.config.v4",
   "run_id": "<calculate-run-id>",
   "run_dir": "<project-dir>/.arc/calculate/<run-id>/execute",
   "workflow_json_dir": "<skill-workflow-json-dir>",
-  "proposer_count": 2,
   "max_recalculations": 1,
-  "human_gate": {
-    "enabled": false
-  },
   "defaults": {
     "model_tier": "high"
   },

@@ -53,7 +53,7 @@ def load_calculate_modules():
 
 def minimal_config(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "schema_version": "arc.workflow.calculate.config.v3",
+        "schema_version": "arc.workflow.calculate.config.v4",
         "run_id": "calc_001",
         "run_dir": str(tmp_path / "execute"),
         "workflow_json_dir": str(WORKFLOW_JSON),
@@ -70,95 +70,69 @@ def minimal_config(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
 
 
 def review(
-    status: str,
+    action: str = "continue",
     *,
-    agreed: list[str] | None = None,
-    likely_wrong: list[str] | None = None,
-    recalculate: list[str] | None = None,
-    best_written: str | None = None,
-    target_quantity_match: bool = True,
-    convention_match: bool = True,
-    declared_scope_match: bool = True,
-    agreement_covers_full_target: bool = True,
-    accepted_by_reviewer_judgment: bool | None = None,
-    action: str | None = None,
-    requires_human: bool = False,
+    trusted: bool = True,
+    supporting_proposer_ids: list[str] | None = None,
+    selected_proposer_id: str = "proposer_001",
+    calculator_assessments: list[dict[str, Any]] | None = None,
+    remarks: list[dict[str, Any]] | None = None,
     proposed_revision: str | None = None,
-    reference_claim_status: str | None = None,
-    source_discrepancies: list[dict[str, Any]] | None = None,
+    expert_question: str | None = None,
 ) -> dict[str, Any]:
-    agreed_ids = agreed or []
-    selected_proposer_id = (
-        best_written
-        if best_written is not None
-        else (
-            agreed_ids[0]
-            if status in {"all_agree", "reference_disagrees"} and agreed_ids
-            else None
-        )
+    proposer_ids = supporting_proposer_ids or [
+        "proposer_001",
+        "proposer_002",
+    ]
+    trusted_results = (
+        [
+            {
+                "summary": "trusted calculation",
+                "final_result": "x",
+                "derivation": "derive x",
+                "validity_scope": "declared scope",
+                "supporting_proposer_ids": proposer_ids,
+                "selected_proposer_id": selected_proposer_id,
+                "comparison_reasoning": (
+                    "The two independent derivations are mathematically "
+                    "equivalent under the declared conventions."
+                ),
+            }
+        ]
+        if trusted
+        else []
     )
-    accepted_result = (
-        {
-            "summary": "accepted calculation",
-            "final_result": "x",
-            "derivation": "derive x",
-            "validity_scope": "declared scope",
-            "selected_proposer_id": selected_proposer_id,
-            "reference_claim_status": reference_claim_status
-            or (
-                "disagrees"
-                if status == "reference_disagrees"
-                else "not_applicable"
-            ),
-            "source_proposer_id": selected_proposer_id,
-        }
-        if status in {"all_agree", "reference_disagrees"}
-        else None
-    )
-    consensus = {
-        "status": status,
-        "accepted_result": accepted_result,
-        "agreed_proposer_ids": agreed_ids,
-        "likely_wrong_proposer_ids": likely_wrong or [],
-        "recalculate_proposer_ids": recalculate or [],
-        "validity_scope": "declared scope",
-        "analysis": "review analysis",
-        "best_written_proposer_id": selected_proposer_id,
-        "best_written_selection_reason": "clearest derivation"
-        if status in {"all_agree", "reference_disagrees"}
-        else "",
-        "agreement_assessment": {
-            "target_quantity_match": target_quantity_match,
-            "convention_match": convention_match,
-            "declared_scope_match": declared_scope_match,
-            "agreement_covers_full_target": agreement_covers_full_target,
-            "comparison_summary": "explicit algebraic comparison",
-            "accepted_by_reviewer_judgment": (
-                status == "all_agree"
-                if accepted_by_reviewer_judgment is None
-                else accepted_by_reviewer_judgment
-            ),
-            "tool_checks": [],
-            "sanity_checks": [],
-            "special_limit_only": False,
-            "notes": "",
-        },
+    payload = {
+        "calculator_assessments": calculator_assessments
+        or [
+            {
+                "proposer_id": proposer_id,
+                "assessment": "valid",
+                "reason": "valid derivation under the declared prompt",
+            }
+            for proposer_id in ["proposer_001", "proposer_002"]
+        ],
+        "review_reasoning": (
+            "Independently checked both calculations against the same target."
+        ),
+        "trusted_results": trusted_results,
+        "remarks": remarks or [],
         "workflow_action": {
-            "action": action or ("continue" if status == "all_agree" else "retry"),
-            "requires_human": requires_human,
-            "issue_type": "none" if status == "all_agree" else "calculation_disagreement",
+            "action": action,
             "proposed_revision": proposed_revision,
             "reason": "test",
-            "expert_question": "What should ARC do next?" if status != "all_agree" else "",
+            "expert_question": expert_question,
         },
-        "source_discrepancies": source_discrepancies or [],
     }
     return {
         "schema_version": "arc.proposer_reviewer.review.v1",
         "action": "continue",
         "reason": "review complete",
-        "feedback": {},
-        "payload": {"consensus": consensus},
+        "feedback": {
+            proposer_id: f"feedback for {proposer_id}"
+            for proposer_id in ["proposer_001", "proposer_002"]
+        },
+        "payload": payload,
     }
 
 
@@ -195,16 +169,7 @@ class FakeBatchExecutor:
 
 def test_calculate_builds_public_batch_and_hides_blind_reference(tmp_path: Path) -> None:
     modules = load_calculate_modules()
-    fake = FakeBatchExecutor(
-        modules.runner,
-        [
-            review(
-                "all_agree",
-                agreed=["proposer_001", "proposer_002"],
-                reference_claim_status="agrees",
-            )
-        ],
-    )
+    fake = FakeBatchExecutor(modules.runner, [review()])
     reference_claim = {"id": "ref_eq_001", "latex": "x = y + z"}
 
     result = modules.runner.run_calculation(
@@ -240,51 +205,48 @@ def test_calculate_builds_public_batch_and_hides_blind_reference(tmp_path: Path)
     assert "proposer_output_paths" not in result["steps"][0]["attempts"][0]
 
 
-def test_two_agree_locks_outputs_and_recalculates_only_one_proposer(tmp_path: Path) -> None:
+def test_retry_reruns_both_calculators_without_locked_outputs(tmp_path: Path) -> None:
     modules = load_calculate_modules()
     fake = FakeBatchExecutor(
         modules.runner,
         [
-            review(
-                "two_agree",
-                agreed=["proposer_001", "proposer_002"],
-                likely_wrong=["proposer_003"],
-                recalculate=["proposer_003"],
-            ),
-            review("all_agree", agreed=["proposer_003"], best_written="proposer_001"),
+            review("retry", trusted=False),
+            review(),
         ],
     )
 
     result = modules.runner.run_calculation(
-        minimal_config(tmp_path, proposer_count=3), batch_executor=fake
+        minimal_config(tmp_path), batch_executor=fake
     )
 
     first, second = (entry[0].loops[0] for entry in fake.calls)
     assert result["status"] == "completed"
-    assert [worker.worker_id for worker in first.proposers] == [
-        "proposer_001",
-        "proposer_002",
-        "proposer_003",
-    ]
-    assert [worker.worker_id for worker in second.proposers] == ["proposer_003"]
-    assert sorted(second.context["locked_outputs"]) == ["proposer_001", "proposer_002"]
-    assert second.context["retry_feedback"][0]["proposer_feedback"]["proposer_003"] == {
-        "message": "feedback for proposer_003"
+    expected = ["proposer_001", "proposer_002"]
+    assert [worker.worker_id for worker in first.proposers] == expected
+    assert [worker.worker_id for worker in second.proposers] == expected
+    assert "locked_outputs" not in second.context
+    retry_packet = second.context["retry_feedback"][0]
+    assert retry_packet == {
+        "attempt_number": 1,
+        "action": "retry",
+        "shared_instruction": "test",
     }
+    assert "feedback for" not in json.dumps(retry_packet)
 
 
-def test_reference_disagreement_blocks_after_recalculation_budget(tmp_path: Path) -> None:
+def test_reference_disagreement_can_remain_untrusted_beside_trusted_result(
+    tmp_path: Path,
+) -> None:
     modules = load_calculate_modules()
+    source_remark = {
+        "status": "untrusted",
+        "summary": "The source claim differs from the joint derivation.",
+        "reason": "The two calculators agree on a different expression.",
+        "related_proposer_ids": ["proposer_001", "proposer_002"],
+    }
     fake = FakeBatchExecutor(
         modules.runner,
-        [
-            review(
-                "reference_disagrees",
-                agreed=["proposer_001", "proposer_002"],
-                target_quantity_match=False,
-                accepted_by_reviewer_judgment=False,
-            )
-        ],
+        [review(remarks=[source_remark])],
     )
 
     result = modules.runner.run_calculation(
@@ -303,8 +265,8 @@ def test_reference_disagreement_blocks_after_recalculation_budget(tmp_path: Path
         batch_executor=fake,
     )
 
-    assert result["status"] == "blocked_for_user"
-    assert result["steps"][0]["blocked_output"]["trigger_status"] == "reference_disagrees"
+    assert result["status"] == "completed"
+    assert result["steps"][0]["reviewer_decision"]["remarks"] == [source_remark]
 
 
 def test_blind_reference_retry_never_passes_reviewer_material_to_proposers(tmp_path: Path) -> None:
@@ -312,17 +274,8 @@ def test_blind_reference_retry_never_passes_reviewer_material_to_proposers(tmp_p
     fake = FakeBatchExecutor(
         modules.runner,
         [
-            review(
-                "reference_disagrees",
-                agreed=["proposer_001", "proposer_002"],
-                target_quantity_match=False,
-                accepted_by_reviewer_judgment=False,
-            ),
-            review(
-                "all_agree",
-                agreed=["proposer_001", "proposer_002"],
-                reference_claim_status="agrees",
-            ),
+            review("retry", trusted=False),
+            review(),
         ],
     )
     claim = {"id": "secret_reference", "latex": "x = y + z"}
@@ -344,21 +297,46 @@ def test_blind_reference_retry_never_passes_reviewer_material_to_proposers(tmp_p
 
     retry_context = fake.calls[1][0].loops[0].context
     assert result["status"] == "completed"
-    assert retry_context["retry_feedback"][0]["status"] == "retry_required"
-    assert retry_context["retry_feedback"][0]["proposer_feedback"] == {}
+    assert retry_context["retry_feedback"][0]["action"] == "retry"
+    assert retry_context["retry_feedback"][0]["shared_instruction"].startswith(
+        "Recompute the supplied step independently."
+    )
+    assert "calculator_feedback" not in retry_context["retry_feedback"][0]
     assert "secret_reference" not in json.dumps(retry_context)
     assert "x = y + z" not in json.dumps(retry_context)
 
 
-def test_human_gate_preserves_nonhuman_revision_handoff(tmp_path: Path) -> None:
+def test_retry_on_final_attempt_is_rejected_as_invalid_action_contract(
+    tmp_path: Path,
+) -> None:
+    modules = load_calculate_modules()
+    fake = FakeBatchExecutor(
+        modules.runner,
+        [review("retry", trusted=False)],
+    )
+
+    result = modules.runner.run_calculation(
+        minimal_config(tmp_path, max_recalculations=0),
+        batch_executor=fake,
+    )
+
+    step = result["steps"][0]
+    assert result["status"] == "failed"
+    assert step["status"] == "failed"
+    assert "final action must be replan or pause_for_human" in step["error"]
+    assert (
+        step["attempts"][0]["reviewer_decision"]["workflow_action"]["action"]
+        == "retry"
+    )
+
+
+def test_partial_trusted_result_is_preserved_for_replan(tmp_path: Path) -> None:
     modules = load_calculate_modules()
     fake = FakeBatchExecutor(
         modules.runner,
         [
             review(
-                "unresolved",
-                action="revise_plan",
-                requires_human=False,
+                "replan",
                 proposed_revision="Split step_001 into two independently checkable steps.",
             )
         ],
@@ -368,162 +346,104 @@ def test_human_gate_preserves_nonhuman_revision_handoff(tmp_path: Path) -> None:
         minimal_config(
             tmp_path,
             max_recalculations=0,
-            human_gate={"enabled": True, "pause_on_statuses": ["unresolved"]},
         ),
         batch_executor=fake,
     )
 
     step = result["steps"][0]
     assert result["status"] == "blocked_for_revision"
-    assert step["blocked_output"]["workflow_action"]["action"] == "revise_plan"
-    assert step["blocked_output"]["requires_human"] is False
+    assert step["blocked_output"]["workflow_action"]["action"] == "replan"
+    assert step["accepted_output"]["trusted_results"]
 
 
-def test_all_agree_requires_exact_active_ids_closed_source_and_continue_action(
+def test_referee_judgment_enforces_only_structural_trust_relationships(
     tmp_path: Path,
 ) -> None:
     modules = load_calculate_modules()
     active = ["proposer_001", "proposer_002"]
 
-    missing_id = review("all_agree", agreed=["proposer_001"])
+    missing_id = review(supporting_proposer_ids=["proposer_001"])
     with pytest.raises(ValueError, match="exactly match active proposer ids"):
-        modules.consensus._review_consensus(  # noqa: SLF001
+        modules.consensus._review_decision(  # noqa: SLF001
             missing_id,
             active_proposer_ids=active,
         )
 
     duplicate_id = review(
-        "all_agree",
-        agreed=["proposer_001", "proposer_001"],
+        supporting_proposer_ids=["proposer_001", "proposer_001"]
     )
     with pytest.raises(ValueError, match="unique"):
-        modules.consensus._review_consensus(  # noqa: SLF001
+        modules.consensus._review_decision(  # noqa: SLF001
             duplicate_id,
             active_proposer_ids=active,
         )
 
-    missing_result = review("all_agree", agreed=active)
-    missing_result["payload"]["consensus"]["accepted_result"] = None
-    with pytest.raises(ValueError, match="accepted_result must be an object"):
-        modules.consensus._review_consensus(  # noqa: SLF001
-            missing_result,
+    retry_with_result = review("retry")
+    with pytest.raises(ValueError, match="retry"):
+        modules.consensus._review_decision(  # noqa: SLF001
+            retry_with_result,
             active_proposer_ids=active,
         )
 
-    wrong_source = review("all_agree", agreed=active)
-    wrong_source["payload"]["consensus"]["accepted_result"][
-        "source_proposer_id"
-    ] = "proposer_999"
-    with pytest.raises(ValueError, match="source_proposer_id"):
-        modules.consensus._review_consensus(  # noqa: SLF001
-            wrong_source,
+    wrong_selected = review(selected_proposer_id="proposer_999")
+    with pytest.raises(ValueError, match="selected_proposer_id"):
+        modules.consensus._review_decision(  # noqa: SLF001
+            wrong_selected,
             active_proposer_ids=active,
         )
 
+    differently_written = review()
+    differently_written["payload"]["trusted_results"][0][
+        "final_result"
+    ] = r"\frac{a}{b}"
+    assert modules.consensus._review_decision(  # noqa: SLF001
+        differently_written,
+        active_proposer_ids=active,
+    )["trusted_results"][0]["final_result"] == r"\frac{a}{b}"
+
+
+def test_pause_for_human_requires_question_and_never_accepts_remarks(
+    tmp_path: Path,
+) -> None:
+    modules = load_calculate_modules()
     paused = review(
-        "all_agree",
-        agreed=active,
-        action="pause_for_human",
-        requires_human=True,
+        "pause_for_human",
+        trusted=False,
+        expert_question="Which boundary condition should govern this step?",
     )
     fake = FakeBatchExecutor(modules.runner, [paused])
     result = modules.runner.run_calculation(
-        minimal_config(tmp_path),
+        minimal_config(tmp_path, max_recalculations=0),
         batch_executor=fake,
     )
     assert result["status"] == "blocked_for_user"
     assert result["steps"][0]["accepted_output"] is None
 
 
-def test_accepted_result_reference_status_is_bound_to_step_mode() -> None:
-    modules = load_calculate_modules()
-    active = ["proposer_001", "proposer_002"]
-
-    ordinary = review(
-        "all_agree",
-        agreed=active,
-        reference_claim_status="agrees",
-    )
-    with pytest.raises(
-        ValueError,
-        match="reference_claim_status must be not_applicable",
-    ):
-        modules.consensus._review_consensus(  # noqa: SLF001
-            ordinary,
-            active_proposer_ids=active,
-        )
-
-    blind = review("all_agree", agreed=active)
-    with pytest.raises(
-        ValueError,
-        match="reference_claim_status must be agrees",
-    ):
-        modules.consensus._review_consensus(  # noqa: SLF001
-            blind,
-            active_proposer_ids=active,
-            reviewer_reference_claim={"claim_id": "claim_001"},
-        )
-
-    disagrees = review(
-        "reference_disagrees",
-        agreed=active,
-        target_quantity_match=False,
-        accepted_by_reviewer_judgment=False,
-        reference_claim_status="agrees",
-    )
-    with pytest.raises(
-        ValueError,
-        match="reference_claim_status must be disagrees",
-    ):
-        modules.consensus._review_consensus(  # noqa: SLF001
-            disagrees,
-            active_proposer_ids=active,
-            reviewer_reference_claim={"claim_id": "claim_001"},
-        )
-
-
-def test_blind_reference_requires_two_proposers_and_lists_every_active_id(
+def test_config_has_exactly_two_calculators_and_rejects_count_override(
     tmp_path: Path,
 ) -> None:
     modules = load_calculate_modules()
-    blind_step = {
-        "step_id": "blind_001",
-        "prompt": "derive x",
-        "kind": "check_known_result",
-        "reviewer_reference_claim": {"claim_id": "claim_001", "statement": "x"},
-    }
-
-    with pytest.raises(
-        modules.config.ConfigError,
-        match="blind reference checks require at least two proposers",
-    ):
+    with pytest.raises(modules.config.ConfigError, match="unsupported fields"):
         modules.config.load_calculation_config(
-            minimal_config(tmp_path, proposer_count=1, steps=[blind_step])
+            minimal_config(tmp_path, proposer_count=3)
         )
 
-    config = modules.config.load_calculation_config(
-        minimal_config(tmp_path, proposer_count=3, steps=[blind_step])
-    )
+    config = modules.config.load_calculation_config(minimal_config(tmp_path))
     request = modules.prompts._attempt_batch_request(  # noqa: SLF001
         config,
         config.steps[0],
         attempt_number=1,
-        active_proposer_ids=[
-            "proposer_001",
-            "proposer_002",
-            "proposer_003",
-        ],
-        locked_outputs={},
         retry_feedback=[],
         accepted_step_outputs={},
     )
+    assert [worker.worker_id for worker in request.loops[0].proposers] == [
+        "proposer_001",
+        "proposer_002",
+    ]
 
-    instructions = request.loops[0].reviewer.instructions
-    assert "proposer_001, proposer_002, proposer_003" in instructions
-    assert "every active proposer" in instructions
 
-
-def test_invalid_nonhuman_revision_never_becomes_revision_handoff(
+def test_invalid_replan_never_becomes_revision_handoff(
     tmp_path: Path,
 ) -> None:
     modules = load_calculate_modules()
@@ -531,9 +451,8 @@ def test_invalid_nonhuman_revision_never_becomes_revision_handoff(
         modules.runner,
         [
             review(
-                "unresolved",
-                action="revise_plan",
-                requires_human=False,
+                "replan",
+                trusted=False,
                 proposed_revision=None,
             )
         ],
@@ -543,7 +462,6 @@ def test_invalid_nonhuman_revision_never_becomes_revision_handoff(
         minimal_config(
             tmp_path,
             max_recalculations=0,
-            human_gate={"enabled": True, "pause_on_statuses": ["unresolved"]},
         ),
         batch_executor=fake,
     )
@@ -553,26 +471,17 @@ def test_invalid_nonhuman_revision_never_becomes_revision_handoff(
     assert "proposed_revision" in result["steps"][0]["error"]
 
 
-def test_source_discrepancy_stays_human_gated(tmp_path: Path) -> None:
+def test_untrusted_remarks_do_not_become_trusted_outputs(tmp_path: Path) -> None:
     modules = load_calculate_modules()
-    discrepancy = {
-        "item_id": "eq_7",
-        "status": "likely_source_error",
-        "source_claim": "source result",
-        "derived_result": "blind result",
-        "confidence_reason": "blind derivations agree but conventions may differ",
-        "reviewer_says_no_human_convention_choice_needed": False,
-        "decision_question": "Which convention should govern the work note?",
+    remark = {
+        "status": "untrusted",
+        "summary": "An alternative sign remains unresolved.",
+        "reason": "Only one calculator supports it.",
+        "related_proposer_ids": ["proposer_002"],
     }
     fake = FakeBatchExecutor(
         modules.runner,
-        [
-            review(
-                "all_agree",
-                agreed=["proposer_001", "proposer_002"],
-                source_discrepancies=[discrepancy],
-            )
-        ],
+        [review(remarks=[remark])],
     )
 
     result = modules.runner.run_calculation(
@@ -580,10 +489,13 @@ def test_source_discrepancy_stays_human_gated(tmp_path: Path) -> None:
         batch_executor=fake,
     )
 
-    blocked = result["steps"][0]["blocked_output"]
-    assert result["status"] == "blocked_for_user"
-    assert blocked["reason"] == "source_discrepancy_requires_human"
-    assert blocked["source_discrepancies"] == [discrepancy]
+    step = result["steps"][0]
+    assert result["status"] == "completed"
+    assert step["reviewer_decision"]["remarks"] == [remark]
+    assert all(
+        "alternative sign" not in json.dumps(trusted)
+        for trusted in step["accepted_output"]["trusted_results"]
+    )
 
 
 def test_dry_run_does_not_invoke_batch_executor(tmp_path: Path) -> None:
@@ -659,8 +571,6 @@ def test_default_executor_uses_public_engine_and_committed_round(
         config,
         config.steps[0],
         attempt_number=1,
-        active_proposer_ids=["proposer_001", "proposer_002"],
-        locked_outputs={},
         retry_feedback=[],
         accepted_step_outputs={},
     )
@@ -668,7 +578,7 @@ def test_default_executor_uses_public_engine_and_committed_round(
         loop_id=request.loops[0].loop_id,
         round_number=1,
         proposals={},
-        review=review("all_agree", agreed=["proposer_001", "proposer_002"]),
+        review=review(),
         proposal_refs={},
         review_ref=None,
         transcript_refs=(),
@@ -742,8 +652,6 @@ def test_default_executor_recovers_committed_frontier_after_exception(
         config,
         config.steps[0],
         attempt_number=1,
-        active_proposer_ids=["proposer_001", "proposer_002"],
-        locked_outputs={},
         retry_feedback=[],
         accepted_step_outputs={},
     )
@@ -751,7 +659,7 @@ def test_default_executor_recovers_committed_frontier_after_exception(
         loop_id=request.loops[0].loop_id,
         round_number=1,
         proposals={},
-        review=review("all_agree", agreed=["proposer_001", "proposer_002"]),
+        review=review(),
         proposal_refs={},
         review_ref=None,
         transcript_refs=(),
@@ -826,8 +734,6 @@ def test_succeeded_batch_projection_failure_reports_durable_frontier(
         config,
         config.steps[0],
         attempt_number=1,
-        active_proposer_ids=["proposer_001", "proposer_002"],
-        locked_outputs={},
         retry_feedback=[],
         accepted_step_outputs={},
     )
@@ -900,8 +806,6 @@ def test_reviewer_template_and_schema_use_public_payload_contract(tmp_path: Path
         config,
         config.steps[0],
         attempt_number=1,
-        active_proposer_ids=["proposer_001", "proposer_002"],
-        locked_outputs={},
         retry_feedback=[],
         accepted_step_outputs={},
     )
@@ -913,38 +817,40 @@ def test_reviewer_template_and_schema_use_public_payload_contract(tmp_path: Path
     assert "arc_llm_call_record" not in template
     assert "arc.llm.review_envelope.v1" not in template
     assert "arc.proposer_reviewer.review.v1" in template
-    assert schema["required"] == ["consensus"]
+    assert schema["required"] == [
+        "calculator_assessments",
+        "review_reasoning",
+        "trusted_results",
+        "remarks",
+        "workflow_action",
+    ]
     assert "review_payload" not in schema["properties"]
     assert "proposer_messages" not in schema["properties"]
-    accepted = schema["properties"]["consensus"]["properties"]["accepted_result"]
-    assert "source_proposer_id" in accepted["properties"]
-    assert "source_proposer_output_path" not in accepted["properties"]
-    assert accepted["type"] == ["object", "null"]
-    assert schema["properties"]["consensus"]["allOf"]
-    agreed = schema["properties"]["consensus"]["properties"]["agreed_proposer_ids"]
-    assert agreed["uniqueItems"] is True
+    trusted = schema["properties"]["trusted_results"]["items"]
+    assert trusted["properties"]["supporting_proposer_ids"]["minItems"] == 2
+    assert trusted["properties"]["supporting_proposer_ids"]["maxItems"] == 2
+    assert "source_proposer_output_path" not in trusted["properties"]
+    assert schema["allOf"]
 
-    paused_all_agree = review(
-        "all_agree",
-        agreed=["proposer_001", "proposer_002"],
-        action="pause_for_human",
-        requires_human=True,
+    paused = review(
+        "pause_for_human",
+        trusted=False,
+        expert_question="Which convention should govern the atomic target?",
     )
-    Draft202012Validator(schema).validate(paused_all_agree["payload"])
+    Draft202012Validator(schema).validate(paused["payload"])
 
-    invalid_nonhuman_revision = review(
-        "unresolved",
-        action="revise_plan",
-        requires_human=False,
+    invalid_replan = review(
+        "replan",
+        trusted=False,
         proposed_revision=" ",
     )
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(
-            invalid_nonhuman_revision["payload"]
+            invalid_replan["payload"]
         )
 
 
-def test_blind_reviewer_schema_binds_reference_claim_status(
+def test_blind_reviewer_keeps_reference_out_of_calculator_contract(
     tmp_path: Path,
 ) -> None:
     modules = load_calculate_modules()
@@ -968,26 +874,16 @@ def test_blind_reviewer_schema_binds_reference_claim_status(
         config,
         config.steps[0],
         attempt_number=1,
-        active_proposer_ids=["proposer_001", "proposer_002"],
-        locked_outputs={},
         retry_feedback=[],
         accepted_step_outputs={},
     )
     validator = Draft202012Validator(request.loops[0].reviewer.output_schema)
-    valid = review(
-        "all_agree",
-        agreed=["proposer_001", "proposer_002"],
-        reference_claim_status="agrees",
-    )
+    valid = review()
     validator.validate(valid["payload"])
-
-    invalid = review(
-        "all_agree",
-        agreed=["proposer_001", "proposer_002"],
-        reference_claim_status="not_applicable",
-    )
-    with pytest.raises(ValidationError):
-        validator.validate(invalid["payload"])
+    loop = request.loops[0]
+    assert "claim_001" in loop.reviewer.instructions
+    assert all("claim_001" not in worker.instructions for worker in loop.proposers)
+    assert "claim_001" not in json.dumps(loop.context)
 
 
 @pytest.mark.parametrize(
@@ -1048,11 +944,15 @@ def test_calculate_docs_define_blocked_as_normal_nonterminal_exit() -> None:
 
 def test_config_parsing_and_model_selection_errors_are_typed(tmp_path: Path) -> None:
     modules = load_calculate_modules()
-    config = modules.config.load_calculation_config(
-        minimal_config(tmp_path, human_gate={"enabled": "false"})
-    )
-
-    assert config.human_gate["enabled"] is False
+    config = modules.config.load_calculation_config(minimal_config(tmp_path))
+    assert config.max_recalculations == 1
+    with pytest.raises(
+        modules.config.ConfigError,
+        match="calculate config contains unsupported fields: human_gate",
+    ):
+        modules.config.load_calculation_config(
+            minimal_config(tmp_path, human_gate={"enabled": False})
+        )
     with pytest.raises(
         modules.config.ConfigError,
         match="calculate config contains unsupported fields: artifact_options",
@@ -1173,8 +1073,6 @@ def test_calculate_step_kinds_have_distinct_acceptance_semantics(
         config,
         config.steps[0],
         attempt_number=1,
-        active_proposer_ids=["proposer_001"],
-        locked_outputs={},
         retry_feedback=[],
         accepted_step_outputs={},
     )
@@ -1230,8 +1128,6 @@ def test_allowed_context_preserves_nested_scientific_path_fields(
         config,
         config.steps[0],
         attempt_number=1,
-        active_proposer_ids=["proposer_001"],
-        locked_outputs={},
         retry_feedback=[],
         accepted_step_outputs={},
     )
@@ -1249,7 +1145,9 @@ def test_calculate_template_and_docs_do_not_offer_retired_options() -> None:
     workflow = (SKILL / "workflows/calculate.md").read_text(encoding="utf-8")
 
     assert "artifact_options" not in template
-    assert template["schema_version"] == "arc.workflow.calculate.config.v3"
+    assert template["schema_version"] == "arc.workflow.calculate.config.v4"
+    assert "proposer_count" not in template
+    assert "human_gate" not in template
     assert "runtime" not in template["defaults"]
     assert "save_prompts" not in workflow
     assert "--json" not in workflow
@@ -1271,7 +1169,7 @@ def test_outer_run_binds_config_and_state_under_project_lease(
     modules = load_calculate_modules()
     fake = FakeBatchExecutor(
         modules.runner,
-        [review("all_agree", agreed=["proposer_001", "proposer_002"])],
+        [review()],
     )
     lease_calls: list[tuple[Path, bool]] = []
 
@@ -1364,9 +1262,7 @@ def test_calculate_modules_have_one_way_dependencies() -> None:
     consensus = (CALCULATE_MODULES / "calculate_consensus.py").read_text(
         encoding="utf-8"
     )
-    consensus_policy = (
-        CALCULATE_MODULES / "calculate_consensus_policy.py"
-    ).read_text(encoding="utf-8")
+    consensus_policy_path = CALCULATE_MODULES / "calculate_consensus_policy.py"
     step_results = (
         CALCULATE_MODULES / "calculate_step_results.py"
     ).read_text(encoding="utf-8")
@@ -1390,18 +1286,14 @@ def test_calculate_modules_have_one_way_dependencies() -> None:
     assert "def run_calculation(" not in entry
     assert "_arc_workflows.calculate_runner import" in entry
     assert "_arc_workflows.calculate_" not in config
-    assert len(consensus.splitlines()) <= 400
-    assert "_arc_workflows.calculate_consensus_policy import" in consensus
+    assert len(consensus.splitlines()) <= 300
+    assert not consensus_policy_path.exists()
+    assert "_arc_workflows.calculate_" not in consensus
     assert "_arc_workflows.calculate_config" not in consensus
     assert "_arc_workflows.calculate_prompts" not in consensus
     assert "_arc_workflows.calculate_runner" not in consensus
-    assert len(consensus_policy.splitlines()) <= 300
-    assert "_arc_workflows.calculate_config import" in consensus_policy
-    assert "_arc_workflows.calculate_consensus import" not in consensus_policy
-    assert "_arc_workflows.calculate_runner" not in consensus_policy
-    assert len(step_results.splitlines()) <= 400
+    assert len(step_results.splitlines()) <= 150
     assert "_arc_workflows.calculate_config import" in step_results
-    assert "_arc_workflows.calculate_consensus_policy import" in step_results
     assert "_arc_workflows.calculate_consensus import" not in step_results
     assert "_arc_workflows.calculate_runner" not in step_results
     assert "_arc_workflows.calculate_config import" in context
@@ -1412,14 +1304,12 @@ def test_calculate_modules_have_one_way_dependencies() -> None:
     assert "_arc_workflows.calculate_prompt_builders import" in prompts
     assert "_arc_workflows.calculate_runner" not in prompts
     assert "_arc_workflows.calculate_config import" in prompt_builders
-    assert "_arc_workflows.calculate_consensus_policy import" in prompt_builders
     assert "_arc_workflows.calculate_reviewer_schema import" in prompt_builders
     assert "_arc_workflows.calculate_runner" not in prompt_builders
     assert "_arc_workflows.calculate_config import" in reviewer_schema
     assert "_arc_workflows.calculate_runner" not in reviewer_schema
     assert "_arc_workflows.calculate_config import" in runner
     assert "_arc_workflows.calculate_consensus import" in runner
-    assert "_arc_workflows.calculate_consensus_policy import" in runner
     assert "_arc_workflows.calculate_step_results import" in runner
     assert "_arc_workflows.calculate_prompts import" in runner
 
@@ -1444,7 +1334,6 @@ def test_runner_has_no_retired_llm_or_private_artifact_dependencies() -> None:
             *(CALCULATE_MODULES / name for name in (
                 "calculate_config.py",
                 "calculate_consensus.py",
-                "calculate_consensus_policy.py",
                 "calculate_step_results.py",
                 "calculate_prompts.py",
                 "calculate_runner.py",
