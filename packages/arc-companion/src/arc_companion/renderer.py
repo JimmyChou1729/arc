@@ -27,7 +27,7 @@ from .validation import require_valid_accepted_book
 
 
 WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v8"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v9"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v10"
 _SOURCE_DATE_EPOCH = "946684800"
 _GLOSSARY_PROTECTED_TEXT = re.compile(
     r"(?:https?://|mailto:)[^\s<>{}\[\]]+"
@@ -976,6 +976,7 @@ def _render_tex(
 \usepackage[breakable]{{tcolorbox}}
 \usepackage{{xurl}}
 \usepackage[colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black]{{hyperref}}
+\usepackage{{calc}}
 \usepackage{{enumitem}}
 \setmainfont{{Noto Sans}}
 \setsansfont{{Noto Sans}}
@@ -985,17 +986,15 @@ def _render_tex(
 \definecolor{{TranslationBg}}{{HTML}}{{EFF6FF}}
 \definecolor{{LearningBg}}{{HTML}}{{FFF7E6}}
 \definecolor{{GlossaryUnderline}}{{HTML}}{{A5A9AE}}
-\newsavebox{{\GlossaryTermBox}}
-\newcommand{{\GlossaryTerm}}[1]{{%
+\DeclareRobustCommand{{\GlossaryTerm}}[1]{{%
   \leavevmode
   \begingroup
-  \sbox{{\GlossaryTermBox}}{{#1}}%
   \smash{{\rlap{{\raisebox{{-0.42ex}}{{%
     \textcolor{{GlossaryUnderline}}{{%
-      \rule{{\wd\GlossaryTermBox}}{{0.25pt}}%
+      \rule{{\widthof{{#1}}}}{{0.25pt}}%
     }}%
   }}}}}}%
-  \usebox{{\GlossaryTermBox}}
+  #1%
   \endgroup
 }}
 \setlength{{\parindent}}{{0pt}}

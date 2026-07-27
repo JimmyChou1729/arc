@@ -30,6 +30,7 @@ RELEASE_MANIFEST_SCHEMA = "arc.companion.release_manifest.v2"
 _LEGACY_DELIVERY_RECIPE = "arc.companion.delivery.v1"
 _BASE_DELIVERY_RECIPE = "arc.companion.delivery.v2"
 DELIVERY_RECIPE = "arc.companion.delivery.v3"
+_LEGACY_PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v9"
 _LEGACY_WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v7"
 _LEGACY_RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v4"
 RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v5"
@@ -494,7 +495,7 @@ def _release_identity(
 ) -> dict[str, Any]:
     return {
         "accepted_book_digest": book.content_digest,
-        "pdf_render_recipe": PDF_RENDER_RECIPE,
+        "pdf_render_recipe": _LEGACY_PDF_RENDER_RECIPE,
         "web_render_recipe": WEB_RENDER_RECIPE,
         "validator_version": RENDER_VALIDATOR_VERSION,
         "delivery_recipe": DELIVERY_RECIPE,
@@ -524,7 +525,7 @@ def _release_identity_for_recipe(
     if delivery_recipe == _BASE_DELIVERY_RECIPE:
         return {
             "accepted_book_digest": book.content_digest,
-            "pdf_render_recipe": PDF_RENDER_RECIPE,
+            "pdf_render_recipe": _LEGACY_PDF_RENDER_RECIPE,
             "web_render_recipe": _LEGACY_WEB_RENDER_RECIPE,
             "validator_version": _LEGACY_RENDER_VALIDATOR_VERSION,
             "delivery_recipe": _BASE_DELIVERY_RECIPE,

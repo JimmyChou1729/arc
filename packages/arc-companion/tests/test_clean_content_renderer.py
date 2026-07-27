@@ -552,7 +552,7 @@ def test_accepted_book_v4_drops_legacy_source_page_label(
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
-    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v9"
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v10"
     assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v8"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
@@ -938,14 +938,17 @@ def test_pdf_glossary_terms_use_subtle_underlines_without_tooltips(
     assert "GlossaryBlue" not in tex
     assert r"\pdftooltip" not in tex
     assert r"\definecolor{GlossaryUnderline}{HTML}{A5A9AE}" in tex
-    assert r"\newcommand{\GlossaryTerm}" in tex
+    assert r"\DeclareRobustCommand{\GlossaryTerm}" in tex
+    assert r"\rule{\widthof{#1}}{0.25pt}" in tex
+    assert r"\usebox{\GlossaryTermBox}" not in tex
     assert r"\smash{\rlap{" in tex
     assert r"\GlossaryTerm{entropy}" in tex
     assert not tooltips
     assert "`熵`" in tex
     assert r"\$熵\$" in tex
-    assert "entropy" in extracted
-    assert "熵" in extracted
+    assert "Probability and entropy" in extracted
+    assert "La 熵 cuantifica" in extracted
+    assert "Cómo leer 熵" in extracted
     assert "Source page" not in extracted
     assert "原文第" not in extracted
     subprocess.run(
