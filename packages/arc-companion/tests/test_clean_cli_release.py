@@ -693,6 +693,11 @@ def test_stop_acknowledges_a_running_attempt_before_it_pauses(
     thread.start()
     assert started.wait(timeout=5)
 
+    assert main(["status", "--project-dir", str(project.root)]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["status"] == "completed"
+    assert status["data"]["selected_run"]["status"] == "running"
+
     assert main(["stop", "--project-dir", str(project.root), "--reason", "pause"]) == 0
     acknowledgement = json.loads(capsys.readouterr().out)
     assert acknowledgement["status"] == "completed"

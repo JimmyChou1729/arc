@@ -427,7 +427,11 @@ def _status(args: argparse.Namespace) -> CommandResult:
     paths = CompanionProjectPaths.load(args.project_dir)
     run_id = _current_run(paths)
     view = CompanionService(paths.jobs_root).inspect(run_id)
-    base = command_result_from_snapshot(view.snapshot)
+    base = command_result_from_snapshot(
+        view.snapshot,
+        query=view.snapshot.status
+        in {RunStatus.PENDING, RunStatus.RUNNING},
+    )
     (
         current,
         available_formats,
