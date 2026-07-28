@@ -31,7 +31,8 @@ _LEGACY_DELIVERY_RECIPE = "arc.companion.delivery.v1"
 _BASE_DELIVERY_RECIPE = "arc.companion.delivery.v2"
 _OLDER_DELIVERY_RECIPE = "arc.companion.delivery.v3"
 _PREVIOUS_DELIVERY_RECIPE = "arc.companion.delivery.v4"
-DELIVERY_RECIPE = "arc.companion.delivery.v5"
+_FORMER_DELIVERY_RECIPE = "arc.companion.delivery.v5"
+DELIVERY_RECIPE = "arc.companion.delivery.v6"
 _LEGACY_PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v9"
 _LEGACY_WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v7"
 _LEGACY_RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v4"
@@ -41,7 +42,10 @@ _PREVIOUS_RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v5"
 _LAST_PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v11"
 _LAST_WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v9"
 _LAST_RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v6"
-RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v7"
+_FORMER_PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v13"
+_FORMER_WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v11"
+_FORMER_RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v7"
+RENDER_VALIDATOR_VERSION = "arc.companion.render_validator.v8"
 _FULL_FORMATS = ("pdf", "web")
 _WEB_ONLY_FORMATS = ("web",)
 _WINDOWS = os.name == "nt"
@@ -530,6 +534,16 @@ def _release_identity_for_recipe(
 ) -> dict[str, Any]:
     if delivery_recipe == DELIVERY_RECIPE:
         return _release_identity(book, available_formats=available_formats)
+    if delivery_recipe == _FORMER_DELIVERY_RECIPE:
+        return {
+            "accepted_book_digest": book.content_digest,
+            "pdf_render_recipe": _FORMER_PDF_RENDER_RECIPE,
+            "web_render_recipe": _FORMER_WEB_RENDER_RECIPE,
+            "validator_version": _FORMER_RENDER_VALIDATOR_VERSION,
+            "delivery_recipe": _FORMER_DELIVERY_RECIPE,
+            "manifest_schema": RELEASE_MANIFEST_SCHEMA,
+            "available_formats": list(available_formats),
+        }
     if delivery_recipe == _PREVIOUS_DELIVERY_RECIPE:
         return {
             "accepted_book_digest": book.content_digest,
@@ -575,6 +589,7 @@ def _delivery_recipe_from_value(value: dict[str, Any], *, code: str) -> str:
         _BASE_DELIVERY_RECIPE,
         _OLDER_DELIVERY_RECIPE,
         _PREVIOUS_DELIVERY_RECIPE,
+        _FORMER_DELIVERY_RECIPE,
         DELIVERY_RECIPE,
     }:
         raise CompanionReleaseError(
@@ -719,6 +734,7 @@ def _delivery_html_bytes(
 ) -> bytes:
     if delivery_recipe in {
         DELIVERY_RECIPE,
+        _FORMER_DELIVERY_RECIPE,
         _PREVIOUS_DELIVERY_RECIPE,
         _OLDER_DELIVERY_RECIPE,
     }:

@@ -562,8 +562,8 @@ def test_accepted_book_v4_drops_legacy_source_page_label(
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
-    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v13"
-    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v11"
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v14"
+    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v12"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
         == r"first line\newline{} second line\par third paragraph"
@@ -628,6 +628,59 @@ def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
         r"Definition line one\newline{} Definition line two"
         r"\par Definition paragraph two"
     ) in tex
+
+
+def test_translations_and_learning_titles_use_math_rendering(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    formula = r"10 \otimes 10 = 1 \oplus 45 \oplus 54"
+    book = replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                translations=(
+                    replace(
+                        chapter.translations[0],
+                        text=f"所以有 ${formula}$。",
+                    ),
+                    *chapter.translations[1:],
+                ),
+                learning_units=(
+                    replace(
+                        chapter.learning_units[0],
+                        title=r"读懂 $SO(10)$ 分解式",
+                        content_markdown=rf"也可以写成 \({formula}\)。",
+                    ),
+                    *chapter.learning_units[1:],
+                ),
+            ),
+        ),
+    )
+    reader = tmp_path / "math-reader"
+    html = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    ).render_web(book, reader).read_text(encoding="utf-8")
+    parsed = BeautifulSoup(html, "html.parser")
+    tex = _render_tex(
+        book,
+        source_paths={"b-figure": "source/frozen-fixture.png"},
+    )
+
+    translation = parsed.select_one(
+        '[data-source-anchor="b-intro"] .translation-layer'
+    )
+    title = parsed.select_one('[data-learning-unit="intuition"] h4')
+    assert translation is not None
+    assert title is not None
+    translation_math = translation.select_one(".math")
+    assert translation_math is not None
+    assert translation_math["data-tex"] == formula
+    assert title.select_one('.math[data-tex="SO(10)"]')
+    assert "$10" not in translation.get_text()
+    assert r"\(10 \otimes 10 = 1 \oplus 45 \oplus 54\)" in tex
+    assert r"\textbf{读懂 \(SO(10)\) 分解式}" in tex
 
 
 def test_renderer_public_import_does_not_load_llm_runtime() -> None:
@@ -1010,6 +1063,7 @@ def test_pdf_glossary_terms_use_subtle_underlines_without_tooltips(
         capture_output=True,
         text=True,
     ).stdout
+    assert "\ufffd" not in extracted
     annotations = [
         annotation.get_object()
         for page in PdfReader(output).pages
@@ -1031,8 +1085,8 @@ def test_pdf_glossary_terms_use_subtle_underlines_without_tooltips(
     assert r"\smash{\rlap{" in tex
     assert r"\GlossaryTerm{entropy}" in tex
     assert not tooltips
-    assert "`熵`" in tex
-    assert r"\$熵\$" in tex
+    assert r"\texttt{熵}" in tex
+    assert r"\(\text{熵}\)" in tex
     assert "Probability and entropy" in extracted
     assert "目录" in extracted
     assert "La 熵 cuantifica" in extracted
@@ -1045,6 +1099,34 @@ def test_pdf_glossary_terms_use_subtle_underlines_without_tooltips(
         capture_output=True,
         text=True,
     )
+
+
+@pytest.mark.skipif(
+    any(shutil.which(item) is None for item in _PDF_TOOLS),
+    reason="offline PDF validation toolchain is unavailable",
+)
+def test_pdf_render_rejects_xelatex_missing_glyphs(
+    accepted_book: AcceptedBook, tmp_path: Path
+) -> None:
+    chapter = accepted_book.chapters[0]
+    book = replace(
+        accepted_book,
+        chapters=(
+            replace(
+                chapter,
+                translations=(
+                    replace(chapter.translations[0], text="缺字\u0378"),
+                    *chapter.translations[1:],
+                ),
+            ),
+        ),
+    )
+    renderer = CompanionRenderer(
+        asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
+    )
+
+    with pytest.raises(CompanionRenderError, match="missing reader-visible glyphs"):
+        renderer.render_pdf(book, tmp_path / "missing-glyph.pdf")
 
 
 def test_source_fragment_links_resolve_to_release_anchors(

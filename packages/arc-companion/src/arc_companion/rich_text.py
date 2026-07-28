@@ -13,6 +13,8 @@ from markdown_it.rules_block import StateBlock
 from markdown_it.rules_inline import StateInline
 from markdown_it.token import Token
 
+from .tex_text import escape_tex_text, sanitize_tex_math
+
 
 _CITATION = re.compile(r"\[@([A-Za-z0-9][A-Za-z0-9._:-]*)\]")
 
@@ -210,19 +212,36 @@ def _citation(state: StateInline, silent: bool) -> bool:
 
 
 def _math_inline(state: StateInline, silent: bool) -> bool:
-    if state.src[state.pos] != "$" or state.src.startswith("$$", state.pos):
+    if state.src.startswith(r"\(", state.pos):
+        open_delimiter = r"\("
+        close_delimiter = r"\)"
+    elif (
+        state.src[state.pos] == "$"
+        and not state.src.startswith("$$", state.pos)
+        and (not state.pos or state.src[state.pos - 1] != "\\")
+    ):
+        open_delimiter = "$"
+        close_delimiter = "$"
+    else:
         return False
-    if state.pos and state.src[state.pos - 1] == "\\":
-        return False
-    close = state.src.find("$", state.pos + 1)
-    while close >= 0 and state.src[close - 1] == "\\":
-        close = state.src.find("$", close + 1)
-    if close < 0 or close == state.pos + 1 or "\n" in state.src[state.pos + 1 : close]:
+    content_start = state.pos + len(open_delimiter)
+    close = state.src.find(close_delimiter, content_start)
+    while (
+        close >= 0
+        and close_delimiter == "$"
+        and state.src[close - 1] == "\\"
+    ):
+        close = state.src.find(close_delimiter, close + 1)
+    if (
+        close < 0
+        or close == content_start
+        or "\n" in state.src[content_start:close]
+    ):
         return False
     if not silent:
         token = state.push("math_inline", "math", 0)
-        token.content = state.src[state.pos + 1 : close].strip()
-    state.pos = close + 1
+        token.content = state.src[content_start:close].strip()
+    state.pos = close + len(close_delimiter)
     return True
 
 
@@ -231,14 +250,19 @@ def _math_block(
 ) -> bool:
     begin = state.bMarks[start_line] + state.tShift[start_line]
     maximum = state.eMarks[start_line]
-    if state.src[begin:maximum].strip() != "$$":
+    opening = state.src[begin:maximum].strip()
+    if opening == "$$":
+        closing = "$$"
+    elif opening == r"\[":
+        closing = r"\]"
+    else:
         return False
     next_line = start_line + 1
     close_line = -1
     while next_line < end_line:
         start = state.bMarks[next_line] + state.tShift[next_line]
         end = state.eMarks[next_line]
-        if state.src[start:end].strip() == "$$":
+        if state.src[start:end].strip() == closing:
             close_line = next_line
             break
         next_line += 1
@@ -372,19 +396,7 @@ def _render_tex_inline(
 
 
 def _tex_escape(value: Any) -> str:
-    replacements = {
-        "\\": r"\textbackslash{}",
-        "{": r"\{",
-        "}": r"\}",
-        "#": r"\#",
-        "$": r"\$",
-        "%": r"\%",
-        "&": r"\&",
-        "_": r"\_",
-        "^": r"\textasciicircum{}",
-        "~": r"\textasciitilde{}",
-    }
-    return "".join(replacements.get(char, char) for char in str(value))
+    return escape_tex_text(value)
 
 
 def _tex_url(value: str) -> str:
@@ -396,7 +408,7 @@ def _tex_label(value: str) -> str:
 
 
 def _sanitize_math(value: str) -> str:
-    return str(value).replace("\x00", "")
+    return sanitize_tex_math(value)
 
 
 def _tex_code(value: str) -> str:

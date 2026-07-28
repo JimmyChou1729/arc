@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 from html import escape as escape_html
 from importlib import resources
@@ -23,11 +24,12 @@ from .reader_labels import ReaderLabelError, resolve_reader_labels
 from .reading_order import iter_visible_learning_units
 from .rich_text import RichTextError, citation_ids_from_tokens, parse_markdown
 from . import rich_text
+from .tex_text import escape_tex_text, sanitize_tex_math
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v11"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v13"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v12"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v14"
 _SOURCE_DATE_EPOCH = "946684800"
 _GLOSSARY_PROTECTED_TEXT = re.compile(
     r"(?:https?://|mailto:)[^\s<>{}\[\]]+"
@@ -430,6 +432,10 @@ class CompanionRenderer:
             layout_text = layout_text_path.read_text(
                 encoding="utf-8", errors="replace"
             )
+            if "\ufffd" in text or "\ufffd" in layout_text:
+                raise CompanionRenderError(
+                    "PDF searchable text contains a replacement character"
+                )
             if not _normalize_pdf_search_text(text) or not _pdf_text_contains(
                 text, book.title
             ):
@@ -725,9 +731,16 @@ def _render_html_chapter(
             if anchor.kind not in {"code", "equation"}
             else None
         )
+        translated_body = (
+            _html_target_prose(translation.text, translation_matcher, labels)
+            if translation is not None and translation_matcher is not None
+            else _html_literal_prose(translation.text)
+            if translation is not None
+            else ""
+        )
         translated = (
             f'<section class="translation-layer" lang="{escape_html(book.target_language)}">'
-            f"<p>{_html_target_prose(translation.text, translation_matcher, labels)}</p></section>"
+            f"{translated_body}</section>"
             if translation is not None and _translation_is_visible(anchor)
             else ""
         )
@@ -754,7 +767,7 @@ def _render_html_chapter(
             f"{source}</section>{translated}{learning}</div></article>"
         )
     guide = (
-        f'<p class="chapter-guide">{_html_glossary_text(_normalize_model_prose_breaks(chapter.guide), target_matcher, labels, preserve_breaks=True)}</p>'
+        f'<div class="chapter-guide">{_html_target_prose(_normalize_model_prose_breaks(chapter.guide), target_matcher, labels)}</div>'
         if chapter.guide
         else ""
     )
@@ -922,7 +935,7 @@ def _render_html_learning(
     return (
         '<section class="learning-unit" '
         f'data-learning-unit="{escape_html(unit.unit_id)}">'
-        f"<h4>{_html_glossary_text(unit.title, matcher, labels)}</h4>"
+        f"<h4>{_html_target_inline(unit.title, matcher, labels)}</h4>"
         f"{body}{fallback}</section>"
     )
 
@@ -1113,14 +1126,56 @@ def _html_target_prose(
     matcher: GlossaryMatcher | None,
     labels: Mapping[str, str],
 ) -> str:
-    if matcher is None:
-        return escape_html(value).replace("\n", "<br>")
-    return _html_glossary_text(
-        value,
-        matcher,
-        labels,
-        preserve_breaks=True,
+    tokens = _target_markdown_tokens(value)
+    try:
+        return rich_text.render_html(
+            tokens,
+            citation_numbers={},
+            text_renderer=(
+                (lambda text: _html_glossary_text(text, matcher, labels))
+                if matcher is not None
+                else escape_html
+            ),
+        )
+    except RichTextError as exc:
+        raise CompanionRenderError(str(exc)) from exc
+
+
+def _html_literal_prose(value: Any) -> str:
+    paragraphs = [
+        paragraph
+        for paragraph in re.split(
+            r"\n[ \t]*\n+",
+            str(value).replace("\r\n", "\n").replace("\r", "\n"),
+        )
+        if paragraph.strip()
+    ]
+    return "".join(
+        "<p>"
+        + "<br>".join(escape_html(line) for line in paragraph.split("\n"))
+        + "</p>"
+        for paragraph in paragraphs
     )
+
+
+def _html_target_inline(
+    value: str,
+    matcher: GlossaryMatcher | None,
+    labels: Mapping[str, str],
+) -> str:
+    tokens = _target_inline_tokens(value)
+    try:
+        return rich_text.render_html(
+            tokens,
+            citation_numbers={},
+            text_renderer=(
+                (lambda text: _html_glossary_text(text, matcher, labels))
+                if matcher is not None
+                else escape_html
+            ),
+        )
+    except RichTextError as exc:
+        raise CompanionRenderError(str(exc)) from exc
 
 
 def _render_tex(
@@ -1163,7 +1218,8 @@ def _render_tex(
 \usepackage[margin=21mm]{{geometry}}
 \usepackage{{fontspec}}
 \usepackage{{xeCJK}}
-\usepackage{{amsmath,amssymb}}
+\usepackage{{amsmath}}
+\usepackage{{unicode-math}}
 \usepackage[table]{{xcolor}}
 \usepackage{{graphicx}}
 \usepackage{{longtable,booktabs,array}}
@@ -1177,6 +1233,11 @@ def _render_tex(
 \setmonofont{{Noto Sans Mono CJK SC}}
 \setCJKmainfont{{Noto Sans CJK SC}}
 \setCJKsansfont{{Noto Sans CJK SC}}
+\setmathfont{{Noto Sans Math}}
+\newfontfamily\ArcUnicodeSymbolFont{{DejaVu Sans}}
+\newfontfamily\ArcEnclosedSymbolFont{{Noto Sans CJK JP}}
+\DeclareRobustCommand{{\ArcUnicodeSymbol}}[1]{{{{\ArcUnicodeSymbolFont #1}}}}
+\DeclareRobustCommand{{\ArcEnclosedSymbol}}[1]{{{{\ArcEnclosedSymbolFont #1}}}}
 \definecolor{{TranslationBg}}{{HTML}}{{EFF6FF}}
 \definecolor{{LearningBg}}{{HTML}}{{FFF7E6}}
 \definecolor{{GlossaryUnderline}}{{HTML}}{{A5A9AE}}
@@ -1191,7 +1252,11 @@ def _render_tex(
   #1%
   \endgroup
 }}
-\pdfstringdefDisableCommands{{\def\GlossaryTerm#1{{#1}}}}
+\pdfstringdefDisableCommands{{%
+  \def\GlossaryTerm#1{{#1}}%
+  \def\ArcUnicodeSymbol#1{{#1}}%
+  \def\ArcEnclosedSymbol#1{{#1}}%
+}}
 \setlength{{\parindent}}{{0pt}}
 \setlength{{\parskip}}{{5pt}}
 \setcounter{{tocdepth}}{{1}}
@@ -1241,7 +1306,7 @@ def _render_tex_chapter(
         values.append(
             rf"\begin{{tcolorbox}}[breakable,colback=LearningBg,colframe=LearningBg,"
             rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
-            rf"{_render_tex_prose(chapter.guide, model_generated=True, matcher=target_matcher, labels=labels)}"
+            rf"{_render_tex_target_markdown(chapter.guide, model_generated=True, matcher=target_matcher, labels=labels)}"
             rf"\end{{tcolorbox}}"
         )
     for unit in chapter.learning_units:
@@ -1273,10 +1338,19 @@ def _render_tex_chapter(
                 if anchor.kind not in {"code", "equation"}
                 else None
             )
+            translation_tex = (
+                _render_tex_target_markdown(
+                    translation.text,
+                    matcher=translation_matcher,
+                    labels=labels,
+                )
+                if translation_matcher is not None
+                else _render_tex_prose(translation.text)
+            )
             values.append(
                 rf"\begin{{tcolorbox}}[breakable,colback=TranslationBg,colframe=TranslationBg,"
                 rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
-                rf"{_render_tex_prose(translation.text, matcher=translation_matcher, labels=labels)}"
+                rf"{translation_tex}"
                 rf"\end{{tcolorbox}}"
             )
         for unit in units.get(anchor.block_id, ()):
@@ -1446,7 +1520,7 @@ def _render_tex_learning(
     return (
         rf"\begin{{tcolorbox}}[breakable,colback=LearningBg,colframe=LearningBg,"
         rf"boxrule=0pt,arc=1mm,left=2mm,right=2mm,top=1.5mm,bottom=1.5mm]"
-        rf"\textbf{{{_tex_glossary_text(unit.title, matcher, labels)}}}\par "
+        rf"\textbf{{{_tex_target_inline(unit.title, matcher, labels)}}}\par "
         rf"{body}"
         rf"{citations}\end{{tcolorbox}}"
     )
@@ -1564,6 +1638,73 @@ def _render_tex_prose(
     )
 
 
+def _render_tex_target_markdown(
+    value: Any,
+    *,
+    model_generated: bool = False,
+    matcher: GlossaryMatcher | None = None,
+    labels: Mapping[str, str] | None = None,
+) -> str:
+    normalized = (
+        _normalize_model_prose_breaks(value)
+        if model_generated
+        else str(value)
+    )
+    tokens = _target_markdown_tokens(normalized)
+    try:
+        return rich_text.render_tex(
+            tokens,
+            citation_numbers={},
+            text_renderer=(
+                (lambda text: _tex_glossary_text(text, matcher, labels))
+                if matcher is not None and labels is not None
+                else _tex_escape
+            ),
+        )
+    except RichTextError as exc:
+        raise CompanionRenderError(str(exc)) from exc
+
+
+def _tex_target_inline(
+    value: Any,
+    matcher: GlossaryMatcher | None,
+    labels: Mapping[str, str],
+) -> str:
+    tokens = _target_inline_tokens(str(value))
+    try:
+        return rich_text.render_tex(
+            tokens,
+            citation_numbers={},
+            text_renderer=(
+                (lambda text: _tex_glossary_text(text, matcher, labels))
+                if matcher is not None
+                else _tex_escape
+            ),
+        )
+    except RichTextError as exc:
+        raise CompanionRenderError(str(exc)) from exc
+
+
+def _target_markdown_tokens(value: Any) -> tuple[Any, ...]:
+    normalized = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    try:
+        return parse_markdown(_without_reader_html_tags(normalized))
+    except RichTextError as exc:
+        raise CompanionRenderError(str(exc)) from exc
+
+
+def _target_inline_tokens(value: Any) -> tuple[Any, ...]:
+    tokens = _target_markdown_tokens(value)
+    if (
+        len(tokens) != 3
+        or tokens[0].type != "paragraph_open"
+        or tokens[1].type != "inline"
+        or tokens[2].type != "paragraph_close"
+    ):
+        raise CompanionRenderError("reader-layer title must be one inline paragraph")
+    return (tokens[1],)
+
+
 def _normalize_model_prose_breaks(value: Any) -> str:
     text = str(value).replace(r"\r\n", "\n")
     return re.sub(r"(?<!\\)\\n", "\n", text)
@@ -1610,6 +1751,18 @@ def _pdf_search_alternatives(
 ) -> tuple[str, ...]:
     """Return projections for explicit extractor line-wrap behaviors."""
 
+    standard, line_unwrapped = _cached_pdf_search_alternatives(str(extracted))
+    if _allows_pdf_line_concat(expected):
+        return tuple(dict.fromkeys((*standard, line_unwrapped)))
+    return standard
+
+
+@lru_cache(maxsize=4)
+def _cached_pdf_search_alternatives(
+    extracted: str,
+) -> tuple[tuple[str, ...], str]:
+    """Compute expensive full-document projections once per extractor."""
+
     text = _normalize_pdf_characters(extracted)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(
@@ -1628,26 +1781,19 @@ def _pdf_search_alternatives(
     typeset_dehyphenated = re.sub(
         rf"(?P<left>\w+)-[ \t]*{line_break}[ \t]*"
         rf"(?P<right>\w+)",
-        lambda match: (
-            match.group("left") + match.group("right")
-            if match.group("left") + match.group("right") in expected
-            and (
-                match.group("left") + "-" + match.group("right")
-                not in expected
-            )
-            else match.group(0)
-        ),
+        lambda match: match.group("left") + match.group("right"),
         text,
     )
     values.append(_normalize_pdf_search_text(typeset_dehyphenated))
-    if _allows_pdf_line_concat(expected):
-        line_unwrapped = re.sub(
-            rf"(?<=\S)[ \t]*{line_break}[ \t]*(?=\S)",
-            "",
-            text,
-        )
-        values.append(_normalize_pdf_search_text(line_unwrapped))
-    return tuple(dict.fromkeys(value for value in values if value))
+    line_unwrapped = re.sub(
+        rf"(?<=\S)[ \t]*{line_break}[ \t]*(?=\S)",
+        "",
+        text,
+    )
+    return (
+        tuple(dict.fromkeys(value for value in values if value)),
+        _normalize_pdf_search_text(line_unwrapped),
+    )
 
 
 def _allows_pdf_line_concat(expected: str) -> bool:
@@ -1661,12 +1807,23 @@ def _allows_pdf_line_concat(expected: str) -> bool:
 
 def _pdf_text_contains(extracted_text: str, expected: Any) -> bool:
     normalized_expected = _normalize_pdf_search_text(expected)
-    return bool(normalized_expected) and any(
+    if not normalized_expected:
+        return False
+    if normalized_expected in _normalized_pdf_haystack(extracted_text):
+        return True
+    return any(
         normalized_expected in alternative
         for alternative in _pdf_search_alternatives(
             extracted_text, normalized_expected
         )
     )
+
+
+@lru_cache(maxsize=4)
+def _normalized_pdf_haystack(extracted_text: str) -> str:
+    """Normalize each large extractor result once during PDF validation."""
+
+    return _normalize_pdf_search_text(extracted_text)
 
 
 def _pdf_bibliography_text_contains(
@@ -1739,6 +1896,25 @@ def _compile_tex(tex_path: Path, content_digest: str) -> Path:
     if completed.returncode != 0 or not built.is_file():
         tail = "\n".join((completed.stdout + completed.stderr).splitlines()[-30:])
         raise CompanionRenderError(f"XeLaTeX compilation failed:\n{tail}")
+    missing = tuple(
+        dict.fromkeys(
+            line.strip()
+            for line in (completed.stdout + completed.stderr).splitlines()
+            if "Missing character:" in line
+        )
+    )
+    if missing:
+        sample = "\n".join(missing[:12])
+        suffix = (
+            f"\n... and {len(missing) - 12} more"
+            if len(missing) > 12
+            else ""
+        )
+        raise CompanionRenderError(
+            "XeLaTeX reported missing reader-visible glyphs:\n"
+            + sample
+            + suffix
+        )
     return built
 
 
@@ -1925,19 +2101,7 @@ def _require_converted_asset(target: Path, media_type: str) -> None:
 
 
 def _tex_escape(value: Any) -> str:
-    replacements = {
-        "\\": r"\textbackslash{}",
-        "{": r"\{",
-        "}": r"\}",
-        "$": r"\$",
-        "&": r"\&",
-        "#": r"\#",
-        "%": r"\%",
-        "_": r"\_",
-        "~": r"\textasciitilde{}",
-        "^": r"\textasciicircum{}",
-    }
-    return "".join(replacements.get(char, char) for char in str(value))
+    return escape_tex_text(value)
 
 
 def _tex_glossary_text(
@@ -1959,7 +2123,7 @@ def _sanitize_math(value: Any) -> str:
     text = str(value).strip()
     if "\x00" in text or r"\write18" in text or r"\input" in text:
         raise CompanionRenderError("source equation contains unsupported TeX commands")
-    return text
+    return sanitize_tex_math(text)
 
 
 def _tex_url(value: str) -> str:

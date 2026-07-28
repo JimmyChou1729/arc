@@ -897,6 +897,7 @@ def test_legacy_release_manifest_and_current_pointer_remain_readable(
         release_module._BASE_DELIVERY_RECIPE,
         release_module._OLDER_DELIVERY_RECIPE,
         release_module._PREVIOUS_DELIVERY_RECIPE,
+        release_module._FORMER_DELIVERY_RECIPE,
     ),
 )
 def test_prior_delivery_releases_remain_valid_after_render_upgrade(

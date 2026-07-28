@@ -95,6 +95,30 @@ def test_commonmark_math_and_nearby_citations_share_validation() -> None:
         validate_rich_markdown("<mark>no</mark>")
 
 
+def test_tex_parenthesis_and_bracket_math_delimiters_render_cross_format() -> None:
+    book = _book(
+        markdown=(
+            r"行内公式 \(x^2 + y^2\)。"
+            "\n\n"
+            "\\[\n"
+            r"10 \otimes 10 = 1 \oplus 45 \oplus 54"
+            "\n\\]\n"
+        )
+    )
+    links = _release_links(book)
+
+    html = _render_html(book, source_assets={}, release_links=links)
+    tex = _render_tex(book, source_paths={}, release_links=links)
+
+    assert 'class="math math-inline" data-tex="x^2 + y^2"' in html
+    assert (
+        'class="math math-display" '
+        'data-tex="10 \\otimes 10 = 1 \\oplus 45 \\oplus 54"'
+    ) in html
+    assert r"\(x^2 + y^2\)" in tex
+    assert r"\[10 \otimes 10 = 1 \oplus 45 \oplus 54\]" in tex
+
+
 def test_model_markdown_images_are_cross_format_unfrozen_links() -> None:
     book = _book(markdown="![示意图](https://example.test/figure.png)")
     links = _release_links(book)
