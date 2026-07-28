@@ -1385,6 +1385,10 @@ def test_pdf_bibliography_search_tolerates_typesetter_spacing() -> None:
         "Oedipus at Thebes: Sophocles’ Tragic Hero and His Time",
         "Oedipus at Thebes: Sophocles' Tragic Hero and His Time",
     )
+    assert _pdf_bibliography_text_contains(
+        "赫尔曼・邦迪传记",
+        "赫尔曼·邦迪传记",
+    )
 
 
 def test_headerless_table_uses_row_width_and_omits_empty_web_header(

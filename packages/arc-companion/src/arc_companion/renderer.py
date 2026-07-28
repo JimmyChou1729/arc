@@ -1579,6 +1579,8 @@ def _normalize_pdf_characters(value: Any) -> str:
                 "\N{RIGHT DOUBLE QUOTATION MARK}": '"',
                 "\N{DOUBLE LOW-9 QUOTATION MARK}": '"',
                 "\N{DOUBLE HIGH-REVERSED-9 QUOTATION MARK}": '"',
+                "\N{KATAKANA MIDDLE DOT}": "\N{MIDDLE DOT}",
+                "\N{BULLET OPERATOR}": "\N{MIDDLE DOT}",
             }
         )
     )
