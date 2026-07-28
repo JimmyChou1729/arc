@@ -18,6 +18,13 @@ mutating a resumed run and reports `runtime_dependency_missing` when that
 installation is incomplete. Explicitly injected translation adapters remain
 available for embedding and offline tests.
 
+For translated builds, every chapter translation completes and freezes before
+guide generation begins. Companion caches one immutable text-only translation
+document through `arc-paper`; chapter proposers and reviewers receive exact
+commands for both the original and translated chapter and parts. Guide wording
+therefore follows the fixed translation's proper names and terminology without
+placing source or translation bodies in loop-context JSON.
+
 ## Quick start
 
 Build a companion from a rich source or paper identifier:

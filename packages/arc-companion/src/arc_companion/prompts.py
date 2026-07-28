@@ -7,9 +7,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v14"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v15"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v14"
+    "arc.companion.chapter-learning-review-prompt.v15"
 )
 CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v10"
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
@@ -322,9 +322,13 @@ Write titles and Markdown in the target language. Cite an externally grounded
 claim nearby using the reference's one-based array position, for example
 `[@1]` or `[@2]`. Include only cited references. ARC assigns publication
 identities and enriches cache metadata deterministically. References may be
-absent or arbitrarily numerous. The translation lane runs independently; use
-the supplied chapter glossary consistently. A prior Companion is optional
-reference material, not a template or accepted source.
+absent or arbitrarily numerous. The complete translation lane is frozen
+before Companion generation begins. Read the original and frozen translation
+together. Use the frozen translation's proper names, translated titles, and
+technical terminology consistently in every generated title and body; do not
+silently invent a different translation. Use the supplied chapter glossary
+consistently as well. A prior Companion is optional reference material, not a
+template or accepted source.
 
 Use the reader background specified in the user intent. Otherwise, for
 popular, directional, or weakly specialized writing assume an adult with
@@ -398,10 +402,15 @@ authorization that was not granted.
 When `arc_commands.availability` is `exact`, the source body is not embedded
 in the loop context: run the supplied commands for exact numbered parts,
 complete current sections, the complete current chapter, search, and
-research. Read the complete current chapter once before drafting, then use an
-exact part or section command to confirm every local placement. When
-availability is `fallback_only`, inspect the attached verified text-only
-Companion source using the supplied chapter part and line metadata instead.
+research. Read the complete original chapter once before drafting. When
+`arc_commands.translation.availability` is `exact`, also run its
+`complete-current-chapter` command and read the complete frozen translation
+before drafting. For every local companion, confirm its placement and wording
+against both the original `source` part command and the matching frozen
+translation `translation.parts` command. When source availability is
+`fallback_only`, inspect the attached verified text-only Companion source
+using the supplied chapter part and line metadata instead. The frozen
+translation remains the terminology authority whenever it is available.
 Do not explore ARC source code or cache directories to rediscover access
 methods. Avoid reading the whole book when the complete current chapter is
 enough. Never open image or media assets.
@@ -482,6 +491,11 @@ must make them easier to understand by unpacking reasoning, explaining
 necessary terms, using concrete wording, and splitting overloaded sentences
 or steps without losing technical accuracy. Request revision for needlessly
 abstract, opaque, or source-imitating prose even when its facts are correct.
+Compare every generated proper name, translated title, and technical term
+with the frozen translation. Require the translation's established wording
+throughout the Companion, including titles, unless the user explicitly asked
+for a different wording. A fluent but inconsistent retranslation is a
+material defect.
 Require nearby positional `[@N]` citations for externally grounded claims.
 
 Treat unsupported corrective framing as a material defect. Audit every
@@ -496,13 +510,17 @@ title or a technically accurate definition. Ordinary factual negation is
 allowed when the fact itself is negative. A prior Companion is optional
 reference material, not a template or authority.
 
-When `arc_commands.availability` is `exact`, run the supplied
-`complete-current-chapter` command before judging anything. Then run the exact
-`part-N` command for every local companion and `section-N-complete` for every
-section guide. When availability is `fallback_only`, inspect the corresponding
-complete chapter and exact locations in the attached verified text-only
-Companion source using the supplied part and line metadata. In either mode,
-compare each unit with the source at its proposed display location and record
+When `arc_commands.availability` is `exact`, run the supplied original-source
+`complete-current-chapter` command before judging anything. When
+`arc_commands.translation.availability` is `exact`, also run its
+`complete-current-chapter` command before judging anything. Then run both
+matching exact `part-N` commands for every local companion and both matching
+`section-N-complete` commands for every section guide. When source
+availability is `fallback_only`, inspect the corresponding complete chapter
+and exact locations in the attached verified text-only Companion source using
+the supplied part and line metadata; still inspect the frozen translation
+through its supplied commands. In either mode, compare each unit with both
+the original and translation at its proposed display location and record
 every inspected location in the review payload. If useful material is
 misplaced, request a move or split rather than deleting it automatically. If
 a proposed constructive addition uses another location, inspect and record

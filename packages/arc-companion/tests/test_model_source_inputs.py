@@ -20,7 +20,10 @@ from arc_companion.model_source import (
     model_chapter_block_index,
     model_source_index,
     model_source_view,
+    model_translation_index,
+    model_translation_view,
     validate_model_source_index,
+    validate_model_translation_index,
 )
 from arc_companion.source_planning import plan_source_chapters
 
@@ -188,3 +191,57 @@ def test_model_source_index_supports_verified_text_fallback_only() -> None:
     validate_model_source_index(
         index, document=document, chapters=chapters
     )
+
+
+def test_model_translation_view_aligns_parts_without_body_in_index() -> None:
+    document = _document()
+    chapters = plan_source_chapters(document)
+    chapter = chapters[0]
+    translations = {
+        chapter.chapter_id: [
+            {"block_id": "heading", "text": "# 固定标题"},
+            {
+                "block_id": "paragraph",
+                "text": "徐先生写下一个难懂的句子。\n这里沿用固定译名。",
+            },
+            {"block_id": "equation", "text": "$$x=1$$"},
+            {"block_id": "figure", "text": "确定性图注"},
+        ]
+    }
+
+    view, access = model_translation_view(chapters, translations)
+    cached = {
+        "source_format": "markdown",
+        "source_sha256": "c" * 64,
+        "source_size": len(view.encode("utf-8")),
+        "media_type": "text/markdown",
+        "parser_contract": "arc.paper.rich-parse.v1",
+        "parsed_document_sha256": "d" * 64,
+    }
+    index = model_translation_index(
+        view,
+        chapters,
+        access,
+        source_document_sha256=document.document_digest,
+        target_language="zh-CN",
+        cached_document=cached,
+    )
+
+    validate_model_translation_index(
+        index,
+        view=view,
+        chapters=chapters,
+        source_document_sha256=document.document_digest,
+        target_language="zh-CN",
+    )
+    paragraph = access[chapter.chapter_id][1]
+    lines = view.splitlines()
+    extracted = "\n".join(
+        lines[
+            paragraph["line_start"] - 1 : paragraph["line_end"]
+        ]
+    )
+    assert extracted == "徐先生写下一个难懂的句子。\n这里沿用固定译名。"
+    encoded = json.dumps(index, ensure_ascii=False)
+    assert "徐先生" not in encoded
+    assert index["cached_document"] == cached

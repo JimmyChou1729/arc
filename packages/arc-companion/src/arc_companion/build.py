@@ -48,6 +48,8 @@ from arc_paper import (
     ReferenceMaterialCache,
     ReferenceCacheError,
     SourceFormat,
+    SourceOrigin,
+    SourceOriginKind,
     SourceRepositoryError,
     apply_visual_equation_labels,
     detect_suspicious_equation_labels,
@@ -108,7 +110,10 @@ from .model_source import (
     model_chapter_block_index,
     model_source_index,
     model_source_view,
+    model_translation_index,
+    model_translation_view,
     validate_model_source_index,
+    validate_model_translation_index,
 )
 from .prompts import (
     AUTHOR_IDENTITY_PROMPT_VERSION,
@@ -143,10 +148,11 @@ from .translation_adapter import (
 from .validation import require_valid_accepted_book
 
 
-COMPANION_BUILD_HANDLER = "arc.companion.build.v12"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v13"
 COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
     {
         COMPANION_BUILD_HANDLER,
+        "arc.companion.build.v12",
         "arc.companion.build.v11",
         "arc.companion.build.v10",
         "arc.companion.build.v9",
@@ -164,6 +170,8 @@ _DIAGNOSTICS_ARTIFACT = "diagnostics/build"
 _EFFECTIVE_SOURCE_ARTIFACT = "source/effective"
 _MODEL_SOURCE_VIEW_ARTIFACT = "source/model-view"
 _MODEL_SOURCE_INDEX_ARTIFACT = "source/model-index"
+_MODEL_TRANSLATION_VIEW_ARTIFACT = "translation/model-view"
+_MODEL_TRANSLATION_INDEX_ARTIFACT = "translation/model-index"
 _ORIGINAL_SOURCE_ARTIFACT = "source/original"
 _AUTHOR_IDENTITY_ARTIFACT = "identity/authors"
 _PRIOR_COMPANION_ARTIFACT = "translation-reuse/prior-companion"
@@ -493,6 +501,100 @@ class CompanionBuildHandler:
             )
         return tuple(inputs)
 
+    def _model_translation_inputs(
+        self,
+        context: RunContext,
+        source: RichDocument,
+        chapters: Sequence[SourceChapter],
+        translations: Mapping[str, Mapping[str, Any]],
+    ) -> tuple[tuple[LLMInputArtifact, ...], Mapping[str, Any]]:
+        """Freeze and cache the accepted translation before guide work."""
+
+        by_chapter = {
+            chapter.chapter_id: mapping_list(
+                translations[f"translation-{chapter.chapter_id}"][
+                    "translations"
+                ],
+                f"translations for {chapter.chapter_id}",
+            )
+            for chapter in chapters
+        }
+        view, access = model_translation_view(chapters, by_chapter)
+        payload = view.encode("utf-8")
+        view_ref = context.artifacts.find(
+            _MODEL_TRANSLATION_VIEW_ARTIFACT
+        )
+        if view_ref is None:
+            view_ref = context.artifacts.publish_bytes(
+                _MODEL_TRANSLATION_VIEW_ARTIFACT,
+                payload,
+                media_type="text/markdown",
+            )
+        elif context.artifacts.read_bytes(view_ref) != payload:
+            raise CompanionContentError(
+                "model_translation_view_mismatch",
+                "Frozen model translation differs from completed translations.",
+            )
+
+        paper = ArcPaperService(
+            cache_root=self.execution.paper_cache_root
+        )
+        cached_source = paper.repository.store_bytes(
+            payload,
+            source_format=SourceFormat.MARKDOWN,
+            origin=SourceOrigin(
+                SourceOriginKind.REPOSITORY,
+                locator=(
+                    f"arc-companion:{context.run_id}:"
+                    f"{_MODEL_TRANSLATION_VIEW_ARTIFACT}"
+                ),
+            ),
+        )
+        cached_document = cached_document_ref_to_document(
+            paper.cache_document(cached_source)
+        )
+        index = model_translation_index(
+            view,
+            chapters,
+            access,
+            source_document_sha256=source.document_digest,
+            target_language=self.request.target_language,
+            cached_document=cached_document,
+        )
+        index_ref = context.artifacts.find(
+            _MODEL_TRANSLATION_INDEX_ARTIFACT
+        )
+        if index_ref is None:
+            index_ref = context.artifacts.publish_json(
+                _MODEL_TRANSLATION_INDEX_ARTIFACT, index
+            )
+        else:
+            frozen = read_json(
+                context, index_ref, "model translation index"
+            )
+            validate_model_translation_index(
+                frozen,
+                view=view,
+                chapters=chapters,
+                source_document_sha256=source.document_digest,
+                target_language=self.request.target_language,
+            )
+            if frozen != index:
+                raise CompanionContentError(
+                    "model_translation_index_mismatch",
+                    "Frozen translation index differs from current cache identity.",
+                )
+        return (
+            (
+                _llm_input(
+                    context,
+                    "companion-translation-index",
+                    index_ref,
+                ),
+            ),
+            index,
+        )
+
     def _authors(
         self,
         context: RunContext,
@@ -796,6 +898,8 @@ class CompanionBuildHandler:
             canonical_json_bytes(dict(glossary))
         ).hexdigest()
         completed_results: dict[str, Mapping[str, Any]] = {}
+        guide_model_inputs = model_inputs
+        translation_index: Mapping[str, Any] | None = None
         if translation_required:
             translation_units = tuple(
                 WorkUnit(
@@ -873,6 +977,16 @@ class CompanionBuildHandler:
                     for item in translations.units
                 }
             )
+            (
+                translation_inputs,
+                translation_index,
+            ) = self._model_translation_inputs(
+                context,
+                source,
+                chapters,
+                completed_results,
+            )
+            guide_model_inputs = (*model_inputs, *translation_inputs)
 
         guide_loops: list[LoopSpec] = []
         guide_contexts: dict[str, Mapping[str, Any]] = {}
@@ -937,6 +1051,7 @@ class CompanionBuildHandler:
                 language_identity=language_identity,
                 glossary=chapter_entries[chapter.chapter_id],
                 has_prior_companion=prior_companion is not None,
+                translation_index=translation_index,
             )
             guide_contexts[chapter.chapter_id] = guide_context
             guide_loops.append(
@@ -983,7 +1098,7 @@ class CompanionBuildHandler:
                         "companion-chapter-guides",
                         tuple(guide_loops),
                         BatchFailurePolicy.FAIL_FAST,
-                        model_inputs,
+                        guide_model_inputs,
                     ),
                     options=ProposerReviewerExecutionOptions(
                         max_concurrent_loops=self.execution.workers,
@@ -1125,6 +1240,7 @@ class CompanionBuildHandler:
         language_identity: Mapping[str, Any],
         glossary: Sequence[Mapping[str, Any]],
         has_prior_companion: bool,
+        translation_index: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         access = model_chapter_block_index(source, chapter)
         sections = [
@@ -1153,6 +1269,18 @@ class CompanionBuildHandler:
             }
             for index, item in enumerate(access, 1)
         ]
+        arc_commands = _chapter_arc_commands(
+            context,
+            chapter,
+            access,
+            cache_root=self.execution.paper_cache_root,
+            structure_ref=self.request.structure_ref,
+        )
+        arc_commands["translation"] = _chapter_translation_commands(
+            chapter,
+            translation_index,
+            cache_root=self.execution.paper_cache_root,
+        )
         return {
             "target_language": self.request.target_language,
             "language_result": dict(language_identity),
@@ -1162,13 +1290,7 @@ class CompanionBuildHandler:
                 "sections": sections,
                 "parts": parts,
             },
-            "arc_commands": _chapter_arc_commands(
-                context,
-                chapter,
-                access,
-                cache_root=self.execution.paper_cache_root,
-                structure_ref=self.request.structure_ref,
-            ),
+            "arc_commands": arc_commands,
             "glossary": list(glossary),
             "has_prior_companion": has_prior_companion,
         }
@@ -1464,6 +1586,142 @@ def _chapter_arc_commands(
             ],
         },
         "research_examples": _research_command_examples(),
+    }
+
+
+def _chapter_translation_commands(
+    chapter: SourceChapter,
+    index: Mapping[str, Any] | None,
+    *,
+    cache_root: Path | None,
+) -> dict[str, Any]:
+    """Return executable ranges for the frozen reader-visible translation."""
+
+    if index is None:
+        return {
+            "availability": "not_required",
+            "instructions": (
+                "No separate translation is required for this document."
+            ),
+            "parts": [],
+        }
+    cached = mapping(
+        index.get("cached_document"), "model translation cached document"
+    )
+    chapter_values = mapping_list(
+        index.get("chapters"), "model translation chapters"
+    )
+    chapter_value = next(
+        (
+            item
+            for item in chapter_values
+            if item.get("chapter_id") == chapter.chapter_id
+        ),
+        None,
+    )
+    if chapter_value is None:
+        raise CompanionContentError(
+            "model_translation_chapter_missing",
+            f"Frozen translation has no chapter {chapter.chapter_id}.",
+        )
+    access = mapping_list(
+        chapter_value.get("parts"), "model translation chapter parts"
+    )
+    if [item.get("block_id") for item in access] != list(
+        chapter.block_ids
+    ):
+        raise CompanionContentError(
+            "model_translation_chapter_mismatch",
+            "Frozen translation part order differs from the source chapter.",
+        )
+    paper = ArcPaperService(cache_root=cache_root)
+    document_json = json.dumps(
+        cached,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    def translated_range(start: int, end: int) -> list[str]:
+        return [
+            "arc-paper",
+            "read-cached-source-range",
+            "--document-ref",
+            document_json,
+            "--cache-root",
+            str(paper.cache_root),
+            "--text-only",
+            str(start),
+            str(end),
+        ]
+
+    commands = []
+    for part_number, item in enumerate(access, 1):
+        start = item.get("line_start")
+        end = item.get("line_end")
+        if not isinstance(start, int) or not isinstance(end, int):
+            raise CompanionContentError(
+                "model_translation_range_invalid",
+                "Frozen translation part has no exact line range.",
+            )
+        commands.append(
+            _command(
+                f"part-{part_number}",
+                translated_range(start, end),
+                part_numbers=[part_number],
+            )
+        )
+    section_starts = [
+        chapter.block_ids.index(block_id)
+        for block_id in chapter.section_block_ids
+    ]
+    for section_index, start_index in enumerate(section_starts, 1):
+        end_index = (
+            section_starts[section_index]
+            if section_index < len(section_starts)
+            else len(access)
+        )
+        commands.append(
+            _command(
+                f"section-{section_index}-complete",
+                translated_range(
+                    min(
+                        int(item["line_start"])
+                        for item in access[start_index:end_index]
+                    ),
+                    max(
+                        int(item["line_end"])
+                        for item in access[start_index:end_index]
+                    ),
+                ),
+                part_numbers=list(
+                    range(start_index + 1, end_index + 1)
+                ),
+            )
+        )
+    if access:
+        commands.append(
+            _command(
+                "complete-current-chapter",
+                translated_range(
+                    min(int(item["line_start"]) for item in access),
+                    max(int(item["line_end"]) for item in access),
+                ),
+                part_numbers=list(range(1, len(access) + 1)),
+            )
+        )
+    return {
+        "availability": "exact",
+        "instructions": (
+            "This is the frozen reader-visible translation. Read it together "
+            "with the original source and use its established proper names "
+            "and terminology in every guide field."
+        ),
+        "translation_view_sha256": index.get(
+            "translation_view_sha256"
+        ),
+        "target_language": index.get("target_language"),
+        "parts": commands,
     }
 
 

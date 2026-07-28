@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -11,6 +12,9 @@ from .source_planning import SourceChapter, equation_label_provenance
 
 
 MODEL_SOURCE_INDEX_SCHEMA = "arc.companion.model_source_index.v2"
+MODEL_TRANSLATION_INDEX_SCHEMA = (
+    "arc.companion.model_translation_index.v1"
+)
 
 
 def model_source_view(
@@ -107,6 +111,167 @@ def model_source_index(
         "chapter_count": len(chapters),
         "block_count": len(document.blocks),
     }
+
+
+def model_translation_view(
+    chapters: Sequence[SourceChapter],
+    translations: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> tuple[str, dict[str, list[dict[str, Any]]]]:
+    """Render frozen translations as text with deterministic part ranges."""
+
+    lines = [
+        "<!-- ARC model translation: text only; referenced media are not inputs. -->"
+    ]
+    access_by_chapter: dict[str, list[dict[str, Any]]] = {}
+    for chapter in chapters:
+        chapter_translations = translations.get(chapter.chapter_id)
+        if chapter_translations is None:
+            raise ValueError(
+                f"model translation is missing chapter: {chapter.chapter_id}"
+            )
+        translated_ids = [
+            str(item.get("block_id")) for item in chapter_translations
+        ]
+        if translated_ids != list(chapter.block_ids):
+            raise ValueError(
+                "model translation block order differs from source chapter"
+            )
+        lines.extend(
+            (
+                "",
+                f"<!-- ARC_CHAPTER id={chapter.chapter_id} -->",
+            )
+        )
+        chapter_access: list[dict[str, Any]] = []
+        for part_number, item in enumerate(chapter_translations, 1):
+            block_id = str(item["block_id"])
+            text = str(item["text"]).strip()
+            lines.extend(
+                (
+                    "",
+                    (
+                        "<!-- ARC_TRANSLATED_BLOCK "
+                        f"id={block_id} part={part_number} -->"
+                    ),
+                )
+            )
+            line_start = len(lines) + 1
+            translated_lines = text.splitlines() or [""]
+            lines.extend(translated_lines)
+            chapter_access.append(
+                {
+                    "block_id": block_id,
+                    "part_number": part_number,
+                    "line_start": line_start,
+                    "line_end": len(lines),
+                }
+            )
+        access_by_chapter[chapter.chapter_id] = chapter_access
+    return "\n".join(lines).rstrip() + "\n", access_by_chapter
+
+
+def model_translation_index(
+    view: str,
+    chapters: Sequence[SourceChapter],
+    access_by_chapter: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    source_document_sha256: str,
+    target_language: str,
+    cached_document: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build a body-free locator index for one frozen translation view."""
+
+    chapter_access = []
+    for chapter in chapters:
+        access = access_by_chapter.get(chapter.chapter_id)
+        if access is None:
+            raise ValueError(
+                f"model translation index is missing chapter: {chapter.chapter_id}"
+            )
+        values = [dict(item) for item in access]
+        if [item.get("block_id") for item in values] != list(
+            chapter.block_ids
+        ):
+            raise ValueError(
+                "model translation index block order differs from source chapter"
+            )
+        chapter_access.append(
+            {
+                "chapter_id": chapter.chapter_id,
+                "parts": values,
+            }
+        )
+    return {
+        "schema_version": MODEL_TRANSLATION_INDEX_SCHEMA,
+        "source_document_sha256": source_document_sha256,
+        "target_language": target_language,
+        "translation_view_sha256": hashlib.sha256(
+            view.encode("utf-8")
+        ).hexdigest(),
+        "translation_view_size": len(view.encode("utf-8")),
+        "cached_document": dict(cached_document),
+        "chapters": chapter_access,
+    }
+
+
+def validate_model_translation_index(
+    value: Mapping[str, Any],
+    *,
+    view: str,
+    chapters: Sequence[SourceChapter],
+    source_document_sha256: str,
+    target_language: str,
+) -> None:
+    """Validate translation identity and exact chapter/part coverage."""
+
+    if value.get("schema_version") != MODEL_TRANSLATION_INDEX_SCHEMA:
+        raise ValueError("unsupported model translation index schema")
+    payload = view.encode("utf-8")
+    if value.get("translation_view_sha256") != hashlib.sha256(
+        payload
+    ).hexdigest() or value.get("translation_view_size") != len(payload):
+        raise ValueError("model translation index view identity differs")
+    if value.get("source_document_sha256") != source_document_sha256:
+        raise ValueError("model translation index source identity differs")
+    if value.get("target_language") != target_language:
+        raise ValueError("model translation index target language differs")
+    cached = value.get("cached_document")
+    if not isinstance(cached, Mapping):
+        raise ValueError("model translation index has no cached document")
+    chapter_values = value.get("chapters")
+    if not isinstance(chapter_values, Sequence) or isinstance(
+        chapter_values, (str, bytes)
+    ):
+        raise ValueError("model translation index chapters are invalid")
+    if any(not isinstance(item, Mapping) for item in chapter_values):
+        raise ValueError("model translation index chapter is invalid")
+    if [item.get("chapter_id") for item in chapter_values] != [
+        chapter.chapter_id for chapter in chapters
+    ]:
+        raise ValueError("model translation index chapter order differs")
+    for chapter, item in zip(chapters, chapter_values, strict=True):
+        parts = item.get("parts")
+        if not isinstance(parts, Sequence) or isinstance(parts, (str, bytes)):
+            raise ValueError("model translation index parts are invalid")
+        if any(not isinstance(part, Mapping) for part in parts):
+            raise ValueError("model translation index part is invalid")
+        if [part.get("block_id") for part in parts] != list(
+            chapter.block_ids
+        ):
+            raise ValueError(
+                "model translation index block coverage differs"
+            )
+        for part_number, part in enumerate(parts, 1):
+            if (
+                part.get("part_number") != part_number
+                or not isinstance(part.get("line_start"), int)
+                or not isinstance(part.get("line_end"), int)
+                or int(part["line_start"]) < 1
+                or int(part["line_end"]) < int(part["line_start"])
+            ):
+                raise ValueError(
+                    "model translation index part range is invalid"
+                )
 
 
 def model_chapter_block_index(
@@ -264,9 +429,13 @@ def _longest_run(value: str, character: str) -> int:
 
 __all__ = [
     "MODEL_SOURCE_INDEX_SCHEMA",
+    "MODEL_TRANSLATION_INDEX_SCHEMA",
     "model_block_access_index",
     "model_chapter_block_index",
     "model_source_index",
     "model_source_view",
+    "model_translation_index",
+    "model_translation_view",
     "validate_model_source_index",
+    "validate_model_translation_index",
 ]

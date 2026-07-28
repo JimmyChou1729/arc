@@ -30,6 +30,7 @@ from arc_paper import (
     SourceOrigin,
     SourceOriginKind,
     SourceRepository,
+    cached_document_ref_from_document,
     cached_reference_material_to_document,
 )
 
@@ -454,6 +455,11 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     for contract, input_ids in tasks.request_input_ids:
         assert input_ids[0] == "companion-source-index", contract
         assert "companion-source" not in input_ids, contract
+        if contract in {
+            CHAPTER_GUIDE_PROMPT_VERSION,
+            CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
+        }:
+            assert "companion-translation-index" in input_ids, contract
     guide_payloads = [
         _request_payload(prompt)[1]
         for contract, _task_id, prompt in tasks.requests
@@ -503,6 +509,20 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
             "A quantum field appears here." not in item["shell"]
             for item in commands["source"]
         )
+        translated = commands["translation"]
+        assert translated["availability"] == "exact"
+        assert translated["target_language"] == "zh-CN"
+        assert any(
+            item["command_id"] == "complete-current-chapter"
+            for item in translated["parts"]
+        )
+        assert all(
+            item["shell"]
+            and item["argv"][0:2]
+            == ["arc-paper", "read-cached-source-range"]
+            and "--text-only" in item["argv"]
+            for item in translated["parts"]
+        )
     assert tasks.runtime_environments
     assert {
         item["ARC_PAPER_CACHE"] for item in tasks.runtime_environments
@@ -520,6 +540,35 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     assert source_index["cached_document"]["source_sha256"] == (
         document.source.artifact_digest
     )
+    translation_index_ref = run_store.find("translation/model-index")
+    assert translation_index_ref is not None
+    translation_index = json.loads(
+        run_store.read_bytes(translation_index_ref)
+    )
+    assert translation_index["source_document_sha256"] == (
+        document.document_digest
+    )
+    assert translation_index["target_language"] == "zh-CN"
+    assert "translated paragraph" not in json.dumps(
+        translation_index, ensure_ascii=False
+    )
+    translation_view_ref = run_store.find("translation/model-view")
+    assert translation_view_ref is not None
+    assert "translated paragraph" in run_store.read_bytes(
+        translation_view_ref
+    ).decode("utf-8")
+    first_part = translation_index["chapters"][0]["parts"][0]
+    translated_range = ArcPaperService(
+        cache_root=tmp_path / "paper"
+    ).read_cached_source_range(
+        cached_document_ref_from_document(
+            translation_index["cached_document"]
+        ),
+        first_part["line_start"],
+        first_part["line_end"],
+        text_only=True,
+    )
+    assert translated_range.text.startswith("translated ")
     planned_chapters = plan_source_chapters(document)
     assert not (
         service.repository.run_directory(completed.run_id)

@@ -58,7 +58,7 @@ from arc_companion.renderer import CompanionRenderer
 
 
 def test_public_build_surface_is_current_only() -> None:
-    assert CompanionBuildHandler.name == "arc.companion.build.v12"
+    assert CompanionBuildHandler.name == "arc.companion.build.v13"
     assert not any(name.startswith("Legacy") for name in public_names)
     for module_name in (
         "arc_companion.build_v2",
@@ -511,12 +511,18 @@ def test_guide_and_review_prompts_reject_invented_misconceptions() -> None:
     assert "plain, accessible language suited to the" in guide
     assert "material to explain, not style templates" in guide
     assert "easier to understand than the passage" in guide
+    assert "complete translation lane is frozen" in guide
+    assert "Read the original and frozen translation together" in guide
+    assert "proper names, translated titles, and" in guide
+    assert "`translation.parts` command" in guide
     assert "Translate English excerpts" in guide
     assert "Treat unsupported corrective framing as a material defect" in review
     assert "including titles, definitions, opening sentences" in review
     assert "do not overlook the defect merely because the contrast occurs in a" in review
     assert "Require plain, accessible language in every title and body" in review
     assert "source-imitating prose" in review
+    assert "fluent but inconsistent retranslation is a" in review
+    assert "compare each unit with both" in review
     assert "Do not criticize merely to demonstrate reviewer activity" in review
     assert "accept it by choosing `stop`" in review
     assert "valuable new Companion idea" in review

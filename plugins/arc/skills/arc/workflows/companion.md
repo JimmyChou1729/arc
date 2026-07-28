@@ -104,6 +104,17 @@ when cache access could not be established. Do not open source image or media
 assets for reading; deterministic assembly restores them later. Models author
 semantic JSON, while Companion injects routing identities such as chapter IDs.
 
+All required chapter translations finish and freeze before any guide loop
+starts. Companion materializes the complete frozen translation as a separate
+content-addressed `arc-paper` document and gives each proposer and reviewer
+direct commands for the complete current original chapter, complete current
+translation, and matching exact parts and sections. Both roles must inspect
+the original and translation together and preserve the translation's
+established proper names, translated titles, and technical terminology.
+Translation bodies remain outside loop-context JSON; a modified translation
+gets a new immutable cache identity, so searches for the selected translation
+never mix old and new versions.
+
 Do not run a document-wide literature survey before planning. Planning first
 audits reader needs and supplies seed units; references are discovered on
 demand while each chapter is proposed and reviewed. Both roles may inspect
