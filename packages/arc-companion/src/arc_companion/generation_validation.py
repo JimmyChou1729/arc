@@ -297,8 +297,10 @@ def validate_chapter_guide_review_audit(
     proposal: Mapping[str, Any],
     part_count: int,
     section_count: int,
+    program_companions: Sequence[Mapping[str, Any]] = (),
+    program_section_guides: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    """Require the final proposal to use only reviewer-inspected locations."""
+    """Require model-authored final content to use reviewer-inspected locations."""
 
     if not isinstance(review, Mapping):
         raise CompanionContentError(
@@ -338,12 +340,14 @@ def validate_chapter_guide_review_audit(
     required_parts = {
         item.get("after_part")
         for item in companions
+        if item not in program_companions
         if isinstance(item.get("after_part"), int)
         and not isinstance(item.get("after_part"), bool)
     }
     required_sections = {
         item.get("section_number")
         for item in sections
+        if item not in program_section_guides
         if isinstance(item.get("section_number"), int)
         and not isinstance(item.get("section_number"), bool)
     }

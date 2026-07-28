@@ -1144,13 +1144,38 @@ class CompanionBuildHandler:
                     loop_result.final_proposals.get("guide-proposer"),
                     f"final guide proposal for {chapter_id}",
                 )
+                chapter = by_chapter[chapter_id]
+                program_candidate = self._augment_chapter_candidate(
+                    chapter, proposal
+                )
+                proposal_companions = mapping_list(
+                    proposal.get("companions"),
+                    f"final guide companions for {chapter_id}",
+                )
+                proposal_sections = mapping_list(
+                    proposal.get("section_guides"),
+                    f"final guide section guides for {chapter_id}",
+                )
+                program_companions = tuple(
+                    item
+                    for item in mapping_list(
+                        program_candidate.get("companions"),
+                        f"augmented guide companions for {chapter_id}",
+                    )
+                    if item not in proposal_companions
+                )
+                program_sections = tuple(
+                    item
+                    for item in mapping_list(
+                        program_candidate.get("section_guides"),
+                        f"augmented guide section guides for {chapter_id}",
+                    )
+                    if item not in proposal_sections
+                )
                 candidate_id = f"chapters/{chapter_id}/guide-final.json"
                 candidate_path = context.working.find_candidate(candidate_id)
-                chapter = by_chapter[chapter_id]
                 if candidate_path is None:
-                    candidate = self._augment_chapter_candidate(
-                        chapter, proposal
-                    )
+                    candidate = program_candidate
                     candidate_path = context.working.write_candidate_json(
                         candidate_id, candidate
                     )
@@ -1173,6 +1198,8 @@ class CompanionBuildHandler:
                         proposal=candidate,
                         part_count=len(chapter.block_ids),
                         section_count=len(chapter.section_block_ids),
+                        program_companions=program_companions,
+                        program_section_guides=program_sections,
                     )
                     accepted_guide = validate_chapter_guide(
                         candidate,

@@ -75,6 +75,7 @@ class FakeGuideTasks:
         invalid_cached_material: bool = False,
         semantic_invalid_contract: str | None = None,
         semantic_invalid_calls: frozenset[int] = frozenset({1}),
+        checked_part_numbers: tuple[int, ...] | None = None,
     ) -> None:
         self.guide_started = guide_started
         self.translation_started = translation_started
@@ -85,6 +86,7 @@ class FakeGuideTasks:
         self.invalid_cached_material = invalid_cached_material
         self.semantic_invalid_contract = semantic_invalid_contract
         self.semantic_invalid_calls = semantic_invalid_calls
+        self.checked_part_numbers = checked_part_numbers
         self.counts: Counter[str] = Counter()
         self.guide_glossaries: dict[str, list[dict]] = {}
         self.requests: list[tuple[str, str, str]] = []
@@ -190,10 +192,14 @@ class FakeGuideTasks:
                 },
                 "payload": {
                     "checked_complete_chapter": True,
-                    "checked_part_numbers": [
-                        int(item["part_number"])
-                        for item in payload["chapter"]["parts"]
-                    ],
+                    "checked_part_numbers": (
+                        list(self.checked_part_numbers)
+                        if self.checked_part_numbers is not None
+                        else [
+                            int(item["part_number"])
+                            for item in payload["chapter"]["parts"]
+                        ]
+                    ),
                     "checked_section_numbers": [
                         int(item["section_number"])
                         for item in payload["chapter"]["sections"]
@@ -698,6 +704,51 @@ def test_structural_display_chapter_skips_loop_but_translates_and_augments(
         "quantum field",
         "relativity",
     ]
+
+
+def test_review_audit_excludes_verified_program_additions(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path)
+    request = CompanionBuildRequest(
+        document,
+        target_language="zh-CN",
+    )
+    service = CompanionService(tmp_path / "jobs")
+    prepared = service.prepare(request)
+
+    class NoteHandler(CompanionBuildHandler):
+        def _augment_chapter_candidate(self, chapter, candidate):
+            value = super()._augment_chapter_candidate(chapter, candidate)
+            value["companions"] = [
+                *value.get("companions", []),
+                {
+                    "after_part": 2,
+                    "title": "译者注",
+                    "content_markdown": "译者注：固定说明。",
+                },
+            ]
+            return value
+
+    spec = service.repository.read_spec(prepared.run_id)
+    snapshot = RunEngine(service.repository).execute(
+        spec,
+        NoteHandler(
+            request,
+            execution=CompanionExecutionOptions(workers=1),
+            task_service=FakeGuideTasks(
+                checked_part_numbers=(1,),
+            ),  # type: ignore[arg-type]
+            translation_adapter=FakeTranslationAdapter(mode="enabled"),
+        ),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    book = service.accepted_book(snapshot.run_id)
+    assert all(
+        any("固定说明" in unit.content_markdown for unit in chapter.learning_units)
+        for chapter in book.chapters
+    )
 
 
 def test_same_language_skips_all_translation_owned_steps(
