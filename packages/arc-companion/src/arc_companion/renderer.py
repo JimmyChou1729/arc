@@ -418,6 +418,18 @@ class CompanionRenderer:
             text_path = workspace / "content.txt"
             _run([str(tools["pdftotext"]), str(pdf_path), str(text_path)])
             text = text_path.read_text(encoding="utf-8", errors="replace")
+            layout_text_path = workspace / "content-layout.txt"
+            _run(
+                [
+                    str(tools["pdftotext"]),
+                    "-layout",
+                    str(pdf_path),
+                    str(layout_text_path),
+                ]
+            )
+            layout_text = layout_text_path.read_text(
+                encoding="utf-8", errors="replace"
+            )
             if not _normalize_pdf_search_text(text) or not _pdf_text_contains(
                 text, book.title
             ):
@@ -435,7 +447,9 @@ class CompanionRenderer:
                             )
             for evidence in book.bibliography:
                 if any(
-                    not _pdf_bibliography_text_contains(text, value)
+                    not _pdf_bibliography_text_contains_any(
+                        (text, layout_text), value
+                    )
                     for value in (
                         evidence.title,
                         evidence.source,
@@ -1669,6 +1683,17 @@ def _pdf_bibliography_text_contains(
         for alternative in _pdf_search_alternatives(
             extracted_text, compact_expected
         )
+    )
+
+
+def _pdf_bibliography_text_contains_any(
+    extracted_texts: Sequence[str], expected: Any
+) -> bool:
+    """Accept bibliography text preserved by either extractor ordering."""
+
+    return any(
+        _pdf_bibliography_text_contains(extracted_text, expected)
+        for extracted_text in extracted_texts
     )
 
 

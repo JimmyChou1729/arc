@@ -37,6 +37,7 @@ from arc_companion.renderer import (
     _anchor_token,
     _normalize_pdf_search_text,
     _pdf_bibliography_text_contains,
+    _pdf_bibliography_text_contains_any,
     _pdf_text_contains,
     _render_tex,
     _render_tex_prose,
@@ -1388,6 +1389,20 @@ def test_pdf_bibliography_search_tolerates_typesetter_spacing() -> None:
     assert _pdf_bibliography_text_contains(
         "赫尔曼・邦迪传记",
         "赫尔曼·邦迪传记",
+    )
+
+
+def test_pdf_bibliography_search_accepts_layout_extractor_order() -> None:
+    expected = "David Tong：《量子场论》讲义"
+    default_order = "《量子场论》讲义\n126. David Tong："
+    layout_order = "126. David Tong：《量子场论》讲义"
+
+    assert not _pdf_bibliography_text_contains(default_order, expected)
+    assert _pdf_bibliography_text_contains_any(
+        (default_order, layout_order), expected
+    )
+    assert not _pdf_bibliography_text_contains_any(
+        (default_order, "unrelated"), expected
     )
 
 
