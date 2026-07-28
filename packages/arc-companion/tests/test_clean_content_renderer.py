@@ -561,8 +561,8 @@ def test_accepted_book_v4_drops_legacy_source_page_label(
 def test_tex_prose_renderer_preserves_line_and_paragraph_breaks(
     accepted_book: AcceptedBook,
 ) -> None:
-    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v12"
-    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v10"
+    assert PDF_RENDER_RECIPE == "arc.companion.pdf.source_anchored.v13"
+    assert WEB_RENDER_RECIPE == "arc.companion.web.source_anchored.v11"
     assert (
         _render_tex_prose("first line\r\nsecond line\r\rthird paragraph")
         == r"first line\newline{} second line\par third paragraph"
@@ -737,9 +737,24 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
     html = first.decode("utf-8")
     css = (reader / "assets" / "reader.css").read_text(encoding="utf-8")
     javascript = (reader / "assets" / "reader.js").read_text(encoding="utf-8")
-    visible_text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+    parsed = BeautifulSoup(html, "html.parser")
+    visible_text = parsed.get_text(" ", strip=True)
+    contents = parsed.select_one("#chapter-contents")
+    toggle = parsed.select_one("#contents-toggle")
+    assert contents is not None
+    assert contents.select_one(
+        'a[href="#chapter-intro"]'
+    ).get_text(" ", strip=True) == "Probability and entropy"
+    assert contents.select_one('a[href="#glossary"]') is not None
+    assert contents.select_one('a[href="#references"]') is not None
+    assert toggle is not None
+    assert toggle["aria-controls"] == "chapter-contents"
+    assert toggle["aria-expanded"] == "true"
     assert '@media (min-width: 900px)' in css
     assert '@media (max-width: 899px)' in css
+    assert ".reader-shell.contents-collapsed" in css
+    assert ".chapter-contents {" in css
+    assert ".contents-toggle {" in css
     assert ".chapter-guide, .chapter-learning {" in css
     assert "background: var(--learning);" in css
     assert "grid-template-columns: minmax(0,1fr) minmax(0,1fr) minmax(18rem,.85fr)" in css
@@ -772,6 +787,9 @@ def test_web_is_responsive_anchor_interleaved_and_deterministic(
     assert "glossary:entropy-reference" not in visible_text
     assert 'href="#reference-paper:1234.56789"' in html
     assert "window.katex.render" in javascript
+    assert "arc-companion-contents:" in javascript
+    assert 'event.key === "Escape"' in javascript
+    assert 'setOpen(false, true)' in javascript
     assert "innerHTML" not in javascript
     assert (reader / "assets" / "katex" / "LICENSE").is_file()
     figure_asset = reader / "assets" / "source" / f"{_PNG_DIGEST}.png"
@@ -1015,6 +1033,7 @@ def test_pdf_glossary_terms_use_subtle_underlines_without_tooltips(
     assert "`熵`" in tex
     assert r"\$熵\$" in tex
     assert "Probability and entropy" in extracted
+    assert "目录" in extracted
     assert "La 熵 cuantifica" in extracted
     assert "Cómo leer 熵" in extracted
     assert "Source page" not in extracted
@@ -1427,6 +1446,8 @@ def test_headerless_table_uses_row_width_and_omits_empty_web_header(
 def test_pdf_is_searchable_complete_and_anchor_interleaved(
     accepted_book: AcceptedBook, tmp_path: Path
 ) -> None:
+    from pypdf import PdfReader
+
     renderer = CompanionRenderer(
         asset_loader=lambda digest: _PNG if digest == _PNG_DIGEST else None
     )
@@ -1439,6 +1460,8 @@ def test_pdf_is_searchable_complete_and_anchor_interleaved(
     ).stdout
 
     assert "A compact fixture companion" in extracted
+    assert "Contents" in extracted
+    assert "Probability and entropy" in str(PdfReader(output).outline)
     assert extracted.index("A state follows") < extracted.index(
         "Spanish b-intro"
     ) < extracted.index("Conservation intuition")

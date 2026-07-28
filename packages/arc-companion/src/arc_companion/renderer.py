@@ -26,8 +26,8 @@ from . import rich_text
 from .validation import require_valid_accepted_book
 
 
-WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v10"
-PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v12"
+WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v11"
+PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v13"
 _SOURCE_DATE_EPOCH = "946684800"
 _GLOSSARY_PROTECTED_TEXT = re.compile(
     r"(?:https?://|mailto:)[^\s<>{}\[\]]+"
@@ -578,6 +578,12 @@ def _render_html(
         if book.authors
         else ""
     )
+    navigation_labels = _navigation_labels(book.target_language)
+    navigation = _render_html_navigation(
+        book,
+        labels=labels,
+        navigation_labels=navigation_labels,
+    )
     language = escape_html(book.target_language)
     return f"""<!doctype html>
 <html lang="{language}">
@@ -592,15 +598,80 @@ def _render_html(
   <script defer src="assets/reader.js"></script>
 </head>
 <body data-book-digest="{book.content_digest}">
-  <header class="book-header">
-    <h1>{_html_glossary_text(book.title, source_matcher, labels)}</h1>
-    {authors}
-  </header>
-  <main>{chapters}{glossary}{bibliography}</main>
+  <button id="contents-toggle" class="contents-toggle" type="button"
+    aria-controls="chapter-contents" aria-expanded="true"
+    data-open-label="{escape_html(navigation_labels['collapse'])}"
+    data-closed-label="{escape_html(navigation_labels['expand'])}">
+    <span aria-hidden="true">☰</span>
+    <span class="contents-toggle-label">{escape_html(navigation_labels['collapse'])}</span>
+  </button>
+  <div id="reader-shell" class="reader-shell">
+    <aside id="chapter-contents" class="chapter-contents">
+      {navigation}
+    </aside>
+    <div class="reader-content">
+      <header class="book-header">
+        <h1>{_html_glossary_text(book.title, source_matcher, labels)}</h1>
+        {authors}
+      </header>
+      <main>{chapters}{glossary}{bibliography}</main>
+    </div>
+  </div>
   <div id="glossary-tooltip" class="glossary-tooltip" role="tooltip" hidden></div>
 </body>
 </html>
 """
+
+
+def _navigation_labels(target_language: str) -> Mapping[str, str]:
+    language = target_language.strip().replace("_", "-").casefold()
+    if language == "zh" or language.startswith("zh-"):
+        traditional = any(
+            item in language.split("-") for item in ("hant", "tw", "hk", "mo")
+        )
+        return {
+            "contents": "目錄" if traditional else "目录",
+            "collapse": "收起目錄" if traditional else "收起目录",
+            "expand": "展開目錄" if traditional else "展开目录",
+        }
+    return {
+        "contents": "Contents",
+        "collapse": "Collapse contents",
+        "expand": "Expand contents",
+    }
+
+
+def _render_html_navigation(
+    book: AcceptedBook,
+    *,
+    labels: Mapping[str, str],
+    navigation_labels: Mapping[str, str],
+) -> str:
+    chapters = "".join(
+        "<li>"
+        f'<a href="#chapter-{escape_html(chapter.chapter_id)}">'
+        f"{escape_html(chapter.title)}</a>"
+        "</li>"
+        for chapter in book.chapters
+    )
+    appendices = ""
+    if book.glossary:
+        appendices += (
+            f'<li class="contents-appendix"><a href="#glossary">'
+            f"{escape_html(labels['glossary'])}</a></li>"
+        )
+    if book.bibliography:
+        appendices += (
+            f'<li class="contents-appendix"><a href="#references">'
+            f"{escape_html(labels['references'])}</a></li>"
+        )
+    return (
+        '<nav aria-label="'
+        f"{escape_html(navigation_labels['contents'])}"
+        '"><h2>'
+        f"{escape_html(navigation_labels['contents'])}"
+        f"</h2><ol>{chapters}{appendices}</ol></nav>"
+    )
 
 
 def _render_html_chapter(
@@ -1073,6 +1144,7 @@ def _render_tex(
         if authors
         else ""
     )
+    contents_name = _navigation_labels(book.target_language)["contents"]
     return rf"""\documentclass[10pt]{{article}}
 \usepackage[margin=21mm]{{geometry}}
 \usepackage{{fontspec}}
@@ -1105,14 +1177,20 @@ def _render_tex(
   #1%
   \endgroup
 }}
+\pdfstringdefDisableCommands{{\def\GlossaryTerm#1{{#1}}}}
 \setlength{{\parindent}}{{0pt}}
 \setlength{{\parskip}}{{5pt}}
-\hypersetup{{pdftitle={{{_tex_escape(book.title)}}},pdfauthor={{{_tex_escape(authors)}}}}}
+\setcounter{{tocdepth}}{{1}}
+\renewcommand{{\contentsname}}{{{_tex_escape(contents_name)}}}
+\hypersetup{{pdftitle={{{_tex_escape(book.title)}}},pdfauthor={{{_tex_escape(authors)}}},bookmarksopen=true,bookmarksnumbered=true}}
 \begin{{document}}
+\pdfbookmark[0]{{{_tex_escape(book.title)}}}{{book-title}}
 \begin{{center}}
 {{\LARGE\bfseries {_tex_glossary_text(book.title, source_matcher, labels)}}}\\[4pt]
 {author_line}
 \end{{center}}
+\tableofcontents
+\clearpage
 {chapters}
 {glossary}
 {bibliography}
@@ -1889,8 +1967,10 @@ _WEB_CSS = """\
   --line: #dfe4e9;
   --translation: #eef5ff;
   --learning: #fff7e7;
+  --contents-width: 18rem;
 }
 * { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
 body {
   margin: 0;
   color: var(--ink);
@@ -1898,6 +1978,88 @@ body {
   font: 1rem/1.65 Inter, ui-sans-serif, system-ui, "Noto Sans CJK SC", sans-serif;
 }
 a { color: inherit; text-decoration-color: #9aa3aa; text-decoration-thickness: 1px; text-underline-offset: .15em; }
+.reader-shell {
+  display: grid;
+  grid-template-columns: var(--contents-width) minmax(0, 1fr);
+  min-height: 100vh;
+  transition: grid-template-columns .18s ease;
+}
+.reader-shell.contents-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+.reader-content { min-width: 0; }
+.chapter-contents {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow: auto;
+  padding: 3rem 1rem 2rem;
+  border-right: 1px solid var(--line);
+  background: #fafbfc;
+  transition: opacity .15s ease, visibility .15s ease;
+}
+.contents-collapsed .chapter-contents {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.chapter-contents h2 {
+  margin: 0 0 .8rem;
+  color: var(--muted);
+  font-size: .82rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.chapter-contents ol { margin: 0; padding: 0; list-style: none; }
+.chapter-contents li + li { margin-top: .22rem; }
+.chapter-contents .contents-appendix:first-of-type {
+  margin-top: .8rem;
+  padding-top: .7rem;
+  border-top: 1px solid var(--line);
+}
+.chapter-contents a {
+  display: block;
+  padding: .38rem .48rem;
+  border-radius: .35rem;
+  color: #3c4650;
+  font-size: .85rem;
+  line-height: 1.35;
+  text-decoration-color: #c3c8cd;
+}
+.chapter-contents a:hover,
+.chapter-contents a:focus-visible {
+  background: #e9edf1;
+  outline: none;
+}
+.chapter-contents a.is-current {
+  color: #1f3f59;
+  background: #e3ebf1;
+  font-weight: 650;
+}
+.contents-toggle {
+  position: fixed;
+  z-index: 40;
+  top: .45rem;
+  left: .45rem;
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  min-height: 2rem;
+  padding: .28rem .5rem;
+  border: 1px solid #c8d0d7;
+  border-radius: .35rem;
+  color: #34414c;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 2px 8px rgb(28 39 50 / 10%);
+  font: inherit;
+  font-size: .76rem;
+  cursor: pointer;
+}
+.contents-toggle:focus-visible {
+  outline: 3px solid #9ec4df;
+  outline-offset: 2px;
+}
 .book-header, main { width: min(100% - 2rem, 94rem); margin-inline: auto; }
 .book-header { padding: 3rem 0 1.5rem; border-bottom: 1px solid var(--line); }
 .book-header h1 { margin: .2rem 0 0; font-size: clamp(1.8rem, 4vw, 3.1rem); }
@@ -1981,6 +2143,24 @@ figcaption, .citations, .source-links { color: var(--muted); font-size: .84rem; 
   .anchor-grid:has(.translation-layer):not(:has(.learning-unit)) { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
 }
 @media (max-width: 899px) {
+  .reader-shell,
+  .reader-shell.contents-collapsed {
+    display: block;
+  }
+  .chapter-contents {
+    position: fixed;
+    z-index: 30;
+    left: 0;
+    width: min(84vw, var(--contents-width));
+    box-shadow: 6px 0 24px rgb(25 36 47 / 18%);
+    transform: translateX(0);
+    transition: transform .18s ease, visibility .18s ease;
+  }
+  .reader-shell.contents-collapsed .chapter-contents {
+    visibility: hidden;
+    opacity: 1;
+    transform: translateX(-102%);
+  }
   .anchor-grid { grid-template-columns: 1fr; }
   .source-layer { order: 1; }
   .translation-layer { order: 2; }
@@ -1988,12 +2168,81 @@ figcaption, .citations, .source-links { color: var(--muted); font-size: .84rem; 
   .glossary-row { grid-template-columns: 1fr 1fr; }
   .glossary-row > dd:last-child { grid-column: 1 / -1; }
 }
+@media print {
+  .chapter-contents, .contents-toggle { display: none !important; }
+  .reader-shell { display: block; }
+}
 """
 
 
 _WEB_JS = """\
 (function () {
   "use strict";
+  function setupContents() {
+    var shell = document.getElementById("reader-shell");
+    var contents = document.getElementById("chapter-contents");
+    var toggle = document.getElementById("contents-toggle");
+    if (!shell || !contents || !toggle) return;
+    var label = toggle.querySelector(".contents-toggle-label");
+    var mobile = window.matchMedia("(max-width: 899px)");
+    var storageKey = "arc-companion-contents:" +
+      (document.body.dataset.bookDigest || "reader");
+    var remembered = null;
+    try { remembered = window.localStorage.getItem(storageKey); } catch (_) {}
+    var open = remembered === "open" ||
+      (remembered !== "closed" && !mobile.matches);
+    function setOpen(value, remember) {
+      open = Boolean(value);
+      shell.classList.toggle("contents-collapsed", !open);
+      contents.setAttribute("aria-hidden", String(!open));
+      toggle.setAttribute("aria-expanded", String(open));
+      var text = open ? toggle.dataset.openLabel : toggle.dataset.closedLabel;
+      toggle.setAttribute("aria-label", text || "");
+      toggle.setAttribute("title", text || "");
+      if (label) label.textContent = text || "";
+      if (remember) {
+        try {
+          window.localStorage.setItem(storageKey, open ? "open" : "closed");
+        } catch (_) {}
+      }
+    }
+    setOpen(open, false);
+    toggle.addEventListener("click", function () {
+      setOpen(!open, true);
+    });
+    contents.addEventListener("click", function (event) {
+      var link = event.target.closest && event.target.closest("a[href^='#']");
+      if (link && mobile.matches) setOpen(false, true);
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && open && mobile.matches) {
+        setOpen(false, true);
+        toggle.focus();
+      }
+    });
+    if ("IntersectionObserver" in window) {
+      var links = Array.prototype.slice.call(
+        contents.querySelectorAll("a[href^='#']")
+      );
+      var byTarget = new Map();
+      links.forEach(function (item) {
+        var target = document.getElementById(item.getAttribute("href").slice(1));
+        if (target) byTarget.set(target, item);
+      });
+      var observer = new IntersectionObserver(function (entries) {
+        var visible = entries.filter(function (entry) {
+          return entry.isIntersecting;
+        }).sort(function (left, right) {
+          return left.boundingClientRect.top - right.boundingClientRect.top;
+        });
+        if (!visible.length) return;
+        links.forEach(function (item) {
+          item.classList.toggle("is-current", item === byTarget.get(visible[0].target));
+        });
+      }, {rootMargin: "-10% 0px -75% 0px"});
+      byTarget.forEach(function (_link, target) { observer.observe(target); });
+    }
+  }
   function typeset() {
     if (!window.katex || typeof window.katex.render !== "function") return;
     document.querySelectorAll(".math[data-tex]").forEach(function (node) {
@@ -2069,10 +2318,14 @@ _WEB_JS = """\
     if (activeTerm) openTooltip(activeTerm);
   });
   window.addEventListener("scroll", closeTooltip, {passive: true});
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", typeset, {once: true});
-  } else {
+  function initialize() {
+    setupContents();
     typeset();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initialize, {once: true});
+  } else {
+    initialize();
   }
 }());
 """
