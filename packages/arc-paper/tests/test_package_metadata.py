@@ -15,8 +15,8 @@ def test_arc_paper_metadata_publishes_only_the_supported_cli() -> None:
 
     assert project["version"] == "1.0.1"
     assert project["scripts"] == {"arc-paper": "arc_paper.cli:main"}
-    assert "arc-jobs>=1.0.1,<1.1" in project["dependencies"]
-    assert "arc-llm>=1.0.1,<1.1" in project["dependencies"]
+    assert "arc-jobs>=1.0,<1.1" in project["dependencies"]
+    assert "arc-llm>=1.0,<1.1" in project["dependencies"]
     assert project["optional-dependencies"] == {"test": ["pytest>=8.0"]}
     assert project["license"] == "MIT"
     assert project["requires-python"] == ">=3.11"
