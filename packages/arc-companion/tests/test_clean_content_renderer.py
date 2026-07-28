@@ -16,6 +16,7 @@ import zlib
 import pytest
 from bs4 import BeautifulSoup
 
+import arc_companion.renderer as renderer_module
 from arc_companion.contracts import (
     AcceptedBook,
     AcceptedChapter,
@@ -472,6 +473,52 @@ def test_render_all_keeps_valid_web_when_pdf_render_fails(
     assert rendered.warnings == (str(failure),)
     assert web_index.is_file()
     assert not pdf_path.exists()
+
+
+def test_visual_pdf_validation_never_queries_or_calls_pdftotext(
+    accepted_book: AcceptedBook,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_path = tmp_path / "fixture.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\nfixture\n")
+    calls: list[tuple[str, ...]] = []
+
+    def which(name: str) -> str:
+        if name == "pdftotext":
+            raise AssertionError("visual validation must not query pdftotext")
+        return f"/tools/{name}"
+
+    def run(command: list[str]) -> str:
+        calls.append(tuple(command))
+        executable = Path(command[0]).name
+        if executable == "pdfinfo":
+            return "Pages: 2\n"
+        if executable == "pdffonts":
+            return (
+                "name type encoding emb sub uni object ID\n"
+                "---- ---- -------- --- --- --- ------ --\n"
+                "Fixture Type1 Custom yes yes yes 4 0\n"
+            )
+        if executable == "pdftoppm":
+            prefix = Path(command[-1])
+            prefix.with_name(f"{prefix.name}-1.png").write_bytes(b"one")
+            prefix.with_name(f"{prefix.name}-2.png").write_bytes(b"two")
+            return ""
+        raise AssertionError(f"unexpected PDF command: {command}")
+
+    monkeypatch.setattr(renderer_module.shutil, "which", which)
+    monkeypatch.setattr(renderer_module, "_run", run)
+
+    CompanionRenderer(pdf_validation="visual").validate_pdf(
+        accepted_book, pdf_path
+    )
+
+    assert [Path(command[0]).name for command in calls] == [
+        "pdfinfo",
+        "pdffonts",
+        "pdftoppm",
+    ]
 
 
 def test_accepted_book_codec_is_canonical_strict_and_immutable(

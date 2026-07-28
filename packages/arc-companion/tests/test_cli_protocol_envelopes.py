@@ -60,6 +60,7 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
     source.write_text("# Source\n\nBody.\n", encoding="utf-8")
     snapshots = [object(), object()]
     calls: list[tuple[str, object]] = []
+    validation_modes: list[str] = []
 
     class FakeService:
         def __init__(self, _repository) -> None:
@@ -131,11 +132,16 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
             return self.validate(pointer["release_id"], _book)
 
     def fake_snapshot_result(_paths, snapshot, **_kwargs):
+        validation_modes.append(_kwargs["pdf_validation"])
         operation = "build" if snapshot is snapshots[0] else "resume"
         return CommandResult(
             CommandStatus.COMPLETED,
             data={"operation": operation},
         )
+
+    def fake_publisher(_paths, **kwargs):
+        validation_modes.append(kwargs["pdf_validation"])
+        return FakePublisher()
 
     monkeypatch.setattr(cli_module, "CompanionService", FakeService)
     monkeypatch.setattr(
@@ -149,11 +155,7 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
         lambda *_args: "companion-fake",
     )
     monkeypatch.setattr(cli_module, "_snapshot_result", fake_snapshot_result)
-    monkeypatch.setattr(
-        cli_module,
-        "_publisher",
-        lambda _paths, **_kwargs: FakePublisher(),
-    )
+    monkeypatch.setattr(cli_module, "_publisher", fake_publisher)
 
     assert main(
         [
@@ -163,6 +165,8 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
             str(project),
             "--workers",
             "3",
+            "--pdf-validation",
+            "visual",
         ]
     ) == 0
     assert _result(capsys)["data"] == {"operation": "build"}
@@ -176,6 +180,8 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
             "2",
             "--input",
             '{"resume_key":"review","action":"discard_review"}',
+            "--pdf-validation",
+            "visual",
         ]
     ) == 0
     assert _result(capsys)["data"] == {"operation": "resume"}
@@ -185,7 +191,15 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
     )
 
     assert main(
-        ["render", "--project-dir", str(project), "--format", "all"]
+        [
+            "render",
+            "--project-dir",
+            str(project),
+            "--format",
+            "all",
+            "--pdf-validation",
+            "visual",
+        ]
     ) == 0
     rendered = _result(capsys)
     assert rendered["data"] == {
@@ -215,7 +229,15 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
         manifest=project / "releases" / "release-fake" / "manifest.json",
         run_id="companion-fake",
     )
-    assert main(["validate", "--project-dir", str(project)]) == 0
+    assert main(
+        [
+            "validate",
+            "--project-dir",
+            str(project),
+            "--pdf-validation",
+            "visual",
+        ]
+    ) == 0
     validated = _result(capsys)
     assert validated["data"] == {
         "release_id": "release-fake",
@@ -231,6 +253,7 @@ def test_main_emits_protocol_envelopes_for_build_resume_render_and_validate(
         "pdf",
         "web",
     }
+    assert validation_modes == ["visual", "visual", "visual", "visual"]
 
 
 def test_render_reports_web_only_release_without_a_pdf_path(

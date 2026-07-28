@@ -14,7 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Any
+from typing import Any, Literal
 import unicodedata
 from urllib.parse import quote, unquote, urlparse
 
@@ -30,6 +30,8 @@ from .validation import require_valid_accepted_book
 
 WEB_RENDER_RECIPE = "arc.companion.web.source_anchored.v12"
 PDF_RENDER_RECIPE = "arc.companion.pdf.source_anchored.v14"
+PDF_VALIDATION_MODES = ("text", "visual")
+PDFValidationMode = Literal["text", "visual"]
 _SOURCE_DATE_EPOCH = "946684800"
 _GLOSSARY_PROTECTED_TEXT = re.compile(
     r"(?:https?://|mailto:)[^\s<>{}\[\]]+"
@@ -248,8 +250,16 @@ def _unit_fallback_citation_ids(unit: LearningUnit) -> tuple[str, ...]:
 class CompanionRenderer:
     """Render one validated accepted book without loading an LLM runtime."""
 
-    def __init__(self, *, asset_loader: _AssetLoader | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        asset_loader: _AssetLoader | None = None,
+        pdf_validation: PDFValidationMode = "text",
+    ) -> None:
+        if pdf_validation not in PDF_VALIDATION_MODES:
+            raise ValueError("pdf_validation must be 'text' or 'visual'")
         self._asset_loader = asset_loader
+        self._pdf_validation = pdf_validation
 
     def render_web(self, book: AcceptedBook, output_dir: Path) -> Path:
         require_valid_accepted_book(book)
@@ -403,7 +413,9 @@ class CompanionRenderer:
     def validate_pdf(self, book: AcceptedBook, pdf_path: Path) -> None:
         if not pdf_path.is_file() or pdf_path.stat().st_size == 0:
             raise CompanionRenderError("PDF is missing or empty")
-        required = ("pdfinfo", "pdftotext", "pdffonts", "pdftoppm")
+        required = ["pdfinfo", "pdffonts", "pdftoppm"]
+        if self._pdf_validation == "text":
+            required.append("pdftotext")
         tools = {name: shutil.which(name) for name in required}
         missing = [name for name, path in tools.items() if path is None]
         if missing:
@@ -417,55 +429,56 @@ class CompanionRenderer:
             if page_match is None:
                 raise CompanionRenderError("PDF does not report a positive page count")
             page_count = int(page_match.group(1))
-            text_path = workspace / "content.txt"
-            _run([str(tools["pdftotext"]), str(pdf_path), str(text_path)])
-            text = text_path.read_text(encoding="utf-8", errors="replace")
-            layout_text_path = workspace / "content-layout.txt"
-            _run(
-                [
-                    str(tools["pdftotext"]),
-                    "-layout",
-                    str(pdf_path),
-                    str(layout_text_path),
-                ]
-            )
-            layout_text = layout_text_path.read_text(
-                encoding="utf-8", errors="replace"
-            )
-            if "\ufffd" in text or "\ufffd" in layout_text:
-                raise CompanionRenderError(
-                    "PDF searchable text contains a replacement character"
+            if self._pdf_validation == "text":
+                text_path = workspace / "content.txt"
+                _run([str(tools["pdftotext"]), str(pdf_path), str(text_path)])
+                text = text_path.read_text(encoding="utf-8", errors="replace")
+                layout_text_path = workspace / "content-layout.txt"
+                _run(
+                    [
+                        str(tools["pdftotext"]),
+                        "-layout",
+                        str(pdf_path),
+                        str(layout_text_path),
+                    ]
                 )
-            if not _normalize_pdf_search_text(text) or not _pdf_text_contains(
-                text, book.title
-            ):
-                raise CompanionRenderError("PDF searchable text is incomplete")
-            for chapter in book.chapters:
-                for anchor in chapter.source_anchors:
-                    if anchor.kind != "table" or not anchor.payload["rows"]:
-                        continue
-                    for cell in anchor.payload["rows"][-1]:
-                        if str(cell).strip() and not _pdf_text_contains(
-                            text, str(cell)
-                        ):
-                            raise CompanionRenderError(
-                                "PDF searchable table content is incomplete"
-                            )
-            for evidence in book.bibliography:
-                if any(
-                    not _pdf_bibliography_text_contains_any(
-                        (text, layout_text), value
-                    )
-                    for value in (
-                        evidence.title,
-                        evidence.source,
-                        *evidence.dois,
-                        *evidence.arxiv_ids,
-                    )
-                ):
+                layout_text = layout_text_path.read_text(
+                    encoding="utf-8", errors="replace"
+                )
+                if "\ufffd" in text or "\ufffd" in layout_text:
                     raise CompanionRenderError(
-                        "PDF searchable bibliography is incomplete"
+                        "PDF searchable text contains a replacement character"
                     )
+                if not _normalize_pdf_search_text(text) or not _pdf_text_contains(
+                    text, book.title
+                ):
+                    raise CompanionRenderError("PDF searchable text is incomplete")
+                for chapter in book.chapters:
+                    for anchor in chapter.source_anchors:
+                        if anchor.kind != "table" or not anchor.payload["rows"]:
+                            continue
+                        for cell in anchor.payload["rows"][-1]:
+                            if str(cell).strip() and not _pdf_text_contains(
+                                text, str(cell)
+                            ):
+                                raise CompanionRenderError(
+                                    "PDF searchable table content is incomplete"
+                                )
+                for evidence in book.bibliography:
+                    if any(
+                        not _pdf_bibliography_text_contains_any(
+                            (text, layout_text), value
+                        )
+                        for value in (
+                            evidence.title,
+                            evidence.source,
+                            *evidence.dois,
+                            *evidence.arxiv_ids,
+                        )
+                    ):
+                        raise CompanionRenderError(
+                            "PDF searchable bibliography is incomplete"
+                        )
             fonts = _run([str(tools["pdffonts"]), str(pdf_path)])
             rows = [row for row in fonts.splitlines()[2:] if row.strip()]
             if not rows or any(

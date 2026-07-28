@@ -115,6 +115,7 @@ class CompanionReleasePublisher:
                     "release_conflict",
                     "complete release path does not contain both PDF and Web",
                 )
+            self._validate_release_artifacts(release, book)
             self._publish_delivery(release, run_id=run_id)
             return release
         self.project.releases_root.mkdir(parents=True, exist_ok=True)
@@ -183,6 +184,8 @@ class CompanionReleasePublisher:
                 release_id=release_id,
                 book=book,
             )
+            if reused:
+                self._validate_release_artifacts(release, book)
             published = CompanionRelease(
                 release.release_id,
                 release.directory,
@@ -207,10 +210,15 @@ class CompanionReleasePublisher:
             release_id=release_id,
             book=book,
         )
+        self._validate_release_artifacts(release, book)
+        return release
+
+    def _validate_release_artifacts(
+        self, release: CompanionRelease, book: AcceptedBook
+    ) -> None:
         self.renderer.validate_web(book, release.web_index)
         if release.pdf is not None:
             self.renderer.validate_pdf(book, release.pdf)
-        return release
 
     def validate_current(
         self,

@@ -125,6 +125,33 @@ def _book() -> AcceptedBook:
     )
 
 
+def test_reused_release_is_revalidated_with_the_current_renderer_policy(
+    tmp_path: Path,
+) -> None:
+    class TrackingRenderer(_FakeRenderer):
+        def __init__(self) -> None:
+            self.validations: list[str] = []
+
+        def validate_pdf(self, book, path: Path) -> None:
+            self.validations.append("pdf")
+            super().validate_pdf(book, path)
+
+        def validate_web(self, book, path: Path) -> None:
+            self.validations.append("web")
+            super().validate_web(book, path)
+
+    project = CompanionProjectPaths.open(tmp_path / "project")
+    renderer = TrackingRenderer()
+    publisher = CompanionReleasePublisher(project, renderer)  # type: ignore[arg-type]
+    book = _book()
+
+    publisher.publish(book, run_id="first")
+    renderer.validations.clear()
+    publisher.publish(book, run_id="second")
+
+    assert renderer.validations == ["web", "pdf"]
+
+
 def test_cli_exposes_exactly_six_protocol_commands() -> None:
     parser = _parser()
     subparsers = next(
@@ -150,6 +177,34 @@ def test_companion_defaults_to_sixteen_parallel_workers() -> None:
     resume = _parser().parse_args(["resume", "--project-dir", "project"])
     assert build.workers == 16
     assert resume.workers == 16
+
+
+def test_pdf_validation_defaults_to_text_and_accepts_visual() -> None:
+    parser = _parser()
+    commands = (
+        ("build", ["source.md", "--project-dir", "project"]),
+        ("resume", ["--project-dir", "project"]),
+        ("render", ["--project-dir", "project"]),
+        ("validate", ["--project-dir", "project"]),
+    )
+    for command, arguments in commands:
+        assert parser.parse_args([command, *arguments]).pdf_validation == "text"
+        assert (
+            parser.parse_args(
+                [command, *arguments, "--pdf-validation", "visual"]
+            ).pdf_validation
+            == "visual"
+        )
+
+
+def test_publisher_constructs_renderer_with_requested_pdf_validation(
+    tmp_path: Path,
+) -> None:
+    project = CompanionProjectPaths.open(tmp_path / "project")
+
+    publisher = cli_module._publisher(project, pdf_validation="visual")
+
+    assert publisher.renderer._pdf_validation == "visual"
 
 
 def test_nonempty_explicit_project_preserves_unrelated_files_on_initialization(

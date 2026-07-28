@@ -141,6 +141,7 @@ def _parser() -> _Parser:
     )
     _host_authority_argument(build)
     _paper_cache_argument(build)
+    _pdf_validation_argument(build)
 
     status = commands.add_parser(
         "status",
@@ -167,6 +168,7 @@ def _parser() -> _Parser:
     )
     _paper_cache_argument(resume)
     _host_authority_argument(resume)
+    _pdf_validation_argument(resume)
 
     stop = commands.add_parser(
         "stop",
@@ -189,6 +191,7 @@ def _parser() -> _Parser:
         help="artifact formats to report (default: all)",
     )
     _paper_cache_argument(render)
+    _pdf_validation_argument(render)
 
     validate = commands.add_parser(
         "validate",
@@ -196,6 +199,7 @@ def _parser() -> _Parser:
         description="Validate the active release manifest and rendered artifacts.",
     )
     validate.add_argument("--project-dir", required=True, help="Companion project directory")
+    _pdf_validation_argument(validate)
     return parser
 
 
@@ -227,6 +231,18 @@ def _host_authority_argument(parser: argparse.ArgumentParser) -> None:
         choices=tuple(item.value for item in HostAuthority),
         default=HostAuthority.UNKNOWN.value,
         help="host permission attestation; unrestricted must be explicit",
+    )
+
+
+def _pdf_validation_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--pdf-validation",
+        choices=("text", "visual"),
+        default="text",
+        help=(
+            "PDF output validation mode: text checks searchable text; visual "
+            "checks PDF metadata, embedded fonts, and page rasters only"
+        ),
     )
 
 
@@ -395,6 +411,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
         snapshot,
         warnings=warnings,
         paper_cache_root=args.paper_cache_root,
+        pdf_validation=args.pdf_validation,
     )
 
 
@@ -413,6 +430,7 @@ def _resume(args: argparse.Namespace) -> CommandResult:
         paths,
         snapshot,
         paper_cache_root=args.paper_cache_root,
+        pdf_validation=args.pdf_validation,
     )
 
 
@@ -541,7 +559,9 @@ def _render(args: argparse.Namespace) -> CommandResult:
     book = service.accepted_book(run_id)
     try:
         release = _publisher(
-            paths, paper_cache_root=args.paper_cache_root
+            paths,
+            paper_cache_root=args.paper_cache_root,
+            pdf_validation=args.pdf_validation,
         ).publish(book, run_id=run_id)
     except CompanionRenderError as exc:
         return _unpublished_render_result(exc)
@@ -577,7 +597,9 @@ def _validate(args: argparse.Namespace) -> CommandResult:
         return _failed("release_not_found", "project has no current release")
     run_id = current["run_id"]
     book = CompanionService(paths.jobs_root).accepted_book(run_id)
-    release = _publisher(paths).validate_current(current, book)
+    release = _publisher(
+        paths, pdf_validation=args.pdf_validation
+    ).validate_current(current, book)
     return CommandResult(
         CommandStatus.COMPLETED,
         data={
@@ -614,6 +636,7 @@ def _snapshot_result(
     *,
     warnings: tuple[str, ...] = (),
     paper_cache_root: str | Path | None = None,
+    pdf_validation: str = "text",
 ) -> CommandResult:
     base = command_result_from_snapshot(snapshot)
     persisted = paths.source_diagnostics(snapshot.run_id)
@@ -640,7 +663,9 @@ def _snapshot_result(
     receipt = service.translation_reuse_receipt(snapshot.run_id)
     try:
         release = _publisher(
-            paths, paper_cache_root=paper_cache_root
+            paths,
+            paper_cache_root=paper_cache_root,
+            pdf_validation=pdf_validation,
         ).publish(book, run_id=snapshot.run_id)
     except CompanionRenderError as exc:
         return CommandResult(
@@ -829,6 +854,7 @@ def _publisher(
     paths: CompanionProjectPaths,
     *,
     paper_cache_root: str | Path | None = None,
+    pdf_validation: str = "text",
 ) -> CompanionReleasePublisher:
     paper: ArcPaperService | None = None
 
@@ -853,7 +879,11 @@ def _publisher(
             return None
 
     return CompanionReleasePublisher(
-        paths, CompanionRenderer(asset_loader=load_asset)
+        paths,
+        CompanionRenderer(
+            asset_loader=load_asset,
+            pdf_validation=pdf_validation,
+        ),
     )
 
 
