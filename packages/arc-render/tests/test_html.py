@@ -281,6 +281,56 @@ def test_source_only_publication_renders_without_layers(tmp_path: Path) -> None:
     assert (tmp_path / "source-only.html").is_file()
 
 
+def test_renderer_ignores_stale_machine_fragments_but_keeps_user_notes(
+    tmp_path: Path,
+) -> None:
+    publication_path, _publication, active = _workspace(tmp_path)
+    stale = FragmentRevision(
+        source=active.source,
+        fragment_id="translation-stale-generation",
+        revision=1,
+        parent_semantic_digest=None,
+        anchor=active.anchor,
+        priority=10,
+        role="translation",
+        language=active.language,
+        title=None,
+        citation_ids=active.citation_ids,
+        provenance={"producer": "arc-translate"},
+        markdown_body="不再由当前 Layer 声明的旧译文 [@ref-1]。",
+    )
+    note = FragmentRevision(
+        source=active.source,
+        fragment_id="user-browser-note",
+        revision=1,
+        parent_semantic_digest=None,
+        anchor=active.anchor,
+        priority=110,
+        role="note",
+        language=active.language,
+        title="Reader note",
+        citation_ids=(),
+        provenance={"producer": "arc-render-browser"},
+        markdown_body="用户新增的外挂。",
+    )
+    write_fragment_revision(tmp_path, stale)
+    write_fragment_revision(tmp_path, note)
+
+    result = render_publication_html(
+        publication_path, tmp_path / "filtered.html"
+    )
+    payload = _payload((tmp_path / "filtered.html").read_text(encoding="utf-8"))
+    fragment_ids = {
+        item["metadata"]["fragment_id"] for item in payload["revisions"]
+    }
+
+    assert result.selected_revision_digests == (
+        active.semantic_digest,
+        note.semantic_digest,
+    )
+    assert fragment_ids == {active.fragment_id, note.fragment_id}
+
+
 def test_missing_source_asset_fails_before_publishing_html(tmp_path: Path) -> None:
     publication_path, _, _ = _workspace(
         tmp_path,

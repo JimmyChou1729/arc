@@ -44,6 +44,7 @@ def test_reader_contract_helpers_execute_under_node() -> None:
         + """
   globalThis.__arcReaderTest = {
     state: state,
+    browserCreatedHistory: browserCreatedHistory,
     effectiveEquationLabel: effectiveEquationLabel,
     stableStringify: stableStringify,
     validateIntegerJson: validateIntegerJson,
@@ -61,6 +62,22 @@ try {
 if (!rejected) throw new Error("non-integer JSON was accepted");
 if (helpers.stableStringify({b: 2, a: 1}) !== '{"a":1,"b":2}') {
   throw new Error("canonical JSON ordering changed");
+}
+if (!helpers.browserCreatedHistory([{
+  revision: 1,
+  parent_semantic_digest: null,
+  semantic_digest: "d".repeat(64),
+  provenance: {producer: "arc-render-browser"}
+}])) {
+  throw new Error("browser-created fragment history was not recognized");
+}
+if (helpers.browserCreatedHistory([{
+  revision: 1,
+  parent_semantic_digest: null,
+  semantic_digest: "e".repeat(64),
+  provenance: {producer: "arc-translate"}
+}])) {
+  throw new Error("stale machine fragment history was treated as user-owned");
 }
 helpers.state.payload = {
   source_identity: {
@@ -142,6 +159,8 @@ def test_reader_rebuilds_directory_state_and_guards_revision_lineage() -> None:
         in javascript
     )
     assert "state.embeddedRevisions.forEach(addRevision)" in javascript
+    assert "state.activeFragmentIds.has(fragmentId)" in javascript
+    assert "browserCreatedHistory(values)" in javascript
     assert "resetRevisionState();\n    var fragments;" in javascript
     assert "await loadDirectoryRevisions();" in javascript
     assert "current.semantic_digest !== base.semantic_digest" in javascript

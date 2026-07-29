@@ -298,6 +298,7 @@ def _load_revisions(
                 fragment_order.append(revision_reference.fragment_id)
 
     fragments_root = root / "fragments"
+    declared_fragment_ids = set(paths_by_fragment)
     if fragments_root.exists():
         if not fragments_root.is_dir():
             raise HTMLRenderError("project fragments path is not a directory")
@@ -322,6 +323,11 @@ def _load_revisions(
             paths_by_fragment[fragment_id],
             fragment_id=fragment_id,
         )
+        if (
+            fragment_id not in declared_fragment_ids
+            and not _browser_created_history(resolution.revisions)
+        ):
+            continue
         diagnostics.extend(resolution.diagnostics)
         revisions.extend(resolution.revisions)
         if resolution.selected is None:
@@ -342,6 +348,20 @@ def _load_revisions(
         key=lambda item: (item.priority, order_index[item.fragment_id])
     )
     return tuple(revisions), tuple(selected), tuple(diagnostics)
+
+
+def _browser_created_history(
+    revisions: Sequence[FragmentRevision],
+) -> bool:
+    roots = tuple(
+        item
+        for item in revisions
+        if item.revision == 1 and item.parent_semantic_digest is None
+    )
+    return (
+        len(roots) == 1
+        and roots[0].provenance.get("producer") == "arc-render-browser"
+    )
 
 
 def _validate_layer_reference(layer: Layer, reference: Any) -> None:

@@ -10,6 +10,7 @@
     revisions: new Map(),
     selected: new Map(),
     embeddedRevisions: [],
+    activeFragmentIds: new Set(),
     diagnostics: [],
     fileDiagnostics: [],
     directory: null,
@@ -290,6 +291,9 @@
 
   function initialRevisions() {
     state.embeddedRevisions = (state.payload.revisions || []).slice();
+    state.activeFragmentIds = new Set(state.embeddedRevisions.map(function (raw) {
+      return raw.metadata ? raw.metadata.fragment_id : raw.fragment_id;
+    }));
     resetRevisionState();
     resolveAll();
   }
@@ -331,10 +335,28 @@
       state.fileDiagnostics
     );
     state.revisions.forEach(function (values, fragmentId) {
+      if (
+        !state.activeFragmentIds.has(fragmentId) &&
+        !browserCreatedHistory(values)
+      ) {
+        return;
+      }
       var resolved = resolveFragment(values, fragmentId);
       if (resolved.selected) state.selected.set(fragmentId, resolved.selected);
       state.diagnostics = state.diagnostics.concat(resolved.diagnostics);
     });
+  }
+
+  function browserCreatedHistory(values) {
+    var roots = values.filter(function (item) {
+      return item.revision === 1 && item.parent_semantic_digest === null;
+    });
+    roots = Array.from(new Map(roots.map(function (item) {
+      return [item.semantic_digest, item];
+    })).values());
+    return roots.length === 1 &&
+      roots[0].provenance &&
+      roots[0].provenance.producer === "arc-render-browser";
   }
 
   function resolveFragment(values, fragmentId) {
