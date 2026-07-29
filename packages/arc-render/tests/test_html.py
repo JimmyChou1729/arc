@@ -260,6 +260,18 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert payload["publication"]["publication_digest"] == (
         publication.publication_digest
     )
+    assert payload["publication"]["outline"] == [
+        {
+            "anchor_block_id": "block-heading",
+            "block_end": 3,
+            "block_start": 0,
+            "level": 1,
+            "ordinal": 0,
+            "path": ["section-reader"],
+            "section_id": "section-reader",
+            "title": "Reader",
+        }
+    ]
     assert payload["selected_revision_digests"] == [selected.semantic_digest]
     revisions = payload["revisions"]
     assert [item["metadata"]["revision"] for item in revisions] == [1, 2]

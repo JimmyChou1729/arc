@@ -5,9 +5,13 @@ import hashlib
 
 import pytest
 from arc_paper import (
+    RichBlock,
+    RichBlockKind,
     RichDocument,
+    RichSection,
     SourceArtifact,
     SourceFormat,
+    SourceLocator,
     SourceOrigin,
     SourceOriginKind,
 )
@@ -18,6 +22,7 @@ from arc_render import (
     FragmentRevisionRef,
     Layer,
     Publication,
+    PublicationOutlineItem,
     anchor_block_from_rich_block,
     fragment_revision_filename,
     layer_from_document,
@@ -39,6 +44,53 @@ def rich_document() -> RichDocument:
             origin=SourceOrigin(SourceOriginKind.REPOSITORY),
         ),
         blocks=(),
+    )
+
+
+def outlined_rich_document() -> RichDocument:
+    document = rich_document()
+    blocks = (
+        RichBlock(
+            "block-heading",
+            0,
+            RichBlockKind.HEADING,
+            ("section-source",),
+            SourceLocator(SourceFormat.MARKDOWN, 1, 1, 1, 8),
+            {"text": "Source", "level": 1},
+        ),
+        RichBlock(
+            "block-paragraph",
+            1,
+            RichBlockKind.PARAGRAPH,
+            ("section-source",),
+            SourceLocator(SourceFormat.MARKDOWN, 2, 1, 2, 5),
+            {
+                "text": "Body",
+                "inline_spans": [
+                    {
+                        "kind": "text",
+                        "start": 0,
+                        "end": 4,
+                        "text": "Body",
+                    }
+                ],
+            },
+        ),
+    )
+    return RichDocument(
+        source=document.source,
+        blocks=blocks,
+        sections=(
+            RichSection(
+                "section-source",
+                "Source",
+                1,
+                0,
+                ("section-source",),
+                0,
+                2,
+            ),
+        ),
     )
 
 
@@ -184,6 +236,140 @@ def test_source_only_publication_round_trips_self_contained_source() -> None:
     encoded = publication_to_document(publication)
     assert "source_document" in encoded
     assert publication_from_document(encoded) == publication
+
+
+def test_publication_outline_is_explicit_digest_bound_and_source_anchored() -> None:
+    document = outlined_rich_document()
+    derived = Publication(document)
+
+    assert derived.outline == (
+        PublicationOutlineItem(
+            section_id="section-source",
+            title="Source",
+            level=1,
+            ordinal=0,
+            path=("section-source",),
+            block_start=0,
+            block_end=2,
+            anchor_block_id="block-heading",
+        ),
+    )
+    encoded = publication_to_document(derived)
+    assert encoded["outline"][0]["anchor_block_id"] == "block-heading"
+    assert publication_from_document(encoded) == derived
+
+    explicit = Publication(
+        document,
+        outline=(
+            PublicationOutlineItem(
+                "section-source",
+                "Reader outline",
+                1,
+                0,
+                ("section-source",),
+                0,
+                2,
+                "block-paragraph",
+            ),
+        ),
+    )
+    assert explicit.publication_digest != derived.publication_digest
+    assert (
+        publication_from_document(publication_to_document(explicit))
+        == explicit
+    )
+
+    with pytest.raises(ValueError, match="anchor.*range"):
+        Publication(
+            document,
+            outline=(
+                PublicationOutlineItem(
+                    "section-source",
+                    "Invalid",
+                    1,
+                    0,
+                    ("section-source",),
+                    0,
+                    1,
+                    "block-paragraph",
+                ),
+            ),
+        )
+
+
+def test_publication_outline_enforces_portable_ids_order_and_ancestry() -> None:
+    document = outlined_rich_document()
+
+    valid = (
+        PublicationOutlineItem(
+            "section-root",
+            "",
+            1,
+            0,
+            ("section-root",),
+            0,
+            2,
+            "block-heading",
+        ),
+        PublicationOutlineItem(
+            "section-child",
+            "Child",
+            3,
+            1,
+            ("section-root", "section-child"),
+            1,
+            2,
+            "block-paragraph",
+        ),
+    )
+    assert Publication(document, outline=valid).outline == valid
+
+    with pytest.raises(ValueError, match="portable identifier"):
+        PublicationOutlineItem(
+            "section invalid",
+            "Invalid",
+            1,
+            0,
+            ("section invalid",),
+            0,
+            1,
+            "block-heading",
+        )
+
+    with pytest.raises(ValueError, match="ordinals.*contiguous"):
+        Publication(
+            document,
+            outline=(
+                PublicationOutlineItem(
+                    "section-root",
+                    "Root",
+                    1,
+                    1,
+                    ("section-root",),
+                    0,
+                    2,
+                    "block-heading",
+                ),
+            ),
+        )
+
+    with pytest.raises(ValueError, match="path ancestry"):
+        Publication(
+            document,
+            outline=(
+                valid[0],
+                PublicationOutlineItem(
+                    "section-child",
+                    "Child",
+                    1,
+                    1,
+                    ("section-root", "section-child"),
+                    1,
+                    2,
+                    "block-paragraph",
+                ),
+            ),
+        )
 
 
 def test_publication_rejects_digest_tampering_and_unknown_fields() -> None:

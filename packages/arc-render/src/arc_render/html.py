@@ -381,7 +381,7 @@ def _validate_selected(
 ) -> None:
     document = publication.source_document
     blocks = {item.block_id: item for item in document.blocks}
-    sections = {item.section_id for item in document.sections}
+    sections = {item.section_id for item in publication.outline or ()}
     bibliography_ids = {
         str(
             item.get("evidence_id")

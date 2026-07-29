@@ -80,7 +80,8 @@
       unknownCitation: "引用不在当前参考文献中：",
       compareCurrent: "当前版本",
       compareHistorical: "历史版本",
-      restore: "恢复为新版本"
+      restore: "恢复为新版本",
+      imageOmitted: "图片未加载"
     } : {
       contents: "Contents",
       collapse: "Collapse contents",
@@ -116,7 +117,8 @@
       unknownCitation: "Citation is absent from the bibliography: ",
       compareCurrent: "Current revision",
       compareHistorical: "Historical revision",
-      restore: "Restore as new revision"
+      restore: "Restore as new revision",
+      imageOmitted: "Image not loaded"
     };
     Object.keys(publication.labels || {}).forEach(function (key) {
       defaults[key] = publication.labels[key];
@@ -233,10 +235,10 @@
     };
     md.renderer.rules.image = function (tokens, index) {
       var token = tokens[index];
-      var destination = md.utils.escapeHtml(token.attrGet("src") || "");
-      var alternative = md.utils.escapeHtml(token.content || destination);
-      return '<a class="arc-markdown-image" href="' + destination +
-        '">[' + alternative + "]</a>";
+      var alternative = md.utils.escapeHtml(token.content || "");
+      var text = md.utils.escapeHtml(labels().imageOmitted);
+      return '<span class="arc-markdown-image" role="note">[' + text +
+        (alternative ? ": " + alternative : "") + "]</span>";
     };
     var defaultLinkOpen = md.renderer.rules.link_open || function (
       tokens, index, options, _env, renderer
@@ -454,7 +456,7 @@
     renderGlossary(main, publication.glossary || [], strings);
     renderBibliography(main, publication.bibliography || [], strings);
     renderDiagnostics(main);
-    renderContents(contents, documentValue.sections || [], strings);
+    renderContents(contents, publication.outline || [], strings);
     setupLaneResponsiveness();
     setupContents();
   }
@@ -468,16 +470,16 @@
 
   function groupedFragments(documentValue) {
     var groups = new Map();
-    var sections = new Map((documentValue.sections || []).map(function (section) {
-      return [section.section_id, section];
-    }));
-    var blocks = documentValue.blocks || [];
+    var sections = new Map(
+      (state.payload.publication.outline || []).map(function (section) {
+        return [section.section_id, section];
+      })
+    );
     state.selected.forEach(function (fragment) {
       var target = fragment.anchor && fragment.anchor.target_id;
       if (fragment.anchor && fragment.anchor.kind === "section") {
         var section = sections.get(target);
-        target = section && blocks[section.block_start] ?
-          blocks[section.block_start].block_id : null;
+        target = section ? section.anchor_block_id : null;
       }
       if (!target) {
         state.diagnostics.push(
@@ -717,8 +719,7 @@
       var item = element("li");
       item.dataset.level = String(section.level);
       var link = element("a", "", section.title);
-      var block = state.payload.publication.source_document.blocks[section.block_start];
-      link.href = block ? "#block-" + safeToken(block.block_id) : "#arc-document";
+      link.href = "#block-" + safeToken(section.anchor_block_id);
       removeVisibleHtmlTags(link);
       item.appendChild(link);
       var note = element("button", "arc-note-button arc-section-note-button", strings.addNote);
@@ -1508,9 +1509,11 @@
     var blocks = new Map((documentValue.blocks || []).map(function (block) {
       return [block.block_id, block];
     }));
-    var sections = new Set((documentValue.sections || []).map(function (section) {
-      return section.section_id;
-    }));
+    var sections = new Set(
+      (state.payload.publication.outline || []).map(function (section) {
+        return section.section_id;
+      })
+    );
     if (
       (anchor.kind === "block" && !blocks.has(anchor.target_id)) ||
       (anchor.kind === "section" && !sections.has(anchor.target_id))

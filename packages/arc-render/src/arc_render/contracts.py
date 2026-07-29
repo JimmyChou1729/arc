@@ -95,9 +95,20 @@ _LAYER_REF_FIELDS = {
     "path",
     "layer_digest",
 }
+_PUBLICATION_OUTLINE_ITEM_FIELDS = {
+    "section_id",
+    "title",
+    "level",
+    "ordinal",
+    "path",
+    "block_start",
+    "block_end",
+    "anchor_block_id",
+}
 _PUBLICATION_FIELDS = {
     "schema_version",
     "source_document",
+    "outline",
     "layers",
     "glossary",
     "bibliography",
@@ -366,6 +377,52 @@ class LayerRef:
         )
 
 
+@dataclass(frozen=True)
+class PublicationOutlineItem:
+    """One explicit publication navigation entry bound to a source block."""
+
+    section_id: str
+    title: str
+    level: int
+    ordinal: int
+    path: tuple[str, ...]
+    block_start: int
+    block_end: int
+    anchor_block_id: str
+
+    def __post_init__(self) -> None:
+        section_id = _identifier(self.section_id, "outline section_id")
+        if not isinstance(self.title, str):
+            raise ValueError("outline title must be a string")
+        title = self.title
+        level = _positive_integer(self.level, "outline level")
+        ordinal = _positive_integer(
+            self.ordinal, "outline ordinal", allow_zero=True
+        )
+        path = tuple(
+            _identifier(item, "outline path item") for item in self.path
+        )
+        if not path or path[-1] != section_id:
+            raise ValueError("outline path must end with its section ID")
+        block_start = _positive_integer(
+            self.block_start, "outline block_start", allow_zero=True
+        )
+        block_end = _positive_integer(self.block_end, "outline block_end")
+        if block_end <= block_start:
+            raise ValueError("outline block range must be non-empty")
+        anchor_block_id = _nonblank(
+            self.anchor_block_id, "outline anchor_block_id"
+        )
+        object.__setattr__(self, "section_id", section_id)
+        object.__setattr__(self, "title", title)
+        object.__setattr__(self, "level", level)
+        object.__setattr__(self, "ordinal", ordinal)
+        object.__setattr__(self, "path", path)
+        object.__setattr__(self, "block_start", block_start)
+        object.__setattr__(self, "block_end", block_end)
+        object.__setattr__(self, "anchor_block_id", anchor_block_id)
+
+
 @dataclass(frozen=True, eq=False)
 class Publication:
     """A self-contained source binding plus ordered external overlay files."""
@@ -378,12 +435,20 @@ class Publication:
     resources: tuple[Mapping[str, JsonValue], ...] = ()
     reader_profile: Mapping[str, JsonValue] = field(default_factory=dict)
     schema_version: str = PUBLICATION_SCHEMA
+    outline: tuple[PublicationOutlineItem, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != PUBLICATION_SCHEMA:
             raise ValueError("unsupported publication schema")
         if not isinstance(self.source_document, RichDocument):
             raise ValueError("source_document must be a RichDocument")
+        outline = (
+            _default_publication_outline(self.source_document)
+            if self.outline is None
+            else tuple(self.outline)
+        )
+        _validate_publication_outline(self.source_document, outline)
+        object.__setattr__(self, "outline", outline)
         source = source_identity_from_rich_document(self.source_document)
         layers = tuple(self.layers)
         if any(not isinstance(item, LayerRef) for item in layers):
@@ -420,12 +485,6 @@ class Publication:
         return source_identity_from_rich_document(self.source_document)
 
     @property
-    def outline(self) -> tuple[Any, ...]:
-        """Return the source-owned outline without duplicating durable state."""
-
-        return self.source_document.sections
-
-    @property
     def publication_digest(self) -> str:
         return publication_semantic_digest(self)
 
@@ -436,6 +495,72 @@ class Publication:
 
     def __hash__(self) -> int:
         return hash(self.publication_digest)
+
+
+def _default_publication_outline(
+    document: RichDocument,
+) -> tuple[PublicationOutlineItem, ...]:
+    return tuple(
+        PublicationOutlineItem(
+            section_id=section.section_id,
+            title=section.title,
+            level=section.level,
+            ordinal=ordinal,
+            path=section.path,
+            block_start=section.block_start,
+            block_end=section.block_end,
+            anchor_block_id=document.blocks[section.block_start].block_id,
+        )
+        for ordinal, section in enumerate(
+            item
+            for item in document.sections
+            if item.block_start < item.block_end
+        )
+    )
+
+
+def _validate_publication_outline(
+    document: RichDocument,
+    outline: tuple[PublicationOutlineItem, ...],
+) -> None:
+    if any(not isinstance(item, PublicationOutlineItem) for item in outline):
+        raise ValueError(
+            "outline must contain PublicationOutlineItem values"
+        )
+    section_ids = tuple(item.section_id for item in outline)
+    if len(set(section_ids)) != len(section_ids):
+        raise ValueError("publication outline section IDs must be unique")
+    if tuple(item.ordinal for item in outline) != tuple(range(len(outline))):
+        raise ValueError("publication outline ordinals must be contiguous")
+    blocks = {item.block_id: item for item in document.blocks}
+    preceding: dict[str, PublicationOutlineItem] = {}
+    for item in outline:
+        if item.block_end > len(document.blocks):
+            raise ValueError(
+                "publication outline block range exceeds the rich source"
+            )
+        anchor = blocks.get(item.anchor_block_id)
+        if (
+            anchor is None
+            or anchor.ordinal < item.block_start
+            or anchor.ordinal >= item.block_end
+        ):
+            raise ValueError(
+                "publication outline anchor must belong to its source block range"
+            )
+        for depth, ancestor_id in enumerate(item.path[:-1], start=1):
+            ancestor = preceding.get(ancestor_id)
+            if (
+                ancestor is None
+                or ancestor.path != item.path[:depth]
+                or ancestor.level >= item.level
+                or ancestor.block_start > item.block_start
+                or ancestor.block_end < item.block_end
+            ):
+                raise ValueError(
+                    "publication outline path ancestry is inconsistent"
+                )
+        preceding[item.section_id] = item
 
 
 def source_identity_from_rich_document(
@@ -685,12 +810,62 @@ def layer_ref_from_document(value: Any) -> LayerRef:
     )
 
 
+def publication_outline_item_to_document(
+    item: PublicationOutlineItem,
+) -> dict[str, Any]:
+    return {
+        "section_id": item.section_id,
+        "title": item.title,
+        "level": item.level,
+        "ordinal": item.ordinal,
+        "path": list(item.path),
+        "block_start": item.block_start,
+        "block_end": item.block_end,
+        "anchor_block_id": item.anchor_block_id,
+    }
+
+
+def publication_outline_item_from_document(
+    value: Any,
+) -> PublicationOutlineItem:
+    item = require_exact(
+        value,
+        _PUBLICATION_OUTLINE_ITEM_FIELDS,
+        "publication outline item",
+    )
+    return PublicationOutlineItem(
+        section_id=require_string(item["section_id"], "outline section_id"),
+        title=require_string(item["title"], "outline title", empty=True),
+        level=require_integer(item["level"], "outline level", minimum=1),
+        ordinal=require_integer(
+            item["ordinal"], "outline ordinal", minimum=0
+        ),
+        path=tuple(
+            require_string(raw, "outline path item")
+            for raw in require_list(item["path"], "outline path")
+        ),
+        block_start=require_integer(
+            item["block_start"], "outline block_start", minimum=0
+        ),
+        block_end=require_integer(
+            item["block_end"], "outline block_end", minimum=1
+        ),
+        anchor_block_id=require_string(
+            item["anchor_block_id"], "outline anchor_block_id"
+        ),
+    )
+
+
 def _publication_material(publication: Publication) -> dict[str, Any]:
     return {
         "schema_version": publication.schema_version,
         "source_document": rich_document_to_document(
             publication.source_document
         ),
+        "outline": [
+            publication_outline_item_to_document(item)
+            for item in publication.outline or ()
+        ],
         "layers": [
             layer_ref_to_document(item) for item in publication.layers
         ],
@@ -730,6 +905,10 @@ def publication_from_document(value: Any) -> Publication:
         raise ValueError("reader_profile must be an object")
     publication = Publication(
         source_document=rich_document_from_document(source_document_value),
+        outline=tuple(
+            publication_outline_item_from_document(raw)
+            for raw in require_list(item["outline"], "outline")
+        ),
         layers=tuple(
             layer_ref_from_document(raw)
             for raw in require_list(item["layers"], "layers")
@@ -838,6 +1017,7 @@ __all__ = [
     "Layer",
     "LayerRef",
     "Publication",
+    "PublicationOutlineItem",
     "SourceIdentity",
     "anchor_block_from_rich_block",
     "anchor_block_from_document",
@@ -854,6 +1034,8 @@ __all__ = [
     "layer_semantic_digest",
     "layer_to_document",
     "publication_from_document",
+    "publication_outline_item_from_document",
+    "publication_outline_item_to_document",
     "publication_semantic_digest",
     "publication_to_document",
     "source_identity_from_document",

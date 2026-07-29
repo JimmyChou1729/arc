@@ -37,16 +37,26 @@ def test_reader_contract_helpers_execute_under_node() -> None:
     if node is None:
         pytest.skip("Node is unavailable")
     javascript = _text("reader.js")
+    markdown_it = _text("markdown-it/markdown-it.min.js")
     startup = javascript.rfind("\n  if (document.readyState")
     assert startup > 0
     instrumented = (
-        javascript[:startup]
+        """
+globalThis.window = globalThis;
+module = undefined;
+exports = undefined;
+define = undefined;
+"""
+        + markdown_it
+        + "\n"
+        + javascript[:startup]
         + """
   globalThis.__arcReaderTest = {
     state: state,
     browserCreatedHistory: browserCreatedHistory,
     effectiveEquationLabel: effectiveEquationLabel,
     stableStringify: stableStringify,
+    setupMarkdown: setupMarkdown,
     validateIntegerJson: validateIntegerJson,
     validateRevisionMetadata: validateRevisionMetadata
   };
@@ -102,7 +112,11 @@ helpers.state.payload = {
           "eq-1": {effective_label: " (7) "}
         }
       }
-    }
+    },
+    outline: [],
+    bibliography: [],
+    labels: {},
+    reader_profile: {}
   }
 };
 helpers.validateRevisionMetadata({
@@ -129,6 +143,16 @@ helpers.validateRevisionMetadata({
   citation_ids: [],
   provenance: {producer: "test"}
 });
+helpers.setupMarkdown();
+var imageMarkup = helpers.state.md.render(
+  "![remote](https://example.test/image.png)"
+);
+if (!imageMarkup.includes("arc-markdown-image")) {
+  throw new Error("Markdown image placeholder is missing");
+}
+if (/\\b(?:src|href)=/.test(imageMarkup)) {
+  throw new Error("Markdown image placeholder retained a fetchable URL");
+}
 if (
   helpers.effectiveEquationLabel({block_id: "eq-1"}, {label: "(3)"}) !== "(7)"
 ) {
@@ -205,3 +229,15 @@ def test_reader_preserves_source_text_and_glossary_rendering_contracts() -> None
     assert 'decorateGlossary(translated, "target")' in javascript
     assert "equation_label_reconciliation" in javascript
     assert "reconciliation.effective_label.trim()" in javascript
+
+
+def test_reader_uses_explicit_outline_for_navigation_and_section_anchors() -> None:
+    javascript = _text("reader.js")
+
+    assert (
+        "renderContents(contents, publication.outline || [], strings)"
+        in javascript
+    )
+    assert "state.payload.publication.outline || []" in javascript
+    assert 'target = section ? section.anchor_block_id : null' in javascript
+    assert 'safeToken(section.anchor_block_id)' in javascript
