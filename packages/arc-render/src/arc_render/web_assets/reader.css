@@ -136,6 +136,15 @@ button { cursor: pointer; }
   font-size: clamp(1.8rem, 4vw, 3.1rem);
 }
 .arc-document { padding-bottom: 5rem; }
+.arc-reader-diagnostics:empty { display: none; }
+.arc-render-chunk:not(.is-rendered) {
+  min-height: var(--arc-chunk-placeholder-height, 20rem);
+}
+.arc-render-chunk.is-rendered {
+  min-height: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--arc-chunk-placeholder-height, 60rem);
+}
 .arc-source-row {
   position: relative;
   margin: 1.25rem 0;
@@ -525,6 +534,13 @@ figcaption, .arc-citations, .arc-figure-note {
   .arc-diagnostic { display: none !important; }
   .arc-shell,
   .arc-shell.contents-collapsed { display: block; min-height: 0; }
+  .arc-render-chunk,
+  .arc-render-chunk.is-rendered {
+    min-height: 0 !important;
+    content-visibility: visible !important;
+    contain: none !important;
+    contain-intrinsic-size: none !important;
+  }
   .arc-book-header,
   .arc-document { width: 100%; }
   .arc-book-header { padding-top: 0; }

@@ -4,6 +4,8 @@
   var FRONT_BEGIN = "<!-- ARC:FRAGMENT-JSON:BEGIN -->";
   var FRONT_END = "<!-- ARC:FRAGMENT-JSON:END -->";
   var FRAGMENT_SCHEMA = "arc.render.fragment_revision.v1";
+  var MAX_BLOCKS_PER_RENDER_CHUNK = 36;
+  var CHUNK_BLOCK_HEIGHT_ESTIMATE = 220;
   var state = {
     payload: null,
     md: null,
@@ -16,7 +18,25 @@
     directory: null,
     editorBase: null,
     editorAnchor: null,
-    editorHistorical: null
+    editorHistorical: null,
+    citationNumberCache: null,
+    glossarySurfaceCache: {source: null, target: null},
+    fragmentGroups: new Map(),
+    renderPlan: [],
+    renderedChunkIds: new Set(),
+    chunkNodes: new Map(),
+    chunkByTargetId: new Map(),
+    chunkObserver: null,
+    laneObserver: null,
+    laneFallbackListener: null,
+    idleRenderHandle: null,
+    idleRenderUsesCallback: false,
+    idleRenderGeneration: 0,
+    hydrationOrder: [],
+    diagnosticsRoot: null,
+    readerShellReady: false,
+    navigationReady: false,
+    printReady: false
   };
 
   function element(tag, className, text) {
@@ -263,12 +283,14 @@
   }
 
   function citationNumbers() {
+    if (state.citationNumberCache) return state.citationNumberCache;
     var values = {};
     (state.payload.publication.bibliography || []).forEach(function (item, index) {
       var id = item.evidence_id || item.citation_id || item.id;
       if (id) values[id] = index + 1;
     });
-    return values;
+    state.citationNumberCache = values;
+    return state.citationNumberCache;
   }
 
   function renderMarkdown(markdown) {
@@ -432,6 +454,9 @@
   }
 
   function renderReader() {
+    stopProgressiveRendering();
+    state.citationNumberCache = null;
+    state.glossarySurfaceCache = {source: null, target: null};
     var publication = state.payload.publication;
     var documentValue = publication.source_document;
     var profile = publication.reader_profile || {};
@@ -459,16 +484,285 @@
       header.appendChild(element("p", "arc-authors", profile.authors.join(", ")));
     }
 
-    var anchorMap = groupedFragments(documentValue);
-    (documentValue.blocks || []).forEach(function (block) {
-      main.appendChild(renderSourceRow(block, anchorMap.get(block.block_id) || []));
+    state.fragmentGroups = groupedFragments(documentValue);
+    state.renderPlan = buildRenderChunks(
+      documentValue.blocks || [], publication.outline || []
+    );
+    state.renderedChunkIds = new Set();
+    state.chunkNodes = new Map();
+    state.chunkByTargetId = new Map();
+    state.diagnosticsRoot = element("div", "arc-reader-diagnostics");
+    main.appendChild(state.diagnosticsRoot);
+    renderDiagnostics(state.diagnosticsRoot);
+
+    state.renderPlan.forEach(function (chunk) {
+      var node = element("div", "arc-render-chunk");
+      node.dataset.chunkId = chunk.chunk_id;
+      node.dataset.chunkKind = chunk.kind;
+      node.setAttribute("aria-busy", "true");
+      node.style.setProperty(
+        "--arc-chunk-placeholder-height",
+        String(chunkHeightEstimate(chunk)) + "px"
+      );
+      state.chunkNodes.set(chunk.chunk_id, node);
+      main.appendChild(node);
+      if (chunk.kind === "content") {
+        for (
+          var index = chunk.block_start;
+          index < chunk.block_end;
+          index += 1
+        ) {
+          var block = documentValue.blocks[index];
+          state.chunkByTargetId.set(
+            "block-" + safeToken(block.block_id), chunk
+          );
+          if (block.kind === "heading") {
+            state.chunkByTargetId.set(
+              "heading-" + safeToken(block.block_id), chunk
+            );
+          }
+        }
+      }
     });
-    renderGlossary(main, publication.glossary || [], strings);
-    renderBibliography(main, publication.bibliography || [], strings);
-    renderDiagnostics(main);
+    var appendix = state.renderPlan.find(function (chunk) {
+      return chunk.kind === "appendices";
+    });
+    if (appendix) {
+      state.chunkByTargetId.set("arc-glossary", appendix);
+      state.chunkByTargetId.set("arc-references", appendix);
+    }
+
     renderContents(contents, publication.outline || [], strings);
-    setupLaneResponsiveness();
     setupContents();
+    setupProgressiveNavigation();
+    setupPrintRendering();
+    state.readerShellReady = true;
+
+    var initialChunk = initialRenderChunk();
+    state.hydrationOrder = hydrationOrderFrom(initialChunk);
+    updateRenderComplete();
+  }
+
+  function buildRenderChunks(blocks, outline) {
+    var blockCount = blocks.length;
+    var roots = (outline || []).filter(function (section) {
+      return Array.isArray(section.path) && section.path.length === 1;
+    });
+    if (!roots.length && outline.length) {
+      var minimumLevel = Math.min.apply(null, outline.map(function (section) {
+        return Number(section.level);
+      }));
+      roots = outline.filter(function (section) {
+        return Number(section.level) === minimumLevel;
+      });
+    }
+    roots = roots.slice().sort(function (left, right) {
+      return Number(left.block_start) - Number(right.block_start) ||
+        Number(left.block_end) - Number(right.block_end) ||
+        Number(left.ordinal || 0) - Number(right.ordinal || 0);
+    });
+
+    var ranges = [];
+    var cursor = 0;
+    roots.forEach(function (section) {
+      var start = Math.max(0, Math.min(blockCount, Number(section.block_start)));
+      var end = Math.max(start, Math.min(blockCount, Number(section.block_end)));
+      if (start > cursor) ranges.push({start: cursor, end: start});
+      if (end > cursor) {
+        ranges.push({
+          start: Math.max(cursor, start),
+          end: end,
+          title: section.title || null
+        });
+        cursor = end;
+      }
+    });
+    if (cursor < blockCount) ranges.push({start: cursor, end: blockCount});
+    if (!ranges.length && blockCount) ranges.push({start: 0, end: blockCount});
+
+    var chunks = [];
+    ranges.forEach(function (range) {
+      var start = range.start;
+      while (start < range.end) {
+        var end = Math.min(range.end, start + MAX_BLOCKS_PER_RENDER_CHUNK);
+        chunks.push({
+          chunk_id: "chunk-" + String(chunks.length).padStart(4, "0"),
+          kind: "content",
+          block_start: start,
+          block_end: end,
+          title: start === range.start ? range.title || null : null
+        });
+        start = end;
+      }
+    });
+    chunks.push({
+      chunk_id: "chunk-" + String(chunks.length).padStart(4, "0"),
+      kind: "appendices",
+      block_start: blockCount,
+      block_end: blockCount,
+      title: null
+    });
+    return chunks;
+  }
+
+  function chunkHeightEstimate(chunk) {
+    if (chunk.kind === "appendices") {
+      var publication = state.payload.publication;
+      return Math.max(
+        320,
+        ((publication.glossary || []).length +
+          (publication.bibliography || []).length) * 72
+      );
+    }
+    return Math.max(
+      320,
+      (chunk.block_end - chunk.block_start) * CHUNK_BLOCK_HEIGHT_ESTIMATE
+    );
+  }
+
+  function initialRenderChunk() {
+    var target = chunkForTargetId(hashTargetId(window.location.hash));
+    if (target) {
+      renderChunk(target);
+      return target;
+    }
+    var contentChunks = state.renderPlan.filter(function (chunk) {
+      return chunk.kind === "content";
+    });
+    if (!contentChunks.length) {
+      var appendix = state.renderPlan[0] || null;
+      if (appendix) renderChunk(appendix);
+      return appendix;
+    }
+    var renderedHeight = 0;
+    var minimumHeight = Math.max(window.innerHeight * 1.5, 720);
+    var last = contentChunks[0];
+    for (var index = 0; index < contentChunks.length; index += 1) {
+      last = contentChunks[index];
+      var node = renderChunk(last);
+      renderedHeight += node.getBoundingClientRect().height;
+      if (renderedHeight >= minimumHeight) break;
+    }
+    return last;
+  }
+
+  function hydrationOrderFrom(initialChunk) {
+    if (!state.renderPlan.length) return [];
+    var initialIndex = Math.max(0, state.renderPlan.indexOf(initialChunk));
+    if (initialIndex === 0) {
+      return state.renderPlan.map(function (chunk) { return chunk.chunk_id; });
+    }
+    var values = [state.renderPlan[initialIndex].chunk_id];
+    for (var distance = 1; values.length < state.renderPlan.length; distance += 1) {
+      if (initialIndex + distance < state.renderPlan.length) {
+        values.push(state.renderPlan[initialIndex + distance].chunk_id);
+      }
+      if (initialIndex - distance >= 0) {
+        values.push(state.renderPlan[initialIndex - distance].chunk_id);
+      }
+    }
+    return values;
+  }
+
+  function renderChunk(chunk) {
+    if (!chunk) return null;
+    var node = state.chunkNodes.get(chunk.chunk_id);
+    if (!node) throw new Error("render chunk has no document shell");
+    if (state.renderedChunkIds.has(chunk.chunk_id)) return node;
+    if (state.chunkObserver) state.chunkObserver.unobserve(node);
+    renderChunkBody(chunk, node);
+    node.classList.add("is-rendered");
+    node.setAttribute("aria-busy", "false");
+    state.renderedChunkIds.add(chunk.chunk_id);
+    setupLaneResponsiveness(node);
+    updateRenderComplete();
+    return node;
+  }
+
+  function rerenderChunk(chunk) {
+    if (!chunk || !state.renderedChunkIds.has(chunk.chunk_id)) return;
+    var node = state.chunkNodes.get(chunk.chunk_id);
+    teardownLaneResponsiveness(node);
+    renderChunkBody(chunk, node);
+    setupLaneResponsiveness(node);
+  }
+
+  function renderChunkBody(chunk, node) {
+    var publication = state.payload.publication;
+    var documentValue = publication.source_document;
+    var content = document.createDocumentFragment();
+    if (chunk.kind === "content") {
+      for (
+        var index = chunk.block_start;
+        index < chunk.block_end;
+        index += 1
+      ) {
+        var block = documentValue.blocks[index];
+        content.appendChild(renderSourceRow(
+          block, state.fragmentGroups.get(block.block_id) || []
+        ));
+      }
+    } else {
+      renderGlossary(content, publication.glossary || [], labels());
+      renderBibliography(content, publication.bibliography || [], labels());
+    }
+    node.replaceChildren(content);
+  }
+
+  function renderAllChunks() {
+    cancelIdleHydration();
+    state.renderPlan.forEach(renderChunk);
+    updateRenderComplete();
+  }
+
+  function refreshRenderedChunks() {
+    if (!state.readerShellReady) return;
+    state.fragmentGroups = groupedFragments(
+      state.payload.publication.source_document
+    );
+    renderDiagnostics(state.diagnosticsRoot);
+    state.renderPlan.forEach(rerenderChunk);
+  }
+
+  function refreshChunkForAnchor(anchor) {
+    if (!state.readerShellReady) return;
+    state.fragmentGroups = groupedFragments(
+      state.payload.publication.source_document
+    );
+    renderDiagnostics(state.diagnosticsRoot);
+    var chunk = chunkForAnchor(anchor);
+    rerenderChunk(chunk);
+  }
+
+  function chunkForAnchor(anchor) {
+    if (!anchor) return null;
+    var target = anchor.target_id;
+    if (anchor.kind === "section") {
+      var section = (state.payload.publication.outline || []).find(
+        function (item) { return item.section_id === target; }
+      );
+      target = section ? section.anchor_block_id : null;
+    }
+    return target ?
+      state.chunkByTargetId.get("block-" + safeToken(target)) || null :
+      null;
+  }
+
+  function chunkForTargetId(targetId) {
+    if (!targetId) return null;
+    if (targetId.indexOf("reference-") === 0) {
+      return state.chunkByTargetId.get("arc-references") || null;
+    }
+    return state.chunkByTargetId.get(targetId) || null;
+  }
+
+  function hashTargetId(hash) {
+    if (!hash || hash.charAt(0) !== "#") return "";
+    try {
+      return decodeURIComponent(hash.slice(1));
+    } catch (_error) {
+      return hash.slice(1);
+    }
   }
 
   function sourceTitle(documentValue) {
@@ -811,12 +1105,16 @@
   }
 
   function renderDiagnostics(main) {
+    main.replaceChildren();
     state.diagnostics.forEach(function (value) {
-      main.insertBefore(element("p", "arc-diagnostic", value), main.firstChild);
+      main.appendChild(element("p", "arc-diagnostic", value));
     });
   }
 
   function glossarySurfaces(layer) {
+    if (state.glossarySurfaceCache[layer]) {
+      return state.glossarySurfaceCache[layer];
+    }
     var values = [];
     (state.payload.publication.glossary || []).forEach(function (entry) {
       var surface = layer === "source" ?
@@ -834,7 +1132,8 @@
       return right.surface.length - left.surface.length ||
         left.surface.localeCompare(right.surface);
     });
-    return values;
+    state.glossarySurfaceCache[layer] = values;
+    return state.glossarySurfaceCache[layer];
   }
 
   function decorateGlossary(root, layer) {
@@ -934,25 +1233,217 @@
     });
   }
 
-  function setupLaneResponsiveness() {
-    function update(lanes) {
-      var count = Number(lanes.style.getPropertyValue("--arc-lane-count")) || 1;
-      var horizontal = window.innerWidth >= 900 &&
-        lanes.getBoundingClientRect().width / count >= 275;
-      lanes.classList.toggle("lanes-horizontal", horizontal);
-    }
-    var lanes = Array.prototype.slice.call(document.querySelectorAll(".arc-lanes"));
-    lanes.forEach(update);
+  function updateLaneResponsiveness(lanes) {
+    var count = Number(lanes.style.getPropertyValue("--arc-lane-count")) || 1;
+    var horizontal = window.innerWidth >= 900 &&
+      lanes.getBoundingClientRect().width / count >= 275;
+    lanes.classList.toggle("lanes-horizontal", horizontal);
+  }
+
+  function setupLaneResponsiveness(root) {
+    var scope = root && root.querySelectorAll ? root : document;
+    var lanes = Array.prototype.slice.call(
+      scope.querySelectorAll(".arc-lanes")
+    );
+    lanes.forEach(updateLaneResponsiveness);
     if ("ResizeObserver" in window) {
-      var observer = new ResizeObserver(function (entries) {
-        entries.forEach(function (entry) { update(entry.target); });
-      });
-      lanes.forEach(function (item) { observer.observe(item); });
-    } else {
-      window.addEventListener("resize", function () {
-        lanes.forEach(update);
-      });
+      if (!state.laneObserver) {
+        state.laneObserver = new ResizeObserver(function (entries) {
+          entries.forEach(function (entry) {
+            updateLaneResponsiveness(entry.target);
+          });
+        });
+      }
+      lanes.forEach(function (item) { state.laneObserver.observe(item); });
+    } else if (!state.laneFallbackListener) {
+      state.laneFallbackListener = function () {
+        Array.prototype.forEach.call(
+          document.querySelectorAll(".arc-lanes"),
+          updateLaneResponsiveness
+        );
+      };
+      window.addEventListener("resize", state.laneFallbackListener);
     }
+  }
+
+  function teardownLaneResponsiveness(root) {
+    if (!state.laneObserver || !root) return;
+    Array.prototype.forEach.call(
+      root.querySelectorAll(".arc-lanes"),
+      function (item) { state.laneObserver.unobserve(item); }
+    );
+  }
+
+  function startProgressiveRendering() {
+    setupChunkObserver();
+    scheduleIdleHydration();
+  }
+
+  function setupChunkObserver() {
+    if (!("IntersectionObserver" in window) || state.chunkObserver) return;
+    state.chunkObserver = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        var chunk = state.renderPlan.find(function (item) {
+          return item.chunk_id === entry.target.dataset.chunkId;
+        });
+        try {
+          renderChunk(chunk);
+        } catch (error) {
+          failProgressiveRender(error);
+        }
+      });
+    }, {rootMargin: "150% 0px", threshold: 0});
+    state.renderPlan.forEach(function (chunk) {
+      if (state.renderedChunkIds.has(chunk.chunk_id)) return;
+      state.chunkObserver.observe(state.chunkNodes.get(chunk.chunk_id));
+    });
+  }
+
+  function scheduleIdleHydration() {
+    if (
+      state.idleRenderHandle !== null ||
+      document.body.dataset.arcRenderComplete === "true"
+    ) {
+      return;
+    }
+    var generation = state.idleRenderGeneration;
+    var work = function () {
+      state.idleRenderHandle = null;
+      if (generation !== state.idleRenderGeneration) return;
+      var chunk = nextHydrationChunk();
+      if (!chunk) {
+        updateRenderComplete();
+        return;
+      }
+      try {
+        renderChunk(chunk);
+      } catch (error) {
+        failProgressiveRender(error);
+        return;
+      }
+      scheduleIdleHydration();
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      state.idleRenderUsesCallback = true;
+      state.idleRenderHandle = window.requestIdleCallback(work, {timeout: 1500});
+    } else {
+      state.idleRenderUsesCallback = false;
+      state.idleRenderHandle = window.setTimeout(work, 50);
+    }
+  }
+
+  function nextHydrationChunk() {
+    for (var index = 0; index < state.hydrationOrder.length; index += 1) {
+      var id = state.hydrationOrder[index];
+      if (state.renderedChunkIds.has(id)) continue;
+      return state.renderPlan.find(function (chunk) {
+        return chunk.chunk_id === id;
+      }) || null;
+    }
+    return state.renderPlan.find(function (chunk) {
+      return !state.renderedChunkIds.has(chunk.chunk_id);
+    }) || null;
+  }
+
+  function cancelIdleHydration() {
+    state.idleRenderGeneration += 1;
+    if (state.idleRenderHandle === null) return;
+    if (
+      state.idleRenderUsesCallback &&
+      typeof window.cancelIdleCallback === "function"
+    ) {
+      window.cancelIdleCallback(state.idleRenderHandle);
+    } else {
+      window.clearTimeout(state.idleRenderHandle);
+    }
+    state.idleRenderHandle = null;
+  }
+
+  function stopProgressiveRendering() {
+    if (state.chunkObserver) state.chunkObserver.disconnect();
+    state.chunkObserver = null;
+    cancelIdleHydration();
+    if (state.laneObserver) state.laneObserver.disconnect();
+    state.laneObserver = null;
+    if (state.laneFallbackListener) {
+      window.removeEventListener("resize", state.laneFallbackListener);
+      state.laneFallbackListener = null;
+    }
+    state.readerShellReady = false;
+  }
+
+  function updateRenderComplete() {
+    var complete = state.renderPlan.length > 0 &&
+      state.renderPlan.every(function (chunk) {
+        return state.renderedChunkIds.has(chunk.chunk_id);
+      });
+    document.body.dataset.arcRenderComplete = String(complete);
+    if (!complete) return;
+    if (state.chunkObserver) state.chunkObserver.disconnect();
+    state.chunkObserver = null;
+    cancelIdleHydration();
+  }
+
+  function failProgressiveRender(error) {
+    stopProgressiveRendering();
+    document.body.dataset.arcRenderReady = "error";
+    var message = String(error.message || error);
+    if (state.diagnosticsRoot) {
+      state.diagnosticsRoot.prepend(
+        element("p", "arc-diagnostic", message)
+      );
+    }
+  }
+
+  function setupProgressiveNavigation() {
+    if (state.navigationReady) return;
+    document.addEventListener("click", function (event) {
+      var link = event.target.closest && event.target.closest('a[href^="#"]');
+      if (!link) return;
+      var href = link.getAttribute("href") || "";
+      var targetId = hashTargetId(href);
+      if (!chunkForTargetId(targetId)) return;
+      event.preventDefault();
+      activateHashTarget(href, true);
+    });
+    window.addEventListener("hashchange", function () {
+      activateHashTarget(window.location.hash, false);
+    });
+    window.addEventListener("popstate", function () {
+      activateHashTarget(window.location.hash, false);
+    });
+    state.navigationReady = true;
+  }
+
+  function activateHashTarget(hash, updateHistory) {
+    var targetId = hashTargetId(hash);
+    var chunk = chunkForTargetId(targetId);
+    if (!chunk) return false;
+    renderChunk(chunk);
+    if (updateHistory) {
+      if (window.location.hash === hash) {
+        window.history.replaceState(null, "", hash);
+      } else {
+        window.history.pushState(null, "", hash);
+      }
+    }
+    window.requestAnimationFrame(function () {
+      var target = document.getElementById(targetId);
+      if (!target) return;
+      var root = document.documentElement;
+      var previousBehavior = root.style.scrollBehavior;
+      root.style.scrollBehavior = "auto";
+      target.scrollIntoView({block: "start", behavior: "auto"});
+      root.style.scrollBehavior = previousBehavior;
+    });
+    return true;
+  }
+
+  function setupPrintRendering() {
+    if (state.printReady) return;
+    window.addEventListener("beforeprint", renderAllChunks);
+    state.printReady = true;
   }
 
   function setupContents() {
@@ -1094,11 +1585,11 @@
     } catch (error) {
       if (error.name === "NotFoundError") {
         resolveAll();
-        renderReader();
+        refreshRenderedChunks();
         return;
       }
       resolveAll();
-      renderReader();
+      refreshRenderedChunks();
       throw error;
     }
     var files = [];
@@ -1117,7 +1608,7 @@
       }
     }
     resolveAll();
-    renderReader();
+    refreshRenderedChunks();
   }
 
   async function collectMarkdownFiles(directory, output) {
@@ -1313,7 +1804,7 @@
       resolveAll();
       document.getElementById("arc-editor-dialog").close();
       setStatus(labels().saveSuccess);
-      renderReader();
+      refreshChunkForAnchor(metadata.anchor);
     } catch (error) {
       setStatus(String(error.message || error), "error");
     }
@@ -1706,6 +2197,8 @@
 
   async function initialize() {
     try {
+      document.body.dataset.arcRenderReady = "loading";
+      document.body.dataset.arcRenderComplete = "false";
       state.payload = readPayload();
       setupMarkdown();
       initialRevisions();
@@ -1721,8 +2214,11 @@
           image.addEventListener("error", resolve, {once: true});
         });
       }));
+      activateHashTarget(window.location.hash, false);
       document.body.dataset.arcRenderReady = "true";
+      startProgressiveRendering();
     } catch (error) {
+      stopProgressiveRendering();
       document.body.dataset.arcRenderReady = "error";
       var root = document.getElementById("arc-document") || document.body;
       root.prepend(element("p", "arc-diagnostic", String(error.message || error)));

@@ -57,6 +57,7 @@ define = undefined;
     effectiveEquationLabel: effectiveEquationLabel,
     stableStringify: stableStringify,
     setupMarkdown: setupMarkdown,
+    buildRenderChunks: buildRenderChunks,
     validateIntegerJson: validateIntegerJson,
     validateRevisionMetadata: validateRevisionMetadata
   };
@@ -163,6 +164,45 @@ if (
 ) {
   throw new Error("equation payload label fallback changed");
 }
+var chunkBlocks = Array.from({length: 95}, function (_value, index) {
+  return {block_id: "chunk-block-" + index};
+});
+var chunks = helpers.buildRenderChunks(chunkBlocks, [{
+  block_start: 0,
+  block_end: 10,
+  level: 1,
+  ordinal: 0,
+  path: ["front"],
+  title: "Front"
+}, {
+  block_start: 10,
+  block_end: 95,
+  level: 1,
+  ordinal: 1,
+  path: ["body"],
+  title: "Body"
+}]);
+var contentChunks = chunks.filter(function (item) {
+  return item.kind === "content";
+});
+if (
+  contentChunks[0].block_start !== 0 ||
+  contentChunks[contentChunks.length - 1].block_end !== 95 ||
+  contentChunks.some(function (item) {
+    return item.block_end - item.block_start > 36;
+  }) ||
+  chunks[chunks.length - 1].kind !== "appendices"
+) {
+  throw new Error("progressive render chunks lost coverage or bounds");
+}
+for (var chunkIndex = 1; chunkIndex < contentChunks.length; chunkIndex += 1) {
+  if (
+    contentChunks[chunkIndex - 1].block_end !==
+    contentChunks[chunkIndex].block_start
+  ) {
+    throw new Error("progressive render chunks contain a gap");
+  }
+}
 """
     )
 
@@ -229,6 +269,27 @@ def test_reader_uses_low_distraction_controls_and_collapsed_advanced_editor() ->
     assert "position: fixed" in stylesheet
     assert 'content: "▸"' in stylesheet
     assert ".arc-editor-advanced[open]" in stylesheet
+
+
+def test_reader_progressively_hydrates_navigation_find_and_print_content() -> None:
+    javascript = _text("reader.js")
+    stylesheet = _text("reader.css")
+
+    assert "MAX_BLOCKS_PER_RENDER_CHUNK = 36" in javascript
+    assert "buildRenderChunks(" in javascript
+    assert "new IntersectionObserver" in javascript
+    assert "window.requestIdleCallback" in javascript
+    assert 'window.addEventListener("beforeprint", renderAllChunks)' in javascript
+    assert "activateHashTarget(href, true)" in javascript
+    assert "refreshRenderedChunks();" in javascript
+    assert "refreshChunkForAnchor(metadata.anchor);" in javascript
+    assert 'document.body.dataset.arcRenderComplete = String(complete)' in javascript
+    assert "state.citationNumberCache" in javascript
+    assert "state.glossarySurfaceCache[layer]" in javascript
+    assert javascript.count("renderReader();") == 1
+    assert ".arc-render-chunk:not(.is-rendered)" in stylesheet
+    assert "content-visibility: auto" in stylesheet
+    assert "content-visibility: visible !important" in stylesheet
 
 
 def test_reader_preserves_source_text_and_glossary_rendering_contracts() -> None:

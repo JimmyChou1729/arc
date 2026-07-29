@@ -35,6 +35,18 @@ resulting reader contains its assets and needs no filesystem permission to
 open. Browser editing, if used, writes new immutable fragment revisions rather
 than changing an existing revision.
 
+## Progressive Reading
+
+Large publications become interactive after the initial reading view is
+rendered. The reader then renders nearby chunks as they approach the viewport
+and fills the remaining chunks one at a time during browser idle periods.
+Rendered chunks remain mounted.
+
+Contents links and URL fragments render the required chunk before scrolling,
+including deep links opened directly from the filesystem. Native browser find
+covers the full publication after background completion. Printing forces any
+remaining chunks to render first.
+
 ## Printing
 
 Automated PDF generation is not part of `arc-render` v1. Open the standalone

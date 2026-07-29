@@ -20,9 +20,15 @@ The initial public API includes:
   revisions, and forks.
 
 Standalone HTML and command-line delivery are built on these contracts. For
-now, a PDF copy may be made manually with Chrome's Print / Save as PDF command.
-Such a PDF is a user-side derivative, not an ARC release artifact, and ARC does
-not validate, reproduce, or automatically publish it.
+large publications, the reader renders an initial reading view first, loads
+nearby chunks on demand, and completes the remaining chunks during browser idle
+time. Contents links and URL fragments render their target before scrolling;
+printing renders every remaining chunk before the browser creates its preview.
+The reader never unloads a rendered chunk.
+
+For now, a PDF copy may be made manually with Chrome's Print / Save as PDF
+command. Such a PDF is a user-side derivative, not an ARC release artifact,
+and ARC does not validate, reproduce, or automatically publish it.
 
 Command help is available without opening the manual:
 
