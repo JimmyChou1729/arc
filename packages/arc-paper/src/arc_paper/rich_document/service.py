@@ -19,7 +19,7 @@ from ..sources import (
     ValidationPolicy,
 )
 from .models import RichAsset, RichBlockKind, RichDocument, RichPageMapEntry
-from .parser import parse_rich_artifact_bytes, resolve_local_asset_path
+from .parser import AssetImporter, parse_rich_artifact_bytes, resolve_local_asset_path
 
 
 PDF_VALIDATOR_MISSING_WARNING = (
@@ -64,9 +64,11 @@ class RichDocumentParserService:
         repository: SourceRepository,
         *,
         pdf_text_extractor: PDFTextExtractor | None = None,
+        asset_importer: AssetImporter | None = None,
     ):
         self.repository = repository
         self.pdf_text_extractor = pdf_text_extractor
+        self.asset_importer = asset_importer
         self.standard_parser = PaperParserService(
             repository,
             pdf_text_extractor=pdf_text_extractor,
@@ -190,6 +192,10 @@ class RichDocumentParserService:
 
     def _asset_importer(self, source_locator: str):
         def import_asset(target: str) -> RichAsset | None:
+            if self.asset_importer is not None:
+                imported = self.asset_importer(target)
+                if imported is not None:
+                    return imported
             if not source_locator:
                 return None
             path = resolve_local_asset_path(source_locator, target)
