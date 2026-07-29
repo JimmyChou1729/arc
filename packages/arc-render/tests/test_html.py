@@ -259,6 +259,11 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert '<details id="arc-editor-advanced"' in text
     assert '<span id="arc-editor-advanced-label">More options</span>' in text
     assert 'id="arc-editor-priority"' in text
+    assert '<h2 id="arc-editor-heading">Edit</h2>' in text
+    assert '<button id="arc-editor-cancel" type="button">Cancel</button>' in text
+    assert '<button id="arc-editor-save" type="button">Save</button>' in text
+    assert "Edit overlay" not in text
+    assert "Save as new revision" not in text
     assert "data:image/png;base64," in text
     assert payload["publication"]["publication_digest"] == (
         publication.publication_digest

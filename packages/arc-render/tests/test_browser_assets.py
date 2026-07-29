@@ -246,6 +246,19 @@ def test_reader_uses_low_distraction_controls_and_collapsed_advanced_editor() ->
     javascript = _text("reader.js")
     stylesheet = _text("reader.css")
 
+    for reader_facing_term in (
+        "添加外挂",
+        "编辑外挂",
+        "新建外挂",
+        "另存为新版本",
+        "Add overlay",
+        "Edit overlay",
+        "New overlay",
+        "Save as new revision",
+    ):
+        assert reader_facing_term not in javascript
+    assert '"arc-editor-cancel").textContent = strings.cancel' in javascript
+    assert '"arc-editor-save").textContent = strings.save' in javascript
     assert "await restoreDirectoryHandle();" in javascript
     assert "await setupEditor();" in javascript
     assert "arc-history-compare" in javascript

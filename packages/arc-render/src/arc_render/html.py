@@ -576,7 +576,7 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
   <dialog id="arc-editor-dialog" class="arc-dialog">
     <div class="arc-dialog-form">
       <header class="arc-dialog-header">
-        <h2 id="arc-editor-heading">Edit overlay</h2>
+        <h2 id="arc-editor-heading">Edit</h2>
         <button id="arc-editor-close" type="button" aria-label="Close">×</button>
       </header>
       <div class="arc-dialog-fields arc-dialog-primary-fields">
@@ -613,8 +613,8 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
         <div id="arc-editor-history" class="arc-history"></div>
       </details>
       <footer class="arc-dialog-footer">
-        <button id="arc-editor-cancel" type="button">Close</button>
-        <button id="arc-editor-save" type="button">Save as new revision</button>
+        <button id="arc-editor-cancel" type="button">Cancel</button>
+        <button id="arc-editor-save" type="button">Save</button>
       </footer>
     </div>
   </dialog>
