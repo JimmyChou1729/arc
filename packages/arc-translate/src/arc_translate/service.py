@@ -19,6 +19,7 @@ from arc_jobs import (
     ValidationReport,
     canonical_json_bytes,
 )
+from arc_render import AnchorKind, decode_fragment_revision
 
 from .contracts import (
     BlocksRequest,
@@ -39,11 +40,11 @@ from .handlers import (
     TranslateBlocksHandler,
 )
 from .workflow import (
-    BlocksResult,
     GlossaryResult,
     KeywordProvider,
     LanguageResult,
     TranslationWorkflowError,
+    TranslationResult,
 )
 
 
@@ -158,7 +159,7 @@ class TranslationService:
 
     def result(
         self, run_id: str
-    ) -> LanguageResult | GlossaryResult | BlocksResult:
+    ) -> LanguageResult | GlossaryResult | TranslationResult:
         spec = self.repository.read_spec(run_id)
         snapshot = self.repository.inspect(run_id).snapshot
         if snapshot.status is not RunStatus.SUCCEEDED or snapshot.result_ref is None:
@@ -180,7 +181,9 @@ class TranslationService:
             if spec.handler == GLOSSARY_HANDLER:
                 return GlossaryResult.from_document(value)
             if spec.handler == BLOCKS_HANDLER:
-                return BlocksResult.from_document(value)
+                result = TranslationResult.from_document(value)
+                _validate_result_artifacts(store, result)
+                return result
             raise ValueError("unsupported run handler")
         except (
             OSError,
@@ -192,6 +195,32 @@ class TranslationService:
         ) as exc:
             raise TranslationServiceError(
                 "result_invalid", "run result artifact is invalid"
+            ) from exc
+
+    def revision_payloads(
+        self,
+        run_id: str,
+        result: TranslationResult,
+    ) -> tuple[bytes, ...]:
+        """Read and verify ordered immutable revision artifacts for delivery."""
+
+        if not isinstance(result, TranslationResult):
+            raise TypeError("result must be a TranslationResult")
+        store = ImmutableArtifactStore(
+            self.repository.run_directory(run_id),
+            repository_root=self.repository.root,
+        )
+        try:
+            payloads = tuple(
+                store.read_bytes(item.artifact)
+                for item in result.revision_artifacts
+            )
+            _validate_result_artifacts(store, result)
+            return payloads
+        except Exception as exc:
+            raise TranslationServiceError(
+                "translation_revision_invalid",
+                "translation revision artifact is unreadable or invalid",
             ) from exc
 
     def result_source(self, run_id: str) -> ArtifactSourceRef:
@@ -259,6 +288,30 @@ class TranslationService:
 def _run_id(prefix: str, semantic_input: Mapping[str, Any]) -> str:
     digest = hashlib.sha256(canonical_json_bytes(semantic_input)).hexdigest()
     return f"translate-{prefix}-{digest[:24]}"
+
+
+def _validate_result_artifacts(
+    store: ImmutableArtifactStore,
+    result: TranslationResult,
+) -> None:
+    for item in result.revision_artifacts:
+        payload = store.read_bytes(item.artifact).decode("utf-8")
+        revision = decode_fragment_revision(
+            payload,
+            filename=Path(item.revision.path).name,
+        )
+        if (
+            revision.semantic_digest != item.revision.semantic_digest
+            or revision.fragment_id != item.revision.fragment_id
+            or revision.source != result.layer.source
+            or revision.priority != 10
+            or revision.role != "translation"
+            or revision.language != result.target_language
+            or revision.anchor.kind is not AnchorKind.BLOCK
+        ):
+            raise ValueError(
+                "translation revision artifact does not match its manifest"
+            )
 
 
 __all__ = ["TranslationService", "TranslationServiceError"]

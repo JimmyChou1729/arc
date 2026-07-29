@@ -3,9 +3,9 @@
 __version__ = "1.0.1"
 
 from .contracts import (  # noqa: E402
-    BLOCKS_RESULT_SCHEMA,
     GLOSSARY_RESULT_SCHEMA,
     LANGUAGE_RESULT_SCHEMA,
+    TRANSLATION_RESULT_SCHEMA,
     BlocksRequest,
     ExecutionOptions,
     GenerationRecipe,
@@ -36,25 +36,25 @@ from .source import (  # noqa: E402
 )
 from .workflow import (  # noqa: E402
     REVIEW_SUPERVISION_SCHEMA,
-    BlocksResult,
     GlossaryResult,
     KeywordProvider,
     LanguageResult,
     TranslationWorkflowError,
     TranslationWorkflowService,
+    TranslationResult,
+    TranslationRevisionArtifact,
 )
 
 __all__ = [
     "BLOCKS_HANDLER",
-    "BLOCKS_RESULT_SCHEMA",
     "GLOSSARY_HANDLER",
     "GLOSSARY_RESULT_SCHEMA",
     "LANGUAGE_HANDLER",
     "LANGUAGE_RESULT_SCHEMA",
+    "TRANSLATION_RESULT_SCHEMA",
     "PROJECT_SCHEMA",
     "REVIEW_SUPERVISION_SCHEMA",
     "BlocksRequest",
-    "BlocksResult",
     "BuildGlossaryHandler",
     "DetectLanguageHandler",
     "ExecutionOptions",
@@ -71,6 +71,8 @@ __all__ = [
     "TranslationServiceError",
     "TranslationSource",
     "TranslationSourceError",
+    "TranslationResult",
+    "TranslationRevisionArtifact",
     "TranslationWorkflowError",
     "TranslationWorkflowService",
     "deterministic_language_samples",

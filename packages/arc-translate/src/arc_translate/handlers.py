@@ -25,12 +25,12 @@ from .contracts import (
     language_semantic_input,
 )
 from .workflow import (
-    BlocksResult,
     GlossaryResult,
     KeywordProvider,
     LanguageResult,
     TranslationWorkflowError,
     TranslationWorkflowService,
+    TranslationResult,
     outer_resume_input,
 )
 
@@ -205,7 +205,7 @@ class TranslateBlocksHandler:
 
 def _outer_outcome(
     context: RunContext,
-    outcome: LanguageResult | GlossaryResult | BlocksResult | Paused | RunError,
+    outcome: LanguageResult | GlossaryResult | TranslationResult | Paused | RunError,
     artifact_id: str,
 ):
     if isinstance(outcome, Paused):

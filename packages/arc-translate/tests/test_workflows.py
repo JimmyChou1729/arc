@@ -19,17 +19,17 @@ from arc_jobs import (
 )
 from arc_llm import LLMCompleted
 from arc_paper import ArcPaperService, RichDocumentParserService
-from arc_paper import ParsedDocument, SourceArtifact, SourceFormat, SourceOrigin, SourceOriginKind
+from arc_render import decode_fragment_revision
 
 from arc_translate import (
     BlocksRequest,
-    BlocksResult,
     GenerationRecipe,
     GlossaryRequest,
     GlossaryResult,
     LanguageRequest,
     LanguageResult,
     TranslationService,
+    TranslationResult,
     TranslationSource,
     TranslationWorkflowService,
     source_blocks,
@@ -58,10 +58,12 @@ class FakeTasks:
         language: str = "en",
         classification: str = "known",
         invalid_review: bool = False,
+        translation_prefix: str = "translated:",
     ) -> None:
         self.language = language
         self.classification = classification
         self.invalid_review = invalid_review
+        self.translation_prefix = translation_prefix
         self.calls: list[str] = []
         self.translation_glossaries: list[list[str]] = []
         self.prompt_glossary_fields: list[list[set[str]]] = []
@@ -104,7 +106,7 @@ class FakeTasks:
                 text = (
                     identity["code_text"]
                     if identity["code_text"] is not None
-                    else f"translated:{block_text(block)}"
+                    else f"{self.translation_prefix}{block_text(block)}"
                 )
                 for token in [
                     *identity["equations"],
@@ -259,9 +261,8 @@ def _source(tmp_path: Path) -> TranslationSource:
     )
     paper = ArcPaperService(cache_root=tmp_path / "paper-cache")
     artifact = paper.import_source(markdown)
-    parsed = paper.parser.parse_source(artifact)
     rich = RichDocumentParserService(paper.repository).parse_source(artifact)
-    return TranslationSource(parsed=parsed, rich=rich)
+    return TranslationSource(rich)
 
 
 def _context(tmp_path: Path, run_id: str = "parent-run") -> RunContext:
@@ -373,10 +374,41 @@ def test_standalone_steps_use_verified_cross_run_results(tmp_path):
     )
     assert blocks_snapshot.status is RunStatus.SUCCEEDED
     blocks = service.result(blocks_snapshot.run_id)
-    assert isinstance(blocks, BlocksResult)
-    assert [item["block_id"] for item in blocks.translations] == [
+    assert isinstance(blocks, TranslationResult)
+    assert blocks.coverage == "document"
+    assert len(blocks.revision_artifacts) == len(source_blocks(source))
+    revisions = [
+        decode_fragment_revision(
+            payload.decode("utf-8"),
+            filename=Path(item.revision.path).name,
+        )
+        for item, payload in zip(
+            blocks.revision_artifacts,
+            service.revision_payloads(blocks_snapshot.run_id, blocks),
+            strict=True,
+        )
+    ]
+    assert [item.anchor.target_id for item in revisions] == [
         item["block_id"] for item in source_blocks(source)
     ]
+    assert all(
+        item.priority == 10
+        and item.role == "translation"
+        and item.anchor.related_block_ids == (item.anchor.target_id,)
+        for item in revisions
+    )
+    manifest = blocks.to_document()
+    assert manifest["schema_version"] == "arc.translate.translation_result.v1"
+    assert set(manifest) == {
+        "schema_version",
+        "source_language",
+        "target_language",
+        "mode",
+        "coverage",
+        "layer",
+        "revision_artifacts",
+    }
+    assert TranslationResult.from_document(manifest) == blocks
 
 
 def test_missing_or_unverified_prerequisite_never_runs_keyword_step(tmp_path):
@@ -583,8 +615,54 @@ def test_invalid_translation_draft_gets_one_fresh_retry(tmp_path):
         target_language="fr",
     )
 
-    assert isinstance(result, BlocksResult)
+    assert isinstance(result, TranslationResult)
+    assert result.coverage == "document"
     assert tasks.calls.count(TRANSLATION_PROMPT_VERSION) == 2
+
+
+def test_changed_translation_gets_a_distinct_fragment_identity(tmp_path) -> None:
+    source = _source(tmp_path)
+    language = LanguageResult(
+        source.document_digest,
+        source.source_digest,
+        "en",
+        "known",
+        1,
+        "fr",
+        "enabled",
+    )
+    glossary = GlossaryResult(
+        source.document_digest,
+        source.source_digest,
+        "fr",
+        1,
+        "d" * 64,
+        (),
+    )
+    first = TranslationWorkflowService(
+        FakeTasks(translation_prefix="first:")
+    ).translate_blocks(
+        _context(tmp_path, "first-generation"),
+        source,
+        language=language,
+        glossary=glossary,
+        target_language="fr",
+    )
+    second = TranslationWorkflowService(
+        FakeTasks(translation_prefix="second:")
+    ).translate_blocks(
+        _context(tmp_path, "second-generation"),
+        source,
+        language=language,
+        glossary=glossary,
+        target_language="fr",
+    )
+
+    assert isinstance(first, TranslationResult)
+    assert isinstance(second, TranslationResult)
+    assert first.layer.initial_revisions[0].fragment_id != (
+        second.layer.initial_revisions[0].fragment_id
+    )
 
 
 def test_block_selector_normalizes_order_and_filters_window_glossary(tmp_path):
@@ -632,10 +710,9 @@ def test_block_selector_normalizes_order_and_filters_window_glossary(tmp_path):
         target_language="fr",
         block_ids=[entropy_block["block_id"]],
     )
-    assert isinstance(result, BlocksResult)
-    assert [item["block_id"] for item in result.translations] == [
-        entropy_block["block_id"]
-    ]
+    assert isinstance(result, TranslationResult)
+    assert result.coverage == "selection"
+    assert len(result.revision_artifacts) == 1
     assert tasks.translation_glossaries == [["Entropy"]]
     assert tasks.prompt_glossary_fields == [
         [
@@ -683,21 +760,22 @@ def test_structural_figures_bypass_models_and_keep_ordered_coverage(tmp_path):
     assets.mkdir()
     (assets / "structural.png").write_bytes(b"\x89PNG structural")
     (assets / "captioned.png").write_bytes(b"\x89PNG captioned")
+    (assets / "alt.png").write_bytes(b"\x89PNG alt")
     markdown = tmp_path / "figures.md"
     markdown.write_text(
         "# Figures\n\n"
-        "![accessibility alt](images/structural.png)\n\n"
+        "![](images/structural.png)\n\n"
         "<details>\n<summary>natural_image</summary>\n\n"
         "Extractor-only sidecar text.\n</details>\n\n"
         "![private alt](images/captioned.png \"Visible scientific caption\")\n\n"
+        "![Accessibility language](images/alt.png)\n\n"
         "The surrounding prose remains translatable.\n",
         encoding="utf-8",
     )
     paper = ArcPaperService(cache_root=tmp_path / "figure-cache")
     artifact = paper.import_source(markdown)
     source = TranslationSource(
-        parsed=paper.parser.parse_source(artifact),
-        rich=RichDocumentParserService(paper.repository).parse_source(artifact),
+        RichDocumentParserService(paper.repository).parse_source(artifact)
     )
     blocks = source_blocks(source)
     structural = next(
@@ -711,6 +789,13 @@ def test_structural_figures_bypass_models_and_keep_ordered_coverage(tmp_path):
         for item in blocks
         if item["kind"] == "figure"
         and str(item["payload"]["caption"]).strip()
+    )
+    alt_only = next(
+        item
+        for item in blocks
+        if item["kind"] == "figure"
+        and str(item["payload"]["alt_text"]).strip()
+        == "Accessibility language"
     )
     language = LanguageResult(
         source.document_digest,
@@ -731,22 +816,26 @@ def test_structural_figures_bypass_models_and_keep_ordered_coverage(tmp_path):
     )
     tasks = FakeTasks()
 
+    context = _context(tmp_path, "figures")
     result = TranslationWorkflowService(tasks).translate_blocks(
-        _context(tmp_path, "figures"),
+        context,
         source,
         language=language,
         glossary=glossary,
         target_language="fr",
     )
 
-    assert isinstance(result, BlocksResult)
-    assert [item["block_id"] for item in result.translations] == [
-        item["block_id"] for item in blocks
+    assert isinstance(result, TranslationResult)
+    revision_block_ids = [
+        decode_fragment_revision(
+            context.artifacts.read_bytes(item.artifact).decode("utf-8"),
+            filename=Path(item.revision.path).name,
+        ).anchor.target_id
+        for item in result.revision_artifacts
     ]
-    translated = {
-        item["block_id"]: item["text"] for item in result.translations
-    }
-    assert translated[structural["block_id"]] == STRUCTURAL_FIGURE_PLACEHOLDER
+    assert structural["block_id"] not in revision_block_ids
+    assert captioned["block_id"] in revision_block_ids
+    assert alt_only["block_id"] in revision_block_ids
     prompted = [
         item for window in tasks.translation_blocks for item in window
     ]
@@ -758,7 +847,15 @@ def test_structural_figures_bypass_models_and_keep_ordered_coverage(tmp_path):
         item for item in prompted if item["block_id"] == captioned["block_id"]
     )
     assert prompted_caption["payload"] == {
-        "caption": "Visible scientific caption"
+        "caption": "Visible scientific caption",
+        "alt_text": "private alt",
+    }
+    prompted_alt = next(
+        item for item in prompted if item["block_id"] == alt_only["block_id"]
+    )
+    assert prompted_alt["payload"] == {
+        "caption": "",
+        "alt_text": "Accessibility language",
     }
     assert set(prompted_caption) == {
         "block_id",
@@ -777,15 +874,12 @@ def test_structural_figures_bypass_models_and_keep_ordered_coverage(tmp_path):
         ensure_ascii=False,
     )
     for private_value in (
-        "images/structural.png",
-        "images/captioned.png",
-        "accessibility alt",
-        "private alt",
-        "Extractor-only sidecar text",
-        "asset_digest",
-        "asset_target",
-        "alt_text",
-        "logical_name",
+            "images/structural.png",
+            "images/captioned.png",
+            "Extractor-only sidecar text",
+            "asset_digest",
+            "asset_target",
+            "logical_name",
         '"target"',
     ):
         assert private_value not in figure_prompts
@@ -801,13 +895,9 @@ def test_structural_figures_bypass_models_and_keep_ordered_coverage(tmp_path):
         target_language="fr",
         block_ids=[structural["block_id"]],
     )
-    assert isinstance(structural_only, BlocksResult)
-    assert structural_only.translations == (
-        {
-            "block_id": structural["block_id"],
-            "text": STRUCTURAL_FIGURE_PLACEHOLDER,
-        },
-    )
+    assert isinstance(structural_only, TranslationResult)
+    assert structural_only.coverage == "selection"
+    assert structural_only.revision_artifacts == ()
     assert structural_only_tasks.calls == []
 
 
@@ -860,8 +950,8 @@ def test_failed_review_can_accept_validated_pre_review_translation(tmp_path):
         glossary=glossary,
         target_language="fr",
     )
-    assert isinstance(resumed, BlocksResult)
-    assert len(resumed.translations) == len(source_blocks(source))
+    assert isinstance(resumed, TranslationResult)
+    assert len(resumed.revision_artifacts) == len(source_blocks(source))
     assert tasks.calls.count(REVIEW_PROMPT_VERSION) == 2
 
 
@@ -871,8 +961,7 @@ def test_review_prompt_obeys_the_same_complete_input_budget(tmp_path):
     paper = ArcPaperService(cache_root=tmp_path / "long-cache")
     artifact = paper.import_source(markdown)
     source = TranslationSource(
-        parsed=paper.parser.parse_source(artifact),
-        rich=RichDocumentParserService(paper.repository).parse_source(artifact),
+        RichDocumentParserService(paper.repository).parse_source(artifact)
     )
     result = TranslationWorkflowService(FakeTasks()).translate_blocks(
         _context(tmp_path, "review-budget"),
@@ -910,8 +999,7 @@ def test_translation_windows_reserve_space_for_review(tmp_path):
     paper = ArcPaperService(cache_root=tmp_path / "review-windows-cache")
     artifact = paper.import_source(markdown)
     source = TranslationSource(
-        parsed=paper.parser.parse_source(artifact),
-        rich=RichDocumentParserService(paper.repository).parse_source(artifact),
+        RichDocumentParserService(paper.repository).parse_source(artifact)
     )
     tasks = FakeTasks()
     result = TranslationWorkflowService(tasks).translate_blocks(
@@ -938,39 +1026,19 @@ def test_translation_windows_reserve_space_for_review(tmp_path):
         input_budget_bytes=4_800,
     )
 
-    assert isinstance(result, BlocksResult)
+    assert isinstance(result, TranslationResult)
     assert tasks.calls.count(TRANSLATION_PROMPT_VERSION) == 4
     assert tasks.calls.count(REVIEW_PROMPT_VERSION) == 4
 
 
-def test_pdf_without_text_layer_is_a_typed_source_failure(tmp_path):
+def test_non_rich_pdf_source_is_rejected(tmp_path):
     path = tmp_path / "scan.pdf"
     path.write_bytes(b"%PDF-fake")
-    artifact = SourceArtifact(
-        SourceFormat.PDF,
-        hashlib.sha256(b"%PDF-fake").hexdigest(),
-        len(b"%PDF-fake"),
-        "application/pdf",
-        SourceOrigin(SourceOriginKind.LOCAL_IMPORT, locator=str(path)),
-    )
-    parsed = ParsedDocument(
-        source=artifact,
-        metadata={"text_layer": False},
-    )
-
-    class Parser:
-        def parse_source(self, _artifact):
-            return parsed
-
-    class Paper:
-        parser = Parser()
-
-        def import_source(self, _path):
-            return artifact
+    paper = ArcPaperService(cache_root=tmp_path / "pdf-cache")
 
     try:
-        resolve_translation_source(Paper(), path)  # type: ignore[arg-type]
+        resolve_translation_source(paper, path)
     except TranslationSourceError as exc:
-        assert exc.code == "pdf_text_layer_missing"
+        assert exc.code == "rich_source_required"
     else:  # pragma: no cover
-        raise AssertionError("missing PDF text layer was accepted")
+        raise AssertionError("non-rich PDF source was accepted")

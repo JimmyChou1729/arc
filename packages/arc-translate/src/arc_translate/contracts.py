@@ -15,23 +15,20 @@ from arc_jobs import (
 )
 from arc_llm import LLMExecutionOptions, ModelSelection
 from arc_paper import (
-    ParsedDocument,
     RichDocument,
-    parsed_document_from_document,
-    parsed_document_to_document,
     rich_document_from_document,
     rich_document_to_document,
 )
 
 
-SOURCE_SCHEMA = "arc.translate.source.v1"
+SOURCE_SCHEMA = "arc.translate.source.v2"
 LANGUAGE_REQUEST_SCHEMA = "arc.translate.language_request.v1"
 GLOSSARY_REQUEST_SCHEMA = "arc.translate.glossary_request.v1"
 BLOCKS_REQUEST_SCHEMA = "arc.translate.blocks_request.v1"
 GENERATION_RECIPE_SCHEMA = "arc.translate.generation_recipe.v1"
 LANGUAGE_RESULT_SCHEMA = "arc.translate.language_result.v1"
 GLOSSARY_RESULT_SCHEMA = "arc.translate.glossary_result.v1"
-BLOCKS_RESULT_SCHEMA = "arc.translate.blocks_result.v1"
+TRANSLATION_RESULT_SCHEMA = "arc.translate.translation_result.v1"
 
 DEFAULT_GLOSSARY_INPUT_BUDGET_BYTES = 32_000
 DEFAULT_TRANSLATION_INPUT_BUDGET_BYTES = 32_000
@@ -41,38 +38,21 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 @dataclass(frozen=True)
 class TranslationSource:
-    """The standard parsed projection plus an optional rich-block projection."""
+    """The immutable RichDocument that exclusively anchors translation."""
 
-    parsed: ParsedDocument | None = None
-    rich: RichDocument | None = None
+    rich: RichDocument
 
     def __post_init__(self) -> None:
-        if self.parsed is None and self.rich is None:
-            raise ValueError("translation source requires parsed or rich content")
-        if self.parsed is not None and not isinstance(
-            self.parsed, ParsedDocument
-        ):
-            raise ValueError("parsed must be a ParsedDocument or None")
-        if self.rich is not None:
-            if not isinstance(self.rich, RichDocument):
-                raise ValueError("rich must be a RichDocument or None")
-            if self.parsed is not None and (
-                self.rich.source.content_identity
-                != self.parsed.source.content_identity
-            ):
-                raise ValueError("parsed and rich projections must share one source")
+        if not isinstance(self.rich, RichDocument):
+            raise ValueError("rich must be a RichDocument")
 
     @property
     def source_digest(self) -> str:
-        projection = self.parsed if self.parsed is not None else self.rich
-        assert projection is not None
-        return projection.source.artifact_digest
+        return self.rich.source.artifact_digest
 
     @property
     def document_digest(self) -> str:
-        projection = self.parsed if self.parsed is not None else self.rich
-        assert projection is not None
-        return projection.document_digest
+        return self.rich.document_digest
 
 
 @dataclass(frozen=True)
@@ -155,37 +135,18 @@ class ExecutionOptions:
 def source_to_document(source: TranslationSource) -> dict[str, JsonValue]:
     return {
         "schema_version": SOURCE_SCHEMA,
-        "parsed": (
-            parsed_document_to_document(source.parsed)
-            if source.parsed is not None
-            else None
-        ),
-        "rich": (
-            rich_document_to_document(source.rich)
-            if source.rich is not None
-            else None
-        ),
+        "rich": rich_document_to_document(source.rich),
     }
 
 
 def source_from_document(value: Mapping[str, Any]) -> TranslationSource:
-    document = _exact(value, {"schema_version", "parsed", "rich"}, "source")
+    document = _exact(value, {"schema_version", "rich"}, "source")
     if document["schema_version"] != SOURCE_SCHEMA:
         raise ValueError("unsupported translation source schema")
-    raw_parsed = document["parsed"]
-    if raw_parsed is not None and not isinstance(raw_parsed, Mapping):
-        raise ValueError("source parsed projection must be an object or null")
     raw_rich = document["rich"]
-    if raw_rich is not None and not isinstance(raw_rich, Mapping):
-        raise ValueError("source rich projection must be an object or null")
-    return TranslationSource(
-        (
-            parsed_document_from_document(raw_parsed)
-            if raw_parsed is not None
-            else None
-        ),
-        rich_document_from_document(raw_rich) if raw_rich is not None else None,
-    )
+    if not isinstance(raw_rich, Mapping):
+        raise ValueError("source rich projection must be an object")
+    return TranslationSource(rich_document_from_document(raw_rich))
 
 
 def artifact_source_to_document(
@@ -430,11 +391,11 @@ def _integer(value: Mapping[str, Any], key: str) -> int:
 
 
 __all__ = [
-    "BLOCKS_RESULT_SCHEMA",
     "DEFAULT_GLOSSARY_INPUT_BUDGET_BYTES",
     "DEFAULT_TRANSLATION_INPUT_BUDGET_BYTES",
     "GLOSSARY_RESULT_SCHEMA",
     "LANGUAGE_RESULT_SCHEMA",
+    "TRANSLATION_RESULT_SCHEMA",
     "BlocksRequest",
     "ExecutionOptions",
     "GenerationRecipe",

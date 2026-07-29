@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol, TypeAlias
 
 from arc_jobs import (
+    ArtifactRef,
     Awaiting,
     Failed,
     JsonValue,
@@ -20,6 +21,8 @@ from arc_jobs import (
     RunError,
     StoppedError,
     canonical_json_bytes,
+    decode_artifact_ref,
+    encode_artifact_ref,
 )
 from arc_llm import (
     JsonOutput,
@@ -36,11 +39,30 @@ from arc_llm import (
     decode_resume_input,
     resume_input_matches,
 )
+from arc_paper import RichBlockKind, rich_block_to_document
+from arc_render import (
+    AnchorKind,
+    FragmentAnchor,
+    FragmentRevision,
+    FragmentRevisionRef,
+    Layer,
+    anchor_block_from_rich_block,
+    block_text_to_markdown,
+    decode_fragment_revision,
+    encode_fragment_revision,
+    fragment_revision_filename,
+    fragment_revision_ref,
+    fragment_revision_ref_from_document,
+    fragment_revision_ref_to_document,
+    layer_from_document,
+    layer_to_document,
+    source_identity_from_rich_document,
+)
 
 from .contracts import (
-    BLOCKS_RESULT_SCHEMA,
     GLOSSARY_RESULT_SCHEMA,
     LANGUAGE_RESULT_SCHEMA,
+    TRANSLATION_RESULT_SCHEMA,
     TranslationSource,
 )
 from .prompts import (
@@ -240,74 +262,122 @@ class GlossaryResult:
 
 
 @dataclass(frozen=True)
-class BlocksResult:
-    document_digest: str
-    source_digest: str
+class TranslationRevisionArtifact:
+    revision: FragmentRevisionRef
+    artifact: ArtifactRef
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.revision, FragmentRevisionRef):
+            raise ValueError("revision must be a FragmentRevisionRef")
+        if not isinstance(self.artifact, ArtifactRef):
+            raise ValueError("artifact must be an ArtifactRef")
+        if self.artifact.media_type != "text/markdown":
+            raise ValueError("translation revision artifact must be Markdown")
+
+    def to_document(self) -> dict[str, JsonValue]:
+        return {
+            "revision": fragment_revision_ref_to_document(self.revision),
+            "artifact": encode_artifact_ref(self.artifact),
+        }
+
+    @classmethod
+    def from_document(
+        cls, value: Mapping[str, Any]
+    ) -> "TranslationRevisionArtifact":
+        _require_fields(
+            value, {"revision", "artifact"}, "translation revision artifact"
+        )
+        return cls(
+            fragment_revision_ref_from_document(value["revision"]),
+            decode_artifact_ref(value["artifact"]),
+        )
+
+
+@dataclass(frozen=True)
+class TranslationResult:
     source_language: str
     target_language: str
     mode: str
-    translations: tuple[Mapping[str, str], ...]
-    schema_version: str = BLOCKS_RESULT_SCHEMA
+    coverage: str
+    layer: Layer
+    revision_artifacts: tuple[TranslationRevisionArtifact, ...]
+    schema_version: str = TRANSLATION_RESULT_SCHEMA
 
     def __post_init__(self) -> None:
-        if self.schema_version != BLOCKS_RESULT_SCHEMA:
-            raise ValueError("unsupported blocks result schema")
+        if self.schema_version != TRANSLATION_RESULT_SCHEMA:
+            raise ValueError("unsupported translation result schema")
         if self.mode not in {"enabled", "skipped"}:
-            raise ValueError("blocks result mode is invalid")
-        values = tuple(dict(item) for item in self.translations)
-        for item in values:
-            if (
-                set(item) != {"block_id", "text"}
-                or not isinstance(item["block_id"], str)
-                or not item["block_id"]
-                or not isinstance(item["text"], str)
-                or not item["text"].strip()
-            ):
-                raise ValueError("translated block is invalid")
-        object.__setattr__(self, "translations", values)
+            raise ValueError("translation result mode is invalid")
+        if self.coverage not in {"document", "selection"}:
+            raise ValueError("translation result coverage is invalid")
+        if not isinstance(self.source_language, str) or not self.source_language:
+            raise ValueError("source_language must be non-empty")
+        if not isinstance(self.target_language, str) or not self.target_language:
+            raise ValueError("target_language must be non-empty")
+        if not isinstance(self.layer, Layer):
+            raise ValueError("layer must be an arc-render Layer")
+        artifacts = tuple(self.revision_artifacts)
+        if any(
+            not isinstance(item, TranslationRevisionArtifact)
+            for item in artifacts
+        ):
+            raise ValueError("revision_artifacts contains an invalid item")
+        refs = tuple(item.revision for item in artifacts)
+        if refs != self.layer.initial_revisions:
+            raise ValueError(
+                "revision artifacts must exactly match the ordered layer"
+            )
+        if self.mode == "skipped" and artifacts:
+            raise ValueError("skipped translation result must have no revisions")
+        object.__setattr__(self, "revision_artifacts", artifacts)
 
     def to_document(self) -> dict[str, JsonValue]:
         return {
             "schema_version": self.schema_version,
-            "document_digest": self.document_digest,
-            "source_digest": self.source_digest,
             "source_language": self.source_language,
             "target_language": self.target_language,
             "mode": self.mode,
-            "translations": [dict(item) for item in self.translations],
+            "coverage": self.coverage,
+            "layer": layer_to_document(self.layer),
+            "revision_artifacts": [
+                item.to_document() for item in self.revision_artifacts
+            ],
         }
 
     @classmethod
-    def from_document(cls, value: Mapping[str, Any]) -> "BlocksResult":
+    def from_document(cls, value: Mapping[str, Any]) -> "TranslationResult":
         _require_fields(
             value,
             {
                 "schema_version",
-                "document_digest",
-                "source_digest",
                 "source_language",
                 "target_language",
                 "mode",
-                "translations",
+                "coverage",
+                "layer",
+                "revision_artifacts",
             },
-            "blocks result",
+            "translation result",
         )
-        translations = _mapping_list(
-            value["translations"], "translated blocks"
+        artifacts = _mapping_list(
+            value["revision_artifacts"], "translation revision artifacts"
         )
         return cls(
-            document_digest=_string(value, "document_digest"),
-            source_digest=_string(value, "source_digest"),
             source_language=_string(value, "source_language"),
             target_language=_string(value, "target_language"),
             mode=_string(value, "mode"),
-            translations=tuple(translations),  # type: ignore[arg-type]
+            coverage=_string(value, "coverage"),
+            layer=layer_from_document(value["layer"]),
+            revision_artifacts=tuple(
+                TranslationRevisionArtifact.from_document(item)
+                for item in artifacts
+            ),
             schema_version=_string(value, "schema_version"),
         )
 
 
 WorkflowResult: TypeAlias = (
-    LanguageResult | GlossaryResult | BlocksResult | Paused | RunError
+    LanguageResult | GlossaryResult | TranslationResult | Paused | RunError
 )
 
 
@@ -424,10 +494,6 @@ class TranslationWorkflowService:
                     "keyword_provider_missing",
                     "glossary generation requires an arc-paper keyword provider",
                 )
-            keyword_source = (
-                source.parsed if source.parsed is not None else source.rich
-            )
-            assert keyword_source is not None
             try:
                 keyword_options: dict[str, Any] = {}
                 if keyword_structure is not None:
@@ -435,7 +501,7 @@ class TranslationWorkflowService:
                     keyword_options["section_ids"] = keyword_section_ids
                 keyword_outcome = self.keyword_provider.extract_keywords(
                     context,
-                    keyword_source,
+                    source.rich,
                     approx_count=approx_count,
                     model=model,
                     resume_input=(
@@ -568,7 +634,7 @@ class TranslationWorkflowService:
         input_budget_bytes: int = 32_000,
         block_ids: Sequence[str] | None = None,
         artifact_prefix: str = "translation",
-    ) -> BlocksResult | Paused | RunError:
+    ) -> TranslationResult | Paused | RunError:
         _validate_language_binding(language, source, target_language)
         _validate_glossary_binding(glossary, source, target_language)
         all_blocks = source_blocks(source)
@@ -576,24 +642,35 @@ class TranslationWorkflowService:
             blocks = _select_blocks(all_blocks, block_ids)
         except TranslationWorkflowError as exc:
             return RunError(exc.code, str(exc))
+        coverage = "document" if block_ids is None else "selection"
         artifact_id = f"{artifact_prefix}/result"
         existing = context.artifacts.find(artifact_id)
         if existing is not None:
-            result = BlocksResult.from_document(
-                _read_json_artifact(context, existing, "blocks result")
+            result = TranslationResult.from_document(
+                _read_json_artifact(context, existing, "translation result")
             )
-            _validate_blocks_binding(
-                result, source, language, target_language, blocks
+            _validate_translation_result(
+                context,
+                result,
+                source,
+                language,
+                target_language,
+                blocks,
+                expected_coverage=coverage,
             )
             return result
         if language.mode == "skipped":
-            result = BlocksResult(
-                document_digest=source.document_digest,
-                source_digest=source.source_digest,
+            result = TranslationResult(
                 source_language=language.language_tag,
                 target_language=target_language,
                 mode="skipped",
-                translations=(),
+                coverage=coverage,
+                layer=Layer(
+                    source_identity_from_rich_document(source.rich),
+                    "arc-translate",
+                    (),
+                ),
+                revision_artifacts=(),
             )
             context.artifacts.publish_json(artifact_id, result.to_document())
             return result
@@ -764,15 +841,24 @@ class TranslationWorkflowService:
             blocks,
             translations,
         )
-        result = BlocksResult(
-            document_digest=source.document_digest,
-            source_digest=source.source_digest,
+        result = _publish_translation_result(
+            context,
+            source,
+            translations=merged_translations,
             source_language=language.language_tag,
             target_language=target_language,
-            mode="enabled",
-            translations=merged_translations,
+            artifact_prefix=artifact_prefix,
+            coverage=coverage,
         )
-        _validate_complete_coverage(result, blocks)
+        _validate_translation_result(
+            context,
+            result,
+            source,
+            language,
+            target_language,
+            blocks,
+            expected_coverage=coverage,
+        )
         context.artifacts.publish_json(artifact_id, result.to_document())
         return result
 
@@ -1411,7 +1497,33 @@ def _is_structural_figure(block: Mapping[str, Any]) -> bool:
             "source_block_invalid",
             "source block payload must be an object",
         )
-    return not str(payload.get("caption", "")).strip()
+    return not (
+        str(payload.get("caption", "")).strip()
+        or str(payload.get("alt_text", "")).strip()
+    )
+
+
+def _is_nonlinguistic_media_block(block: Mapping[str, Any]) -> bool:
+    """Return whether a source media block has no language-bearing content."""
+
+    return _is_structural_figure(block)
+
+
+def _is_nonlinguistic_media_translation(
+    block: Mapping[str, Any], text: str
+) -> bool:
+    if not _is_nonlinguistic_media_block(block):
+        return False
+    payload = block.get("payload")
+    assert isinstance(payload, Mapping)
+    marker = text.strip()
+    structural_markers = {
+        STRUCTURAL_FIGURE_PLACEHOLDER,
+        str(payload.get("target", "")).strip(),
+        str(payload.get("asset_digest", "")).strip(),
+    }
+    structural_markers.discard("")
+    return marker in structural_markers
 
 
 def _merge_structural_figure_translations(
@@ -1706,44 +1818,192 @@ def _validate_glossary_binding(
         )
 
 
-def _validate_blocks_binding(
-    result: BlocksResult,
+def _validate_translation_result(
+    context: RunContext,
+    result: TranslationResult,
     source: TranslationSource,
     language: LanguageResult,
     target_language: str,
     blocks: Sequence[Mapping[str, Any]],
+    *,
+    expected_coverage: str,
 ) -> None:
     if (
-        result.document_digest != source.document_digest
-        or result.source_digest != source.source_digest
+        result.layer.source
+        != source_identity_from_rich_document(source.rich)
+        or result.layer.producer != "arc-translate"
         or result.source_language != language.language_tag
         or result.target_language != target_language
         or result.mode != language.mode
+        or result.coverage != expected_coverage
     ):
         raise TranslationWorkflowError(
-            "blocks_result_binding_mismatch",
-            "blocks result does not match source, language, or target",
+            "translation_result_binding_mismatch",
+            "translation result does not match source, language, or target",
         )
     if result.mode == "skipped":
-        if result.translations:
+        if result.revision_artifacts:
             raise TranslationWorkflowError(
                 "translation_coverage_invalid",
                 "skipped translation result must be empty",
             )
         return
-    _validate_complete_coverage(result, blocks)
-
-
-def _validate_complete_coverage(
-    result: BlocksResult, blocks: Sequence[Mapping[str, Any]]
-) -> None:
-    expected = [str(item["block_id"]) for item in blocks]
-    actual = [str(item["block_id"]) for item in result.translations]
+    expected = [
+        str(item["block_id"])
+        for item in blocks
+        if not _is_nonlinguistic_media_block(item)
+    ]
+    actual: list[str] = []
+    source_blocks_by_id = {
+        block.block_id: block for block in source.rich.blocks
+    }
+    for item in result.revision_artifacts:
+        try:
+            payload = context.artifacts.read_bytes(item.artifact).decode(
+                "utf-8"
+            )
+            revision = decode_fragment_revision(
+                payload,
+                filename=Path(item.revision.path).name,
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise TranslationWorkflowError(
+                "translation_revision_invalid",
+                "translation revision artifact is unreadable or invalid",
+            ) from exc
+        if (
+            revision.semantic_digest != item.revision.semantic_digest
+            or revision.fragment_id != item.revision.fragment_id
+            or revision.source != result.layer.source
+            or revision.priority != 10
+            or revision.role != "translation"
+            or revision.language != target_language
+            or revision.anchor.kind is not AnchorKind.BLOCK
+        ):
+            raise TranslationWorkflowError(
+                "translation_revision_binding_mismatch",
+                "translation revision does not match its result manifest",
+            )
+        block_id = revision.anchor.target_id
+        rich_block = source_blocks_by_id.get(block_id)
+        if (
+            rich_block is None
+            or revision.anchor.related_block_ids != (block_id,)
+            or revision.anchor.related_blocks[0]
+            != anchor_block_from_rich_block(rich_block)
+        ):
+            raise TranslationWorkflowError(
+                "translation_revision_binding_mismatch",
+                "translation revision anchor does not match its RichDocument block",
+            )
+        rich_block_document = rich_block_to_document(rich_block)
+        try:
+            if rich_block.kind is RichBlockKind.CODE:
+                expected_code = block_text_to_markdown(
+                    rich_block,
+                    str(rich_block.payload["text"]),
+                )
+                if revision.markdown_body != expected_code:
+                    raise TranslationSourceError(
+                        "translation_source_identity_invalid",
+                        f"translation changed code text for {block_id}",
+                    )
+            else:
+                validate_translation_text(
+                    revision.markdown_body,
+                    rich_block_document,
+                )
+        except TranslationSourceError as exc:
+            raise TranslationWorkflowError(exc.code, str(exc)) from exc
+        actual.append(block_id)
     if actual != expected:
         raise TranslationWorkflowError(
             "translation_coverage_invalid",
             "translation result must cover all source blocks in order",
         )
+
+
+def _publish_translation_result(
+    context: RunContext,
+    source: TranslationSource,
+    *,
+    translations: Sequence[Mapping[str, str]],
+    source_language: str,
+    target_language: str,
+    artifact_prefix: str,
+    coverage: str,
+) -> TranslationResult:
+    rich_blocks = {item.block_id: item for item in source.rich.blocks}
+    source_identity = source_identity_from_rich_document(source.rich)
+    revisions: list[FragmentRevisionRef] = []
+    artifacts: list[TranslationRevisionArtifact] = []
+    for translated in translations:
+        block_id = str(translated["block_id"])
+        block = rich_blocks.get(block_id)
+        if block is None:
+            raise TranslationWorkflowError(
+                "translation_coverage_invalid",
+                f"translation refers to unknown source block {block_id}",
+            )
+        block_document = rich_block_to_document(block)
+        if _is_nonlinguistic_media_translation(
+            block_document, str(translated["text"])
+        ):
+            continue
+        markdown_body = block_text_to_markdown(
+            block,
+            str(translated["text"]),
+        )
+        fragment_material = {
+            "producer": "arc-translate",
+            "source": source_identity.rich_document_digest,
+            "block_id": block_id,
+            "target_language": target_language,
+            "markdown_body": markdown_body,
+        }
+        fragment_digest = hashlib.sha256(
+            canonical_json_bytes(fragment_material)
+        ).hexdigest()
+        revision = FragmentRevision(
+            source=source_identity,
+            fragment_id=f"translation-{fragment_digest[:32]}",
+            revision=1,
+            parent_semantic_digest=None,
+            anchor=FragmentAnchor(
+                AnchorKind.BLOCK,
+                block_id,
+                (anchor_block_from_rich_block(block),),
+            ),
+            priority=10,
+            role="translation",
+            language=target_language,
+            title=None,
+            citation_ids=(),
+            provenance={
+                "producer": "arc-translate",
+                "source_language": source_language,
+                "translation_mode": "enabled",
+            },
+            markdown_body=markdown_body,
+        )
+        filename = fragment_revision_filename(revision)
+        path = f"fragments/{revision.fragment_id}/{filename}"
+        reference = fragment_revision_ref(path, revision)
+        artifact = context.artifacts.publish_bytes(
+            f"{artifact_prefix}/fragments/{revision.fragment_id}/revision-000001",
+            encode_fragment_revision(revision).encode("utf-8"),
+            media_type="text/markdown",
+        )
+        revisions.append(reference)
+        artifacts.append(TranslationRevisionArtifact(reference, artifact))
+    return TranslationResult(
+        source_language=source_language,
+        target_language=target_language,
+        mode="enabled",
+        coverage=coverage,
+        layer=Layer(source_identity, "arc-translate", tuple(revisions)),
+        revision_artifacts=tuple(artifacts),
+    )
 
 
 def _awaiting(outcome: LLMPaused) -> Awaiting:
@@ -1838,10 +2098,11 @@ def _is_sha256(value: str) -> bool:
 
 
 __all__ = [
-    "BlocksResult",
     "GlossaryResult",
     "KeywordProvider",
     "LanguageResult",
+    "TranslationResult",
+    "TranslationRevisionArtifact",
     "REVIEW_SUPERVISION_SCHEMA",
     "TranslationWorkflowError",
     "TranslationWorkflowService",

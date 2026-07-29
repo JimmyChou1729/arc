@@ -2,9 +2,9 @@
 
 `arc-translate` owns reusable scientific language detection, LLM-reviewed
 bilingual glossary generation, source-block translation, and translation
-review over verified `arc-paper` documents. It uses `arc-jobs` for durable
-execution and `arc-llm` for model calls; Companion rendering is outside this
-package.
+review over verified `arc-paper.RichDocument` sources. It uses `arc-jobs` for
+durable execution, `arc-llm` for model calls, and publishes native
+`arc-render` fragment revisions plus a translation Layer.
 
 ## Quick start
 
@@ -23,8 +23,19 @@ three independent stages, their prerequisites, and durable project controls.
 
 `--paper-cache-root` is optional and otherwise resolves to ARC's shared paper
 cache. Durable state is project-local under `<project-dir>/.arc/translate/`.
-Each successful step publishes the human-readable
-`<project-dir>/translation.html`; no Markdown-only output is delivered.
+The final translation step publishes immutable revisions below
+`<project-dir>/fragments/` and
+`<project-dir>/translation.layer.json`. Language and glossary steps remain
+durable prerequisites and do not publish a reader delivery. Compose the Layer
+with `arc-render` to produce standalone reader HTML.
+
+Each translation revision is bound to exactly one source RichDocument block,
+has priority `10`, and preserves the block locator and content fingerprint.
+Full-document results are publishable Layers. The lower-level selected-block
+mode is an orchestration result for callers such as Companion and cannot
+replace `translation.layer.json`.
+Source figures or media with no language-bearing caption or alt text do not
+produce visible translation fragments; their assets remain source-owned.
 
 Generation and resume commands accept `--host-authority`. Set
 `<host-authority>` once per run: use `unrestricted` only when the host

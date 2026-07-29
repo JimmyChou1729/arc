@@ -75,8 +75,8 @@ class TranslationProject:
         return self.runtime_root / "jobs"
 
     @property
-    def delivery_html(self) -> Path:
-        return self.root / "translation.html"
+    def translation_layer(self) -> Path:
+        return self.root / "translation.layer.json"
 
     @property
     def current_run_id(self) -> str | None:

@@ -11,10 +11,12 @@ from typing import Any
 from arc_jobs import canonical_json_bytes
 from arc_paper import (
     ArcPaperService,
+    ParseError,
     RichBlock,
     RichBlockKind,
     RichDocumentParserService,
-    SourceFormat,
+    RichDocumentValidationError,
+    SourceRepositoryError,
     rich_block_to_document,
 )
 
@@ -41,37 +43,34 @@ def resolve_translation_source(
     source_text = str(source)
     path = Path(source_text)
     artifact = (
-        paper.import_source(path)
+        paper.repository.import_path(path)
         if path.is_file()
         else paper.fetch_arxiv_auto(source_text, refresh=refresh)
     )
-    parsed = paper.parser.parse_source(artifact)
-    if artifact.source_format is SourceFormat.PDF:
-        if not bool(parsed.metadata.get("text_layer")):
-            raise TranslationSourceError(
-                "pdf_text_layer_missing",
-                "PDF source has no extractable text layer",
-            )
-        if not _parsed_text_values(parsed):
-            raise TranslationSourceError(
-                "pdf_text_layer_missing",
-                "PDF source has no extractable text content",
-            )
-        return TranslationSource(parsed=parsed)
-    rich = RichDocumentParserService(paper.repository).parse_source(artifact)
+    try:
+        rich = RichDocumentParserService(paper.repository).parse_source(
+            artifact
+        )
+    except (
+        ParseError,
+        RichDocumentValidationError,
+        SourceRepositoryError,
+    ) as exc:
+        raise TranslationSourceError(
+            getattr(exc, "code", "rich_source_required"),
+            str(exc),
+        ) from exc
     if not rich.blocks:
         raise TranslationSourceError(
             "source_content_empty", "source contains no translatable blocks"
         )
-    return TranslationSource(parsed=parsed, rich=rich)
+    return TranslationSource(rich)
 
 
 def source_blocks(source: TranslationSource) -> tuple[dict[str, Any], ...]:
-    """Return exact rich blocks, or deterministic PDF text blocks."""
+    """Return exact blocks from the source RichDocument."""
 
-    if source.rich is not None:
-        return tuple(rich_block_to_document(item) for item in source.rich.blocks)
-    return _pdf_blocks(source)
+    return tuple(rich_block_to_document(item) for item in source.rich.blocks)
 
 
 def deterministic_language_samples(
@@ -83,11 +82,7 @@ def deterministic_language_samples(
 
     if maximum_characters < 3:
         raise ValueError("maximum_characters must be at least three")
-    values = (
-        [_rich_block_text(item) for item in source.rich.blocks]
-        if source.rich is not None
-        else _parsed_text_values(_require_parsed(source))
-    )
+    values = [_rich_block_text(item) for item in source.rich.blocks]
     joined = "\n\n".join(value for value in values if value.strip())
     if not joined:
         return ("",)
@@ -204,7 +199,10 @@ def prompt_block(block: Mapping[str, Any]) -> dict[str, Any]:
         "ordinal": block.get("ordinal"),
         "kind": "figure",
         "section_path": block.get("section_path"),
-        "payload": {"caption": str(payload.get("caption", ""))},
+        "payload": {
+            "caption": str(payload.get("caption", "")),
+            "alt_text": str(payload.get("alt_text", "")),
+        },
         "source_identity": {
             "equations": [],
             "code_text": None,
@@ -238,7 +236,8 @@ def block_text(block: Mapping[str, Any]) -> str:
             if isinstance(row, Sequence) and not isinstance(row, (str, bytes))
         )
     if kind == "figure":
-        return str(payload.get("caption", ""))
+        caption = str(payload.get("caption", "")).strip()
+        return caption or str(payload.get("alt_text", ""))
     raise TranslationSourceError(
         "source_block_invalid", f"unsupported block kind: {kind}"
     )
@@ -246,77 +245,6 @@ def block_text(block: Mapping[str, Any]) -> str:
 
 def block_digest(blocks: Sequence[Mapping[str, Any]]) -> str:
     return hashlib.sha256(canonical_json_bytes(list(blocks))).hexdigest()
-
-
-def _pdf_blocks(source: TranslationSource) -> tuple[dict[str, Any], ...]:
-    parsed = _require_parsed(source)
-    blocks: list[dict[str, Any]] = []
-    units: list[tuple[str, str, int | None]] = []
-    if parsed.sections:
-        units.extend(
-            (item.section_id, item.text, item.page_start)
-            for item in parsed.sections
-            if item.text.strip()
-        )
-    else:
-        units.extend(
-            (f"page-{item.page_number}", item.text, item.page_number)
-            for item in parsed.pages
-            if item.text.strip()
-        )
-    for ordinal, (unit_id, text, page) in enumerate(units):
-        identity = {
-            "source_digest": source.source_digest,
-            "unit_id": unit_id,
-            "ordinal": ordinal,
-            "text": text,
-        }
-        digest = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()[:24]
-        blocks.append(
-            {
-                "block_id": f"pdf-block-{digest}",
-                "ordinal": ordinal,
-                "kind": "paragraph",
-                "section_path": [unit_id],
-                "locator": {
-                    "source_format": "pdf",
-                    "line_start": None,
-                    "column_start": None,
-                    "line_end": None,
-                    "column_end": None,
-                    "selector": f"page:{page}" if page is not None else "",
-                    "source_id": unit_id,
-                },
-                "payload": {
-                    "text": text,
-                    "links": [],
-                    "inline_math": [],
-                    "inline_spans": [],
-                },
-            }
-        )
-    if not blocks:
-        raise TranslationSourceError(
-            "pdf_text_layer_missing",
-            "PDF source has no extractable text content",
-        )
-    return tuple(blocks)
-
-
-def _parsed_text_values(parsed: Any) -> list[str]:
-    values = [item.text for item in parsed.sections if item.text.strip()]
-    if not values:
-        values = [item.text for item in parsed.pages if item.text.strip()]
-    return values
-
-
-def _require_parsed(source: TranslationSource) -> Any:
-    if source.parsed is None:
-        raise TranslationSourceError(
-            "parsed_source_required",
-            "this source operation requires a ParsedDocument",
-        )
-    return source.parsed
 
 
 def _rich_block_text(block: RichBlock) -> str:

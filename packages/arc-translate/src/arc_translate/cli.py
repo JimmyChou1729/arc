@@ -15,6 +15,7 @@ from arc_jobs import (
     CommandResult,
     CommandRun,
     CommandStatus,
+    CommandWarning,
     command_result_from_snapshot,
     command_result_json,
     snapshot_data,
@@ -31,13 +32,13 @@ from .contracts import (
 )
 from .delivery import (
     TranslationDeliveryError,
-    publish_translation_html,
-    validate_translation_html,
+    publish_translation_layer,
+    validate_translation_layer,
 )
 from .project import TranslationProject, TranslationProjectError
 from .service import TranslationService, TranslationServiceError
 from .source import TranslationSourceError, resolve_translation_source
-from .workflow import GlossaryResult, LanguageResult
+from .workflow import GlossaryResult, LanguageResult, TranslationResult
 
 
 class _UsageError(ValueError):
@@ -341,14 +342,20 @@ def _status(args: argparse.Namespace) -> CommandResult:
             steps[step] = snapshot_data(service.inspect(selected).snapshot)
     selected_snapshot = service.inspect(run_id).snapshot
     delivery_ok = (
-        selected_snapshot.status.value == "succeeded"
-        and project.delivery_html.is_file()
+        project.current_step == "blocks"
+        and selected_snapshot.status.value == "succeeded"
+        and project.translation_layer.is_file()
     )
     warnings = base.warnings
-    if selected_snapshot.status.value == "succeeded" and not delivery_ok:
+    if (
+        project.current_step == "blocks"
+        and selected_snapshot.status.value == "succeeded"
+        and not delivery_ok
+    ):
         warnings = (*warnings, CommandWarning(
             "delivery_missing",
-            "successful translation has no visible HTML delivery; resume or rerun its publishing step",
+            "successful translation has no visible arc-render Layer; "
+            "resume or rerun its publishing step",
         ))
     return CommandResult(
         base.status,
@@ -359,7 +366,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
             "steps": steps,
         },
         artifacts=(
-            CommandArtifact("html", run_id, str(project.delivery_html)),
+            CommandArtifact("layer", run_id, str(project.translation_layer)),
         )
         if delivery_ok
         else (),
@@ -410,8 +417,9 @@ def _validate(args: argparse.Namespace) -> CommandResult:
     if report.ok:
         snapshot = service.inspect(run_id).snapshot
         if snapshot.status.value == "succeeded":
-            service.result(run_id)
-            validate_translation_html(project, run_id=run_id)
+            result = service.result(run_id)
+            if isinstance(result, TranslationResult):
+                validate_translation_layer(project, result=result)
         return CommandResult(
             CommandStatus.COMPLETED,
             run=CommandRun(snapshot.run_id, snapshot.revision),
@@ -419,15 +427,19 @@ def _validate(args: argparse.Namespace) -> CommandResult:
                 "valid": True,
                 "issues": [],
                 "delivery": (
-                    {"html": str(project.delivery_html)}
+                    {"layer": str(project.translation_layer)}
                     if snapshot.status.value == "succeeded"
+                    and isinstance(result, TranslationResult)
                     else None
                 ),
             },
             artifacts=(
-                CommandArtifact("html", run_id, str(project.delivery_html)),
+                CommandArtifact(
+                    "layer", run_id, str(project.translation_layer)
+                ),
             )
             if snapshot.status.value == "succeeded"
+            and isinstance(result, TranslationResult)
             else (),
         )
     return _failed(
@@ -462,19 +474,46 @@ def _snapshot_result(
             error=base.error,
             resume=base.resume,
         )
-    delivery = publish_translation_html(
+    result = service.result(snapshot.run_id)
+    if not isinstance(result, TranslationResult):
+        return CommandResult(
+            base.status,
+            run=base.run,
+            data={"run": snapshot_data(snapshot)},
+            artifacts=base.artifacts,
+            warnings=base.warnings,
+            error=base.error,
+            resume=base.resume,
+        )
+    delivery = publish_translation_layer(
         project,
-        run_id=snapshot.run_id,
-        result=service.result(snapshot.run_id),
+        result=result,
+        revision_payloads=service.revision_payloads(
+            snapshot.run_id, result
+        ),
+    )
+    revision_artifacts = tuple(
+        CommandArtifact(
+            "fragment-revision",
+            item.revision.fragment_id,
+            str(project.root / item.revision.path),
+        )
+        for item in result.revision_artifacts
     )
     return CommandResult(
         base.status,
         run=base.run,
         data={
             "run": snapshot_data(snapshot),
-            "delivery": {"html": str(delivery)},
+            "delivery": {
+                "layer": str(delivery),
+                "revision_count": len(result.revision_artifacts),
+            },
         },
-        artifacts=(CommandArtifact("html", snapshot.run_id, str(delivery)),),
+        artifacts=(
+            CommandArtifact("layer", snapshot.run_id, str(delivery)),
+            *revision_artifacts,
+        ),
         warnings=base.warnings,
         error=base.error,
         resume=base.resume,
