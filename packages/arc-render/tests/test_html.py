@@ -31,6 +31,7 @@ from arc_render import (
 from arc_render.html import (
     HTMLRenderError,
     render_publication_html,
+    validate_standalone_html,
 )
 from arc_render.workspace import (
     relative_fragment_path,
@@ -140,7 +141,7 @@ def _revision(
         language="zh-CN",
         title=None,
         citation_ids=("ref-1",),
-        provenance={"producer": "test"},
+        provenance={"producer": "arc-translate"},
         markdown_body=body,
     )
 
@@ -209,7 +210,7 @@ def _workspace(
     if add_second_revision:
         second = _revision(
             document,
-            body="修订后的译文。",
+            body="修订后的译文 [@ref-1]。",
             revision=2,
             parent=first.semantic_digest,
         )
@@ -259,9 +260,10 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert payload["publication"]["publication_digest"] == (
         publication.publication_digest
     )
+    assert payload["selected_revision_digests"] == [selected.semantic_digest]
     revisions = payload["revisions"]
     assert [item["metadata"]["revision"] for item in revisions] == [1, 2]
-    assert revisions[-1]["markdown_body"] == "修订后的译文。"
+    assert revisions[-1]["markdown_body"] == "修订后的译文 [@ref-1]。"
 
 
 def test_source_only_publication_renders_without_layers(tmp_path: Path) -> None:
@@ -353,3 +355,131 @@ def test_fragment_provenance_must_match_current_rich_source(tmp_path: Path) -> N
 
     with pytest.raises(HTMLRenderError, match="provenance differs"):
         render_publication_html(publication_path, tmp_path / "reader.html")
+
+
+def test_fragment_markdown_citations_must_match_declared_ids(
+    tmp_path: Path,
+) -> None:
+    document = _rich_document()
+    revision = _revision(document, body="正文含有 [@other]。")
+    path = write_fragment_revision(tmp_path, revision)
+    layer = Layer(
+        revision.source,
+        "arc-translate",
+        (
+            fragment_revision_ref(
+                relative_fragment_path(tmp_path, path),
+                revision,
+            ),
+        ),
+    )
+    write_layer(tmp_path / "layers" / "translation.json", layer)
+    publication = Publication(
+        document,
+        layers=(layer.reference("layers/translation.json"),),
+        bibliography=(
+            {
+                "evidence_id": "ref-1",
+                "title": "Reference",
+                "source": "https://example.test/reference",
+            },
+            {
+                "evidence_id": "other",
+                "title": "Other",
+                "source": "https://example.test/other",
+            },
+        ),
+    )
+    publication_path = tmp_path / "publication.json"
+    write_publication(publication_path, publication)
+
+    with pytest.raises(HTMLRenderError, match="Markdown citations"):
+        render_publication_html(publication_path, tmp_path / "reader.html")
+
+
+def test_layer_rejects_contradictory_fragment_producer(
+    tmp_path: Path,
+) -> None:
+    document = _rich_document()
+    normal = _revision(document)
+    revision = FragmentRevision(
+        source=normal.source,
+        fragment_id=normal.fragment_id,
+        revision=normal.revision,
+        parent_semantic_digest=normal.parent_semantic_digest,
+        anchor=normal.anchor,
+        priority=normal.priority,
+        role=normal.role,
+        language=normal.language,
+        title=normal.title,
+        citation_ids=normal.citation_ids,
+        provenance={"producer": "another-producer"},
+        markdown_body=normal.markdown_body,
+    )
+    path = write_fragment_revision(tmp_path, revision)
+    layer = Layer(
+        revision.source,
+        "arc-translate",
+        (
+            fragment_revision_ref(
+                relative_fragment_path(tmp_path, path),
+                revision,
+            ),
+        ),
+    )
+    write_layer(tmp_path / "layers" / "translation.json", layer)
+    publication_path = tmp_path / "publication.json"
+    write_publication(
+        publication_path,
+        Publication(
+            document,
+            layers=(layer.reference("layers/translation.json"),),
+            bibliography=(
+                {
+                    "evidence_id": "ref-1",
+                    "title": "Reference",
+                    "source": "https://example.test/reference",
+                },
+            ),
+        ),
+    )
+
+    with pytest.raises(HTMLRenderError, match="layer producer"):
+        render_publication_html(publication_path, tmp_path / "reader.html")
+
+
+@pytest.mark.parametrize("tamper", ["revision", "resource"])
+def test_standalone_validation_detects_payload_tampering(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    publication_path, publication, _selected = _workspace(
+        tmp_path,
+        asset_payload=b"\x89PNG\r\n\x1a\nvalidated",
+    )
+    output = tmp_path / "reader.html"
+    render_publication_html(publication_path, output)
+    text = output.read_text(encoding="utf-8")
+    payload = _payload(text)
+    if tamper == "revision":
+        payload["revisions"][0]["markdown_body"] = "tampered"
+    else:
+        payload["resources"][0]["data_uri"] = "data:image/png;base64,AAAA"
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).replace("</script", r"<\/script")
+    text = re.sub(
+        r'(<script id="arc-render-payload" type="application/json">)'
+        r".*?(</script>)",
+        lambda match: match.group(1) + encoded + match.group(2),
+        text,
+        count=1,
+        flags=re.DOTALL,
+    )
+    output.write_text(text, encoding="utf-8")
+
+    with pytest.raises(HTMLRenderError, match="fragment identity|resource"):
+        validate_standalone_html(publication, output)

@@ -9,6 +9,7 @@
     md: null,
     revisions: new Map(),
     selected: new Map(),
+    embeddedRevisions: [],
     diagnostics: [],
     fileDiagnostics: [],
     directory: null,
@@ -73,7 +74,12 @@
       definition: "释义",
       noDirectoryApi: "当前浏览器不支持本地目录编辑；阅读功能不受影响。",
       saveSuccess: "新版本已保存。",
-      loading: "正在读取外挂版本……"
+      loading: "正在读取外挂版本……",
+      historyChanged: "目录中的当前版本已变化；请关闭编辑器并重新打开后再保存。",
+      unknownCitation: "引用不在当前参考文献中：",
+      compareCurrent: "当前版本",
+      compareHistorical: "历史版本",
+      restore: "恢复为新版本"
     } : {
       contents: "Contents",
       collapse: "Collapse contents",
@@ -104,7 +110,12 @@
       definition: "Definition",
       noDirectoryApi: "This browser cannot edit a local directory; reading is unaffected.",
       saveSuccess: "A new revision was saved.",
-      loading: "Loading overlay revisions…"
+      loading: "Loading overlay revisions…",
+      historyChanged: "The current directory revision changed; close and reopen the editor before saving.",
+      unknownCitation: "Citation is absent from the bibliography: ",
+      compareCurrent: "Current revision",
+      compareHistorical: "Historical revision",
+      restore: "Restore as new revision"
     };
     Object.keys(publication.labels || {}).forEach(function (key) {
       defaults[key] = publication.labels[key];
@@ -259,7 +270,11 @@
   }
 
   function normalizeMarkdown(value) {
-    return String(value || "").replace(/\r\n?/g, "\n").normalize("NFC");
+    var normalized = String(value || "").replace(/\r\n?/g, "\n").normalize("NFC");
+    if (normalized.indexOf("\u0000") >= 0) {
+      throw new Error("Markdown body cannot contain NUL");
+    }
+    return normalized;
   }
 
   function removeVisibleHtmlTags(root) {
@@ -274,8 +289,15 @@
   }
 
   function initialRevisions() {
-    (state.payload.revisions || []).forEach(addRevision);
+    state.embeddedRevisions = (state.payload.revisions || []).slice();
+    resetRevisionState();
     resolveAll();
+  }
+
+  function resetRevisionState() {
+    state.revisions = new Map();
+    state.fileDiagnostics = [];
+    state.embeddedRevisions.forEach(addRevision);
   }
 
   function addRevision(raw) {
@@ -284,15 +306,12 @@
       revision.markdown_body || "" : raw.markdown_body;
     revision.semantic_digest = raw.semantic_digest || revision.semantic_digest || "";
     revision._origin = raw._origin || "embedded";
-    if (!revision.fragment_id) return;
-    if (
-      state.payload.source_identity &&
-      revision.source &&
-      revision.source.rich_document_digest !==
-        state.payload.source_identity.rich_document_digest
-    ) {
+    try {
+      validateRevisionMetadata(metadataOnly(revision));
+    } catch (error) {
       state.fileDiagnostics.push(
-        "Ignored fragment for another rich source: " + revision.fragment_id
+        "Ignored invalid fragment " + (revision.fragment_id || "(unknown)") + ": " +
+        String(error.message || error)
       );
       return;
     }
@@ -398,6 +417,7 @@
     contents.replaceChildren();
 
     var heading = element("h1", "", title);
+    removeVisibleHtmlTags(heading);
     header.appendChild(heading);
     decorateGlossary(heading, "source");
     decorateGlossary(heading, "target");
@@ -499,6 +519,7 @@
       var heading = element("h" + level, "", payload.text || "");
       heading.id = "heading-" + safeToken(block.block_id);
       container.appendChild(heading);
+      removeVisibleHtmlTags(heading);
       decorateGlossary(heading, "source");
       return container;
     }
@@ -530,9 +551,11 @@
       var math = element("div", "math math-display", payload.tex || "");
       math.dataset.tex = payload.tex || "";
       container.appendChild(math);
-      if (payload.label) {
-        container.appendChild(element("span", "arc-equation-label", payload.label));
+      var equationLabel = effectiveEquationLabel(block, payload);
+      if (equationLabel) {
+        container.appendChild(element("span", "arc-equation-label", equationLabel));
       }
+      removeVisibleHtmlTags(container);
       typeset(container);
       return container;
     }
@@ -558,6 +581,7 @@
       });
       table.appendChild(body);
       container.appendChild(table);
+      removeVisibleHtmlTags(table);
       decorateGlossary(table, "source");
       return container;
     }
@@ -577,16 +601,35 @@
       }
       if (payload.caption) figure.appendChild(element("figcaption", "", payload.caption));
       container.appendChild(figure);
+      removeVisibleHtmlTags(figure);
       decorateGlossary(figure, "source");
       return container;
     }
     container.appendChild(element("p", "", JSON.stringify(payload)));
+    removeVisibleHtmlTags(container);
     return container;
+  }
+
+  function effectiveEquationLabel(block, payload) {
+    var documentValue = state.payload.publication.source_document;
+    var reconciliations = (
+      (documentValue.metadata || {}).equation_label_reconciliation || {}
+    );
+    var reconciliation = reconciliations[block.block_id];
+    if (
+      reconciliation &&
+      typeof reconciliation.effective_label === "string" &&
+      reconciliation.effective_label.trim()
+    ) {
+      return reconciliation.effective_label.trim();
+    }
+    return typeof payload.label === "string" ? payload.label.trim() : "";
   }
 
   function appendInlineSpans(parent, spans, fallback) {
     if (!Array.isArray(spans) || spans.length === 0) {
       parent.textContent = fallback || "";
+      removeVisibleHtmlTags(parent);
       decorateGlossary(parent, "source");
       return;
     }
@@ -604,6 +647,7 @@
         parent.appendChild(document.createTextNode(span.text || ""));
       }
     });
+    removeVisibleHtmlTags(parent);
     decorateGlossary(parent, "source");
     typeset(parent);
   }
@@ -653,7 +697,16 @@
       var link = element("a", "", section.title);
       var block = state.payload.publication.source_document.blocks[section.block_start];
       link.href = block ? "#block-" + safeToken(block.block_id) : "#arc-document";
+      removeVisibleHtmlTags(link);
       item.appendChild(link);
+      var note = element("button", "arc-note-button arc-section-note-button", strings.addNote);
+      note.type = "button";
+      note.addEventListener("click", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        openNewSectionEditor(section);
+      });
+      item.appendChild(note);
       list.appendChild(item);
     });
     if ((state.payload.publication.glossary || []).length) {
@@ -680,8 +733,14 @@
     var dl = element("dl");
     glossary.forEach(function (entry) {
       var row = element("div", "arc-glossary-row");
-      row.appendChild(element("dt", "", entry.term || entry.source_term || ""));
-      row.appendChild(element("dd", "", entry.translated_term || entry.translation || ""));
+      var original = element("dt", "", entry.term || entry.source_term || "");
+      var translated = element(
+        "dd", "", entry.translated_term || entry.translation || ""
+      );
+      decorateGlossary(original, "source");
+      decorateGlossary(translated, "target");
+      row.appendChild(original);
+      row.appendChild(translated);
       row.appendChild(element("dd", "", entry.definition || ""));
       dl.appendChild(row);
     });
@@ -938,7 +997,7 @@
     window.addEventListener("scroll", close, {passive: true});
   }
 
-  function setupEditor() {
+  async function setupEditor() {
     var connect = document.getElementById("arc-connect");
     connect.textContent = labels().connect;
     connect.addEventListener("click", connectDirectory);
@@ -946,7 +1005,7 @@
       connect.disabled = true;
       setStatus(labels().noDirectoryApi, "error");
     } else {
-      restoreDirectoryHandle();
+      await restoreDirectoryHandle();
     }
     var dialog = document.getElementById("arc-editor-dialog");
     document.getElementById("arc-editor-close").onclick = function () { dialog.close(); };
@@ -968,22 +1027,29 @@
       setStatus(labels().loading);
       await loadDirectoryRevisions();
       setStatus(labels().connected);
+      return true;
     } catch (error) {
-      if (error && error.name === "AbortError") return;
+      if (error && error.name === "AbortError") return false;
+      state.directory = null;
       setStatus(String(error.message || error), "error");
+      return false;
     }
   }
 
   async function loadDirectoryRevisions() {
     if (!state.directory) return;
+    resetRevisionState();
     var fragments;
     try {
       fragments = await state.directory.getDirectoryHandle("fragments");
     } catch (error) {
       if (error.name === "NotFoundError") {
+        resolveAll();
         renderReader();
         return;
       }
+      resolveAll();
+      renderReader();
       throw error;
     }
     var files = [];
@@ -1023,13 +1089,26 @@
   }
 
   function openNewEditor(block) {
-    state.editorBase = null;
-    state.editorHistorical = null;
-    state.editorAnchor = {
+    openNewEditorForAnchor({
       kind: "block",
       target_id: block.block_id,
       related_blocks: [anchorBlock(block)]
-    };
+    });
+  }
+
+  function openNewSectionEditor(section) {
+    var blocks = state.payload.publication.source_document.blocks || [];
+    openNewEditorForAnchor({
+      kind: "section",
+      target_id: section.section_id,
+      related_blocks: blocks.slice(section.block_start, section.block_end).map(anchorBlock)
+    });
+  }
+
+  function openNewEditorForAnchor(anchor) {
+    state.editorBase = null;
+    state.editorHistorical = null;
+    state.editorAnchor = anchor;
     fillEditor({
       title: null,
       role: "note",
@@ -1055,22 +1134,62 @@
     var root = document.getElementById("arc-editor-history");
     root.replaceChildren();
     if (!fragmentId) return;
-    root.appendChild(document.createTextNode(labels().history + ": "));
-    (state.revisions.get(fragmentId) || []).slice().sort(function (a, b) {
+    var strings = labels();
+    var revisions = (state.revisions.get(fragmentId) || []).slice().sort(function (a, b) {
       return a.revision - b.revision;
-    }).forEach(function (revision) {
+    });
+    var toolbar = element("div", "arc-history-toolbar");
+    toolbar.appendChild(element("span", "", strings.history + ": "));
+    revisions.forEach(function (revision) {
       var button = element("button", "", "v" + revision.revision);
       button.type = "button";
+      button.classList.toggle(
+        "is-selected",
+        Boolean(
+          state.editorHistorical &&
+          state.editorHistorical.semantic_digest === revision.semantic_digest
+        )
+      );
       button.onclick = function () {
         state.editorHistorical = revision;
-        document.getElementById("arc-editor-title").value = revision.title || "";
-        document.getElementById("arc-editor-role").value = revision.role;
-        document.getElementById("arc-editor-priority").value = String(revision.priority);
-        document.getElementById("arc-editor-markdown").value = revision.markdown_body;
-        updatePreview();
+        renderHistory(fragmentId);
       };
-      root.appendChild(button);
+      toolbar.appendChild(button);
     });
+    root.appendChild(toolbar);
+    if (!state.editorBase || !state.editorHistorical) return;
+
+    var compare = element("div", "arc-history-compare");
+    compare.appendChild(historyPane(
+      strings.compareCurrent + " · v" + state.editorBase.revision,
+      state.editorBase.markdown_body
+    ));
+    compare.appendChild(historyPane(
+      strings.compareHistorical + " · v" + state.editorHistorical.revision,
+      state.editorHistorical.markdown_body
+    ));
+    root.appendChild(compare);
+    var restore = element("button", "arc-history-restore", strings.restore);
+    restore.type = "button";
+    restore.onclick = restoreHistoricalRevision;
+    root.appendChild(restore);
+  }
+
+  function historyPane(title, markdown) {
+    var pane = element("section", "arc-history-pane");
+    pane.appendChild(element("h3", "", title));
+    pane.appendChild(element("pre", "", markdown || ""));
+    return pane;
+  }
+
+  function restoreHistoricalRevision() {
+    var revision = state.editorHistorical;
+    if (!revision) return;
+    document.getElementById("arc-editor-title").value = revision.title || "";
+    document.getElementById("arc-editor-role").value = revision.role;
+    document.getElementById("arc-editor-priority").value = String(revision.priority);
+    document.getElementById("arc-editor-markdown").value = revision.markdown_body;
+    updatePreview();
   }
 
   function updatePreview() {
@@ -1083,12 +1202,35 @@
   async function saveEditor(event) {
     event.preventDefault();
     try {
-      if (!state.directory) await connectDirectory();
+      if (!state.directory) {
+        if (!await connectDirectory()) return;
+      } else {
+        setStatus(labels().loading);
+        await loadDirectoryRevisions();
+      }
       if (!state.directory) return;
+      var base = state.editorBase;
+      if (base) {
+        var current = state.selected.get(base.fragment_id);
+        var eligibleChildren = (
+          state.revisions.get(base.fragment_id) || []
+        ).filter(function (revision) {
+          return revision.parent_semantic_digest === base.semantic_digest &&
+            revision.revision === base.revision + 1 &&
+            stableStringify(revision.source) === stableStringify(base.source) &&
+            stableStringify(revision.anchor) === stableStringify(base.anchor);
+        });
+        if (
+          !current ||
+          current.semantic_digest !== base.semantic_digest ||
+          eligibleChildren.length > 1
+        ) {
+          throw new Error(labels().historyChanged);
+        }
+      }
       var markdown = normalizeMarkdown(
         document.getElementById("arc-editor-markdown").value
       );
-      var base = state.editorBase;
       var metadata = base ? metadataOnly(base) : newNoteMetadata();
       metadata.revision = base ? base.revision + 1 : 1;
       metadata.parent_semantic_digest = base ? base.semantic_digest : null;
@@ -1099,10 +1241,12 @@
         throw new Error("priority must be a positive integer");
       }
       metadata.citation_ids = citationIds(markdown);
+      assertKnownCitations(metadata.citation_ids);
       metadata.provenance = Object.assign({}, metadata.provenance || {}, {
         last_editor: "arc-render-browser",
         edited_at: new Date().toISOString()
       });
+      validateRevisionMetadata(metadata);
       var digest = await semanticDigest(metadata, markdown);
       var filename = "revision-" + String(metadata.revision).padStart(6, "0") +
         "-" + digest + ".md";
@@ -1192,6 +1336,25 @@
     return values;
   }
 
+  function bibliographyIdSet() {
+    var values = new Set();
+    (state.payload.publication.bibliography || []).forEach(function (item) {
+      var id = item.evidence_id || item.citation_id || item.id;
+      if (typeof id === "string" && id) values.add(id);
+    });
+    return values;
+  }
+
+  function assertKnownCitations(citations) {
+    var known = bibliographyIdSet();
+    var unknown = citations.find(function (citation) {
+      return !known.has(citation);
+    });
+    if (unknown !== undefined) {
+      throw new Error(labels().unknownCitation + unknown);
+    }
+  }
+
   async function fragmentDirectory(fragmentId, create) {
     var fragments = await state.directory.getDirectoryHandle(
       "fragments", {create: Boolean(create)}
@@ -1243,18 +1406,19 @@
       "parent_semantic_digest", "priority", "provenance", "revision", "role",
       "schema_version", "source", "title"
     ];
-    if (
-      !metadata || typeof metadata !== "object" || Array.isArray(metadata) ||
-      stableStringify(Object.keys(metadata).sort()) !== stableStringify(fields)
-    ) {
-      throw new Error("fragment revision has invalid metadata fields");
-    }
+    requireExactObject(metadata, fields, "fragment revision");
+    validateIntegerJson(metadata, "fragment revision");
     if (
       metadata.schema_version !== FRAGMENT_SCHEMA ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(metadata.fragment_id) ||
-      !Number.isInteger(metadata.revision) || metadata.revision < 1 ||
-      !Number.isInteger(metadata.priority) || metadata.priority < 1 ||
-      !metadata.anchor || !["block", "section"].includes(metadata.anchor.kind)
+      !portableIdentifier(metadata.fragment_id) ||
+      !positiveInteger(metadata.revision) ||
+      !positiveInteger(metadata.priority) ||
+      !normalizedNonblank(metadata.role) ||
+      !normalizedNonblank(metadata.language) ||
+      (
+        metadata.title !== null &&
+        !normalizedNonblank(metadata.title)
+      )
     ) {
       throw new Error("fragment revision metadata is invalid");
     }
@@ -1265,10 +1429,174 @@
     ) {
       throw new Error("fragment revision parent identity is invalid");
     }
+    validateSourceIdentity(metadata.source);
+    if (
+      stableStringify(metadata.source) !==
+      stableStringify(state.payload.source_identity)
+    ) {
+      throw new Error("fragment revision binds another rich source");
+    }
+    validateAnchor(metadata.anchor);
+    if (!Array.isArray(metadata.citation_ids)) {
+      throw new Error("fragment citation_ids must be an array");
+    }
+    var citationSet = new Set();
+    metadata.citation_ids.forEach(function (citation) {
+      if (!normalizedNonblank(citation) || citationSet.has(citation)) {
+        throw new Error("fragment citation IDs must be unique non-empty strings");
+      }
+      citationSet.add(citation);
+    });
+    if (!plainObject(metadata.provenance)) {
+      throw new Error("fragment provenance must be an object");
+    }
+  }
+
+  function validateSourceIdentity(source) {
+    requireExactObject(source, [
+      "artifact_digest", "media_type", "rich_document_digest",
+      "size", "source_format"
+    ], "source identity");
+    if (
+      !["html", "markdown", "tex"].includes(source.source_format) ||
+      typeof source.media_type !== "string" ||
+      source.media_type !== source.media_type.trim().toLowerCase() ||
+      source.media_type.indexOf("/") < 1 ||
+      source.media_type.indexOf(";") >= 0 ||
+      !digestValue(source.artifact_digest) ||
+      !digestValue(source.rich_document_digest) ||
+      !nonnegativeInteger(source.size)
+    ) {
+      throw new Error("fragment source identity is invalid");
+    }
+  }
+
+  function validateAnchor(anchor) {
+    requireExactObject(
+      anchor, ["kind", "related_blocks", "target_id"], "fragment anchor"
+    );
+    if (
+      !["block", "section"].includes(anchor.kind) ||
+      !normalizedNonblank(anchor.target_id) ||
+      !Array.isArray(anchor.related_blocks)
+    ) {
+      throw new Error("fragment anchor is invalid");
+    }
+    var documentValue = state.payload.publication.source_document;
+    var blocks = new Map((documentValue.blocks || []).map(function (block) {
+      return [block.block_id, block];
+    }));
+    var sections = new Set((documentValue.sections || []).map(function (section) {
+      return section.section_id;
+    }));
+    if (
+      (anchor.kind === "block" && !blocks.has(anchor.target_id)) ||
+      (anchor.kind === "section" && !sections.has(anchor.target_id))
+    ) {
+      throw new Error("fragment anchor target is absent from the rich source");
+    }
+    var blockIds = new Set();
+    var ordinals = new Set();
+    anchor.related_blocks.forEach(function (frozen) {
+      requireExactObject(frozen, [
+        "block_id", "content_fingerprint", "kind", "locator", "ordinal"
+      ], "anchor related block");
+      if (
+        !normalizedNonblank(frozen.block_id) ||
+        !["heading", "paragraph", "list", "code", "equation", "table", "figure"]
+          .includes(frozen.kind) ||
+        !nonnegativeInteger(frozen.ordinal) ||
+        !plainObject(frozen.locator) ||
+        !digestValue(frozen.content_fingerprint) ||
+        blockIds.has(frozen.block_id) ||
+        ordinals.has(frozen.ordinal)
+      ) {
+        throw new Error("anchor related block provenance is invalid");
+      }
+      var current = blocks.get(frozen.block_id);
+      if (
+        !current ||
+        current.kind !== frozen.kind ||
+        current.ordinal !== frozen.ordinal ||
+        stableStringify(current.locator) !== stableStringify(frozen.locator) ||
+        (state.payload.block_fingerprints || {})[frozen.block_id] !==
+          frozen.content_fingerprint
+      ) {
+        throw new Error("anchor related block differs from the rich source");
+      }
+      blockIds.add(frozen.block_id);
+      ordinals.add(frozen.ordinal);
+    });
+    if (anchor.kind === "block" && !blockIds.has(anchor.target_id)) {
+      throw new Error("block anchor target must be a related block");
+    }
+  }
+
+  function validateIntegerJson(value, description) {
+    if (typeof value === "number") {
+      if (!Number.isSafeInteger(value)) {
+        throw new Error(description + " contains a non-integer JSON number");
+      }
+      return;
+    }
+    if (value === null || ["string", "boolean"].includes(typeof value)) return;
+    if (Array.isArray(value)) {
+      value.forEach(function (item) { validateIntegerJson(item, description); });
+      return;
+    }
+    if (plainObject(value)) {
+      Object.keys(value).forEach(function (key) {
+        validateIntegerJson(value[key], description);
+      });
+      return;
+    }
+    throw new Error(description + " is not JSON-compatible");
+  }
+
+  function requireExactObject(value, fields, description) {
+    if (
+      !plainObject(value) ||
+      stableStringify(Object.keys(value).sort()) !==
+        stableStringify(fields.slice().sort())
+    ) {
+      throw new Error(description + " has invalid fields");
+    }
+  }
+
+  function plainObject(value) {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function normalizedNonblank(value) {
+    return typeof value === "string" && Boolean(value) && value === value.trim();
+  }
+
+  function portableIdentifier(value) {
+    return normalizedNonblank(value) &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value);
+  }
+
+  function digestValue(value) {
+    return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+  }
+
+  function positiveInteger(value) {
+    return Number.isSafeInteger(value) && value >= 1;
+  }
+
+  function nonnegativeInteger(value) {
+    return Number.isSafeInteger(value) && value >= 0;
   }
 
   function stableStringify(value) {
-    if (value === null || typeof value !== "object") return JSON.stringify(value);
+    if (typeof value === "number" && !Number.isSafeInteger(value)) {
+      throw new Error("canonical JSON contains a non-integer number");
+    }
+    if (value === null || typeof value !== "object") {
+      var primitive = JSON.stringify(value);
+      if (primitive === undefined) throw new Error("value is not JSON-compatible");
+      return primitive;
+    }
     if (Array.isArray(value)) {
       return "[" + value.map(stableStringify).join(",") + "]";
     }
@@ -1328,6 +1656,7 @@
         setStatus(labels().connected);
       }
     } catch (_error) {
+      state.directory = null;
       /* Opaque file origins may not persist IndexedDB; reconnect still works. */
     }
   }
@@ -1339,7 +1668,7 @@
       initialRevisions();
       renderReader();
       setupTooltip();
-      setupEditor();
+      await setupEditor();
       if (document.fonts && document.fonts.ready) await document.fonts.ready;
       await Promise.all(Array.prototype.slice.call(document.images).map(function (image) {
         if (image.complete) return Promise.resolve();

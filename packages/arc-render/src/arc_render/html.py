@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -23,19 +24,35 @@ from .contracts import (
     Layer,
     Publication,
     anchor_block_from_rich_block,
+    fragment_revision_from_document,
     fragment_revision_to_document,
+    publication_from_document,
     publication_to_document,
     source_identity_to_document,
 )
 from .markdown import read_fragment_revision
-from .resolver import RevisionDiagnostic, resolve_fragment_revision_files
-from .standalone_html import StandaloneHtmlError, write_standalone_html
+from .resolver import (
+    RevisionDiagnostic,
+    resolve_fragment_revision_files,
+    resolve_fragment_revisions,
+)
+from .standalone_html import (
+    StandaloneHtmlError,
+    _srcset_candidates,
+    write_standalone_html,
+)
 from .workspace import RenderWorkspaceError, read_layer, read_publication
 
 
 HTML_RENDER_RECIPE = "arc.render.standalone_html.v1"
 READER_PAYLOAD_SCHEMA = "arc.render.reader_payload.v1"
 AssetLoader = Callable[[str], bytes | None]
+_CITATION_PATTERN = re.compile(r"\[@([A-Za-z0-9][A-Za-z0-9._:-]*)\]")
+_CSS_URL_PATTERN = re.compile(
+    r"url\(\s*(?:'(?P<single>[^']*)'|\"(?P<double>[^\"]*)\"|"
+    r"(?P<plain>[^)]*))\s*\)",
+    re.IGNORECASE,
+)
 
 
 class HTMLRenderError(RuntimeError):
@@ -97,6 +114,7 @@ def render_html(
     payload = _reader_payload(
         publication,
         revisions=revisions,
+        selected=selected,
         resources=resources,
         diagnostics=diagnostics,
     )
@@ -174,11 +192,16 @@ def validate_standalone_html(
     encoded_publication = payload.get("publication")
     if not isinstance(encoded_publication, Mapping):
         raise HTMLRenderError("standalone HTML has no encoded publication")
-    if (
-        encoded_publication.get("publication_digest")
-        != publication.publication_digest
-    ):
-        raise HTMLRenderError("standalone HTML publication digest is inconsistent")
+    try:
+        embedded_publication = publication_from_document(encoded_publication)
+    except ValueError as exc:
+        raise HTMLRenderError(
+            "standalone HTML contains an invalid publication"
+        ) from exc
+    if embedded_publication != publication:
+        raise HTMLRenderError(
+            "standalone HTML publication digest is inconsistent"
+        )
     source = encoded_publication.get("source_document")
     if not isinstance(source, Mapping):
         raise HTMLRenderError("standalone HTML has no rich source")
@@ -193,6 +216,8 @@ def validate_standalone_html(
     ]
     if actual != expected:
         raise HTMLRenderError("standalone HTML source block order is invalid")
+    _validate_reader_resources(publication, payload)
+    _validate_reader_revisions(publication, payload)
     portability = _PortabilityValidator()
     portability.feed(text)
     portability.close()
@@ -251,6 +276,15 @@ def _load_revisions(
             ):
                 raise HTMLRenderError(
                     "initial fragment revision does not match its layer reference: "
+                    f"{revision_reference.path}"
+                )
+            claimed_producer = initial.provenance.get("producer")
+            if (
+                claimed_producer is not None
+                and claimed_producer != layer.producer
+            ):
+                raise HTMLRenderError(
+                    "initial fragment provenance contradicts its layer producer: "
                     f"{revision_reference.path}"
                 )
             existing = claimed_paths.get(revision_path)
@@ -366,6 +400,14 @@ def _validate_selected(
             raise HTMLRenderError(
                 f"fragment citation is absent from the bibliography: {unknown}"
             )
+        visible_citations = tuple(
+            dict.fromkeys(_CITATION_PATTERN.findall(revision.markdown_body))
+        )
+        if visible_citations != revision.citation_ids:
+            raise HTMLRenderError(
+                "fragment Markdown citations do not match citation_ids: "
+                f"{revision.fragment_id}"
+            )
 
 
 def _embedded_resources(
@@ -427,6 +469,7 @@ def _reader_payload(
     publication: Publication,
     *,
     revisions: Sequence[FragmentRevision],
+    selected: Sequence[FragmentRevision],
     resources: Sequence[Mapping[str, Any]],
     diagnostics: Sequence[RevisionDiagnostic],
 ) -> dict[str, Any]:
@@ -446,6 +489,9 @@ def _reader_payload(
                 "semantic_digest": item.semantic_digest,
             }
             for item in revisions
+        ],
+        "selected_revision_digests": [
+            item.semantic_digest for item in selected
         ],
         "resources": list(resources),
         "diagnostics": [_diagnostic_text(item) for item in diagnostics],
@@ -618,6 +664,150 @@ def _extract_reader_payload(text: str) -> Mapping[str, Any]:
     return value
 
 
+def _validate_reader_resources(
+    publication: Publication,
+    payload: Mapping[str, Any],
+) -> None:
+    raw_resources = payload.get("resources")
+    if not isinstance(raw_resources, list):
+        raise HTMLRenderError("standalone HTML resources are invalid")
+    resources: dict[str, Mapping[str, Any]] = {}
+    expected_fields = {
+        "artifact_digest",
+        "media_type",
+        "logical_name",
+        "size",
+        "data_uri",
+    }
+    for raw in raw_resources:
+        if not isinstance(raw, Mapping) or set(raw) != expected_fields:
+            raise HTMLRenderError("standalone HTML resource metadata is invalid")
+        digest = raw.get("artifact_digest")
+        if not isinstance(digest, str) or digest in resources:
+            raise HTMLRenderError("standalone HTML resource identity is invalid")
+        resources[digest] = raw
+    expected_digests = {
+        item.artifact_digest for item in publication.source_document.assets
+    }
+    if set(resources) != expected_digests:
+        raise HTMLRenderError(
+            "standalone HTML source resources are incomplete"
+        )
+    for asset in publication.source_document.assets:
+        raw = resources[asset.artifact_digest]
+        if (
+            raw.get("media_type") != asset.media_type
+            or raw.get("logical_name") != asset.logical_name
+            or raw.get("size") != asset.size
+        ):
+            raise HTMLRenderError(
+                "standalone HTML source resource metadata differs from the source"
+            )
+        data_uri = raw.get("data_uri")
+        prefix = f"data:{asset.media_type};base64,"
+        if not isinstance(data_uri, str) or not data_uri.startswith(prefix):
+            raise HTMLRenderError(
+                "standalone HTML source resource data URI is invalid"
+            )
+        try:
+            resource_bytes = base64.b64decode(
+                data_uri[len(prefix) :],
+                validate=True,
+            )
+        except (binascii.Error, ValueError) as exc:
+            raise HTMLRenderError(
+                "standalone HTML source resource base64 is invalid"
+            ) from exc
+        if (
+            len(resource_bytes) != asset.size
+            or hashlib.sha256(resource_bytes).hexdigest()
+            != asset.artifact_digest
+        ):
+            raise HTMLRenderError(
+                "standalone HTML source resource bytes differ from the source"
+            )
+
+
+def _validate_reader_revisions(
+    publication: Publication,
+    payload: Mapping[str, Any],
+) -> None:
+    raw_revisions = payload.get("revisions")
+    if not isinstance(raw_revisions, list):
+        raise HTMLRenderError("standalone HTML revisions are invalid")
+    groups: dict[str, list[FragmentRevision]] = {}
+    order: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raw_revisions:
+        if (
+            not isinstance(raw, Mapping)
+            or set(raw) != {
+                "metadata",
+                "markdown_body",
+                "semantic_digest",
+            }
+            or not isinstance(raw.get("metadata"), Mapping)
+            or not isinstance(raw.get("markdown_body"), str)
+            or not isinstance(raw.get("semantic_digest"), str)
+        ):
+            raise HTMLRenderError(
+                "standalone HTML revision record is invalid"
+            )
+        try:
+            revision = fragment_revision_from_document(
+                raw["metadata"],
+                raw["markdown_body"],
+            )
+        except ValueError as exc:
+            raise HTMLRenderError(
+                "standalone HTML contains malformed fragment metadata"
+            ) from exc
+        if (
+            revision.semantic_digest != raw["semantic_digest"]
+            or revision.source != publication.source
+        ):
+            raise HTMLRenderError(
+                "standalone HTML fragment identity is inconsistent"
+            )
+        identity = (revision.fragment_id, revision.semantic_digest)
+        if identity in seen:
+            raise HTMLRenderError(
+                "standalone HTML contains a duplicate fragment revision"
+            )
+        seen.add(identity)
+        if revision.fragment_id not in groups:
+            groups[revision.fragment_id] = []
+            order.append(revision.fragment_id)
+        groups[revision.fragment_id].append(revision)
+
+    selected: list[FragmentRevision] = []
+    for fragment_id in order:
+        try:
+            resolution = resolve_fragment_revisions(groups[fragment_id])
+        except ValueError as exc:
+            raise HTMLRenderError(
+                "standalone HTML fragment history is invalid"
+            ) from exc
+        if resolution.selected is not None:
+            selected.append(resolution.selected)
+    position = {fragment_id: index for index, fragment_id in enumerate(order)}
+    selected.sort(
+        key=lambda item: (item.priority, position[item.fragment_id])
+    )
+    _validate_selected(publication, selected)
+
+    claimed = payload.get("selected_revision_digests")
+    expected = [item.semantic_digest for item in selected]
+    if (
+        not isinstance(claimed, list)
+        or any(not isinstance(item, str) for item in claimed)
+        or claimed != expected
+    ):
+        raise HTMLRenderError(
+            "standalone HTML selected revisions are inconsistent"
+        )
+
+
 def _diagnostic_text(item: RevisionDiagnostic) -> str:
     detail = f" ({', '.join(item.paths)})" if item.paths else ""
     return f"{item.code}: {item.message}{detail}"
@@ -627,16 +817,27 @@ class _PortabilityValidator(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
         self.errors: list[str] = []
+        self._style_depth = 0
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
     ) -> None:
         self._check(tag, attrs)
+        if tag.casefold() == "style":
+            self._style_depth += 1
 
     def handle_startendtag(
         self, tag: str, attrs: list[tuple[str, str | None]]
     ) -> None:
         self._check(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() == "style" and self._style_depth:
+            self._style_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._style_depth:
+            self._check_css(data)
 
     def _check(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -651,6 +852,18 @@ class _PortabilityValidator(HTMLParser):
             value = values.get(name)
             if value is not None and not value.startswith("data:"):
                 self.errors.append(f"{lower}[{name}]={value}")
+        srcset = values.get("srcset")
+        if srcset is not None:
+            try:
+                candidates = _srcset_candidates(srcset)
+            except StandaloneHtmlError:
+                self.errors.append(f"{lower}[srcset]={srcset}")
+            else:
+                for reference, _descriptor in candidates:
+                    if not reference.startswith("data:"):
+                        self.errors.append(
+                            f"{lower}[srcset]={reference}"
+                        )
         if lower == "object":
             value = values.get("data")
             if value is not None and not value.startswith("data:"):
@@ -661,6 +874,35 @@ class _PortabilityValidator(HTMLParser):
                 value.startswith("data:") or value.startswith("#")
             ):
                 self.errors.append(f"link[href]={value}")
+        if lower in {"image", "feimage", "use"}:
+            for name in ("href", "xlink:href"):
+                value = values.get(name)
+                if value is not None and not (
+                    value.startswith("data:") or value.startswith("#")
+                ):
+                    self.errors.append(f"{lower}[{name}]={value}")
+        style = values.get("style")
+        if style is not None:
+            self._check_css(style)
+
+    def _check_css(self, value: str) -> None:
+        if re.search(r"@import\b", value, re.IGNORECASE):
+            self.errors.append("css[@import]")
+        for match in _CSS_URL_PATTERN.finditer(value):
+            reference = next(
+                item
+                for item in (
+                    match.group("single"),
+                    match.group("double"),
+                    match.group("plain"),
+                )
+                if item is not None
+            ).strip()
+            if not (
+                reference.startswith("data:")
+                or reference.startswith("#")
+            ):
+                self.errors.append(f"css[url]={reference}")
 
 
 __all__ = [

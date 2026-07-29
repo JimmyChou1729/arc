@@ -61,6 +61,7 @@ button { cursor: pointer; }
 }
 .arc-contents ol { margin: 0; padding: 0; list-style: none; }
 .arc-contents li + li { margin-top: .18rem; }
+.arc-contents li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem; }
 .arc-contents li[data-level="2"] { padding-left: .75rem; }
 .arc-contents li[data-level="3"],
 .arc-contents li[data-level="4"],
@@ -206,6 +207,12 @@ button { cursor: pointer; }
   box-shadow: none;
 }
 .arc-note-button { margin-top: .25rem; }
+.arc-section-note-button {
+  align-self: start;
+  margin: .24rem 0 0;
+  padding-inline: .35rem;
+  white-space: nowrap;
+}
 .arc-markdown > :first-child { margin-top: 0; }
 .arc-markdown > :last-child { margin-bottom: 0; }
 .arc-source-card h1,
@@ -373,13 +380,48 @@ figcaption, .arc-citations, .arc-figure-note {
   background: white;
 }
 .arc-history {
-  max-height: 8rem;
+  max-height: 22rem;
   overflow: auto;
   padding: 0 1rem .7rem;
   color: var(--arc-muted);
   font-size: .78rem;
 }
 .arc-history button { margin: .15rem .25rem .15rem 0; box-shadow: none; }
+.arc-history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .1rem;
+}
+.arc-history-toolbar button.is-selected {
+  border-color: #6f98b8;
+  background: #eaf4fb;
+}
+.arc-history-compare {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: .65rem;
+  margin-top: .45rem;
+}
+.arc-history-pane {
+  min-width: 0;
+  padding: .45rem;
+  border: 1px solid var(--arc-line);
+  border-radius: .35rem;
+  background: white;
+}
+.arc-history-pane h3 {
+  margin: 0 0 .3rem;
+  color: #45515c;
+  font-size: .76rem;
+}
+.arc-history-pane pre {
+  max-height: 9rem;
+  margin: 0;
+  padding: .45rem;
+  white-space: pre-wrap;
+}
+.arc-history-restore { margin-top: .45rem !important; }
 
 @media (max-width: 899px) {
   .arc-shell, .arc-shell.contents-collapsed { display: block; }
@@ -400,7 +442,9 @@ figcaption, .arc-citations, .arc-figure-note {
   .arc-lanes.lanes-horizontal { grid-template-columns: 1fr; }
   .arc-glossary-row { grid-template-columns: 1fr 1fr; }
   .arc-glossary-row > :last-child { grid-column: 1 / -1; }
-  .arc-editor-grid, .arc-dialog-fields { grid-template-columns: 1fr; }
+  .arc-editor-grid,
+  .arc-dialog-fields,
+  .arc-history-compare { grid-template-columns: 1fr; }
 }
 
 @media print {

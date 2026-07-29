@@ -9,6 +9,8 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+from arc_paper import RichBlock, RichBlockKind
+
 from ._json import canonical_json_bytes
 from .contracts import (
     FragmentRevision,
@@ -35,6 +37,61 @@ def normalize_markdown(markdown: str) -> str:
     return unicodedata.normalize(
         "NFC", markdown.replace("\r\n", "\n").replace("\r", "\n")
     )
+
+
+def block_text_to_markdown(block: RichBlock, text: str) -> str:
+    """Encode accepted block text as canonical overlay Markdown.
+
+    Models provide semantic text; the producer, not the model, supplies the
+    deterministic Markdown structure inherited from the source block.
+    """
+
+    if not isinstance(block, RichBlock):
+        raise ValueError("block must be a RichBlock")
+    value = normalize_markdown(text)
+    if not value.strip():
+        raise ValueError("block text must be non-empty")
+    if block.kind is RichBlockKind.HEADING:
+        level = max(1, min(6, int(block.payload["level"])))
+        lines = value.strip().splitlines()
+        heading = f"{'#' * level} {lines[0].strip()}"
+        remainder = "\n".join(lines[1:]).strip()
+        return heading + (f"\n\n{remainder}" if remainder else "") + "\n"
+    if block.kind is RichBlockKind.LIST:
+        lines = [line.strip() for line in value.splitlines() if line.strip()]
+        items = tuple(block.payload["items"])
+        if len(lines) == len(items) and not any(
+            re.match(r"(?:[-+*]|\d+[.)])\s+", line)
+            for line in lines
+        ):
+            ordered = bool(block.payload["ordered"])
+            lines = [
+                (f"{index}. " if ordered else "- ") + line
+                for index, line in enumerate(lines, 1)
+            ]
+        return "\n".join(lines) + "\n"
+    if block.kind is RichBlockKind.CODE:
+        longest = max(
+            (len(match.group(0)) for match in re.finditer(r"`+", value)),
+            default=0,
+        )
+        fence = "`" * max(3, longest + 1)
+        body = value if value.endswith("\n") else value + "\n"
+        return f"{fence}\n{body}{fence}\n"
+    if block.kind is RichBlockKind.EQUATION:
+        stripped = value.strip()
+        if (
+            stripped.startswith("$$")
+            and stripped.endswith("$$")
+            and len(stripped) > 4
+        ) or (
+            stripped.startswith(r"\[")
+            and stripped.endswith(r"\]")
+            and len(stripped) > 4
+        ):
+            return stripped + "\n"
+        return f"$$\n{stripped}\n$$\n"
+    return value.rstrip("\n") + "\n"
 
 
 def fragment_semantic_digest(revision: FragmentRevision) -> str:
@@ -145,6 +202,7 @@ __all__ = [
     "FRONT_MATTER_END",
     "decode_fragment_revision",
     "encode_fragment_revision",
+    "block_text_to_markdown",
     "fragment_revision_filename",
     "fragment_revision_ref",
     "fragment_semantic_digest",

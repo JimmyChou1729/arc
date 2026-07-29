@@ -131,3 +131,47 @@ def test_standalone_html_replaces_bundle_csp_and_escapes_script_end(
     assert text.count("Content-Security-Policy") == 1
     assert "script-src 'unsafe-inline'" in text
     assert '<\\/script>' in text
+
+
+def test_srcset_preserves_data_uri_commas_and_inlines_local_candidates(
+    tmp_path: Path,
+) -> None:
+    image = b"local-image"
+    (tmp_path / "image.png").write_bytes(image)
+    index = tmp_path / "index.html"
+    index.write_text(
+        '<html><head></head><body><img srcset="'
+        'data:image/png;base64,AAAA 1x, image.png 2x"></body></html>',
+        encoding="utf-8",
+    )
+
+    text = standalone_html_bytes(index).decode("utf-8")
+
+    assert "data:image/png;base64,AAAA 1x" in text
+    encoded = base64.b64encode(image).decode("ascii")
+    assert f"data:image/png;base64,{encoded} 2x" in text
+
+
+def test_svg_image_and_use_resources_are_embedded(tmp_path: Path) -> None:
+    (tmp_path / "image.png").write_bytes(b"svg-image")
+    (tmp_path / "icons.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<symbol id="mark"><circle r="1"/></symbol></svg>',
+        encoding="utf-8",
+    )
+    index = tmp_path / "index.html"
+    index.write_text(
+        '<html><head></head><body><svg>'
+        '<image href="image.png"></image>'
+        '<use href="icons.svg#mark"></use>'
+        '<use xlink:href="#local"></use>'
+        '</svg></body></html>',
+        encoding="utf-8",
+    )
+
+    text = standalone_html_bytes(index).decode("utf-8")
+
+    assert 'href="data:image/png;base64,' in text
+    assert 'href="data:image/svg+xml;base64,' in text
+    assert '#mark"' in text
+    assert 'xlink:href="#local"' in text

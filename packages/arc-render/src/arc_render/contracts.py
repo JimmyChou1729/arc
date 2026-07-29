@@ -170,6 +170,7 @@ class AnchorBlock:
         locator = freeze_json(self.locator, "block locator")
         if not isinstance(locator, Mapping):
             raise ValueError("block locator must be an object")
+        _require_integer_json_numbers(locator, "block locator")
         object.__setattr__(self, "locator", locator)
         object.__setattr__(
             self,
@@ -256,6 +257,7 @@ class FragmentRevision:
         provenance = freeze_json(self.provenance, "provenance")
         if not isinstance(provenance, Mapping):
             raise ValueError("provenance must be an object")
+        _require_integer_json_numbers(provenance, "provenance")
         if not isinstance(self.markdown_body, str):
             raise ValueError("markdown_body must be a string")
         from .markdown import normalize_markdown
@@ -757,6 +759,25 @@ def _object_tuple(value: Any, description: str) -> tuple[Mapping[str, Any], ...]
     return tuple(result)
 
 
+def _require_integer_json_numbers(value: Any, description: str) -> None:
+    """Keep fragment metadata canonical across Python and browser JSON.
+
+    JSON integer spelling is identical in both runtimes. Floating-point
+    spelling is not (for example ``1.0`` versus ``1``), so v1 fragment
+    metadata deliberately reserves non-integer numbers instead of allowing
+    browser-created revisions with a different semantic digest.
+    """
+
+    if isinstance(value, float):
+        raise ValueError(f"{description} contains a non-integer number")
+    if isinstance(value, Mapping):
+        for item in value.values():
+            _require_integer_json_numbers(item, description)
+    elif isinstance(value, tuple):
+        for item in value:
+            _require_integer_json_numbers(item, description)
+
+
 def _digest(value: Any, description: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{description} must be a SHA-256 digest")
@@ -817,6 +838,7 @@ __all__ = [
     "Layer",
     "LayerRef",
     "Publication",
+    "SourceIdentity",
     "anchor_block_from_rich_block",
     "anchor_block_from_document",
     "anchor_block_to_document",

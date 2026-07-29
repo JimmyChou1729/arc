@@ -32,9 +32,6 @@ _IMPORT_PATTERN = re.compile(
     r"@import\s+(?:url\(\s*)?(?P<value>'[^']*'|\"[^\"]*\"|[^;\s)]+)\s*\)?\s*;",
     re.IGNORECASE,
 )
-_SRCSET_SPLIT = re.compile(r"\s*,\s*")
-
-
 class StandaloneHtmlError(ValueError):
     """The source bundle cannot be represented safely as one HTML file."""
 
@@ -272,13 +269,29 @@ class _HtmlInliner(HTMLParser):
                 output.append((key, self._srcset(value)))
             elif lower == "style":
                 output.append((key, self._rewrite_css(value, self.root, set())))
-            elif lower == "href":
+            elif lower in {"href", "xlink:href"}:
                 output.append((key, self._href(tag, value)))
             else:
                 output.append((key, value))
         return output
 
     def _href(self, tag: str, value: str) -> str:
+        if tag in {"image", "feimage"}:
+            return self._resource_uri(value, self.root)
+        if tag == "use":
+            if value.startswith("#"):
+                return value
+            parsed = urlsplit(value)
+            fragment = parsed.fragment
+            if parsed.query:
+                raise StandaloneHtmlError(
+                    f"local SVG resource must not contain a query: {value}"
+                )
+            resource = self._resource_uri(
+                parsed._replace(fragment="").geturl(),
+                self.root,
+            )
+            return resource + (f"#{fragment}" if fragment else "")
         if tag == "a":
             if _is_navigation(value):
                 return value
@@ -289,12 +302,9 @@ class _HtmlInliner(HTMLParser):
 
     def _srcset(self, value: str) -> str:
         values: list[str] = []
-        for candidate in _SRCSET_SPLIT.split(value.strip()):
-            if not candidate:
-                continue
-            parts = candidate.split(None, 1)
-            uri = self._resource_uri(parts[0], self.root)
-            values.append(uri + (f" {parts[1]}" if len(parts) == 2 else ""))
+        for reference, descriptor in _srcset_candidates(value):
+            uri = self._resource_uri(reference, self.root)
+            values.append(uri + (f" {descriptor}" if descriptor else ""))
         if not values:
             raise StandaloneHtmlError("srcset has no usable candidates")
         return ", ".join(values)
@@ -376,6 +386,54 @@ class _HtmlInliner(HTMLParser):
         if not resolved.is_file():
             raise StandaloneHtmlError(f"local resource is missing: {reference}")
         return resolved
+
+
+def _srcset_candidates(value: str) -> list[tuple[str, str]]:
+    """Parse the URL and descriptor portions needed for deterministic inlining.
+
+    The HTML algorithm reads a URL through ASCII whitespace, not through
+    commas. That distinction preserves the comma inside a data URI.
+    """
+
+    candidates: list[tuple[str, str]] = []
+    position = 0
+    length = len(value)
+    whitespace = " \t\n\f\r"
+    while position < length:
+        while position < length and (
+            value[position] in whitespace or value[position] == ","
+        ):
+            position += 1
+        if position >= length:
+            break
+        start = position
+        while position < length and value[position] not in whitespace:
+            position += 1
+        reference = value[start:position]
+        if reference.endswith(","):
+            reference = reference.rstrip(",")
+            descriptor = ""
+        else:
+            while position < length and value[position] in whitespace:
+                position += 1
+            start = position
+            parentheses = 0
+            while position < length:
+                character = value[position]
+                if character == "(":
+                    parentheses += 1
+                elif character == ")" and parentheses:
+                    parentheses -= 1
+                elif character == "," and parentheses == 0:
+                    break
+                position += 1
+            descriptor = value[start:position].strip()
+            if position < length and value[position] == ",":
+                position += 1
+        if not reference:
+            raise StandaloneHtmlError("srcset has an empty candidate")
+        candidates.append((reference, descriptor))
+    return candidates
 
 
 def _tag(
