@@ -333,6 +333,7 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         "arc-llm",
         "arc-proposer-reviewer",
         "arc-paper",
+        "arc-render",
         "arc-domain",
         "arc-translate",
         "arc-companion",
@@ -500,7 +501,7 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
             "arc-companion.md",
             "arc-companion render",
             "companion",
-            ["render", "--project-dir", "companion", "--format", "all"],
+            ["render", "--project-dir", "companion"],
         ),
     )
 
@@ -615,6 +616,34 @@ def test_companion_docs_define_on_demand_unbounded_reference_research() -> None:
         compact_workflow
     )
     assert "not copies of whole works" in compact_workflow
+
+
+def test_companion_docs_describe_html_only_run_owned_publication() -> None:
+    manual = (SKILL / "manuals/arc-companion.md").read_text(encoding="utf-8")
+    workflow = (WF / "companion.md").read_text(encoding="utf-8")
+    render = (SKILL / "manuals/arc-render.md").read_text(encoding="utf-8")
+    combined = f"{manual}\n{workflow}"
+    compact = " ".join(combined.split())
+
+    for retired in (
+        "AcceptedBook",
+        "releases/",
+        "<project-dir>/companion.pdf",
+        "--format",
+        "--reuse-translation-from",
+    ):
+        assert retired not in combined
+    assert "run-owned `arc-render` publication" in compact
+    assert "<project-dir>/.arc/companion/publications/<run-id>/" in combined
+    assert "build and resume commands automatically attempt" in compact
+    assert "`render` makes no model calls" in compact
+    assert "validate both the run-owned publication workspace and the root standalone HTML" in compact
+    assert "user-side derivative" in compact
+    assert "does not validate it, reproduce it, automatically publish it, or make durability guarantees" in compact
+    assert "--pdf <validator.pdf>" in manual
+    assert "PDF input validator" in workflow
+    assert "--html reader.html" in render
+    assert "validate" in render
 
 
 def test_arc_paper_quick_start_defers_cache_administration_to_help() -> None:

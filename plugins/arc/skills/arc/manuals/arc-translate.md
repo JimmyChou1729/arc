@@ -45,9 +45,12 @@ definitions or explanations.
 
 `--paper-cache-root` is optional. Without it, ARC uses the shared reusable
 paper cache. Translation durable state lives only in
-`<project-dir>/.arc/translate/`, while every successful step publishes a
-human-readable `<project-dir>/translation.html` for direct delivery. No
-Markdown-only result is published.
+`<project-dir>/.arc/translate/`. A successful translation publishes immutable
+Markdown fragment revisions under `<project-dir>/fragments/` and the native
+`<project-dir>/translation.layer.json`. Language and glossary steps publish
+durable prerequisites but no reader delivery. Compose the Layer with
+`arc-render` to make standalone HTML; `arc-translate` does not publish a
+translation HTML file.
 
 ## Inspect, Resume, and Validate
 
