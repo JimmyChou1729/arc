@@ -1,0 +1,154 @@
+"""JSON-front-matter Markdown codec for immutable fragment revisions."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import unicodedata
+from pathlib import Path
+from typing import Any
+
+from ._json import canonical_json_bytes
+from .contracts import (
+    FragmentRevision,
+    FragmentRevisionRef,
+    fragment_revision_from_document,
+    fragment_revision_to_document,
+)
+
+
+FRONT_MATTER_BEGIN = "<!-- ARC:FRAGMENT-JSON:BEGIN -->"
+FRONT_MATTER_END = "<!-- ARC:FRAGMENT-JSON:END -->"
+_FILENAME_RE = re.compile(
+    r"revision-(?P<revision>[0-9]{6,})-(?P<digest>[0-9a-f]{64})[.]md"
+)
+
+
+def normalize_markdown(markdown: str) -> str:
+    """Normalize Unicode and line endings without trimming authored content."""
+
+    if not isinstance(markdown, str):
+        raise ValueError("Markdown body must be a string")
+    if "\x00" in markdown:
+        raise ValueError("Markdown body cannot contain NUL")
+    return unicodedata.normalize(
+        "NFC", markdown.replace("\r\n", "\n").replace("\r", "\n")
+    )
+
+
+def fragment_semantic_digest(revision: FragmentRevision) -> str:
+    material = {
+        "metadata": fragment_revision_to_document(revision),
+        "markdown_body": normalize_markdown(revision.markdown_body),
+    }
+    return hashlib.sha256(canonical_json_bytes(material)).hexdigest()
+
+
+def fragment_revision_filename(revision: FragmentRevision) -> str:
+    return (
+        f"revision-{revision.revision:06d}-"
+        f"{revision.semantic_digest}.md"
+    )
+
+
+def parse_fragment_revision_filename(filename: str) -> tuple[int, str]:
+    match = _FILENAME_RE.fullmatch(filename)
+    if match is None:
+        raise ValueError("invalid fragment revision filename")
+    revision = int(match.group("revision"))
+    if revision < 1:
+        raise ValueError("fragment revision filename must be positive")
+    return revision, match.group("digest")
+
+
+def encode_fragment_revision(revision: FragmentRevision) -> str:
+    metadata = canonical_json_bytes(
+        fragment_revision_to_document(revision)
+    ).decode("utf-8")
+    return (
+        f"{FRONT_MATTER_BEGIN}\n"
+        f"{metadata}\n"
+        f"{FRONT_MATTER_END}\n"
+        f"{revision.markdown_body}"
+    )
+
+
+def decode_fragment_revision(
+    value: str, *, filename: str | None = None
+) -> FragmentRevision:
+    if not isinstance(value, str):
+        raise ValueError("fragment revision must be text")
+    prefix = f"{FRONT_MATTER_BEGIN}\n"
+    separator = f"\n{FRONT_MATTER_END}\n"
+    if not value.startswith(prefix):
+        raise ValueError("fragment revision is missing JSON front matter")
+    payload = value[len(prefix) :]
+    metadata_text, marker, markdown_body = payload.partition(separator)
+    if not marker:
+        raise ValueError("fragment revision has unterminated JSON front matter")
+    try:
+        metadata: Any = json.loads(
+            metadata_text,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("fragment revision front matter is not valid JSON") from exc
+    revision = fragment_revision_from_document(metadata, markdown_body)
+    if filename is not None:
+        claimed_revision, claimed_digest = parse_fragment_revision_filename(
+            Path(filename).name
+        )
+        if claimed_revision != revision.revision:
+            raise ValueError("fragment revision filename has the wrong revision")
+        if claimed_digest != revision.semantic_digest:
+            raise ValueError("fragment revision filename digest does not match")
+    return revision
+
+
+def read_fragment_revision(path: str | Path) -> FragmentRevision:
+    revision_path = Path(path)
+    try:
+        value = revision_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read fragment revision: {revision_path}") from exc
+    return decode_fragment_revision(value, filename=revision_path.name)
+
+
+def fragment_revision_ref(
+    path: str, revision: FragmentRevision
+) -> FragmentRevisionRef:
+    return FragmentRevisionRef(
+        path=path,
+        fragment_id=revision.fragment_id,
+        revision=revision.revision,
+        semantic_digest=revision.semantic_digest,
+    )
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        value[key] = item
+    return value
+
+
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"unsupported JSON number: {value}")
+
+
+__all__ = [
+    "FRONT_MATTER_BEGIN",
+    "FRONT_MATTER_END",
+    "decode_fragment_revision",
+    "encode_fragment_revision",
+    "fragment_revision_filename",
+    "fragment_revision_ref",
+    "fragment_semantic_digest",
+    "normalize_markdown",
+    "parse_fragment_revision_filename",
+    "read_fragment_revision",
+]
