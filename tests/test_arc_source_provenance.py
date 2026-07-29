@@ -43,6 +43,7 @@ def _make_fake_repo(tmp_path: Path, label: str) -> Path:
         ("arc-llm", "arc_llm"),
         ("arc-proposer-reviewer", "arc_proposer_reviewer"),
         ("arc-paper", "arc_paper"),
+        ("arc-render", "arc_render"),
         ("arc-domain", "arc_domain"),
         ("arc-translate", "arc_translate"),
         ("arc-companion", "arc_companion"),

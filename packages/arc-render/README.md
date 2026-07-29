@@ -23,3 +23,16 @@ Standalone HTML and command-line delivery are built on these contracts. For
 now, a PDF copy may be made manually with Chrome's Print / Save as PDF command.
 Such a PDF is a user-side derivative, not an ARC release artifact, and ARC does
 not validate, reproduce, or automatically publish it.
+
+Command help is available without opening the manual:
+
+```bash
+arc-render --help
+arc-render <command> --help
+```
+
+Run the package tests with:
+
+```bash
+python -m pytest packages/arc-render/tests
+```

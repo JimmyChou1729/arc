@@ -312,6 +312,7 @@ def test_package_manuals_are_self_contained_quick_starts() -> None:
         "arc-llm.md": "`arc-llm`",
         "arc-proposer-reviewer.md": "`arc-proposer-reviewer`",
         "arc-translate.md": "`arc-translate`",
+        "arc-render.md": "`arc-render`",
         "arc-companion.md": "`arc-companion`",
     }
     skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")

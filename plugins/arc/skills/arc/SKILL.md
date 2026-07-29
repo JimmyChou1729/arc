@@ -88,9 +88,11 @@ not optional.
   troubleshooting: read `manuals/arc-llm.md`.
 - Standalone language detection, bilingual glossary generation, or block
   translation: read `manuals/arc-translate.md`.
+- Renderable source publications or standalone HTML readers: read
+  `manuals/arc-render.md`.
 - Typed proposer-reviewer batch construction, resume, or safe observation of
   committed rounds: read `manuals/arc-proposer-reviewer.md`.
-- Companion-reading PDF generation: read `workflows/companion.md` and
+- Companion standalone HTML generation: read `workflows/companion.md` and
   `manuals/arc-companion.md` before fetching a paper or starting LLM work.
 - User-facing Markdown report export: use the ordinary blocking
   Pandoc/XeLaTeX command in `rules/math_typeset.md`; see
@@ -98,8 +100,9 @@ not optional.
 
 ## CLI Resolution
 
-Use `arc-paper`, `arc-domain`, `arc-llm`, `arc-translate`, `arc-companion`, and
-`arc-jobs` directly when the host plugin exposes them on `PATH`. The core-only
+Use `arc-paper`, `arc-render`, `arc-domain`, `arc-llm`, `arc-translate`,
+`arc-companion`, and `arc-jobs` directly when the host plugin exposes them on
+`PATH`. The core-only
 `arc-proposer-reviewer` tool deliberately has no plugin-bin wrapper; invoke it
 through the runtime launcher. For a standalone Skill install, or when a bare
 command is unavailable, invoke the same command through:
@@ -288,12 +291,14 @@ obsolete/not triggered, or record an explicit stop condition in `Open Questions`
 or `Calculation Status`. Only stop when requested calculation coverage is
 complete and no triggered rough/pending item remains.
 
-Case 5: Generate a companion-reading PDF.
+Case 5: Generate a Companion reader.
 Use only when the user explicitly requests a companion reading or asks for the
 original paper to be split into semantic units with interleaved translation
 and commentary.
-Read and execute `workflows/companion.md`. The default deliverables are the
-validated PDF and static Web release.
+Read and execute `workflows/companion.md`. The default deliverable is a
+standalone HTML reader. If a PDF copy is requested, the user may open the HTML
+in Chrome and use Print / Save as PDF. That user-side derivative is not an ARC
+release artifact.
 
 ### Phase 3: Self-Reflection
 
