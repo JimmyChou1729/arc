@@ -11,7 +11,6 @@ CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v15"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
     "arc.companion.chapter-learning-review-prompt.v15"
 )
-CHAPTER_PLAN_PROMPT_VERSION = "arc.companion.chapter-plan-prompt.v10"
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
 
 
@@ -27,79 +26,11 @@ def _closed(
 
 
 _NONEMPTY = {"type": "string", "minLength": 1}
-_BLOCK_IDS = {
-    "type": "array",
-    "items": _NONEMPTY,
-    "minItems": 1,
-    "uniqueItems": True,
-}
 _STRING_IDS = {
     "type": "array",
     "items": _NONEMPTY,
     "uniqueItems": True,
 }
-_PLANNED_UNIT = _closed(
-    {
-        "unit_id": _NONEMPTY,
-        "anchor_block_ids": _BLOCK_IDS,
-        "placement": {
-            "type": "string",
-            "enum": ["inline", "chapter"],
-        },
-        "purpose": _NONEMPTY,
-    },
-    (
-        "unit_id",
-        "anchor_block_ids",
-        "placement",
-        "purpose",
-    ),
-)
-_READER_PROFILE = _closed(
-    {
-        "source_type": {
-            "type": "string",
-            "enum": [
-                "user_specified",
-                "popular_or_directional",
-                "research_paper",
-                "textbook",
-                "other",
-            ],
-        },
-        "assumed_background": _NONEMPTY,
-        "basis": _NONEMPTY,
-    },
-    ("source_type", "assumed_background", "basis"),
-)
-_READER_NEED = _closed(
-    {
-        "block_id": _NONEMPTY,
-        "needs_companion": {"type": "boolean"},
-        "reason": _NONEMPTY,
-        "learning_unit_ids": _STRING_IDS,
-    },
-    (
-        "block_id",
-        "needs_companion",
-        "reason",
-        "learning_unit_ids",
-    ),
-)
-CHAPTER_PLAN_SCHEMA = _closed(
-    {
-        "chapter_id": _NONEMPTY,
-        "reader_profile": _READER_PROFILE,
-        "reader_needs": {"type": "array", "items": _READER_NEED},
-        "learning_units": {"type": "array", "items": _PLANNED_UNIT},
-    },
-    (
-        "chapter_id",
-        "reader_profile",
-        "reader_needs",
-        "learning_units",
-    ),
-)
 _REFERENCE = _closed(
     {"title": _NONEMPTY, "source": _NONEMPTY},
     ("title", "source"),
@@ -129,7 +60,7 @@ _COMPANION = _closed(
 )
 CHAPTER_GUIDE_PROPOSAL_SCHEMA = _closed(
     {
-        "chapter_guide": _GUIDE_TEXT,
+        "chapter_guide": {"anyOf": [_GUIDE_TEXT, {"type": "null"}]},
         "section_guides": {"type": "array", "items": _SECTION_GUIDE},
         "companions": {"type": "array", "items": _COMPANION},
         "references": {"type": "array", "items": _REFERENCE},
@@ -167,113 +98,13 @@ CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA = _closed(
 )
 
 
-def chapter_plan_prompt(
-    *,
-    chapter_id: str,
-    title: str,
-    document_title: str | None = None,
-    document_outline: Sequence[str] = (),
-    block_ids: Sequence[str],
-    block_access: Sequence[Mapping[str, Any]] = (),
-    target_language: str,
-    intent: str,
-    has_prior_companion: bool = False,
-) -> str:
-    return _prompt(
-        CHAPTER_PLAN_PROMPT_VERSION,
-        """
-        Audit this source chapter and seed selective additions. ARC supplies
-        source context, anchors, and recoverable work state; it does not prescribe
-        a creative or pedagogical form. Propose a learning unit only for a
-        concrete increment absent from the source. `purpose` must say what
-        that increment is, not impose a presentation format. Questions,
-        close reading, distinctions, argument maps, history, counterexamples,
-        objections, connections, and reading paths are non-exhaustive
-        inspirations, not a required taxonomy or quota. Inline and chapter
-        placement are equally valid; paragraph-local and cross-paragraph work
-        are equally valid; there is no default or quota for either. Do not add
-        paraphrase, same-meaning rewrite, repeated reasoning, or generic
-        summary. Give exact source anchors. Terminology and translation are
-        owned by a separate workflow. Never invent source block IDs. A prior
-        Companion may be supplied as optional reference.
-        Preserve, deepen, recombine, or discard its ideas according to the
-        current source, intent, and evidence; never copy its repeated format or
-        treat it as a required template.
-
-        First resolve the reader profile. An explicit reader background in the
-        user intent overrides every default. Otherwise, for popular,
-        directional, or weakly specialized writing, assume an adult with
-        average general literacy and no specialist training. For a research
-        paper, assume a professional student who has completed the relevant
-        discipline's foundational courses. For a textbook, assume a student
-        who has completed its standard prerequisite courses, but do not assume
-        difficult prerequisite concepts are already mastered confidently. Use
-        the document title, outline, source, and intent to choose and explain
-        the profile; do not infer expertise merely from an interested reader.
-
-        Audit every supplied source block exactly once and in source order in
-        `reader_needs`. Decide whether the resolved reader needs Companion help
-        and give a concrete reason. Seed learning units when a useful approach
-        is already clear, but the seed may be empty: the mandatory chapter
-        proposer-reviewer loop owns the final additions. If a need lists a seed
-        unit, that unit must anchor the block. One unit may cover several related blocks;
-        there is no per-block unit quota and no minimum unit count. Mark a block
-        as not needing help only when its actual content is simple,
-        self-contained, and understandable for the resolved reader, and explain
-        why. Zero units are valid only when every block passes that audit.
-
-        Look actively for unexplained works, people, events, schools,
-        institutions, compressed historical claims, allusions, technical
-        concepts, and skipped reasoning. Examples that rely on another text may
-        require its plot, narrative levels, or mistaken-identity context. These
-        are non-exhaustive signals of reader need, not required categories or
-        content quotas.
-
-        Give first priority to additions that make genuinely difficult or
-        compressed material understandable for the resolved reader: supply the
-        missing context behind an isolated quotation or named work, make
-        skipped derivation steps explicit, bridge a real logical gap, or
-        explain prerequisite knowledge that this reader profile should not be
-        assumed to command confidently. Also look for evidence-grounded value
-        that became visible after the source was written: later corrections,
-        doubts, disputes, unexpectedly important developments, and the
-        historical significance of a passage or work. These priorities do not
-        remove any other useful explanatory form and do not impose a category
-        or quantity quota.
-
-        Prefer direct affirmative explanation. Use corrective contrasts such
-        as “not X but Y” only when the source, user intent, or an inspected reference
-        establishes that the misconception actually exists. Never invent a
-        belief for the reader merely to create an explanatory effect. In
-        particular, do not write “the author is not denying X, but asking Y”
-        unless some supplied material actually advances the denial claim; state
-        affirmatively that the author uses X to ask Y and spend the saved
-        attention on missing context. Write the reader profile, audit reasons,
-        and purposes in the target language.
-        """,
-        {
-            "chapter_id": chapter_id,
-            "title": title,
-            "document_title": document_title or title,
-            "document_outline": list(document_outline),
-            "target_language": target_language,
-            "intent": intent,
-            "block_ids": list(block_ids),
-            "block_access": [dict(item) for item in block_access],
-            "source_inputs": _source_input_manifest(
-                has_prior_companion=has_prior_companion,
-            ),
-        },
-    )
-
-
 _CHAPTER_GUIDE_INSTRUCTION = """
 Write the Companion for the current real chapter. The program owns chapter,
 section, block, learning-unit, and reference identities. Fill only the simple
-semantic template supplied in the loop context: one `chapter_guide`, sparse
-`section_guides` selected by `section_number`, sparse local `companions`
-selected by `after_part`, and `references` containing only `title` and
-`source`.
+semantic template supplied in the loop context: one optional `chapter_guide`
+(an object or `null`), sparse `section_guides` selected by `section_number`,
+sparse local `companions` selected by `after_part`, and `references`
+containing only `title` and `source`.
 
 The chapter guide appears before the body and helps the reader enter the
 chapter as a whole. A section guide appears after that section's translated
@@ -313,6 +144,11 @@ or the chapter guide's only purpose. Still, do not merely retell the chapter
 or reproduce its table of contents: any selection and compression must
 provide a concrete reading benefit.
 
+Return `chapter_guide: null` when the complete chapter is already simple and
+self-contained and no useful orientation, background, connection, reading
+strategy, later development, or other concrete reading benefit is available.
+Do not create a chapter guide merely to fill the field.
+
 The structured `title` field is the unit's sole main title.
 `content_markdown` must begin with substantive prose, not another Markdown
 heading. Later internal headings are allowed only when the body genuinely
@@ -327,8 +163,7 @@ before Companion generation begins. Read the original and frozen translation
 together. Use the frozen translation's proper names, translated titles, and
 technical terminology consistently in every generated title and body; do not
 silently invent a different translation. Use the supplied chapter glossary
-consistently as well. A prior Companion is optional reference material, not a
-template or accepted source.
+consistently as well.
 
 Use the reader background specified in the user intent. Otherwise, for
 popular, directional, or weakly specialized writing assume an adult with
@@ -507,8 +342,7 @@ X is a live misconception and the proposal makes that basis clear. Otherwise
 request a direct affirmative replacement even when the rest of the unit is
 strong; do not overlook the defect merely because the contrast occurs in a
 title or a technically accurate definition. Ordinary factual negation is
-allowed when the fact itself is negative. A prior Companion is optional
-reference material, not a template or authority.
+allowed when the fact itself is negative.
 
 When `arc_commands.availability` is `exact`, run the supplied original-source
 `complete-current-chapter` command before judging anything. When
@@ -540,58 +374,6 @@ def chapter_guide_reviewer_instructions() -> str:
     return _instruction_contract(
         CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
         _CHAPTER_GUIDE_REVIEW_INSTRUCTION,
-    )
-
-
-def chapter_guide_prompt(
-    *,
-    plan: Mapping[str, Any],
-    block_ids: Sequence[str],
-    block_access: Sequence[Mapping[str, Any]] = (),
-    glossary: Sequence[Mapping[str, Any]],
-    target_language: str,
-    language_result: Mapping[str, Any],
-    has_prior_companion: bool = False,
-) -> str:
-    return _prompt(
-        CHAPTER_GUIDE_PROMPT_VERSION,
-        _CHAPTER_GUIDE_INSTRUCTION,
-        {
-            "target_language": target_language,
-            "language_result": dict(language_result),
-            "plan": dict(plan),
-            "block_ids": list(block_ids),
-            "block_access": [dict(item) for item in block_access],
-            "glossary": list(glossary),
-            "source_inputs": _source_input_manifest(
-                has_prior_companion=has_prior_companion
-            ),
-        },
-    )
-
-
-def chapter_guide_review_prompt(
-    *,
-    plan: Mapping[str, Any],
-    draft: Mapping[str, Any],
-    block_ids: Sequence[str],
-    block_access: Sequence[Mapping[str, Any]] = (),
-    glossary: Sequence[Mapping[str, Any]],
-    has_prior_companion: bool = False,
-) -> str:
-    return _prompt(
-        CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
-        _CHAPTER_GUIDE_REVIEW_INSTRUCTION,
-        {
-            "plan": dict(plan),
-            "draft": dict(draft),
-            "block_ids": list(block_ids),
-            "block_access": [dict(item) for item in block_access],
-            "glossary": list(glossary),
-            "source_inputs": _source_input_manifest(
-                has_prior_companion=has_prior_companion
-            ),
-        },
     )
 
 
@@ -632,7 +414,6 @@ def author_identity_prompt(
 
 def _source_input_manifest(
     *,
-    has_prior_companion: bool = False,
     additional: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Describe verified workspace inputs without embedding their content."""
@@ -641,8 +422,6 @@ def _source_input_manifest(
         "companion-source-index",
         *additional,
     ]
-    if has_prior_companion:
-        inputs.append("prior-companion")
     return {
         "input_ids": inputs,
         "conditional_input_ids": [
@@ -696,12 +475,7 @@ __all__ = [
     "CHAPTER_GUIDE_PROPOSAL_SCHEMA",
     "CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA",
     "CHAPTER_GUIDE_REVIEW_PROMPT_VERSION",
-    "CHAPTER_PLAN_PROMPT_VERSION",
-    "CHAPTER_PLAN_SCHEMA",
     "author_identity_prompt",
-    "chapter_guide_prompt",
     "chapter_guide_proposer_instructions",
-    "chapter_guide_review_prompt",
     "chapter_guide_reviewer_instructions",
-    "chapter_plan_prompt",
 ]

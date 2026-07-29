@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from arc_jobs import atomic_write_bytes, atomic_write_json
+from arc_jobs import atomic_write_bytes, atomic_write_json, file_lease
 
 
-PROJECT_SCHEMA = "arc.companion.project.v2"
-CURRENT_SCHEMA = "arc.companion.current_release.v2"
+PROJECT_SCHEMA = "arc.companion.project.v3"
 DIAGNOSTICS_SCHEMA = "arc.companion.source_diagnostics.v1"
 
 
@@ -78,12 +75,6 @@ class CompanionProjectPaths:
         return self.runtime_root / "jobs"
 
     @property
-    def frozen_assets_root(self) -> Path:
-        """Project-owned copies of source assets needed for later rendering."""
-
-        return self.runtime_root / "frozen-assets"
-
-    @property
     def diagnostics_visual_root(self) -> Path:
         """Project-owned visual diagnostics, grouped by logical run."""
 
@@ -102,24 +93,18 @@ class CompanionProjectPaths:
         return self.operator_inputs_root / _validate_run_id(run_id)
 
     @property
-    def releases_root(self) -> Path:
-        return self.root / "releases"
-
-    @property
-    def current(self) -> Path:
-        return self.runtime_root / "current.json"
-
-    @property
-    def delivery_pdf(self) -> Path:
-        return self.root / "companion.pdf"
-
-    @property
     def delivery_html(self) -> Path:
         return self.root / "companion.html"
 
     @property
     def delivery_lease(self) -> Path:
         return self.runtime_root / "delivery.lock"
+
+    def publication_workspace(self, run_id: str) -> Path:
+        return self.runtime_root / "publications" / _validate_run_id(run_id)
+
+    def publication_html(self, run_id: str) -> Path:
+        return self.publication_workspace(run_id) / "companion.html"
 
     @property
     def current_run_id(self) -> str | None:
@@ -128,27 +113,25 @@ class CompanionProjectPaths:
     def select_run(self, run_id: str) -> None:
         if not run_id:
             raise ValueError("run_id must be non-empty")
-        self._write_project(run_id)
+        with file_lease(self.delivery_lease, blocking=True):
+            self._write_project(run_id)
 
-    def current_release(self) -> dict[str, Any] | None:
-        if not self.current.exists():
-            return None
-        value = _read_json(self.current, "current release")
-        if set(value) != {
-            "schema_version",
-            "release_id",
-            "manifest",
-            "run_id",
-        } or value.get("schema_version") != CURRENT_SCHEMA:
-            raise CompanionProjectError(
-                "project_state_invalid", "current release pointer is invalid"
-            )
-        for key in ("release_id", "manifest", "run_id"):
-            if not isinstance(value.get(key), str) or not value[key]:
+    def promote_publication_html(self, run_id: str) -> bool:
+        """Promote a verified run-specific reader only while it is selected."""
+
+        source = self.publication_html(run_id)
+        with file_lease(self.delivery_lease, blocking=True):
+            if self.current_run_id != run_id:
+                return False
+            try:
+                payload = source.read_bytes()
+            except OSError as exc:
                 raise CompanionProjectError(
-                    "project_state_invalid", "current release pointer is invalid"
-                )
-        return value
+                    "publication_html_unavailable",
+                    "run-specific standalone HTML is unreadable",
+                ) from exc
+            atomic_write_bytes(self.delivery_html, payload)
+            return True
 
     def write_source_diagnostics(
         self, run_id: str, warnings: tuple[str, ...]
@@ -185,65 +168,6 @@ class CompanionProjectPaths:
             )
         return tuple(value["warnings"])
 
-    def frozen_asset_path(self, digest: str) -> Path:
-        if not _is_digest(digest):
-            raise ValueError("asset digest must be a SHA-256 digest")
-        return self.frozen_assets_root / digest
-
-    def freeze_asset(self, digest: str, payload: bytes) -> Path:
-        """Persist one verified source asset with the project, atomically."""
-
-        if not isinstance(payload, bytes):
-            raise TypeError("asset payload must be bytes")
-        if _digest(payload) != digest:
-            raise CompanionProjectError(
-                "asset_digest_mismatch",
-                "source asset does not match its declared digest",
-            )
-        path = self.frozen_asset_path(digest)
-        if path.exists():
-            try:
-                existing = path.read_bytes()
-            except OSError as exc:
-                raise CompanionProjectError(
-                    "project_state_invalid",
-                    "frozen source asset is unreadable",
-                ) from exc
-            if _digest(existing) != digest:
-                # The filename is content-addressed; a mismatched existing
-                # payload is accidental project corruption and may be repaired
-                # from the verified shared cache payload.
-                atomic_write_bytes(path, payload)
-                return path
-            if existing != payload:
-                raise CompanionProjectError(
-                    "asset_digest_mismatch",
-                    "frozen source asset conflicts with its declared digest",
-                )
-            return path
-        atomic_write_bytes(path, payload)
-        return path
-
-    def publish_current(
-        self, *, release_id: str, manifest: Path, run_id: str
-    ) -> None:
-        try:
-            relative = manifest.relative_to(self.root).as_posix()
-        except ValueError as exc:
-            raise CompanionProjectError(
-                "release_path_invalid",
-                "release manifest must be inside the project",
-            ) from exc
-        _atomic_json(
-            self.current,
-            {
-                "schema_version": CURRENT_SCHEMA,
-                "release_id": release_id,
-                "manifest": relative,
-                "run_id": run_id,
-            },
-        )
-
     def _read_project(self) -> dict[str, Any]:
         value = _read_json(self.marker, "project marker")
         if set(value) != {"schema_version", "current_run_id"}:
@@ -276,9 +200,7 @@ class CompanionProjectPaths:
             return arc_root
         for path in (
             self.runtime_root,
-            self.delivery_pdf,
             self.delivery_html,
-            self.releases_root,
         ):
             if _path_exists(path):
                 return path
@@ -328,16 +250,7 @@ def _path_exists(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
-def _digest(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _is_digest(value: str) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
-
-
 __all__ = [
-    "CURRENT_SCHEMA",
     "DIAGNOSTICS_SCHEMA",
     "PROJECT_SCHEMA",
     "CompanionProjectError",

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from collections.abc import Mapping
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -34,15 +32,17 @@ from arc_paper import (
     SourceBundle,
     detect_suspicious_equation_labels,
 )
+from arc_render import (
+    HTMLRenderError,
+    RenderWorkspaceError,
+    read_publication,
+    render_publication_html,
+    validate_publication_workspace,
+    validate_standalone_html,
+)
 
 from .project import CompanionProjectError, CompanionProjectPaths
 from .reader_labels import ReaderLabelError, resolve_reader_labels
-from .release import (
-    CompanionReleaseError,
-    CompanionReleasePublisher,
-    validate_current_delivery,
-)
-from .renderer import CompanionRenderError, CompanionRenderer
 from .request_contracts import (
     CompanionBuildRequest,
     CompanionExecutionOptions,
@@ -56,11 +56,6 @@ from .service import (
 from .translation_adapter import (
     CompanionTranslationRuntimeError,
     require_translation_runtime,
-)
-from .translation_reuse import (
-    TranslationReuseError,
-    TranslationReuseReceipt,
-    TranslationReuseSource,
 )
 
 
@@ -87,7 +82,7 @@ def _parser() -> _Parser:
         prog="arc-companion",
         description=(
             "Build, resume, render, and validate source-anchored Companion "
-            "releases. Results are always JSON."
+            "publications. Results are always JSON."
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -131,22 +126,13 @@ def _parser() -> _Parser:
         "--approx-term-count", type=int, default=50, help="target glossary size (default: 50)"
     )
     build.add_argument("--refresh", action="store_true", help="refresh cached source data")
-    build.add_argument(
-        "--reuse-translation-from",
-        help=(
-            "reuse exact language, glossary, and translation results from the "
-            "selected successful run in another Companion project, and supply "
-            "its prior guide as optional model context"
-        ),
-    )
     _host_authority_argument(build)
     _paper_cache_argument(build)
-    _pdf_validation_argument(build)
 
     status = commands.add_parser(
         "status",
-        help="inspect the selected build and active release",
-        description="Inspect the selected Companion build and active release.",
+        help="inspect the selected build",
+        description="Inspect the selected Companion build and publication.",
     )
     status.add_argument("--project-dir", required=True, help="Companion project directory")
 
@@ -168,7 +154,6 @@ def _parser() -> _Parser:
     )
     _paper_cache_argument(resume)
     _host_authority_argument(resume)
-    _pdf_validation_argument(resume)
 
     stop = commands.add_parser(
         "stop",
@@ -180,26 +165,17 @@ def _parser() -> _Parser:
 
     render = commands.add_parser(
         "render",
-        help="publish PDF and web release artifacts",
-        description="Publish release artifacts from the accepted Companion book.",
+        help="render a standalone HTML publication",
+        description="Render standalone HTML from the selected publication.",
     )
     render.add_argument("--project-dir", required=True, help="Companion project directory")
-    render.add_argument(
-        "--format",
-        choices=("all", "pdf", "web"),
-        default="all",
-        help="artifact formats to report (default: all)",
-    )
-    _paper_cache_argument(render)
-    _pdf_validation_argument(render)
 
     validate = commands.add_parser(
         "validate",
-        help="validate the active Companion release",
-        description="Validate the active release manifest and rendered artifacts.",
+        help="validate the selected Companion publication",
+        description="Validate the publication workspace and standalone HTML.",
     )
     validate.add_argument("--project-dir", required=True, help="Companion project directory")
-    _pdf_validation_argument(validate)
     return parser
 
 
@@ -234,18 +210,6 @@ def _host_authority_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _pdf_validation_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--pdf-validation",
-        choices=("text", "visual"),
-        default="text",
-        help=(
-            "PDF output validation mode: text checks searchable text; visual "
-            "checks PDF metadata, embedded fonts, and page rasters only"
-        ),
-    )
-
-
 def _execution_options(args: argparse.Namespace) -> CompanionExecutionOptions:
     return CompanionExecutionOptions(
         workers=args.workers,
@@ -270,14 +234,22 @@ def main(argv: list[str] | None = None) -> int:
     except (
         ArcJobsError,
         CompanionProjectError,
-        CompanionReleaseError,
-        CompanionRenderError,
         CompanionServiceError,
         CompanionTranslationRuntimeError,
-        TranslationReuseError,
         RichDocumentValidationError,
+        HTMLRenderError,
     ) as exc:
-        code = str(exc.code)
+        code = str(
+            getattr(
+                exc,
+                "code",
+                (
+                    "html_render_failed"
+                    if isinstance(exc, HTMLRenderError)
+                    else "internal_error"
+                ),
+            )
+        )
         raw_details = getattr(exc, "details", {}) or {}
         details = (
             dict(raw_details)
@@ -379,27 +351,9 @@ def _build(args: argparse.Namespace) -> CommandResult:
     )
     execution = _execution_options(args)
     service = CompanionService(paths.jobs_root)
-    reuse_source = (
-        TranslationReuseSource(args.reuse_translation_from)
-        if args.reuse_translation_from is not None
-        else None
-    )
-    reuse_plan = None
-    if reuse_source is not None:
-        reuse_plan = service.plan_translation_reuse(
-            reuse_source, request, recipe
-        )
-        request = replace(
-            request, translation_reuse_digest=reuse_plan.reuse_digest
-        )
     run_id = companion_run_id(request, recipe)
     prepared = service.prepare(request, recipe=recipe, run_id=run_id)
     run_id = prepared.run_id
-    if reuse_source is not None:
-        assert reuse_plan is not None
-        service.stage_translation_reuse(
-            run_id, reuse_source, plan=reuse_plan
-        )
     paths.select_run(run_id)
     paths.write_source_diagnostics(run_id, warnings)
     snapshot = service.execute(
@@ -410,8 +364,6 @@ def _build(args: argparse.Namespace) -> CommandResult:
         paths,
         snapshot,
         warnings=warnings,
-        paper_cache_root=args.paper_cache_root,
-        pdf_validation=args.pdf_validation,
     )
 
 
@@ -429,8 +381,6 @@ def _resume(args: argparse.Namespace) -> CommandResult:
     return _snapshot_result(
         paths,
         snapshot,
-        paper_cache_root=args.paper_cache_root,
-        pdf_validation=args.pdf_validation,
     )
 
 
@@ -443,6 +393,11 @@ def _validate_workers(workers: int) -> None:
 
 def _status(args: argparse.Namespace) -> CommandResult:
     paths = CompanionProjectPaths.load(args.project_dir)
+    with file_lease(paths.delivery_lease, blocking=True):
+        return _status_locked(paths)
+
+
+def _status_locked(paths: CompanionProjectPaths) -> CommandResult:
     run_id = _current_run(paths)
     view = CompanionService(paths.jobs_root).inspect(run_id)
     base = command_result_from_snapshot(
@@ -450,70 +405,80 @@ def _status(args: argparse.Namespace) -> CommandResult:
         query=view.snapshot.status
         in {RunStatus.PENDING, RunStatus.RUNNING},
     )
-    (
-        current,
-        available_formats,
-        release_warnings,
-        delivery_warnings,
-    ) = _status_release_state(paths)
     selected_run = snapshot_data(view.snapshot)
-    release_matches_selected_run = (
-        current is not None and current["run_id"] == run_id
-    )
-    active_release = (
-        {
-            **current,
-            "available_formats": list(available_formats),
-        }
-        if current is not None
-        else None
-    )
     data: dict[str, Any] = {
         "selected_run": selected_run,
-        "active_release": active_release,
-        "release_matches_selected_run": release_matches_selected_run,
         "build_diagnostics": CompanionService(
             paths.jobs_root
         ).build_diagnostics(run_id),
     }
-    receipt = CompanionService(paths.jobs_root).translation_reuse_receipt(
-        run_id
-    )
-    if receipt is not None:
-        data["translation_reuse"] = dict(receipt.document)
-    artifacts = ()
-    if (
-        current is not None
-        and release_matches_selected_run
-        and not release_warnings
-        and not delivery_warnings
-    ):
-        artifacts = (
-            *(
-                (
-                    CommandArtifact(
-                        "pdf",
-                        str(current["release_id"]),
-                        str(paths.delivery_pdf),
-                    ),
+    artifacts: tuple[CommandArtifact, ...] = ()
+    publication_warnings: list[CommandWarning] = []
+    if view.snapshot.status is RunStatus.SUCCEEDED:
+        publication = CompanionService(paths.jobs_root).publication(run_id)
+        data["publication_digest"] = publication.publication_digest
+        workspace = paths.publication_workspace(run_id)
+        publication_path = workspace / "publication.json"
+        validated_artifacts: list[CommandArtifact] = []
+        if publication_path.is_file():
+            try:
+                diagnostics = validate_publication_workspace(
+                    publication_path
                 )
-                if "pdf" in available_formats
-                else ()
-            ),
-            CommandArtifact(
-                "web", str(current["release_id"]), str(paths.delivery_html)
-            ),
-            CommandArtifact(
-                "manifest",
-                str(current["release_id"]),
-                str(paths.root / str(current["manifest"])),
-            ),
-        )
-    if receipt is not None:
-        artifacts = (
-            *artifacts,
-            _translation_reuse_command_artifact(paths, run_id, receipt),
-        )
+                materialized = read_publication(publication_path)
+                if (
+                    materialized.publication_digest
+                    != publication.publication_digest
+                ):
+                    raise HTMLRenderError(
+                        "materialized publication belongs to another run"
+                    )
+                data["publication"] = str(publication_path)
+                validated_artifacts.append(
+                    CommandArtifact(
+                        "publication", run_id, str(publication_path)
+                    )
+                )
+                publication_warnings.extend(
+                    CommandWarning(
+                        "fragment_revision_diagnostic", item
+                    )
+                    for item in diagnostics
+                )
+            except (
+                HTMLRenderError,
+                RenderWorkspaceError,
+                OSError,
+            ) as exc:
+                publication_warnings.append(
+                    CommandWarning(
+                        "publication_workspace_invalid", str(exc)
+                    )
+                )
+        else:
+            publication_warnings.append(
+                CommandWarning(
+                    "publication_workspace_missing",
+                    "the selected run has not been materialized",
+                )
+            )
+        if paths.delivery_html.is_file():
+            try:
+                validate_standalone_html(
+                    publication, paths.delivery_html
+                )
+                validated_artifacts.append(
+                    CommandArtifact(
+                        "web", run_id, str(paths.delivery_html)
+                    )
+                )
+            except HTMLRenderError as exc:
+                publication_warnings.append(
+                    CommandWarning(
+                        "standalone_html_stale", str(exc)
+                    )
+                )
+        artifacts = tuple(validated_artifacts)
     return CommandResult(
         base.status,
         run=base.run,
@@ -522,8 +487,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
         warnings=(
             *_source_warnings(paths, run_id),
             *_build_warnings(paths, run_id),
-            *release_warnings,
-            *delivery_warnings,
+            *publication_warnings,
         ),
         error=base.error,
         resume=base.resume,
@@ -556,76 +520,83 @@ def _render(args: argparse.Namespace) -> CommandResult:
     snapshot = service.inspect(run_id).snapshot
     if snapshot.status is not RunStatus.SUCCEEDED:
         return command_result_from_snapshot(snapshot)
-    book = service.accepted_book(run_id)
-    try:
-        release = _publisher(
-            paths,
-            paper_cache_root=args.paper_cache_root,
-            pdf_validation=args.pdf_validation,
-        ).publish(book, run_id=run_id)
-    except CompanionRenderError as exc:
-        return _unpublished_render_result(exc)
-    roles = {"pdf", "web"} if args.format == "all" else {args.format}
+    publication_path = service.materialize_publication(
+        run_id, paths.publication_workspace(run_id)
+    )
+    publication = service.publication(run_id)
+    warnings: list[CommandWarning] = []
     artifacts = [
-        CommandArtifact("manifest", release.release_id, str(release.manifest))
+        CommandArtifact("publication", run_id, str(publication_path))
     ]
-    if "pdf" in roles and release.pdf is not None:
+    rendered = render_publication_html(
+        publication_path,
+        paths.publication_html(run_id),
+    )
+    promoted = paths.promote_publication_html(run_id)
+    if promoted:
         artifacts.append(
-            CommandArtifact("pdf", release.release_id, str(paths.delivery_pdf))
+            CommandArtifact("web", run_id, str(paths.delivery_html))
         )
-    if "web" in roles:
-        artifacts.append(
-            CommandArtifact("web", release.release_id, str(paths.delivery_html))
+    else:
+        warnings.append(
+            CommandWarning(
+                "publication_not_selected",
+                "standalone HTML was rendered for the run but not promoted "
+                "because another run is selected",
+            )
         )
+    warnings.extend(
+        CommandWarning("fragment_revision_diagnostic", item)
+        for item in rendered.warnings
+    )
     return CommandResult(
         CommandStatus.COMPLETED,
         data={
-            "release_id": release.release_id,
-            "reused": release.reused,
-            "available_formats": list(release.available_formats),
-            "delivery": _delivery_paths(paths, release.available_formats),
+            "publication_digest": publication.publication_digest,
+            "delivery": (
+                {"html": str(paths.delivery_html)}
+                if promoted
+                else {}
+            ),
         },
         artifacts=tuple(artifacts),
-        warnings=_release_render_warnings(release),
+        warnings=tuple(warnings),
     )
 
 
 def _validate(args: argparse.Namespace) -> CommandResult:
     paths = CompanionProjectPaths.load(args.project_dir)
-    current = paths.current_release()
-    if current is None:
-        return _failed("release_not_found", "project has no current release")
-    run_id = current["run_id"]
-    book = CompanionService(paths.jobs_root).accepted_book(run_id)
-    release = _publisher(
-        paths, pdf_validation=args.pdf_validation
-    ).validate_current(current, book)
+    with file_lease(paths.delivery_lease, blocking=True):
+        return _validate_locked(paths)
+
+
+def _validate_locked(paths: CompanionProjectPaths) -> CommandResult:
+    run_id = _current_run(paths)
+    service = CompanionService(paths.jobs_root)
+    publication_path = service.materialize_publication(
+        run_id, paths.publication_workspace(run_id)
+    )
+    warnings = validate_publication_workspace(publication_path)
+    publication = service.publication(run_id)
+    if not paths.delivery_html.is_file():
+        raise HTMLRenderError(
+            "the selected publication has no standalone HTML release"
+        )
+    validate_standalone_html(publication, paths.delivery_html)
     return CommandResult(
         CommandStatus.COMPLETED,
         data={
-            "release_id": release.release_id,
+            "publication_digest": publication.publication_digest,
             "valid": True,
-            "available_formats": list(release.available_formats),
-            "delivery": _delivery_paths(paths, release.available_formats),
         },
         artifacts=(
-            CommandArtifact(
-                "manifest", release.release_id, str(release.manifest)
-            ),
-            *(
-                (
-                    CommandArtifact(
-                        "pdf",
-                        release.release_id,
-                        str(paths.delivery_pdf),
-                    ),
-                )
-                if release.pdf is not None
-                else ()
-            ),
-            CommandArtifact(
-                "web", release.release_id, str(paths.delivery_html)
-            ),
+            CommandArtifact("publication", run_id, str(publication_path)),
+            *((CommandArtifact("web", run_id, str(paths.delivery_html)),)
+              if paths.delivery_html.is_file() else ()),
+        ),
+        warnings=tuple(
+            CommandWarning("fragment_revision_diagnostic", item)
+            for item in warnings
         ),
     )
 
@@ -635,8 +606,6 @@ def _snapshot_result(
     snapshot: Any,
     *,
     warnings: tuple[str, ...] = (),
-    paper_cache_root: str | Path | None = None,
-    pdf_validation: str = "text",
 ) -> CommandResult:
     base = command_result_from_snapshot(snapshot)
     persisted = paths.source_diagnostics(snapshot.run_id)
@@ -659,41 +628,50 @@ def _snapshot_result(
             resume=base.resume,
         )
     service = CompanionService(paths.jobs_root)
-    book = service.accepted_book(snapshot.run_id)
-    receipt = service.translation_reuse_receipt(snapshot.run_id)
     try:
-        release = _publisher(
-            paths,
-            paper_cache_root=paper_cache_root,
-            pdf_validation=pdf_validation,
-        ).publish(book, run_id=snapshot.run_id)
-    except CompanionRenderError as exc:
+        publication_path = service.materialize_publication(
+            snapshot.run_id,
+            paths.publication_workspace(snapshot.run_id),
+        )
+        rendered = render_publication_html(
+            publication_path,
+            paths.publication_html(snapshot.run_id),
+        )
+        publication = service.publication(snapshot.run_id)
+    except (HTMLRenderError, OSError) as exc:
         return CommandResult(
             CommandStatus.COMPLETED,
             run=base.run,
             data={
                 "run": snapshot_data(snapshot),
                 "published": False,
-                "available_formats": [],
                 "delivery": {},
-                **(
-                    {"translation_reuse": dict(receipt.document)}
-                    if receipt is not None
-                    else {}
-                ),
             },
-            artifacts=(
-                (
-                    _translation_reuse_command_artifact(
-                        paths, snapshot.run_id, receipt
-                    ),
-                )
-                if receipt is not None
-                else ()
-            ),
+            artifacts=(),
             warnings=(
                 *command_warnings,
-                _web_render_warning(exc),
+                CommandWarning("web_render_failed", str(exc)),
+            ),
+        )
+    try:
+        promoted = paths.promote_publication_html(snapshot.run_id)
+        promotion_warnings = (
+            ()
+            if promoted
+            else (
+                CommandWarning(
+                    "publication_not_selected",
+                    "standalone HTML was rendered for the run but not promoted "
+                    "because another run is selected",
+                ),
+            )
+        )
+    except (CompanionProjectError, OSError) as exc:
+        promoted = False
+        promotion_warnings = (
+            CommandWarning(
+                "web_render_failed",
+                f"standalone HTML could not be promoted: {exc}",
             ),
         )
     return CommandResult(
@@ -701,62 +679,34 @@ def _snapshot_result(
         run=base.run,
         data={
             "run": snapshot_data(snapshot),
-            "release_id": release.release_id,
-            "reused": release.reused,
-            "available_formats": list(release.available_formats),
-            "delivery": _delivery_paths(paths, release.available_formats),
-            **(
-                {"translation_reuse": dict(receipt.document)}
-                if receipt is not None
+            "publication_digest": publication.publication_digest,
+            "delivery": (
+                {"html": str(paths.delivery_html)}
+                if promoted
                 else {}
             ),
         },
         artifacts=(
+            CommandArtifact("publication", snapshot.run_id, str(publication_path)),
             *(
                 (
                     CommandArtifact(
-                        "pdf",
-                        release.release_id,
-                        str(paths.delivery_pdf),
+                        "web",
+                        snapshot.run_id,
+                        str(paths.delivery_html),
                     ),
                 )
-                if release.pdf is not None
-                else ()
-            ),
-            CommandArtifact("web", release.release_id, str(paths.delivery_html)),
-            CommandArtifact(
-                "manifest", release.release_id, str(release.manifest)
-            ),
-            *(
-                (
-                    _translation_reuse_command_artifact(
-                        paths, snapshot.run_id, receipt
-                    ),
-                )
-                if receipt is not None
+                if promoted
                 else ()
             ),
         ),
         warnings=(
             *command_warnings,
-            *_release_render_warnings(release),
-        ),
-    )
-
-
-def _translation_reuse_command_artifact(
-    paths: CompanionProjectPaths,
-    run_id: str,
-    receipt: TranslationReuseReceipt,
-) -> CommandArtifact:
-    return CommandArtifact(
-        "translation_reuse_receipt",
-        receipt.artifact_ref.artifact_id,
-        str(
-            paths.jobs_root
-            / "runs"
-            / run_id
-            / receipt.artifact_ref.relative_path
+            *(
+                CommandWarning("fragment_revision_diagnostic", item)
+                for item in rendered.warnings
+            ),
+            *promotion_warnings,
         ),
     )
 
@@ -850,43 +800,6 @@ def _resolve_source(
     )
 
 
-def _publisher(
-    paths: CompanionProjectPaths,
-    *,
-    paper_cache_root: str | Path | None = None,
-    pdf_validation: str = "text",
-) -> CompanionReleasePublisher:
-    paper: ArcPaperService | None = None
-
-    def load_asset(digest: str) -> bytes | None:
-        frozen = paths.frozen_asset_path(digest)
-        try:
-            if frozen.is_file():
-                payload = frozen.read_bytes()
-                if hashlib.sha256(payload).hexdigest() == digest:
-                    return payload
-        except OSError:
-            pass
-        nonlocal paper
-        if paper is None:
-            paper = ArcPaperService(cache_root=paper_cache_root)
-        try:
-            asset = paper.repository.get_asset(digest)
-            payload = paper.repository.read_asset_bytes(asset)
-            paths.freeze_asset(digest, payload)
-            return payload
-        except Exception:
-            return None
-
-    return CompanionReleasePublisher(
-        paths,
-        CompanionRenderer(
-            asset_loader=load_asset,
-            pdf_validation=pdf_validation,
-        ),
-    )
-
-
 def _current_run(paths: CompanionProjectPaths) -> str:
     value = paths.current_run_id
     if value is None:
@@ -894,59 +807,6 @@ def _current_run(paths: CompanionProjectPaths) -> str:
             "run_not_found", "project has no selected build run"
         )
     return value
-
-
-def _delivery_paths(
-    paths: CompanionProjectPaths,
-    available_formats: tuple[str, ...],
-) -> dict[str, str]:
-    delivery = {"html": str(paths.delivery_html)}
-    if "pdf" in available_formats:
-        delivery["pdf"] = str(paths.delivery_pdf)
-    return delivery
-
-
-def _release_render_warnings(
-    release: Any,
-) -> tuple[CommandWarning, ...]:
-    if "pdf" in release.available_formats:
-        return ()
-    messages = tuple(release.warnings) or (
-        "PDF rendering or validation failed; published the Web reader only.",
-    )
-    return tuple(
-        CommandWarning(
-            "pdf_render_failed",
-            message,
-            {
-                "format": "pdf",
-                "available_formats": list(release.available_formats),
-            },
-        )
-        for message in messages
-    )
-
-
-def _web_render_warning(exc: CompanionRenderError) -> CommandWarning:
-    return CommandWarning(
-        "web_render_failed",
-        str(exc),
-        {"format": "web", "available_formats": []},
-    )
-
-
-def _unpublished_render_result(
-    exc: CompanionRenderError,
-) -> CommandResult:
-    return CommandResult(
-        CommandStatus.COMPLETED,
-        data={
-            "published": False,
-            "available_formats": [],
-            "delivery": {},
-        },
-        warnings=(_web_render_warning(exc),),
-    )
 
 
 def _source_warnings(
@@ -970,76 +830,6 @@ def _build_warnings(
         CommandWarning("equation_label_review", item)
         for item in diagnostics["warnings"]
     )
-
-
-def _release_pointer_warnings(
-    paths: CompanionProjectPaths,
-    current: Mapping[str, Any] | None,
-) -> tuple[CommandWarning, ...]:
-    if current is None:
-        return ()
-    expected_manifest = (
-        paths.releases_root / str(current["release_id"]) / "manifest.json"
-    )
-    expected_relative = expected_manifest.relative_to(paths.root).as_posix()
-    if current["manifest"] != expected_relative:
-        return (
-            CommandWarning(
-                "release_pointer_invalid",
-                "active release manifest does not match its release ID",
-            ),
-        )
-    if not expected_manifest.is_file():
-        return (
-            CommandWarning(
-                "release_pointer_stale",
-                "active release is missing; rerun render for the selected run",
-            ),
-        )
-    return ()
-
-
-def _status_release_state(
-    paths: CompanionProjectPaths,
-) -> tuple[
-    dict[str, Any] | None,
-    tuple[str, ...],
-    tuple[CommandWarning, ...],
-    tuple[CommandWarning, ...],
-]:
-    # Do not create a lease file for a project that has never published. A
-    # concurrent first publication linearizes after this empty observation.
-    if paths.current_release() is None:
-        return None, (), (), ()
-    with file_lease(paths.delivery_lease, blocking=True):
-        current = paths.current_release()
-        release_warnings = _release_pointer_warnings(paths, current)
-        available_formats, delivery_warnings = _delivery_state(
-            paths,
-            current,
-            release_warnings=release_warnings,
-        )
-        return (
-            current,
-            available_formats,
-            release_warnings,
-            delivery_warnings,
-        )
-
-
-def _delivery_state(
-    paths: CompanionProjectPaths,
-    current: Mapping[str, Any] | None,
-    *,
-    release_warnings: tuple[CommandWarning, ...],
-) -> tuple[tuple[str, ...], tuple[CommandWarning, ...]]:
-    if current is None or release_warnings:
-        return (), ()
-    try:
-        available_formats = validate_current_delivery(paths, dict(current))
-    except CompanionReleaseError as exc:
-        return (), (CommandWarning("delivery_invalid", str(exc)),)
-    return available_formats, ()
 
 
 def _json_input(value: str) -> Mapping[str, Any]:

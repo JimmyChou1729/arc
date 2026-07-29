@@ -252,15 +252,16 @@ def test_complete_visual_mapping_becomes_the_effective_build_source(
     )
     assert completed.status is RunStatus.SUCCEEDED
     assert tasks.plan_labels == ["1", "2"]
-    book = service.accepted_book(completed.run_id)
-    assert book.document_digest != source.document_digest
-    labels = [
-        anchor.payload["label"]
-        for chapter in book.chapters
-        for anchor in chapter.source_anchors
-        if anchor.kind == "equation"
+    effective = service.publication(completed.run_id).source_document
+    assert effective.document_digest != source.document_digest
+    reconciliation = effective.metadata[
+        "equation_label_reconciliation"
     ]
-    assert labels == ["1", "2"]
+    assert [
+        reconciliation[block.block_id]["effective_label"]
+        for block in effective.blocks
+        if block.kind is RichBlockKind.EQUATION
+    ] == ["1", "2"]
     diagnostics = service.build_diagnostics(completed.run_id)
     assert diagnostics is not None
     assert diagnostics["status"] == "applied"
@@ -299,7 +300,9 @@ def test_incomplete_visual_mapping_warns_and_keeps_all_web_labels(
     )
     assert completed.status is RunStatus.SUCCEEDED
     assert tasks.plan_labels == ["1", "3"]
-    assert service.accepted_book(completed.run_id).document_digest == (
+    assert service.publication(
+        completed.run_id
+    ).source_document.document_digest == (
         source.document_digest
     )
     diagnostics = service.build_diagnostics(completed.run_id)

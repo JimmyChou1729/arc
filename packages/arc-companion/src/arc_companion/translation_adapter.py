@@ -32,6 +32,7 @@ def require_translation_runtime() -> None:
         from arc_translate import (
             GlossaryResult,
             LanguageResult,
+            TranslationResult,
             TranslationSource,
             TranslationWorkflowService,
         )
@@ -44,6 +45,7 @@ def require_translation_runtime() -> None:
     _ = (
         GlossaryResult,
         LanguageResult,
+        TranslationResult,
         TranslationSource,
         TranslationWorkflowService,
     )

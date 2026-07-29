@@ -73,15 +73,11 @@ class ReaderLabelError(ValueError):
 def reader_labels(
     target_language: str,
     supplied: Mapping[str, str] | None = None,
-    *,
-    legacy: bool = False,
 ) -> dict[str, str]:
     """Return a complete label package for a target language.
 
-    A supplied package is deliberately all-or-nothing: a release must not
-    silently blend caller wording with a different locale.  ``legacy`` keeps
-    pre-label accepted books renderable in English when their target has no
-    built-in package.
+    A supplied package is deliberately all-or-nothing: a publication must not
+    silently blend caller wording with a different locale.
     """
 
     if supplied is not None:
@@ -112,8 +108,6 @@ def reader_labels(
         return dict(_ZH_HANS)
     if language == "zh-Hant":
         return dict(_ZH_HANT)
-    if legacy:
-        return dict(_EN)
     raise ReaderLabelError(
         "no built-in reader labels for target language "
         f"{target_language!r}; supply a complete reader_labels package"
@@ -123,16 +117,8 @@ def reader_labels(
 def resolve_reader_labels(
     target_language: str,
     custom_labels: Mapping[str, str] | None = None,
-    *,
-    allow_legacy_fallback: bool = False,
 ) -> dict[str, str]:
-    """Compatibility-facing name used by the immutable content contract."""
-
-    return reader_labels(
-        target_language,
-        custom_labels,
-        legacy=allow_legacy_fallback,
-    )
+    return reader_labels(target_language, custom_labels)
 
 
 def _canonical_language(value: str) -> str:

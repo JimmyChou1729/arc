@@ -1,4 +1,4 @@
-"""Public durable service for Companion build control and accepted content."""
+"""Public durable service for Companion build control and publications."""
 
 from __future__ import annotations
 
@@ -17,17 +17,22 @@ from arc_jobs import (
     RunStatus,
     RunView,
     canonical_json_bytes,
-    decode_artifact_ref,
 )
 from arc_llm import LLMTaskService
+from arc_render import Publication
 
 from .build import (
-    COMPATIBLE_COMPANION_BUILD_HANDLERS,
     COMPANION_BUILD_HANDLER,
     CompanionBuildHandler,
     validate_build_diagnostics,
 )
-from .contracts import AcceptedBook, CompanionContentCodec
+from .generation_validation import CompanionContentError
+from .publication import (
+    CompanionPublicationError,
+    PublishedCompanion,
+    load_published_companion,
+    materialize_published_companion,
+)
 from .request_contracts import (
     CompanionBuildRequest,
     CompanionExecutionOptions,
@@ -39,15 +44,7 @@ from .translation_adapter import (
     CompanionTranslationAdapter,
     require_translation_runtime,
 )
-from .translation_reuse import (
-    StagedTranslationReuseAdapter,
-    TranslationReusePlan,
-    TranslationReuseReceipt,
-    TranslationReuseSource,
-    plan_translation_reuse,
-    read_translation_reuse_receipt,
-    stage_translation_reuse_plan,
-)
+
 
 class CompanionServiceError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
@@ -157,11 +154,6 @@ class CompanionService:
             request, recipe = decode_handler_semantic_input(
                 spec.semantic_input
             )
-            if request.translation_reuse_digest is not None:
-                translation_adapter = StagedTranslationReuseAdapter(
-                    request.translation_reuse_digest,
-                    approx_term_count=recipe.approx_term_count,
-                )
             return CompanionBuildHandler(
                 request,
                 recipe,
@@ -169,59 +161,9 @@ class CompanionService:
                 task_service=task_service,
                 translation_adapter=translation_adapter,
             )
-        if spec.handler in COMPATIBLE_COMPANION_BUILD_HANDLERS:
-            raise CompanionServiceError(
-                "legacy_run_requires_new_build",
-                "unfinished Companion runs created by an older handler must "
-                "be rebuilt as a new run; completed releases remain readable",
-            )
         raise CompanionServiceError(
             "run_handler_invalid", "run is not a Companion build"
         )
-
-    def plan_translation_reuse(
-        self,
-        source: TranslationReuseSource,
-        request: CompanionBuildRequest,
-        recipe: CompanionGenerationRecipe | None = None,
-    ) -> TranslationReusePlan:
-        """Resolve and verify exact reusable translation content."""
-
-        return plan_translation_reuse(
-            source, request, _recipe_for_request(request, recipe)
-        )
-
-    def stage_translation_reuse(
-        self,
-        run_id: str,
-        source: TranslationReuseSource,
-        *,
-        plan: TranslationReusePlan | None = None,
-    ) -> TranslationReuseReceipt | None:
-        """Copy a verified source bundle into target-owned durable working state."""
-
-        spec = self.repository.read_working_spec(run_id)
-        request, recipe = decode_handler_semantic_input(spec.semantic_input)
-        if request.translation_reuse_digest is None:
-            raise CompanionServiceError(
-                "translation_reuse_not_requested",
-                "target run semantic input does not request translation reuse",
-            )
-        resolved = plan or plan_translation_reuse(source, request, recipe)
-        if resolved.reuse_digest != request.translation_reuse_digest:
-            raise CompanionServiceError(
-                "translation_reuse_digest_mismatch",
-                "resolved translation reuse differs from the target run",
-            )
-        stage_translation_reuse_plan(self.repository, run_id, resolved)
-        return self.translation_reuse_receipt(run_id)
-
-    def translation_reuse_receipt(
-        self, run_id: str
-    ) -> TranslationReuseReceipt | None:
-        """Return the verified consumed-reuse receipt, when present."""
-
-        return read_translation_reuse_receipt(self.repository, run_id)
 
     def inspect(self, run_id: str) -> RunView:
         return self.repository.inspect(run_id)
@@ -269,43 +211,46 @@ class CompanionService:
     def stop(self, run_id: str, *, reason: str | None = None) -> RunView:
         return self.repository.request_stop(run_id, reason=reason)
 
-    def accepted_book(self, run_id: str) -> AcceptedBook:
+    def published_companion(self, run_id: str) -> PublishedCompanion:
         snapshot = self.repository.inspect(run_id).snapshot
         if snapshot.status is not RunStatus.SUCCEEDED or snapshot.result_ref is None:
             raise CompanionServiceError(
-                "accepted_book_unavailable",
-                "run has no accepted book",
+                "publication_unavailable",
+                "run has no accepted publication",
             )
         artifacts = ImmutableArtifactStore(
             self.repository.run_directory(run_id),
             repository_root=self.repository.root,
         )
         try:
-            result = json.loads(
-                artifacts.read_bytes(snapshot.result_ref).decode("utf-8")
+            return load_published_companion(
+                artifacts, snapshot.result_ref
             )
-            if not isinstance(result, Mapping) or set(result) != {
-                "schema_version",
-                "accepted_book",
-            }:
-                raise ValueError("invalid result fields")
-            if result["schema_version"] != "arc.companion.build_result.v1":
-                raise ValueError("unsupported result schema")
-            raw_ref = result["accepted_book"]
-            if not isinstance(raw_ref, Mapping):
-                raise ValueError("accepted_book ref must be an object")
-            book_ref = decode_artifact_ref(raw_ref)
-            return CompanionContentCodec.loads(artifacts.read_bytes(book_ref))
-        except (
-            OSError,
-            UnicodeDecodeError,
-            json.JSONDecodeError,
-            TypeError,
-            ValueError,
-        ) as exc:
+        except CompanionPublicationError as exc:
             raise CompanionServiceError(
-                "accepted_book_invalid",
-                "run accepted-book artifact is invalid",
+                "publication_invalid",
+                "run publication artifacts are invalid",
+            ) from exc
+
+    def publication(self, run_id: str) -> Publication:
+        return self.published_companion(run_id).publication
+
+    def materialize_publication(
+        self, run_id: str, workspace: str | Path
+    ) -> Path:
+        published = self.published_companion(run_id)
+        artifacts = ImmutableArtifactStore(
+            self.repository.run_directory(run_id),
+            repository_root=self.repository.root,
+        )
+        try:
+            return materialize_published_companion(
+                artifacts, published, workspace
+            )
+        except CompanionPublicationError as exc:
+            raise CompanionServiceError(
+                "publication_invalid",
+                "run publication cannot be materialized",
             ) from exc
 
 

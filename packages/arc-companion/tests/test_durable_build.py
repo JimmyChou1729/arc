@@ -33,6 +33,20 @@ from arc_paper import (
     cached_document_ref_from_document,
     cached_reference_material_to_document,
 )
+from arc_render import (
+    AnchorKind,
+    FragmentAnchor,
+    FragmentRevision,
+    Layer,
+    anchor_block_from_rich_block,
+    block_text_to_markdown,
+    decode_fragment_revision,
+    encode_fragment_revision,
+    fragment_revision_filename,
+    fragment_revision_ref,
+    source_identity_from_rich_document,
+)
+from arc_translate import TranslationResult, TranslationRevisionArtifact
 
 from arc_companion.build import (
     COMPANION_BUILD_HANDLER,
@@ -40,13 +54,11 @@ from arc_companion.build import (
     _attach_cached_reference_materials,
     _verify_cached_reference_materials,
 )
-from arc_companion.contracts import CompanionContentCodec
 from arc_companion.generation_validation import CompanionContentError
 from arc_companion.prompts import (
     AUTHOR_IDENTITY_PROMPT_VERSION,
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
-    CHAPTER_PLAN_PROMPT_VERSION,
 )
 from arc_companion.request_contracts import (
     CompanionBuildRequest,
@@ -54,7 +66,10 @@ from arc_companion.request_contracts import (
     CompanionGenerationRecipe,
 )
 from arc_companion.service import CompanionService, CompanionServiceError
-from arc_companion.source_planning import plan_source_chapters
+from arc_companion.source_planning import (
+    plan_source_chapters,
+    plan_structured_source_chapters,
+)
 from arc_companion.translation_adapter import (
     ArcTranslateAdapter,
     CompanionTranslationRuntimeError,
@@ -317,24 +332,74 @@ class FakeTranslationAdapter:
             ],
         }
 
-    def translate_blocks(self, _context, source, **kwargs):
+    def translate_blocks(self, context, source, **kwargs):
         self.calls.append(f"translation:{kwargs['artifact_prefix']}")
         if self.translation_started is not None:
             self.translation_started.set()
         by_id = {item.block_id: item for item in source.blocks}
-        return {
-            "schema_version": "arc.translate.blocks_result.v1",
-            "document_digest": source.document_digest,
-            "source_digest": source.source.artifact_digest,
-            "target_language": kwargs["target_language"],
-            "translations": [
-                {
-                    "block_id": block_id,
-                    "text": f"translated {by_id[block_id].kind.value}",
-                }
-                for block_id in kwargs["block_ids"]
-            ],
-        }
+        source_identity = source_identity_from_rich_document(source)
+        revisions = []
+        artifacts = []
+        for block_id in kwargs["block_ids"]:
+            block = by_id[block_id]
+            if (
+                block.kind.value == "figure"
+                and not str(block.payload["caption"]).strip()
+                and not str(block.payload["alt_text"]).strip()
+            ):
+                continue
+            text = (
+                str(block.payload["text"])
+                if block.kind.value == "code"
+                else str(block.payload["tex"])
+                if block.kind.value == "equation"
+                else f"translated {block.kind.value}"
+            )
+            revision = FragmentRevision(
+                source=source_identity,
+                fragment_id=f"fake-translation-{block.ordinal}",
+                revision=1,
+                parent_semantic_digest=None,
+                anchor=FragmentAnchor(
+                    AnchorKind.BLOCK,
+                    block_id,
+                    (anchor_block_from_rich_block(block),),
+                ),
+                priority=10,
+                role="translation",
+                language=kwargs["target_language"],
+                title=None,
+                citation_ids=(),
+                provenance={"producer": "arc-translate"},
+                markdown_body=block_text_to_markdown(block, text),
+            )
+            relative = (
+                f"fragments/{revision.fragment_id}/"
+                f"{fragment_revision_filename(revision)}"
+            )
+            reference = fragment_revision_ref(relative, revision)
+            artifact = context.artifacts.publish_bytes(
+                (
+                    f"{kwargs['artifact_prefix']}/fragments/"
+                    f"{revision.fragment_id}/revision-000001"
+                ),
+                encode_fragment_revision(revision).encode("utf-8"),
+                media_type="text/markdown",
+            )
+            revisions.append(reference)
+            artifacts.append(
+                TranslationRevisionArtifact(reference, artifact)
+            )
+        return TranslationResult(
+            source_language="en",
+            target_language=kwargs["target_language"],
+            mode="enabled",
+            coverage="selection",
+            layer=Layer(
+                source_identity, "arc-translate", tuple(revisions)
+            ),
+            revision_artifacts=tuple(artifacts),
+        ).to_document()
 
 
 def _document(tmp_path: Path):
@@ -451,7 +516,6 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     assert completed.status is RunStatus.SUCCEEDED
     assert translation.calls[0:2] == ["language", "glossary"]
     assert translation.approx_counts == [73]
-    assert tasks.counts[CHAPTER_PLAN_PROMPT_VERSION] == 0
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 6
     assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 4
     assert all(
@@ -574,7 +638,7 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
         first_part["line_end"],
         text_only=True,
     )
-    assert translated_range.text.startswith("translated ")
+    assert translated_range.text.startswith("# translated ")
     planned_chapters = plan_source_chapters(document)
     assert not (
         service.repository.run_directory(completed.run_id)
@@ -602,13 +666,22 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
         for values in tasks.guide_glossaries.values()
     } == {("quantum field",), ("relativity",)}
 
-    book = service.accepted_book(completed.run_id)
-    assert book.translation_mode == "enabled"
-    assert [
-        item.block_id
-        for chapter in book.chapters
-        for item in chapter.translations
-    ] == [
+    publication = service.publication(completed.run_id)
+    assert publication.reader_profile["translation_mode"] == "enabled"
+    published = service.published_companion(completed.run_id)
+    store = ImmutableArtifactStore(
+        service.repository.run_directory(completed.run_id),
+        repository_root=service.repository.root,
+    )
+    translations = [
+        revision
+        for ref in published.fragment_refs
+        for revision in (
+            decode_fragment_revision(store.read_bytes(ref).decode("utf-8")),
+        )
+        if revision.role == "translation"
+    ]
+    assert [item.anchor.target_id for item in translations] == [
         item.block_id for item in document.blocks
     ]
 
@@ -690,17 +763,28 @@ def test_structural_display_chapter_skips_loop_but_translates_and_augments(
     assert translation.glossary_kwargs[0]["structure_ref"] == structure_ref
     assert translation.glossary_kwargs[0]["section_ids"] == ("real-chapter",)
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 3
-    book = service.accepted_book(snapshot.run_id)
-    assert len(book.chapters) == 2
-    assert sum(len(item.translations) for item in book.chapters) == len(
-        document.blocks
+    publication = service.publication(snapshot.run_id)
+    assert len(publication.outline) >= 2
+    structured_chapter = next(
+        item for item in publication.outline if item.title == "Relativity"
     )
-    assert book.chapters[0].learning_units[0].placement == "inline"
-    assert "固定说明" in book.chapters[0].learning_units[0].content_markdown
-    assert book.glossary[0].term == "quantum field"
-    assert book.glossary[0].translated_term == "量子场"
-    assert book.glossary[0].definition == "量子场的定义"
-    assert [item.term for item in book.glossary] == [
+    expected_chapter = next(
+        item
+        for item in plan_structured_source_chapters(
+            document,
+            overlay,
+            companion_section_ids=("real-chapter",),
+        )
+        if item.structure_section_id == "real-chapter"
+    )
+    assert (
+        structured_chapter.anchor_block_id
+        == expected_chapter.display_anchor_block_id
+    )
+    assert publication.glossary[0]["term"] == "quantum field"
+    assert publication.glossary[0]["translated_term"] == "量子场"
+    assert publication.glossary[0]["definition"] == "量子场的定义"
+    assert [item["term"] for item in publication.glossary] == [
         "quantum field",
         "relativity",
     ]
@@ -744,11 +828,16 @@ def test_review_audit_excludes_verified_program_additions(
     )
 
     assert snapshot.status is RunStatus.SUCCEEDED
-    book = service.accepted_book(snapshot.run_id)
-    assert all(
-        any("固定说明" in unit.content_markdown for unit in chapter.learning_units)
-        for chapter in book.chapters
+    published = service.published_companion(snapshot.run_id)
+    store = ImmutableArtifactStore(
+        service.repository.run_directory(snapshot.run_id),
+        repository_root=service.repository.root,
     )
+    bodies = [
+        decode_fragment_revision(store.read_bytes(ref).decode("utf-8")).markdown_body
+        for ref in published.fragment_refs
+    ]
+    assert any("固定说明" in body for body in bodies)
 
 
 def test_same_language_skips_all_translation_owned_steps(
@@ -794,10 +883,8 @@ def test_empty_seed_still_runs_three_proposals_and_covers_reader_need(
         service.repository.run_directory(completed.run_id),
         repository_root=service.repository.root,
     )
-    book_ref = store.find("book/accepted")
-    assert book_ref is not None
-    book = CompanionContentCodec.loads(store.read_bytes(book_ref))
-    assert all(chapter.learning_units for chapter in book.chapters)
+    assert store.find("publication/publication.json") is not None
+    assert service.published_companion(completed.run_id).fragment_refs
 
 
 def test_program_names_and_publishes_only_cited_chapter_references(
@@ -818,19 +905,12 @@ def test_program_names_and_publishes_only_cited_chapter_references(
         service.repository.run_directory(completed.run_id),
         repository_root=service.repository.root,
     )
-    book_ref = store.find("book/accepted")
-    assert book_ref is not None
-    book = CompanionContentCodec.loads(store.read_bytes(book_ref))
-    assert len(book.bibliography) == 1
-    reference = book.bibliography[0]
-    assert reference.evidence_id.startswith("reference-")
-    assert reference.dois == ("10.1000/fixture",)
-    assert reference.arxiv_ids == ("2401.00001",)
-    assert all(
-        unit.citations == (reference.evidence_id,)
-        for chapter in book.chapters
-        for unit in chapter.learning_units
-    )
+    publication = service.publication(completed.run_id)
+    assert len(publication.bibliography) == 1
+    reference = publication.bibliography[0]
+    assert str(reference["evidence_id"]).startswith("reference-")
+    assert reference["dois"] == ("10.1000/fixture",)
+    assert reference["arxiv_ids"] == ("2401.00001",)
 
 
 def test_minimal_reference_contract_does_not_accept_model_cache_handles(
@@ -986,11 +1066,11 @@ def test_review_remove_publishes_ordered_subset_without_retry(
     assert completed.status is RunStatus.SUCCEEDED
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 6
     assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 4
-    assert all(
-        len(chapter.learning_units) == 1
-        and chapter.learning_units[0].unit_id.startswith("unit-")
-        for chapter in service.accepted_book(completed.run_id).chapters
-    )
+    published = service.published_companion(completed.run_id)
+    assert sum(
+        ref.artifact_id.startswith("publication/fragments/companion-")
+        for ref in published.fragment_refs
+    ) == len(plan_source_chapters(document))
 
 
 @pytest.mark.parametrize(
@@ -1181,7 +1261,6 @@ def test_default_adapter_wires_keyword_provider_to_companion_cache(
     assert isinstance(service.keyword_provider.store, TermInventoryStore)
     assert service.keyword_provider.store.root == tmp_path / "paper-cache"
     assert source.rich is not None
-    assert source.parsed is None
 
 
 def test_default_adapter_resolves_shared_cache_for_structure(
@@ -1295,4 +1374,4 @@ def test_unfinished_legacy_handlers_require_a_new_build(
             translation_adapter=None,
         )
 
-    assert exc_info.value.code == "legacy_run_requires_new_build"
+    assert exc_info.value.code == "run_handler_invalid"

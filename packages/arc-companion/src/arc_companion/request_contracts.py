@@ -23,54 +23,12 @@ from .prompts import (
     AUTHOR_IDENTITY_PROMPT_VERSION,
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
-    CHAPTER_PLAN_PROMPT_VERSION,
 )
 from .reader_labels import resolve_reader_labels
 
 
-COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v6"
-_LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V5 = (
-    "arc.companion.build_request.v5"
-)
-_LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4 = (
-    "arc.companion.build_request.v4"
-)
-_LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3 = "arc.companion.build_request.v3"
-_LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2 = "arc.companion.build_request.v2"
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v15"
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14 = (
-    "arc.companion.generation_recipe.v14"
-)
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13 = (
-    "arc.companion.generation_recipe.v13"
-)
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12 = (
-    "arc.companion.generation_recipe.v12"
-)
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11 = (
-    "arc.companion.generation_recipe.v11"
-)
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10 = (
-    "arc.companion.generation_recipe.v10"
-)
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9 = (
-    "arc.companion.generation_recipe.v9"
-)
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V8 = (
-    "arc.companion.generation_recipe.v8"
-)
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7 = (
-    "arc.companion.generation_recipe.v7"
-)
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V6 = (
-    "arc.companion.generation_recipe.v6"
-)
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V5 = (
-    "arc.companion.generation_recipe.v5"
-)
-_LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V4 = (
-    "arc.companion.generation_recipe.v4"
-)
+COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v7"
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v16"
 COMPANION_CONTENT_CONTRACT = "arc.companion.source_anchored_textbook.v1"
 NEUTRAL_TEXTBOOK_INTENT = (
     "Explain the source faithfully as a neutral textbook companion for an "
@@ -88,7 +46,6 @@ class CompanionBuildRequest:
     target_language: str = "zh-CN"
     user_intent: str = ""
     content_contract: str = COMPANION_CONTENT_CONTRACT
-    translation_reuse_digest: str | None = None
     authors: tuple[str, ...] = ()
     reader_labels: Mapping[str, str] | None = None
     structure_ref: CachedDocumentStructureRef | None = None
@@ -113,13 +70,6 @@ class CompanionBuildRequest:
             raise ValueError("user_intent must be a string")
         if self.content_contract != COMPANION_CONTENT_CONTRACT:
             raise ValueError("unsupported Companion content contract")
-        if self.translation_reuse_digest is not None and (
-            not isinstance(self.translation_reuse_digest, str)
-            or _SHA256.fullmatch(self.translation_reuse_digest) is None
-        ):
-            raise ValueError(
-                "translation_reuse_digest must be a SHA-256 digest or null"
-            )
         if isinstance(self.authors, (str, bytes, bytearray)):
             raise ValueError("authors must be a sequence of author names")
         authors = tuple(self.authors)
@@ -220,8 +170,6 @@ class CompanionGenerationRecipe:
     model: ModelSelection = field(default_factory=ModelSelection)
     approx_term_count: int = 50
     author_identity_prompt: str = AUTHOR_IDENTITY_PROMPT_VERSION
-    # Legacy decode surface only; current builds do not execute this prompt.
-    chapter_plan_prompt: str = CHAPTER_PLAN_PROMPT_VERSION
     chapter_guide_prompt: str = CHAPTER_GUIDE_PROMPT_VERSION
     chapter_guide_review_prompt: str = (
         CHAPTER_GUIDE_REVIEW_PROMPT_VERSION
@@ -256,7 +204,6 @@ class CompanionGenerationRecipe:
             )
         expected = {
             "author_identity_prompt": AUTHOR_IDENTITY_PROMPT_VERSION,
-            "chapter_plan_prompt": CHAPTER_PLAN_PROMPT_VERSION,
             "chapter_guide_prompt": CHAPTER_GUIDE_PROMPT_VERSION,
             "chapter_guide_review_prompt": (
                 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION
@@ -303,7 +250,6 @@ def encode_build_request(
         "target_language": request.target_language,
         "user_intent": request.effective_intent,
         "content_contract": request.content_contract,
-        "translation_reuse_digest": request.translation_reuse_digest,
         "authors": list(request.authors),
         "reader_labels": (
             dict(request.reader_labels)
@@ -362,99 +308,49 @@ def encode_handler_semantic_input(
 def decode_build_request(
     document: Mapping[str, Any],
 ) -> CompanionBuildRequest:
-    schema_version = document.get("schema_version")
-    legacy_fields = {
+    fields = {
         "schema_version",
         "source",
         "validator_digests",
         "target_language",
         "user_intent",
         "content_contract",
+        "authors",
+        "reader_labels",
+        "structure_ref",
+        "companion_section_ids",
     }
-    if schema_version in {
-        COMPANION_BUILD_REQUEST_SCHEMA,
-    }:
-        fields = legacy_fields | {
-            "translation_reuse_digest",
-            "authors",
-            "reader_labels",
-            "structure_ref",
-            "companion_section_ids",
-        }
-    elif schema_version in {
-        _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V5,
-        _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4,
-    }:
-        fields = legacy_fields | {
-            "translation_reuse_digest",
-            "authors",
-            "reader_labels",
-        }
-    elif schema_version == _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3:
-        fields = legacy_fields | {"translation_reuse_digest"}
-    elif schema_version == _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V2:
-        fields = legacy_fields
-    else:
-        raise ValueError("unsupported Companion build-request schema")
     request = _exact(document, fields, "build request")
+    if request["schema_version"] != COMPANION_BUILD_REQUEST_SCHEMA:
+        raise ValueError("unsupported Companion build-request schema")
     source = _mapping(request["source"], "rich source")
     validators = request["validator_digests"]
     if not isinstance(validators, list) or any(
         not isinstance(item, str) for item in validators
     ):
         raise ValueError("validator_digests must be an array of strings")
-    authors: tuple[str, ...] = ()
-    reader_labels: Mapping[str, str] | None = None
-    if schema_version in {
-        COMPANION_BUILD_REQUEST_SCHEMA,
-        _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V5,
-        _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4,
-    }:
-        raw_authors = request["authors"]
-        if not isinstance(raw_authors, list) or any(
-            not isinstance(item, str) for item in raw_authors
-        ):
-            raise ValueError("authors must be an array of strings")
-        authors = tuple(raw_authors)
-        reader_labels = _optional_string_mapping(
-            request["reader_labels"], "reader_labels"
-        )
-        if (
-            schema_version == _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4
-            and reader_labels is not None
-        ):
-            reader_labels = dict(reader_labels)
-            reader_labels.pop("source_page", None)
-    else:
-        reader_labels = resolve_reader_labels(
-            _string(request, "target_language"),
-            allow_legacy_fallback=True,
-        )
+    raw_authors = request["authors"]
+    if not isinstance(raw_authors, list) or any(
+        not isinstance(item, str) for item in raw_authors
+    ):
+        raise ValueError("authors must be an array of strings")
+    authors = tuple(raw_authors)
+    reader_labels = _optional_string_mapping(
+        request["reader_labels"], "reader_labels"
+    )
     return CompanionBuildRequest(
         source=rich_document_from_document(source),
         validator_digests=tuple(validators),
         target_language=_string(request, "target_language"),
         user_intent=_string(request, "user_intent"),
         content_contract=_string(request, "content_contract"),
-        translation_reuse_digest=(
-            _optional_string(request, "translation_reuse_digest")
-            if schema_version
-            in {
-                COMPANION_BUILD_REQUEST_SCHEMA,
-                _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V5,
-                _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V4,
-                _LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V3,
-            }
-            else None
-        ),
         authors=authors,
         reader_labels=reader_labels,
         structure_ref=(
             cached_document_structure_ref_from_document(
                 _mapping(request["structure_ref"], "structure ref")
             )
-            if schema_version == COMPANION_BUILD_REQUEST_SCHEMA
-            and request["structure_ref"] is not None
+            if request["structure_ref"] is not None
             else None
         ),
         companion_section_ids=(
@@ -462,8 +358,7 @@ def decode_build_request(
                 request["companion_section_ids"],
                 "companion_section_ids",
             ))
-            if schema_version == COMPANION_BUILD_REQUEST_SCHEMA
-            and request["companion_section_ids"] is not None
+            if request["companion_section_ids"] is not None
             else None
         ),
     )
@@ -472,8 +367,7 @@ def decode_build_request(
 def decode_generation_recipe(
     document: Mapping[str, Any],
 ) -> CompanionGenerationRecipe:
-    schema_version = document.get("schema_version")
-    current_fields = {
+    fields = {
         "schema_version",
         "model",
         "approx_term_count",
@@ -484,80 +378,9 @@ def decode_generation_recipe(
         "chapter_guide_max_rounds",
         "chapter_guide_review_final_round",
     }
-    common_fields = {
-        "schema_version",
-        "model",
-        "approx_term_count",
-        "chapter_plan_prompt",
-        "chapter_guide_prompt",
-        "chapter_guide_review_prompt",
-        "equation_label_visual_prompt",
-    }
-    if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA:
-        fields = current_fields
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14:
-        fields = current_fields
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13:
-        fields = current_fields
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12:
-        fields = common_fields | {
-            "author_identity_prompt",
-            "chapter_guide_max_rounds",
-            "chapter_guide_review_final_round",
-        }
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11:
-        fields = common_fields | {
-            "author_identity_prompt",
-            "chapter_guide_max_rounds",
-            "chapter_guide_review_final_round",
-        }
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10:
-        fields = common_fields | {
-            "author_identity_prompt",
-            "chapter_guide_max_rounds",
-            "chapter_guide_review_final_round",
-        }
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9:
-        fields = common_fields | {
-            "literature_request_prompt",
-            "evidence_research_prompt",
-            "literature_survey_prompt",
-            "author_identity_prompt",
-            "chapter_guide_max_rounds",
-            "chapter_guide_review_final_round",
-        }
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V8:
-        fields = common_fields | {
-            "literature_request_prompt",
-            "evidence_research_prompt",
-            "literature_survey_prompt",
-            "author_identity_prompt",
-            "chapter_guide_max_rounds",
-            "chapter_guide_review_final_round",
-        }
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7:
-        fields = common_fields | {
-            "literature_request_prompt",
-            "evidence_research_prompt",
-            "literature_survey_prompt",
-            "author_identity_prompt",
-        }
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V6:
-        fields = common_fields | {
-            "literature_request_prompt",
-            "literature_survey_prompt",
-            "author_identity_prompt",
-        }
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V5:
-        fields = common_fields | {
-            "literature_request_prompt",
-            "literature_survey_prompt",
-        }
-    elif schema_version == _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V4:
-        fields = common_fields
-    else:
-        raise ValueError("unsupported Companion generation-recipe schema")
     raw_recipe = _exact(document, fields, "generation recipe")
+    if raw_recipe["schema_version"] != COMPANION_GENERATION_RECIPE_SCHEMA:
+        raise ValueError("unsupported Companion generation-recipe schema")
     model = _exact(
         _mapping(raw_recipe["model"], "model"),
         {"provider", "model", "tier"},
@@ -574,36 +397,6 @@ def decode_generation_recipe(
         "chapter_guide_review_final_round",
     }:
         _string(raw_recipe, key)
-    if schema_version not in {
-        COMPANION_GENERATION_RECIPE_SCHEMA,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V4,
-    }:
-        _string(raw_recipe, "literature_request_prompt")
-        _string(raw_recipe, "literature_survey_prompt")
-    if schema_version in {
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V8,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7,
-    }:
-        _string(raw_recipe, "evidence_research_prompt")
-    if schema_version in {
-        COMPANION_GENERATION_RECIPE_SCHEMA,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V8,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V7,
-        _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V6,
-    }:
-        _string(raw_recipe, "author_identity_prompt")
-    legacy_recipe = schema_version != COMPANION_GENERATION_RECIPE_SCHEMA
     return CompanionGenerationRecipe(
         model=ModelSelection(
             provider=_string(model, "provider"),
@@ -611,59 +404,19 @@ def decode_generation_recipe(
             tier=_string(model, "tier"),  # type: ignore[arg-type]
         ),
         approx_term_count=_integer(raw_recipe, "approx_term_count"),
-        author_identity_prompt=(
-            AUTHOR_IDENTITY_PROMPT_VERSION
-            if legacy_recipe
-            else _string(raw_recipe, "author_identity_prompt")
+        author_identity_prompt=_string(raw_recipe, "author_identity_prompt"),
+        chapter_guide_prompt=_string(raw_recipe, "chapter_guide_prompt"),
+        chapter_guide_review_prompt=_string(
+            raw_recipe, "chapter_guide_review_prompt"
         ),
-        chapter_plan_prompt=(
-            CHAPTER_PLAN_PROMPT_VERSION
-            if schema_version == COMPANION_GENERATION_RECIPE_SCHEMA
-            else CHAPTER_PLAN_PROMPT_VERSION
+        chapter_guide_max_rounds=_integer(
+            raw_recipe, "chapter_guide_max_rounds"
         ),
-        chapter_guide_prompt=(
-            CHAPTER_GUIDE_PROMPT_VERSION
-            if legacy_recipe
-            else _string(raw_recipe, "chapter_guide_prompt")
+        chapter_guide_review_final_round=_strict_bool(
+            raw_recipe, "chapter_guide_review_final_round"
         ),
-        chapter_guide_review_prompt=(
-            CHAPTER_GUIDE_REVIEW_PROMPT_VERSION
-            if legacy_recipe
-            else _string(raw_recipe, "chapter_guide_review_prompt")
-        ),
-        chapter_guide_max_rounds=(
-            _integer(raw_recipe, "chapter_guide_max_rounds")
-            if schema_version in {
-                COMPANION_GENERATION_RECIPE_SCHEMA,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9,
-            }
-            else 3
-        ),
-        chapter_guide_review_final_round=(
-            _strict_bool(
-                raw_recipe,
-                "chapter_guide_review_final_round",
-            )
-            if schema_version in {
-                COMPANION_GENERATION_RECIPE_SCHEMA,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V14,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V13,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V12,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V11,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V10,
-                _LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V9,
-            }
-            else False
-        ),
-        equation_label_visual_prompt=(
-            EQUATION_LABEL_VISUAL_PROMPT_VERSION
-            if legacy_recipe
-            else _string(raw_recipe, "equation_label_visual_prompt")
+        equation_label_visual_prompt=_string(
+            raw_recipe, "equation_label_visual_prompt"
         ),
     )
 

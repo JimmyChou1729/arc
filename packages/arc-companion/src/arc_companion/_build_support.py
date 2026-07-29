@@ -13,11 +13,6 @@ from arc_jobs import (
     canonical_json_bytes,
 )
 
-from .contracts import (
-    AcceptedBook,
-    AcceptedChapter,
-    CompanionContentCodec,
-)
 from .generation_validation import CompanionContentError
 
 
@@ -26,23 +21,6 @@ def task_id(prefix: str, semantic: Mapping[str, Any]) -> str:
         canonical_json_bytes(dict(semantic))
     ).hexdigest()
     return f"{prefix}-{digest[:24]}"
-
-
-def accepted_chapter_document(
-    chapter: AcceptedChapter,
-) -> dict[str, Any]:
-    placeholder = AcceptedBook(
-        document_digest="0" * 64,
-        title="chapter",
-        source_language="und",
-        target_language="und",
-        translation_mode=(
-            "enabled" if chapter.translations else "skipped"
-        ),
-        chapters=(chapter,),
-        bibliography=(),
-    )
-    return CompanionContentCodec.to_document(placeholder)["chapters"][0]
 
 
 def ref_document(ref: Any) -> dict[str, JsonValue]:
@@ -96,7 +74,6 @@ def mapping_list(
 
 
 __all__ = [
-    "accepted_chapter_document",
     "mapping",
     "mapping_list",
     "read_json",

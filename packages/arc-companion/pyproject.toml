@@ -17,8 +17,6 @@ dependencies = [
   "arc-render>=1.0,<1.1",
   "arc-proposer-reviewer>=1.0,<1.1",
   "arc-translate>=1.0,<1.1",
-  "beautifulsoup4>=4.12",
-  "jsonschema>=4.0",
   "markdown-it-py>=4.2,<5",
 ]
 classifiers = [
@@ -38,7 +36,6 @@ test = ["pytest>=8.0"]
 
 [project.scripts]
 arc-companion = "arc_companion.cli:main"
-arc-standalone-html = "arc_companion.standalone_html:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/arc_companion"]

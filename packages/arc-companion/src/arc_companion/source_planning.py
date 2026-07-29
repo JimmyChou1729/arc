@@ -25,8 +25,10 @@ class SourceChapter:
     chapter_id: str
     title: str
     block_ids: tuple[str, ...]
+    display_anchor_block_id: str
     section_block_ids: tuple[str, ...] = ()
     section_titles: tuple[str, ...] = ()
+    section_levels: tuple[int, ...] = ()
     structure_section_id: str | None = None
     generate_guide: bool = True
 
@@ -35,10 +37,21 @@ class SourceChapter:
             raise ValueError("source chapter requires identity, title, and blocks")
         if len(set(self.block_ids)) != len(self.block_ids):
             raise ValueError("source chapter contains duplicate blocks")
-        if len(self.section_block_ids) != len(self.section_titles):
-            raise ValueError("section identities and titles differ")
+        if self.display_anchor_block_id not in self.block_ids:
+            raise ValueError("chapter display anchor is outside its source chapter")
+        if not (
+            len(self.section_block_ids)
+            == len(self.section_titles)
+            == len(self.section_levels)
+        ):
+            raise ValueError("section identities, titles, and levels differ")
         if any(item not in self.block_ids for item in self.section_block_ids):
             raise ValueError("section heading is outside its source chapter")
+        if any(
+            not isinstance(item, int) or isinstance(item, bool) or item < 2
+            for item in self.section_levels
+        ):
+            raise ValueError("section outline levels must be at least two")
 
 
 def plan_source_chapters(document: RichDocument) -> tuple[SourceChapter, ...]:
@@ -170,6 +183,7 @@ def plan_structured_source_chapters(
         ]
         section_blocks: list[RichBlock] = []
         section_titles: list[str] = []
+        section_levels: list[int] = []
         for section in sorted(
             descendant_headings, key=lambda value: value.source_line_start
         ):
@@ -185,13 +199,25 @@ def plan_structured_source_chapters(
             if heading is not None:
                 section_blocks.append(heading)
                 section_titles.append(section.title)
+                section_levels.append(max(2, section.level - item.level + 1))
+        display_anchor = next(
+            (
+                block
+                for block in chapter_blocks
+                if block.kind is RichBlockKind.HEADING
+                and block.locator.line_start == item.heading_line
+            ),
+            None,
+        )
         chapters.append(
             _chapter(
                 document,
                 title=item.title,
                 blocks=chapter_blocks,
+                display_anchor_block=display_anchor,
                 section_blocks=tuple(section_blocks),
                 section_titles=tuple(section_titles),
+                section_levels=tuple(section_levels),
                 structure_section_id=item.section_id,
                 generate_guide=True,
             )
@@ -248,20 +274,48 @@ def _chapter(
     *,
     title: str,
     blocks: tuple[RichBlock, ...],
+    display_anchor_block: RichBlock | None = None,
     section_blocks: tuple[RichBlock, ...] = (),
     section_titles: tuple[str, ...] = (),
+    section_levels: tuple[int, ...] = (),
     structure_section_id: str | None = None,
     generate_guide: bool = True,
 ) -> SourceChapter:
+    if display_anchor_block is None:
+        display_anchor_block = next(
+            (
+                item
+                for item in blocks
+                if item.kind is RichBlockKind.HEADING
+                and str(item.payload["text"]).strip() == title.strip()
+            ),
+            None,
+        )
+    if display_anchor_block is None:
+        display_anchor_block = next(
+            (item for item in blocks if item.kind is RichBlockKind.HEADING),
+            blocks[0],
+        )
     if not section_blocks:
         headings = tuple(
             item for item in blocks if item.kind is RichBlockKind.HEADING
         )
-        if headings and headings[0] == blocks[0]:
-            headings = headings[1:]
+        if display_anchor_block in headings:
+            headings = tuple(
+                item for item in headings if item != display_anchor_block
+            )
         section_blocks = headings
         section_titles = tuple(
             str(item.payload["text"]).strip() for item in headings
+        )
+        anchor_level = (
+            int(display_anchor_block.payload["level"])
+            if display_anchor_block.kind is RichBlockKind.HEADING
+            else 0
+        )
+        section_levels = tuple(
+            max(2, int(item.payload["level"]) - anchor_level + 1)
+            for item in headings
         )
     material = {
         "document_digest": document.document_digest,
@@ -272,8 +326,10 @@ def _chapter(
         chapter_id=f"chapter-{digest}",
         title=title or "Document",
         block_ids=tuple(block.block_id for block in blocks),
+        display_anchor_block_id=display_anchor_block.block_id,
         section_block_ids=tuple(block.block_id for block in section_blocks),
         section_titles=section_titles,
+        section_levels=section_levels,
         structure_section_id=structure_section_id,
         generate_guide=generate_guide,
     )

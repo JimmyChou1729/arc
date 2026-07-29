@@ -74,22 +74,10 @@ from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 from arc_proposer_reviewer.protocol import decode_batch_result
 
 from ._build_support import (
-    accepted_chapter_document,
     mapping,
     mapping_list,
     read_json,
-    ref_document,
     task_id,
-)
-from .contracts import (
-    AcceptedBook,
-    AcceptedChapter,
-    CompanionContentCodec,
-    EvidenceSource,
-    GlossaryEntry,
-    LearningUnit,
-    SourceAnchor,
-    TranslatedBlock,
 )
 from .generation_validation import (
     CompanionContentError,
@@ -125,8 +113,12 @@ from .prompts import (
     chapter_guide_reviewer_instructions,
 )
 from .reader_labels import ReaderLabelError, resolve_reader_labels
-from .reading_order import first_visible_citation_ids
 from .rich_text import RichTextError
+from .publication import (
+    CompanionPublicationError,
+    build_result_document,
+    publish_companion,
+)
 from .request_contracts import (
     CompanionBuildRequest,
     CompanionExecutionOptions,
@@ -145,27 +137,12 @@ from .translation_adapter import (
     ArcTranslateAdapter,
     CompanionTranslationAdapter,
 )
-from .validation import require_valid_accepted_book
-
-
-COMPANION_BUILD_HANDLER = "arc.companion.build.v13"
-COMPATIBLE_COMPANION_BUILD_HANDLERS = frozenset(
-    {
-        COMPANION_BUILD_HANDLER,
-        "arc.companion.build.v12",
-        "arc.companion.build.v11",
-        "arc.companion.build.v10",
-        "arc.companion.build.v9",
-        "arc.companion.build.v8",
-        "arc.companion.build.v7",
-        "arc.companion.build.v6",
-        "arc.companion.build.v5",
-        "arc.companion.build.v4",
-        "arc.companion.build.v3",
-    }
+from .translation_results import (
+    CompanionTranslationResultError,
+    load_translation_selection,
 )
+COMPANION_BUILD_HANDLER = "arc.companion.build.v14"
 COMPANION_BUILD_DIAGNOSTICS_SCHEMA = "arc.companion.build_diagnostics.v1"
-_BOOK_ARTIFACT = "book/accepted"
 _DIAGNOSTICS_ARTIFACT = "diagnostics/build"
 _EFFECTIVE_SOURCE_ARTIFACT = "source/effective"
 _MODEL_SOURCE_VIEW_ARTIFACT = "source/model-view"
@@ -174,8 +151,6 @@ _MODEL_TRANSLATION_VIEW_ARTIFACT = "translation/model-view"
 _MODEL_TRANSLATION_INDEX_ARTIFACT = "translation/model-index"
 _ORIGINAL_SOURCE_ARTIFACT = "source/original"
 _AUTHOR_IDENTITY_ARTIFACT = "identity/authors"
-_PRIOR_COMPANION_ARTIFACT = "translation-reuse/prior-companion"
-_PRIOR_REFERENCE_ARTIFACT = "translation-reuse/prior-reference"
 _RESULT_ARTIFACT = "result"
 
 
@@ -288,13 +263,7 @@ class CompanionBuildHandler:
                     "language_result_invalid",
                     "arc-translate language mode is invalid",
                 )
-            prior_companion = _prior_companion_reference(context)
-            prior_input = _prior_reference_input(
-                context, prior_companion
-            )
-            document_inputs = model_inputs + (
-                (prior_input,) if prior_input is not None else ()
-            )
+            document_inputs = model_inputs
 
             glossary: dict[str, Any]
             if translation_required:
@@ -335,64 +304,46 @@ class CompanionBuildHandler:
                 source=source,
                 language=language,
                 translation_required=translation_required,
-                prior_companion=prior_companion,
                 model_inputs=document_inputs,
             )
             if isinstance(chapters_outcome, (Paused, Failed)):
                 return chapters_outcome
 
-            book_ref = context.artifacts.find(_BOOK_ARTIFACT)
-            if book_ref is None:
-                glossary_contracts = (
-                    _glossary_contracts(glossary, source)
-                    if translation_required
-                    else ()
-                )
-                cited_ids = first_visible_citation_ids(
-                    chapters_outcome,
-                    glossary_contracts,
-                )
-                bibliography = _chapter_reference_contracts(
-                    context,
-                    chapters,
-                    cited_ids=cited_ids,
-                )
-                book = AcceptedBook(
-                    document_digest=source.document_digest,
-                    title=title,
-                    authors=authors,
-                    source_language=str(language["language_tag"]),
-                    target_language=self.request.target_language,
-                    reader_labels=reader_labels,
-                    translation_mode=(
-                        "enabled" if translation_required else "skipped"
-                    ),
-                    chapters=chapters_outcome,
-                    glossary=glossary_contracts,
-                    bibliography=bibliography,
-                )
-                require_valid_accepted_book(
-                    book,
-                    expected_block_ids=[
-                        item.block_id
-                        for item in source.blocks
-                    ],
-                )
-                book_ref = context.artifacts.publish_bytes(
-                    _BOOK_ARTIFACT,
-                    CompanionContentCodec.dumps(book).encode("utf-8"),
-                    media_type="application/json",
-                )
+            glossary_contracts = (
+                _glossary_contracts(glossary, source)
+                if translation_required
+                else ()
+            )
+            cited_ids = _first_visible_citation_ids(chapters_outcome)
+            bibliography = _chapter_reference_contracts(
+                context,
+                chapters,
+                cited_ids=cited_ids,
+            )
+            published = publish_companion(
+                context,
+                source=source,
+                title=title,
+                authors=authors,
+                source_language=str(language["language_tag"]),
+                target_language=self.request.target_language,
+                translation_mode=(
+                    "enabled" if translation_required else "skipped"
+                ),
+                reader_labels=reader_labels,
+                chapters=chapters_outcome,
+                glossary=glossary_contracts,
+                bibliography=bibliography,
+                paper_cache_root=self.execution.paper_cache_root,
+            )
             result_ref = context.artifacts.publish_json(
-                _RESULT_ARTIFACT,
-                {
-                    "schema_version": "arc.companion.build_result.v1",
-                    "accepted_book": ref_document(book_ref),
-                },
+                _RESULT_ARTIFACT, build_result_document(published)
             )
             return Succeeded(result_ref)
         except CompanionContentError as exc:
             return Failed(RunError(exc.code, str(exc)))
+        except CompanionPublicationError as exc:
+            return Failed(RunError("companion_publication_invalid", str(exc)))
         except CachedDocumentError as exc:
             return Failed(
                 RunError(
@@ -511,12 +462,13 @@ class CompanionBuildHandler:
         """Freeze and cache the accepted translation before guide work."""
 
         by_chapter = {
-            chapter.chapter_id: mapping_list(
-                translations[f"translation-{chapter.chapter_id}"][
-                    "translations"
-                ],
-                f"translations for {chapter.chapter_id}",
-            )
+            chapter.chapter_id: load_translation_selection(
+                context,
+                translations[f"translation-{chapter.chapter_id}"],
+                source=source,
+                block_ids=chapter.block_ids,
+                target_language=self.request.target_language,
+            ).view_records
             for chapter in chapters
         }
         view, access = model_translation_view(chapters, by_chapter)
@@ -867,9 +819,8 @@ class CompanionBuildHandler:
         source: RichDocument,
         language: Mapping[str, Any],
         translation_required: bool,
-        prior_companion: Mapping[str, Any] | None,
         model_inputs: tuple[LLMInputArtifact, ...],
-    ) -> tuple[AcceptedChapter, ...] | Paused | Failed:
+    ) -> tuple[dict[str, Any], ...] | Paused | Failed:
         by_chapter = {item.chapter_id: item for item in chapters}
         entries = _glossary_entries(glossary)
         chapter_entries = {
@@ -912,9 +863,6 @@ class CompanionBuildHandler:
                         "language": language_identity,
                         "glossary_digest": glossary_digest,
                         "content_contract": self.request.content_contract,
-                        "prior_companion_digest": (
-                            _optional_document_digest(prior_companion)
-                        ),
                     },
                 )
                 for chapter in chapters
@@ -939,9 +887,22 @@ class CompanionBuildHandler:
                     return outcome
                 if isinstance(outcome, RunError):
                     return UnitResult(unit.unit_id, "failed", error=outcome)
-                return _validated_translations(
-                    outcome, block_ids=chapter.block_ids
-                )
+                try:
+                    return load_translation_selection(
+                        context,
+                        outcome,
+                        source=source,
+                        block_ids=chapter.block_ids,
+                        target_language=self.request.target_language,
+                    ).result.to_document()
+                except CompanionTranslationResultError as exc:
+                    return UnitResult(
+                        unit.unit_id,
+                        "failed",
+                        error=RunError(
+                            "translation_result_invalid", str(exc)
+                        ),
+                    )
 
             translations = context.run_group(
                 "chapter-translations-v2",
@@ -1016,8 +977,10 @@ class CompanionBuildHandler:
                     program_candidate,
                     chapter_id=chapter.chapter_id,
                     block_ids=chapter.block_ids,
+                    chapter_anchor_block_id=(
+                        chapter.display_anchor_block_id
+                    ),
                     section_block_ids=chapter.section_block_ids,
-                    allow_empty_chapter_guide=True,
                 )
                 empty_guide = _attach_cached_reference_materials(
                     empty_guide,
@@ -1050,7 +1013,6 @@ class CompanionBuildHandler:
                 chapter,
                 language_identity=language_identity,
                 glossary=chapter_entries[chapter.chapter_id],
-                has_prior_companion=prior_companion is not None,
                 translation_index=translation_index,
             )
             guide_contexts[chapter.chapter_id] = guide_context
@@ -1205,6 +1167,9 @@ class CompanionBuildHandler:
                         candidate,
                         chapter_id=chapter_id,
                         block_ids=chapter.block_ids,
+                        chapter_anchor_block_id=(
+                            chapter.display_anchor_block_id
+                        ),
                         section_block_ids=chapter.section_block_ids,
                     )
                     accepted_guide = _attach_cached_reference_materials(
@@ -1266,7 +1231,6 @@ class CompanionBuildHandler:
         *,
         language_identity: Mapping[str, Any],
         glossary: Sequence[Mapping[str, Any]],
-        has_prior_companion: bool,
         translation_index: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         access = model_chapter_block_index(source, chapter)
@@ -1319,7 +1283,6 @@ class CompanionBuildHandler:
             },
             "arc_commands": arc_commands,
             "glossary": list(glossary),
-            "has_prior_companion": has_prior_companion,
         }
 
     def _publish_completed_chapters(
@@ -1331,14 +1294,10 @@ class CompanionBuildHandler:
         *,
         source: RichDocument,
         translation_required: bool,
-    ) -> tuple[AcceptedChapter, ...] | Failed:
+    ) -> tuple[dict[str, Any], ...] | Failed:
         """Publish every chapter whose independent lanes already succeeded."""
 
-        accepted: list[AcceptedChapter] = []
-        page_by_block = {
-            item.block_id: item.page_number
-            for item in source.page_map
-        }
+        accepted: list[dict[str, Any]] = []
         for chapter in chapters:
             guide_key = f"guide-{chapter.chapter_id}"
             translation_key = f"translation-{chapter.chapter_id}"
@@ -1347,60 +1306,40 @@ class CompanionBuildHandler:
             ):
                 continue
             guide = results[guide_key]
-            translations = (
-                mapping_list(
-                    results[translation_key]["translations"],
-                    "translations",
+            translation_result = (
+                dict(
+                    mapping(
+                        results[translation_key],
+                        "translation result",
+                    )
                 )
                 if translation_required
-                else []
+                else None
             )
-            chapter_value = AcceptedChapter(
-                chapter_id=chapter.chapter_id,
-                title=chapter.title,
-                guide=None,
-                source_anchors=tuple(
-                    SourceAnchor.from_rich_block(
-                        blocks[block_id],
-                        page_number=page_by_block.get(block_id),
-                        equation_label_provenance=equation_label_provenance(
-                            source, block_id
-                        ),
-                    )
-                    for block_id in chapter.block_ids
+            chapter_value = {
+                "chapter_id": chapter.chapter_id,
+                "title": chapter.title,
+                "block_ids": list(chapter.block_ids),
+                "display_anchor_block_id": (
+                    chapter.display_anchor_block_id
                 ),
-                translations=tuple(
-                    TranslatedBlock(
-                        block_id=str(item["block_id"]),
-                        text=str(item["text"]),
-                    )
-                    for item in translations
+                "section_block_ids": list(chapter.section_block_ids),
+                "section_titles": list(chapter.section_titles),
+                "section_levels": list(chapter.section_levels),
+                "translation_result": translation_result,
+                "learning_units": mapping_list(
+                    guide["learning_units"], "learning units"
                 ),
-                learning_units=tuple(
-                    LearningUnit(
-                        unit_id=str(item["unit_id"]),
-                        title=str(item["title"]),
-                        anchor_ids=tuple(item["anchor_block_ids"]),
-                        placement=str(item["placement"]),
-                        content_markdown=str(item["content_markdown"]),
-                        citations=tuple(item["citations"]),
-                    )
-                    for item in mapping_list(
-                        guide["learning_units"], "learning units"
-                    )
-                ),
-            )
+            }
             accepted_id = f"chapters/{chapter.chapter_id}/accepted"
             existing = context.artifacts.find(accepted_id)
             if existing is None:
-                context.artifacts.publish_json(
-                    accepted_id, accepted_chapter_document(chapter_value)
-                )
+                context.artifacts.publish_json(accepted_id, chapter_value)
             else:
                 frozen = read_json(
                     context, existing, "accepted chapter"
                 )
-                if frozen != accepted_chapter_document(chapter_value):
+                if frozen != chapter_value:
                     return Failed(
                         RunError(
                             "chapter_join_mismatch",
@@ -1897,8 +1836,8 @@ def _chapter_reference_contracts(
     chapters: Sequence[SourceChapter],
     *,
     cited_ids: Sequence[str],
-) -> tuple[EvidenceSource, ...]:
-    by_id: dict[str, EvidenceSource] = {}
+) -> tuple[dict[str, Any], ...]:
+    by_id: dict[str, dict[str, Any]] = {}
     for chapter in chapters:
         ref = context.artifacts.find(
             f"chapters/{chapter.chapter_id}/guide-accepted"
@@ -1910,15 +1849,15 @@ def _chapter_reference_contracts(
             )
         guide = read_json(context, ref, "accepted chapter guide")
         for item in mapping_list(guide.get("references"), "chapter references"):
-            value = EvidenceSource(
-                evidence_id=str(item["reference_id"]),
-                title=str(item["title"]),
-                source=str(item["source"]),
-                dois=tuple(str(value) for value in item["dois"]),
-                arxiv_ids=tuple(
+            value = {
+                "evidence_id": str(item["reference_id"]),
+                "title": str(item["title"]),
+                "source": str(item["source"]),
+                "dois": [str(value) for value in item["dois"]],
+                "arxiv_ids": [
                     str(value) for value in item["arxiv_ids"]
-                ),
-                cached_document=(
+                ],
+                "cached_document": (
                     mapping(
                         item["cached_document"],
                         "cached document reference",
@@ -1926,7 +1865,7 @@ def _chapter_reference_contracts(
                     if item["cached_document"] is not None
                     else None
                 ),
-                cached_material=(
+                "cached_material": (
                     mapping(
                         item["cached_material"],
                         "cached reference material",
@@ -1934,14 +1873,15 @@ def _chapter_reference_contracts(
                     if item["cached_material"] is not None
                     else None
                 ),
-            )
-            existing = by_id.get(value.evidence_id)
+            }
+            evidence_id = str(value["evidence_id"])
+            existing = by_id.get(evidence_id)
             if existing is not None and existing != value:
                 raise CompanionContentError(
                     "chapter_reference_identity_collision",
                     "chapters disagree about shared reference metadata",
                 )
-            by_id[value.evidence_id] = value
+            by_id[evidence_id] = value
     missing = [reference_id for reference_id in cited_ids if reference_id not in by_id]
     if missing:
         raise CompanionContentError(
@@ -1949,31 +1889,6 @@ def _chapter_reference_contracts(
             f"cited chapter references are missing metadata: {missing}",
         )
     return tuple(by_id[reference_id] for reference_id in cited_ids)
-
-
-def _validated_translations(
-    value: Mapping[str, Any], *, block_ids: Sequence[str]
-) -> dict[str, Any]:
-    result = mapping(value, "translation result")
-    translations = mapping_list(
-        result.get("translations"), "translations"
-    )
-    if [item.get("block_id") for item in translations] != list(block_ids):
-        raise CompanionContentError(
-            "translation_coverage_invalid",
-            "arc-translate did not exactly cover the chapter source order",
-        )
-    if any(
-        set(item) != {"block_id", "text"}
-        or not isinstance(item.get("text"), str)
-        or not item["text"].strip()
-        for item in translations
-    ):
-        raise CompanionContentError(
-            "translation_coverage_invalid",
-            "arc-translate returned invalid translated blocks",
-        )
-    return {"translations": translations}
 
 
 def _empty_glossary(source: Any) -> dict[str, Any]:
@@ -2022,7 +1937,7 @@ def _literal_strings(value: Any) -> str:
 
 def _glossary_contracts(
     glossary: Mapping[str, Any], source: Any
-) -> tuple[GlossaryEntry, ...]:
+) -> tuple[dict[str, Any], ...]:
     block_documents = {
         block.block_id: _source_block_document(source, block)
         for block in source.blocks
@@ -2035,26 +1950,26 @@ def _glossary_contracts(
             for value in item.get("source_refs", [])
             if isinstance(value, str)
         }
-        anchors = tuple(
+        anchors = [
             block_id
             for block_id, block in block_documents.items()
             if block_id in source_refs
             or term.casefold()
             in _literal_strings(block.get("payload")).casefold()
-        )
+        ]
         if not anchors:
             continue
         values.append(
-            GlossaryEntry(
-                entry_id=str(item["term_id"]),
-                term=term,
-                translated_term=str(
+            {
+                "entry_id": str(item["term_id"]),
+                "term": term,
+                "translated_term": str(
                     item.get("preferred_translation") or ""
                 ),
-                definition=str(item["target_definition"]),
-                anchor_ids=anchors,
-                citations=(),
-            )
+                "definition": str(item["target_definition"]),
+                "anchor_ids": anchors,
+                "citations": [],
+            }
         )
     return tuple(values)
 
@@ -2066,86 +1981,29 @@ def _source_block_document(source: Any, block: Any) -> dict[str, Any]:
     )
 
 
-def _prior_companion_reference(
-    context: RunContext,
-) -> dict[str, Any] | None:
-    """Expose a reused Companion as optional model context, never as state."""
-
-    ref = context.artifacts.find(_PRIOR_COMPANION_ARTIFACT)
-    if ref is None:
-        return None
-    try:
-        book = CompanionContentCodec.loads(context.artifacts.read_bytes(ref))
-    except (OSError, TypeError, ValueError) as exc:
-        raise CompanionContentError(
-            "prior_companion_invalid",
-            "The staged prior Companion reference is invalid.",
-        ) from exc
-    return {
-        "schema_version": "arc.companion.prior_reference.v1",
-        "title": book.title,
-        "authors": list(book.authors),
-        "chapters": [
-            {
-                "chapter_id": chapter.chapter_id,
-                "title": chapter.title,
-                "guide": chapter.guide,
-                "learning_units": [
-                    {
-                        "unit_id": unit.unit_id,
-                        "title": unit.title,
-                        "anchor_block_ids": list(unit.anchor_ids),
-                        "placement": unit.placement,
-                        "content_markdown": unit.content_markdown,
-                        "citations": list(unit.citations),
-                    }
-                    for unit in chapter.learning_units
-                ],
-            }
-            for chapter in book.chapters
-        ],
-        "bibliography": [
-            {
-                "evidence_id": item.evidence_id,
-                "title": item.title,
-                "source": item.source,
-                "dois": list(item.dois),
-                "arxiv_ids": list(item.arxiv_ids),
-                "cached_document": (
-                    dict(item.cached_document)
-                    if item.cached_document is not None
-                    else None
-                ),
-                "cached_material": (
-                    dict(item.cached_material)
-                    if item.cached_material is not None
-                    else None
-                ),
-            }
-            for item in book.bibliography
-        ],
-    }
+def _first_visible_citation_ids(
+    chapters: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    values: list[str] = []
+    for chapter in chapters:
+        for unit in mapping_list(
+            chapter.get("learning_units"), "learning units"
+        ):
+            values.extend(
+                _string_list(unit.get("citations"), "learning citations")
+            )
+    return tuple(dict.fromkeys(values))
 
 
-def _prior_reference_input(
-    context: RunContext,
-    prior_companion: Mapping[str, Any] | None,
-) -> LLMInputArtifact | None:
-    if prior_companion is None:
-        return None
-    ref = context.artifacts.find(_PRIOR_REFERENCE_ARTIFACT)
-    if ref is None:
-        ref = context.artifacts.publish_json(
-            _PRIOR_REFERENCE_ARTIFACT, dict(prior_companion)
-        )
-    elif read_json(context, ref, "prior Companion reference") != dict(
-        prior_companion
+def _string_list(value: Any, description: str) -> list[str]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item for item in value
     ):
         raise CompanionContentError(
-            "prior_companion_reference_mismatch",
-            "Frozen prior Companion reference differs from staged reuse input.",
+            "companion_artifact_invalid",
+            f"{description} must contain non-empty strings",
         )
-    return _llm_input(context, "prior-companion", ref)
+    return list(value)
 
 
 def _artifact_input(
@@ -2203,16 +2061,6 @@ def _companion_llm_options(
     return replace(
         execution.llm,
         runtime_environment=ArcRuntimeEnvironment(values),
-    )
-
-
-def _optional_document_digest(
-    value: Mapping[str, Any] | None,
-) -> str | None:
-    return (
-        hashlib.sha256(canonical_json_bytes(dict(value))).hexdigest()
-        if value is not None
-        else None
     )
 
 
@@ -2310,7 +2158,6 @@ def validate_build_diagnostics(value: Mapping[str, Any]) -> None:
 __all__ = [
     "COMPANION_BUILD_DIAGNOSTICS_SCHEMA",
     "COMPANION_BUILD_HANDLER",
-    "COMPATIBLE_COMPANION_BUILD_HANDLERS",
     "CompanionBuildHandler",
     "validate_build_diagnostics",
 ]
