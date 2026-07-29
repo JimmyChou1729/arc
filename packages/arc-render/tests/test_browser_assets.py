@@ -202,7 +202,7 @@ def test_reader_enforces_strict_browser_revision_contract() -> None:
     assert "assertKnownCitations(metadata.citation_ids)" in javascript
 
 
-def test_reader_waits_for_storage_and_exposes_history_and_section_notes() -> None:
+def test_reader_uses_low_distraction_controls_and_collapsed_advanced_editor() -> None:
     javascript = _text("reader.js")
     stylesheet = _text("reader.css")
 
@@ -210,13 +210,25 @@ def test_reader_waits_for_storage_and_exposes_history_and_section_notes() -> Non
     assert "await setupEditor();" in javascript
     assert "arc-history-compare" in javascript
     assert "restoreHistoricalRevision" in javascript
-    assert "openNewSectionEditor(section)" in javascript
     assert (
-        "blocks.slice(section.block_start, section.block_end).map(anchorBlock)"
+        '"arc-note-button arc-icon-button", "+", labels().addNote'
+        in javascript
+    )
+    assert (
+        '"arc-edit-button arc-icon-button", "✎", labels().edit'
+        in javascript
+    )
+    assert "openNewSectionEditor" not in javascript
+    assert (
+        'document.getElementById("arc-editor-advanced").open = false'
         in javascript
     )
     assert ".arc-history-compare" in stylesheet
-    assert ".arc-section-note-button" in stylesheet
+    assert ".arc-section-note-button" not in stylesheet
+    assert ".arc-icon-button" in stylesheet
+    assert "position: fixed" in stylesheet
+    assert 'content: "▸"' in stylesheet
+    assert ".arc-editor-advanced[open]" in stylesheet
 
 
 def test_reader_preserves_source_text_and_glossary_rendering_contracts() -> None:

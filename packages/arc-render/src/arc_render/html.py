@@ -579,30 +579,39 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
         <h2 id="arc-editor-heading">Edit overlay</h2>
         <button id="arc-editor-close" type="button" aria-label="Close">×</button>
       </header>
-      <div class="arc-dialog-fields">
-        <label>Title<input id="arc-editor-title" type="text"></label>
-        <label>Role
-          <select id="arc-editor-role">
-            <option value="translation">Translation</option>
-            <option value="companion">Companion</option>
-            <option value="guide">Guide</option>
-            <option value="note">Note</option>
-          </select>
+      <div class="arc-dialog-fields arc-dialog-primary-fields">
+        <label><span id="arc-editor-title-label">Title</span>
+          <input id="arc-editor-title" type="text">
         </label>
-        <label>Priority<input id="arc-editor-priority" type="number" min="1"></label>
       </div>
       <div class="arc-editor-grid">
         <div class="arc-editor-pane">
-          <label>Markdown
+          <label><span id="arc-editor-markdown-label">Markdown</span>
             <textarea id="arc-editor-markdown" spellcheck="true"></textarea>
           </label>
         </div>
         <div class="arc-editor-pane">
-          <label>Preview</label>
+          <span id="arc-editor-preview-label">Preview</span>
           <div id="arc-editor-preview" class="arc-editor-preview"></div>
         </div>
       </div>
-      <div id="arc-editor-history" class="arc-history"></div>
+      <details id="arc-editor-advanced" class="arc-editor-advanced">
+        <summary><span id="arc-editor-advanced-label">More options</span></summary>
+        <div class="arc-dialog-fields arc-dialog-advanced-fields">
+          <label><span id="arc-editor-role-label">Role</span>
+            <select id="arc-editor-role">
+              <option value="translation">Translation</option>
+              <option value="companion">Companion</option>
+              <option value="guide">Guide</option>
+              <option value="note">Note</option>
+            </select>
+          </label>
+          <label><span id="arc-editor-priority-label">Priority</span>
+            <input id="arc-editor-priority" type="number" min="1">
+          </label>
+        </div>
+        <div id="arc-editor-history" class="arc-history"></div>
+      </details>
       <footer class="arc-dialog-footer">
         <button id="arc-editor-cancel" type="button">Close</button>
         <button id="arc-editor-save" type="button">Save as new revision</button>

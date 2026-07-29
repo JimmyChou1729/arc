@@ -256,6 +256,9 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert "showDirectoryPicker" in text
     assert "@media print" in text
     assert "--print-to-pdf" not in text
+    assert '<details id="arc-editor-advanced"' in text
+    assert '<span id="arc-editor-advanced-label">More options</span>' in text
+    assert 'id="arc-editor-priority"' in text
     assert "data:image/png;base64," in text
     assert payload["publication"]["publication_digest"] == (
         publication.publication_digest

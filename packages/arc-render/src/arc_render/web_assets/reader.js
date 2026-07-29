@@ -26,6 +26,14 @@
     return node;
   }
 
+  function iconButton(className, symbol, accessibleLabel) {
+    var button = element("button", className, symbol);
+    button.type = "button";
+    button.setAttribute("aria-label", accessibleLabel);
+    button.title = accessibleLabel;
+    return button;
+  }
+
   function readPayload() {
     var node = document.getElementById("arc-render-payload");
     if (!node) throw new Error("ARC render payload is missing");
@@ -58,6 +66,7 @@
       title: "标题",
       role: "类型",
       priority: "优先级",
+      advanced: "更多设置",
       markdown: "Markdown",
       preview: "预览",
       save: "另存为新版本",
@@ -95,6 +104,7 @@
       title: "Title",
       role: "Role",
       priority: "Priority",
+      advanced: "More options",
       markdown: "Markdown",
       preview: "Preview",
       save: "Save as new revision",
@@ -526,8 +536,9 @@
       full.forEach(function (item) { fullRows.appendChild(renderFragment(item)); });
       row.appendChild(fullRows);
     }
-    var noteButton = element("button", "arc-note-button", labels().addNote);
-    noteButton.type = "button";
+    var noteButton = iconButton(
+      "arc-note-button arc-icon-button", "+", labels().addNote
+    );
     noteButton.addEventListener("click", function () {
       openNewEditor(block);
     });
@@ -697,8 +708,9 @@
       "span", "arc-fragment-meta",
       roleLabel(fragment.role) + " · " + fragment.priority + " · v" + fragment.revision
     ));
-    var edit = element("button", "arc-edit-button", labels().edit);
-    edit.type = "button";
+    var edit = iconButton(
+      "arc-edit-button arc-icon-button", "✎", labels().edit
+    );
     edit.addEventListener("click", function () { openEditEditor(fragment); });
     actions.appendChild(edit);
     header.appendChild(actions);
@@ -722,14 +734,6 @@
       link.href = "#block-" + safeToken(section.anchor_block_id);
       removeVisibleHtmlTags(link);
       item.appendChild(link);
-      var note = element("button", "arc-note-button arc-section-note-button", strings.addNote);
-      note.type = "button";
-      note.addEventListener("click", function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        openNewSectionEditor(section);
-      });
-      item.appendChild(note);
       list.appendChild(item);
     });
     if ((state.payload.publication.glossary || []).length) {
@@ -1021,17 +1025,39 @@
   }
 
   async function setupEditor() {
+    var strings = labels();
     var connect = document.getElementById("arc-connect");
-    connect.textContent = labels().connect;
+    connect.textContent = strings.connect;
     connect.addEventListener("click", connectDirectory);
     if (!window.showDirectoryPicker) {
       connect.disabled = true;
-      setStatus(labels().noDirectoryApi, "error");
+      setStatus(strings.noDirectoryApi, "error");
     } else {
       await restoreDirectoryHandle();
     }
     var dialog = document.getElementById("arc-editor-dialog");
-    document.getElementById("arc-editor-close").onclick = function () { dialog.close(); };
+    document.getElementById("arc-editor-title-label").textContent =
+      strings.title;
+    document.getElementById("arc-editor-markdown-label").textContent =
+      strings.markdown;
+    document.getElementById("arc-editor-preview-label").textContent =
+      strings.preview;
+    document.getElementById("arc-editor-advanced-label").textContent =
+      strings.advanced;
+    document.getElementById("arc-editor-role-label").textContent =
+      strings.role;
+    document.getElementById("arc-editor-priority-label").textContent =
+      strings.priority;
+    document.getElementById("arc-editor-save").textContent = strings.save;
+    document.getElementById("arc-editor-cancel").textContent = strings.close;
+    var close = document.getElementById("arc-editor-close");
+    close.setAttribute("aria-label", strings.close);
+    close.title = strings.close;
+    Array.prototype.forEach.call(
+      document.getElementById("arc-editor-role").options,
+      function (option) { option.textContent = strings[option.value] || option.value; }
+    );
+    close.onclick = function () { dialog.close(); };
     document.getElementById("arc-editor-cancel").onclick = function () { dialog.close(); };
     document.getElementById("arc-editor-markdown").addEventListener("input", updatePreview);
     document.getElementById("arc-editor-save").addEventListener("click", saveEditor);
@@ -1119,15 +1145,6 @@
     });
   }
 
-  function openNewSectionEditor(section) {
-    var blocks = state.payload.publication.source_document.blocks || [];
-    openNewEditorForAnchor({
-      kind: "section",
-      target_id: section.section_id,
-      related_blocks: blocks.slice(section.block_start, section.block_end).map(anchorBlock)
-    });
-  }
-
   function openNewEditorForAnchor(anchor) {
     state.editorBase = null;
     state.editorHistorical = null;
@@ -1148,6 +1165,7 @@
     document.getElementById("arc-editor-role").value = fragment.role || "note";
     document.getElementById("arc-editor-priority").value = String(fragment.priority || 110);
     document.getElementById("arc-editor-markdown").value = fragment.markdown_body || "";
+    document.getElementById("arc-editor-advanced").open = false;
     renderHistory(fragment.fragment_id);
     updatePreview();
     dialog.showModal();
