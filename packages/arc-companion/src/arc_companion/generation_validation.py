@@ -133,7 +133,7 @@ def validate_chapter_guide(
             raise CompanionContentError(
                 "learning_markdown_invalid", str(exc)
             ) from exc
-        return markdown, list(citations)
+        return markdown, list(dict.fromkeys(citations))
 
     units: list[dict[str, Any]] = []
     if chapter_guide is not None:

@@ -266,6 +266,38 @@ def test_simple_chapter_may_publish_no_guide_units(tmp_path: Path) -> None:
     assert guide["learning_units"] == []
 
 
+def test_chapter_guide_deduplicates_repeated_citation_metadata(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    chapter = plan_source_chapters(source)[0]
+
+    guide = validate_chapter_guide(
+        {
+            "chapter_guide": {
+                "title": "How to read",
+                "content_markdown": "First [@1], second [@1], third [@1].",
+            },
+            "section_guides": [],
+            "companions": [],
+            "references": [
+                {
+                    "title": "Reference",
+                    "source": "https://example.com/reference",
+                }
+            ],
+        },
+        chapter_id=chapter.chapter_id,
+        block_ids=chapter.block_ids,
+        chapter_anchor_block_id=chapter.display_anchor_block_id,
+        section_block_ids=chapter.section_block_ids,
+    )
+
+    unit = guide["learning_units"][0]
+    assert len(unit["citations"]) == 1
+    assert unit["content_markdown"].count(f"[@{unit['citations'][0]}]") == 3
+
+
 def test_publication_outline_uses_program_chapters_and_subsections(
     tmp_path: Path,
 ) -> None:
