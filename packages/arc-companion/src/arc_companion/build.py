@@ -152,6 +152,7 @@ _MODEL_TRANSLATION_INDEX_ARTIFACT = "translation/model-index"
 _ORIGINAL_SOURCE_ARTIFACT = "source/original"
 _AUTHOR_IDENTITY_ARTIFACT = "identity/authors"
 _RESULT_ARTIFACT = "result"
+_TRANSLATION_LANE_CONTRACT = "arc.companion.translation_lane.v1"
 
 
 class CompanionBuildHandler:
@@ -859,6 +860,9 @@ class CompanionBuildHandler:
                         "chapter_id": chapter.chapter_id,
                         "block_ids": list(chapter.block_ids),
                         "lane": "translation",
+                        "translation_lane_contract": (
+                            _TRANSLATION_LANE_CONTRACT
+                        ),
                         "target_language": self.request.target_language,
                         "language": language_identity,
                         "glossary_digest": glossary_digest,
@@ -905,7 +909,7 @@ class CompanionBuildHandler:
                     )
 
             translations = context.run_group(
-                "chapter-translations-v2",
+                "chapter-translations-v3",
                 translation_units,
                 translation_worker,
                 max_workers=self.execution.workers,

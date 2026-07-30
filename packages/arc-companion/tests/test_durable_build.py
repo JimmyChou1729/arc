@@ -10,10 +10,12 @@ import pytest
 
 from arc_jobs import (
     ImmutableArtifactStore,
+    RunContext,
     RunEngine,
     RunRepository,
     RunSpec,
     RunStatus,
+    semantic_key,
 )
 from arc_llm import LLMCompleted
 from arc_paper import (
@@ -683,6 +685,69 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     assert [item.anchor.target_id for item in translations] == [
         item.block_id for item in document.blocks
     ]
+
+
+def test_translation_durable_units_freeze_the_lane_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = CompanionService(tmp_path / "jobs")
+    request = CompanionBuildRequest(
+        _document(tmp_path),
+        target_language="zh-CN",
+    )
+    prepared = service.prepare(request)
+    old_group = (
+        service.repository.run_directory(prepared.run_id)
+        / "groups"
+        / "chapter-translations-v2"
+    )
+    old_group.mkdir(parents=True)
+    (old_group / "state.json").write_text("{}", encoding="utf-8")
+    captured: list[tuple[str, tuple]] = []
+    original_run_group = RunContext.run_group
+
+    def capture_run_group(self, group_id, units, worker, **kwargs):
+        if group_id.startswith("chapter-translations-"):
+            captured.append((group_id, units))
+        return original_run_group(
+            self,
+            group_id,
+            units,
+            worker,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(RunContext, "run_group", capture_run_group)
+
+    completed = service.execute(
+        prepared.run_id,
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=FakeGuideTasks(),  # type: ignore[arg-type]
+        translation_adapter=FakeTranslationAdapter(mode="enabled"),
+    )
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert [group_id for group_id, _units in captured] == [
+        "chapter-translations-v3"
+    ]
+    assert all(
+        unit.semantic_input["translation_lane_contract"]
+        == "arc.companion.translation_lane.v1"
+        for _group_id, units in captured
+        for unit in units
+    )
+    for _group_id, units in captured:
+        for unit in units:
+            legacy_input = dict(unit.semantic_input)
+            legacy_input.pop("translation_lane_contract")
+            assert (
+                semantic_key(legacy_input).sha256
+                != semantic_key(unit.semantic_input).sha256
+            )
+    assert json.loads(
+        (old_group / "state.json").read_text(encoding="utf-8")
+    ) == {}
 
 
 def test_structural_display_chapter_skips_loop_but_translates_and_augments(
