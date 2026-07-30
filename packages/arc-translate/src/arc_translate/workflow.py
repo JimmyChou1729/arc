@@ -1908,6 +1908,16 @@ def _validate_translation_result(
                         "translation_source_identity_invalid",
                         f"translation changed code text for {block_id}",
                     )
+            elif rich_block.kind is RichBlockKind.EQUATION:
+                expected_equation = block_text_to_markdown(
+                    rich_block,
+                    str(rich_block.payload["tex"]),
+                )
+                if revision.markdown_body != expected_equation:
+                    raise TranslationSourceError(
+                        "translation_source_identity_invalid",
+                        f"translation changed equation text for {block_id}",
+                    )
             else:
                 validate_translation_text(
                     revision.markdown_body,

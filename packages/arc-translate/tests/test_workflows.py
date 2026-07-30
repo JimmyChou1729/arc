@@ -103,11 +103,12 @@ class FakeTasks:
             translations = []
             for block in payload["blocks"]:
                 identity = block["source_identity"]
-                text = (
-                    identity["code_text"]
-                    if identity["code_text"] is not None
-                    else f"{self.translation_prefix}{block_text(block)}"
-                )
+                if identity["code_text"] is not None:
+                    text = identity["code_text"]
+                elif block["kind"] == "equation":
+                    text = block_text(block)
+                else:
+                    text = f"{self.translation_prefix}{block_text(block)}"
                 for token in [
                     *identity["equations"],
                     *identity["link_targets"],
@@ -279,6 +280,74 @@ def _prompt(prompt: str) -> tuple[str, dict[str, Any]]:
     contract = prompt.splitlines()[0].removeprefix("Contract: ")
     payload = json.loads(prompt.split("Input JSON:\n", 1)[1])
     return contract, payload
+
+
+def test_equation_translation_round_trips_through_fragment_markdown(
+    tmp_path: Path,
+) -> None:
+    tex = r"\left[p_\mu\right](p'-p)"
+    markdown = tmp_path / "equation.md"
+    markdown.write_text(
+        f"# Equation\n\n$$\n{tex}\n$$\n",
+        encoding="utf-8",
+    )
+    paper = ArcPaperService(cache_root=tmp_path / "equation-cache")
+    rich = RichDocumentParserService(paper.repository).parse_source(
+        paper.import_source(markdown)
+    )
+    source = TranslationSource(rich)
+    equation = next(
+        block
+        for block in source_blocks(source)
+        if block["kind"] == "equation"
+    )
+    tasks = FakeTasks()
+    context = _context(tmp_path, "equation-round-trip")
+
+    result = TranslationWorkflowService(tasks).translate_blocks(
+        context,
+        source,
+        language=LanguageResult(
+            source.document_digest,
+            source.source_digest,
+            "en",
+            "known",
+            1,
+            "zh-CN",
+            "enabled",
+        ),
+        glossary=GlossaryResult(
+            source.document_digest,
+            source.source_digest,
+            "zh-CN",
+            1,
+            "d" * 64,
+            (),
+        ),
+        target_language="zh-CN",
+    )
+
+    assert isinstance(result, TranslationResult)
+    prompted_equation = next(
+        block
+        for window in tasks.translation_blocks
+        for block in window
+        if block["block_id"] == equation["block_id"]
+    )
+    assert block_text(prompted_equation) == tex
+    revisions = [
+        decode_fragment_revision(
+            context.artifacts.read_bytes(item.artifact).decode("utf-8"),
+            filename=Path(item.revision.path).name,
+        )
+        for item in result.revision_artifacts
+    ]
+    revision = next(
+        item
+        for item in revisions
+        if item.anchor.target_id == equation["block_id"]
+    )
+    assert revision.markdown_body == f"$$\n{tex}\n$$\n"
 
 
 def test_glossary_schema_only_requests_reasoned_content_and_join_id():
