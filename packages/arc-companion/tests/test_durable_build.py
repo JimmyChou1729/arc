@@ -8,6 +8,8 @@ from threading import Event, Lock
 
 import pytest
 
+import arc_companion.build as companion_build
+
 from arc_jobs import (
     ImmutableArtifactStore,
     RunContext,
@@ -1314,6 +1316,83 @@ def test_invalid_terminal_revision_reports_program_owned_candidate(
     assert (
         recovered_guide["learning_units"][0]["content_markdown"]
         == "Recovered guide content."
+    )
+
+
+def test_resume_rebuilds_joined_chapter_after_guide_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _document(tmp_path)
+    chapters = plan_source_chapters(document)
+    tasks = FakeGuideTasks()
+    service = CompanionService(tmp_path / "jobs")
+    publish = companion_build.publish_companion
+    calls = 0
+
+    def fail_publication_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise companion_build.CompanionPublicationError(
+                "fixture publication failure"
+            )
+        return publish(*args, **kwargs)
+
+    monkeypatch.setattr(
+        companion_build, "publish_companion", fail_publication_once
+    )
+    failed = service.build(
+        CompanionBuildRequest(document, target_language="en"),
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
+    )
+
+    assert failed.status is RunStatus.FAILED
+    store = ImmutableArtifactStore(
+        service.repository.run_directory(failed.run_id),
+        repository_root=service.repository.root,
+    )
+    assert store.find(
+        f"chapters/{chapters[0].chapter_id}/accepted"
+    ) is not None
+
+    candidate_path = (
+        service.repository.run_directory(failed.run_id)
+        / "working/candidates/chapters"
+        / chapters[0].chapter_id
+        / "guide-final.json"
+    )
+    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+    candidate["chapter_guide"]["content_markdown"] = (
+        "Recovered joined content."
+    )
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    guide_calls = tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION]
+
+    recovered = service.resume(
+        failed.run_id,
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks,  # type: ignore[arg-type]
+        translation_adapter=FakeTranslationAdapter(mode="skipped"),
+    )
+
+    assert recovered.status is RunStatus.SUCCEEDED
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == guide_calls
+    recovered_store = ImmutableArtifactStore(
+        service.repository.run_directory(recovered.run_id),
+        repository_root=service.repository.root,
+    )
+    joined_ref = recovered_store.find(
+        "recovery-1/chapters/"
+        f"{chapters[0].chapter_id}/accepted"
+    )
+    assert joined_ref is not None
+    joined = json.loads(recovered_store.read_bytes(joined_ref))
+    assert (
+        joined["learning_units"][0]["content_markdown"]
+        == "Recovered joined content."
     )
 
 

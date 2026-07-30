@@ -963,7 +963,7 @@ class CompanionBuildHandler:
             artifact_id = f"chapters/{chapter.chapter_id}/guide-accepted"
             existing = (
                 None
-                if replay_guide_batch
+                if replay_guide_batch and chapter.generate_guide
                 else context.artifacts.find(artifact_id)
             )
             if existing is not None:
@@ -1210,6 +1210,7 @@ class CompanionBuildHandler:
             blocks,
             source=source,
             translation_required=translation_required,
+            rebuild=replay_guide_batch,
         )
         if isinstance(joined, Failed):
             return joined
@@ -1302,6 +1303,7 @@ class CompanionBuildHandler:
         *,
         source: RichDocument,
         translation_required: bool,
+        rebuild: bool = False,
     ) -> tuple[dict[str, Any], ...] | Failed:
         """Publish every chapter whose independent lanes already succeeded."""
 
@@ -1340,7 +1342,11 @@ class CompanionBuildHandler:
                 ),
             }
             accepted_id = f"chapters/{chapter.chapter_id}/accepted"
-            existing = context.artifacts.find(accepted_id)
+            existing = (
+                None
+                if rebuild
+                else context.artifacts.find(accepted_id)
+            )
             if existing is None:
                 context.artifacts.publish_json(accepted_id, chapter_value)
             else:
