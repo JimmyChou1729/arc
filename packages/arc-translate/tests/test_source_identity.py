@@ -131,6 +131,38 @@ def test_changed_link_multiset_is_rejected(text: str) -> None:
         validate_translation_text(text, _paragraph_block())
 
 
+def test_link_validation_ignores_markdown_shapes_inside_inline_math() -> None:
+    tex = r"\left[p_\mu\right](p'-p)"
+    block = {
+        "block_id": "block-math-link-shape",
+        "kind": "paragraph",
+        "payload": {
+            "text": f"${tex}$",
+            "inline_spans": [
+                {
+                    "kind": "math",
+                    "start": 0,
+                    "end": len(tex) + 2,
+                    "text": f"${tex}$",
+                    "tex": tex,
+                    "source": f"${tex}$",
+                }
+            ],
+        },
+    }
+
+    assert source_identity(block)["link_targets"] == []
+    validate_translation_text(f"${tex}$", block)
+    with pytest.raises(
+        TranslationSourceError,
+        match="changed link occurrences",
+    ):
+        validate_translation_text(
+            f"${tex}$ [extra](https://example.test/extra)",
+            block,
+        )
+
+
 def test_list_identity_uses_each_items_inline_spans() -> None:
     block = {
         "block_id": "block-list",
@@ -172,17 +204,26 @@ def test_list_identity_uses_each_items_inline_spans() -> None:
 
 
 def test_heading_identity_extracts_markdown_math_without_inline_spans() -> None:
+    link_shaped_tex = r"\left[V\right](p)"
     block = {
         "block_id": "block-heading",
         "kind": "heading",
         "payload": {
-            "text": r"Representations of $G$ and $\mathfrak g$",
+            "text": (
+                r"Representations of $G$, $\mathfrak g$, and "
+                f"${link_shaped_tex}$"
+            ),
             "level": 2,
         },
     }
 
-    assert source_identity(block)["equations"] == ["G", r"\mathfrak g"]
-    validate_translation_text(r"$\mathfrak g$ 与 $G$ 的表示", block)
+    identity = source_identity(block)
+    assert identity["equations"] == ["G", r"\mathfrak g", link_shaped_tex]
+    assert identity["link_targets"] == []
+    validate_translation_text(
+        f"${link_shaped_tex}$、" r"$\mathfrak g$ 与 $G$ 的表示",
+        block,
+    )
 
 
 def test_table_identity_extracts_markdown_math_and_links() -> None:
@@ -261,15 +302,23 @@ def test_undelimited_inline_math_still_uses_exact_tex_identity() -> None:
 
 
 @pytest.mark.parametrize(
-    "text",
-    [r"x^2 + y^2 = z^2", r"$$x^2 + y^2 = z^2$$", r"x^2  + y^2 = z^2"],
+    ("source_tex", "text"),
+    [
+        (r"x^2 + y^2 = z^2", r"x^2 + y^2 = z^2"),
+        (r"x^2 + y^2 = z^2", r"$$x^2 + y^2 = z^2$$"),
+        (r"x^2 + y^2 = z^2", r"x^2  + y^2 = z^2"),
+        (r"\left[p_\mu\right](p'-p)", r"\left[p_\mu\right](p'-p)"),
+    ],
 )
-def test_equation_translation_must_equal_source_tex(text: str) -> None:
+def test_equation_translation_must_equal_source_tex(
+    source_tex: str,
+    text: str,
+) -> None:
     block = {
         "block_id": "block-equation",
         "kind": "equation",
         "payload": {
-            "tex": "x^2 + y^2 = z^2",
+            "tex": source_tex,
             "display": True,
             "label": "",
         },

@@ -191,12 +191,13 @@ def validate_translation_text(text: str, block: Mapping[str, Any]) -> None:
             "translation changed formula occurrences for "
             f"{block['block_id']}",
         )
-    expected_links = Counter(identity["link_targets"])
-    if _link_occurrences(text, expected_links) != expected_links:
-        raise TranslationSourceError(
-            "translation_source_identity_invalid",
-            f"translation changed link occurrences for {block['block_id']}",
-        )
+    if str(block.get("kind")) != "equation":
+        expected_links = Counter(identity["link_targets"])
+        if _link_occurrences(text, expected_links) != expected_links:
+            raise TranslationSourceError(
+                "translation_source_identity_invalid",
+                f"translation changed link occurrences for {block['block_id']}",
+            )
     if identity["asset_digest"] is not None and not str(
         identity["asset_digest"]
     ).strip():
@@ -323,7 +324,10 @@ def _extend_markdown_identity(
     links: list[str],
 ) -> None:
     equations.extend(_markdown_math_occurrences(text))
-    links.extend(match.group(1) for match in _MARKDOWN_LINK.finditer(text))
+    links.extend(
+        match.group(1)
+        for match in _MARKDOWN_LINK.finditer(_without_markdown_math(text))
+    )
 
 
 def _markdown_math_occurrences(text: str) -> tuple[str, ...]:
@@ -368,6 +372,7 @@ def _link_occurrences(
     text: str,
     expected: Counter[str],
 ) -> Counter[str]:
+    text = _without_markdown_math(text)
     markdown_targets = Counter(
         match.group(1) for match in _MARKDOWN_LINK.finditer(text)
     )
@@ -388,6 +393,13 @@ def _link_occurrences(
                 )
             )
         }
+    )
+
+
+def _without_markdown_math(text: str) -> str:
+    return _MARKDOWN_MATH.sub(
+        lambda match: " " * len(match.group(0)),
+        text,
     )
 
 
