@@ -700,6 +700,7 @@
         index += 1
       ) {
         var block = documentValue.blocks[index];
+        if (isPdfPageMarkerBlock(block)) continue;
         content.appendChild(renderSourceRow(
           block, state.fragmentGroups.get(block.block_id) || []
         ));
@@ -772,6 +773,12 @@
       return block.kind === "heading" && Number(block.payload.level) === 1;
     });
     return first ? first.payload.text : "";
+  }
+
+  function isPdfPageMarkerBlock(block) {
+    if (!block || block.kind !== "paragraph") return false;
+    var text = String((block.payload || {}).text || "");
+    return /^<!-- PDF_PAGE: [1-9][0-9]* -->$/.test(text);
   }
 
   function groupedFragments(documentValue) {

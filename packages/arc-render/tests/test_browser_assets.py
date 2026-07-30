@@ -59,6 +59,7 @@ define = undefined;
     stableStringify: stableStringify,
     setupMarkdown: setupMarkdown,
     buildRenderChunks: buildRenderChunks,
+    isPdfPageMarkerBlock: isPdfPageMarkerBlock,
     validateIntegerJson: validateIntegerJson,
     validateRevisionMetadata: validateRevisionMetadata
   };
@@ -72,6 +73,24 @@ try {
   rejected = true;
 }
 if (!rejected) throw new Error("non-integer JSON was accepted");
+if (!helpers.isPdfPageMarkerBlock({
+  kind: "paragraph",
+  payload: {text: "<!-- PDF_PAGE: 1 -->"}
+})) {
+  throw new Error("PDF page marker remained visible");
+}
+if (helpers.isPdfPageMarkerBlock({
+  kind: "paragraph",
+  payload: {text: "<!-- note --> visible text"}
+})) {
+  throw new Error("visible paragraph text was hidden with its comment");
+}
+if (helpers.isPdfPageMarkerBlock({
+  kind: "paragraph",
+  payload: {text: "<!-- note -->"}
+})) {
+  throw new Error("ordinary HTML comment was treated as a PDF page marker");
+}
 if (helpers.stableStringify({b: 2, a: 1}) !== '{"a":1,"b":2}') {
   throw new Error("canonical JSON ordering changed");
 }
