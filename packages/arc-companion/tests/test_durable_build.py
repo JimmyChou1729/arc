@@ -1271,6 +1271,21 @@ def test_invalid_terminal_revision_reports_program_owned_candidate(
         f"chapters/{chapters[1].chapter_id}/guide-accepted"
     ) is None
 
+    first_candidate_path = (
+        service.repository.run_directory(failed.run_id)
+        / "working/candidates/chapters"
+        / chapters[0].chapter_id
+        / "guide-final.json"
+    )
+    first_candidate = json.loads(
+        first_candidate_path.read_text(encoding="utf-8")
+    )
+    first_candidate["chapter_guide"]["content_markdown"] = (
+        "Recovered guide content."
+    )
+    first_candidate_path.write_text(
+        json.dumps(first_candidate), encoding="utf-8"
+    )
     candidate["companions"][0]["after_part"] = 1
     candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
     guide_calls = tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION]
@@ -1284,6 +1299,22 @@ def test_invalid_terminal_revision_reports_program_owned_candidate(
 
     assert recovered.status is RunStatus.SUCCEEDED
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == guide_calls
+    recovered_store = ImmutableArtifactStore(
+        service.repository.run_directory(recovered.run_id),
+        repository_root=service.repository.root,
+    )
+    recovered_guide_ref = recovered_store.find(
+        "recovery-1/chapters/"
+        f"{chapters[0].chapter_id}/guide-accepted"
+    )
+    assert recovered_guide_ref is not None
+    recovered_guide = json.loads(
+        recovered_store.read_bytes(recovered_guide_ref)
+    )
+    assert (
+        recovered_guide["learning_units"][0]["content_markdown"]
+        == "Recovered guide content."
+    )
 
 
 @pytest.mark.parametrize("value", [0, 201, True])

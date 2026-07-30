@@ -961,8 +961,12 @@ class CompanionBuildHandler:
         replay_guide_batch = existing_guide_batch is not None
         for chapter in chapters:
             artifact_id = f"chapters/{chapter.chapter_id}/guide-accepted"
-            existing = context.artifacts.find(artifact_id)
-            if existing is not None and not replay_guide_batch:
+            existing = (
+                None
+                if replay_guide_batch
+                else context.artifacts.find(artifact_id)
+            )
+            if existing is not None:
                 completed_results[f"guide-{chapter.chapter_id}"] = read_json(
                     context, existing, "accepted chapter guide"
                 )
