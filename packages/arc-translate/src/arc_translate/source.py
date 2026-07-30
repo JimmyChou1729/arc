@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -24,6 +25,18 @@ from .contracts import TranslationSource
 
 
 STRUCTURAL_FIGURE_PLACEHOLDER = "\ufffc"
+_MARKDOWN_MATH = re.compile(
+    r"(?P<bracket>(?<!\\)\\\[(?P<bracket_tex>.+?)(?<!\\)\\\])"
+    r"|(?P<paren>(?<!\\)\\\((?P<paren_tex>.+?)(?<!\\)\\\))"
+    r"|(?P<double>(?<!\\)\$\$(?P<double_tex>.+?)(?<!\\)\$\$)"
+    r"|(?P<single>(?<!\\)(?<!\$)\$(?!\$)"
+    r"(?P<single_tex>.+?)(?<!\\)\$(?!\$))",
+    re.DOTALL,
+)
+_MARKDOWN_LINK = re.compile(
+    r"(?<!!)\[[^\]]+\]\(([^)\s]+)(?:\s+[^)]*)?\)"
+)
+_LINK_TOKEN_CHARACTER = r"A-Za-z0-9._~:/?#@!$&'*+,;=%-"
 
 
 class TranslationSourceError(RuntimeError):
@@ -117,28 +130,24 @@ def source_identity(block: Mapping[str, Any]) -> dict[str, Any]:
     if kind == "equation":
         equations.append(str(payload.get("tex", "")))
     elif kind == "paragraph":
-        equations.extend(
-            str(item["tex"])
-            for item in _mapping_items(payload.get("inline_math"))
-            if "tex" in item
-        )
-        links.extend(
-            str(item["target"])
-            for item in _mapping_items(payload.get("links"))
-            if "target" in item
+        _extend_inline_identity(
+            payload.get("inline_spans"),
+            equations=equations,
+            links=links,
         )
     elif kind == "list":
         for item in _mapping_items(payload.get("items")):
-            equations.extend(
-                str(span["tex"])
-                for span in _mapping_items(item.get("inline_math"))
-                if "tex" in span
+            _extend_inline_identity(
+                item.get("inline_spans"),
+                equations=equations,
+                links=links,
             )
-            links.extend(
-                str(link["target"])
-                for link in _mapping_items(item.get("links"))
-                if "target" in link
-            )
+    elif kind in {"heading", "table", "figure"}:
+        _extend_markdown_identity(
+            block_text(block),
+            equations=equations,
+            links=links,
+        )
     return {
         "equations": equations,
         "code_text": str(payload["text"]) if kind == "code" else None,
@@ -168,14 +177,25 @@ def validate_translation_text(text: str, block: Mapping[str, Any]) -> None:
             "translation_source_identity_invalid",
             f"translation changed code text for {block['block_id']}",
         )
-    occurrences = Counter(
-        [*identity["equations"], *identity["link_targets"]]
-    )
-    if any(text.count(token) < count for token, count in occurrences.items()):
+    expected_equations = Counter(identity["equations"])
+    if str(block.get("kind")) == "equation":
+        expected_text = next(iter(expected_equations), "")
+        if text != expected_text:
+            raise TranslationSourceError(
+                "translation_source_identity_invalid",
+                f"translation changed equation text for {block['block_id']}",
+            )
+    elif _formula_occurrences(text, expected_equations) != expected_equations:
         raise TranslationSourceError(
             "translation_source_identity_invalid",
-            "translation omitted a formula or link occurrence for "
+            "translation changed formula occurrences for "
             f"{block['block_id']}",
+        )
+    expected_links = Counter(identity["link_targets"])
+    if _link_occurrences(text, expected_links) != expected_links:
+        raise TranslationSourceError(
+            "translation_source_identity_invalid",
+            f"translation changed link occurrences for {block['block_id']}",
         )
     if identity["asset_digest"] is not None and not str(
         identity["asset_digest"]
@@ -194,6 +214,7 @@ def prompt_block(block: Mapping[str, Any]) -> dict[str, Any]:
         raise TranslationSourceError(
             "source_block_invalid", "source block payload must be an object"
         )
+    identity = source_identity(block)
     return {
         "block_id": block.get("block_id"),
         "ordinal": block.get("ordinal"),
@@ -204,9 +225,9 @@ def prompt_block(block: Mapping[str, Any]) -> dict[str, Any]:
             "alt_text": str(payload.get("alt_text", "")),
         },
         "source_identity": {
-            "equations": [],
+            "equations": identity["equations"],
             "code_text": None,
-            "link_targets": [],
+            "link_targets": identity["link_targets"],
         },
     }
 
@@ -279,6 +300,112 @@ def _mapping_items(value: Any) -> tuple[Mapping[str, Any], ...]:
             "source_block_invalid", "source identity item is invalid"
         )
     return tuple(value)
+
+
+def _extend_inline_identity(
+    value: Any,
+    *,
+    equations: list[str],
+    links: list[str],
+) -> None:
+    for span in _mapping_items(value):
+        kind = str(span.get("kind"))
+        if kind == "math" and "tex" in span:
+            equations.append(str(span["tex"]))
+        elif kind == "link" and "target" in span:
+            links.append(str(span["target"]))
+
+
+def _extend_markdown_identity(
+    text: str,
+    *,
+    equations: list[str],
+    links: list[str],
+) -> None:
+    equations.extend(_markdown_math_occurrences(text))
+    links.extend(match.group(1) for match in _MARKDOWN_LINK.finditer(text))
+
+
+def _markdown_math_occurrences(text: str) -> tuple[str, ...]:
+    return tuple(
+        next(
+            value
+            for value in (
+                match.group("bracket_tex"),
+                match.group("paren_tex"),
+                match.group("double_tex"),
+                match.group("single_tex"),
+            )
+            if value is not None
+        )
+        for match in _MARKDOWN_MATH.finditer(text)
+    )
+
+
+def _formula_occurrences(
+    text: str,
+    expected: Counter[str],
+) -> Counter[str]:
+    delimited = Counter(_markdown_math_occurrences(text))
+    if delimited:
+        return delimited
+    return Counter(
+        {
+            token: count
+            for token in expected
+            if (
+                count := _literal_occurrence_count(
+                    text,
+                    token,
+                    edge_characters=r"A-Za-z0-9\\^_{}[\]",
+                )
+            )
+        }
+    )
+
+
+def _link_occurrences(
+    text: str,
+    expected: Counter[str],
+) -> Counter[str]:
+    markdown_targets = Counter(
+        match.group(1) for match in _MARKDOWN_LINK.finditer(text)
+    )
+    if any(
+        target not in expected or count > expected[target]
+        for target, count in markdown_targets.items()
+    ):
+        return markdown_targets
+    return Counter(
+        {
+            target: count
+            for target in expected
+            if (
+                count := _literal_occurrence_count(
+                    text,
+                    target,
+                    edge_characters=_LINK_TOKEN_CHARACTER,
+                )
+            )
+        }
+    )
+
+
+def _literal_occurrence_count(
+    text: str,
+    token: str,
+    *,
+    edge_characters: str,
+) -> int:
+    if not token:
+        return 0
+    return len(
+        re.findall(
+            rf"(?<![{edge_characters}]){re.escape(token)}"
+            rf"(?![{edge_characters}])",
+            text,
+        )
+    )
 
 
 def _primary_language(tag: str) -> str:
