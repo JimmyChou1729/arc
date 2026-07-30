@@ -574,7 +574,7 @@ def _validate_published_artifacts(
         for digest, artifact in actual_resources.items():
             resource = resources[digest]
             if (
-                artifact.digest.size != resource.get("size")
+                artifact.digest.size_bytes != resource.get("size")
                 or artifact.media_type != resource.get("media_type")
             ):
                 raise ValueError(

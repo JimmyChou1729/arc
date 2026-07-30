@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from arc_jobs import ImmutableArtifactStore, RunContext, RunRepository, RunSpec
 from arc_paper import (
+    ArcPaperService,
     RichDocumentParserService,
     SourceFormat,
     SourceOrigin,
@@ -47,6 +48,24 @@ def _source(tmp_path: Path):
         origin=SourceOrigin(SourceOriginKind.LOCAL_IMPORT, locator="source.md"),
     )
     return RichDocumentParserService(repository).parse_source(artifact)
+
+
+def _illustrated_source(tmp_path: Path):
+    source_path = tmp_path / "illustrated.md"
+    asset_path = tmp_path / "figure.svg"
+    asset_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+        encoding="utf-8",
+    )
+    source_path.write_text(
+        "# Illustrated\n\nBody.\n\n![Figure](figure.svg)\n",
+        encoding="utf-8",
+    )
+    service = ArcPaperService(cache_root=tmp_path / "paper")
+    artifact = service.import_source(source_path)
+    return RichDocumentParserService(service.repository).parse_source(
+        artifact
+    )
 
 
 def test_publication_uses_atomic_overlays_and_materializes_directly(
@@ -141,6 +160,54 @@ def test_publication_uses_atomic_overlays_and_materializes_directly(
             incomplete,
             tmp_path / "incomplete",
         )
+
+
+def test_materialization_validates_resource_size_bytes(tmp_path: Path) -> None:
+    source = _illustrated_source(tmp_path)
+    chapter = plan_source_chapters(source)[0]
+    repository = RunRepository(tmp_path / "jobs")
+    snapshot = repository.create(
+        RunSpec("resource-run", "handler", {"input": "test"})
+    )
+    context = RunContext(repository, snapshot, resume_input=None)
+
+    published = publish_companion(
+        context,
+        source=source,
+        title="Illustrated",
+        authors=(),
+        source_language="en",
+        target_language="en",
+        translation_mode="skipped",
+        reader_labels={},
+        chapters=(
+            {
+                "chapter_id": chapter.chapter_id,
+                "title": chapter.title,
+                "block_ids": list(chapter.block_ids),
+                "display_anchor_block_id": chapter.display_anchor_block_id,
+                "section_block_ids": list(chapter.section_block_ids),
+                "section_titles": list(chapter.section_titles),
+                "section_levels": list(chapter.section_levels),
+                "translation_result": None,
+                "learning_units": [],
+            },
+        ),
+        glossary=(),
+        bibliography=(),
+        paper_cache_root=tmp_path / "paper",
+    )
+
+    assert published.resource_refs
+    publication_path = materialize_published_companion(
+        ImmutableArtifactStore(
+            repository.run_directory("resource-run"),
+            repository_root=repository.root,
+        ),
+        published,
+        tmp_path / "publication-with-resource",
+    )
+    assert validate_publication_workspace(publication_path) == ()
 
 
 def test_changed_companion_content_gets_a_distinct_fragment_identity(
