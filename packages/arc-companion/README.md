@@ -56,14 +56,15 @@ The publication workspace is self-contained:
 publication.json
 layers/translation.json
 layers/companion.json
-fragments/<fragment-id>/revision-....md
+fragments/revision-....md
 resources/<sha256>
 ```
 
 Translation fragments use priority 10. Inline Companion fragments use priority
 20; chapter and section guides use priority 101. Fragment location is anchored
 to immutable rich-source block identity, while the Markdown file contains only
-the human-authored semantic content.
+the human-authored semantic content. The validated JSON front matter owns
+fragment identity; directory names are never semantic identities.
 
 ## Reader assumptions
 

@@ -374,8 +374,7 @@ class FakeTranslationAdapter:
                 markdown_body=block_text_to_markdown(block, text),
             )
             relative = (
-                f"fragments/{revision.fragment_id}/"
-                f"{fragment_revision_filename(revision)}"
+                f"fragments/{fragment_revision_filename(revision)}"
             )
             reference = fragment_revision_ref(relative, revision)
             artifact = context.artifacts.publish_bytes(
@@ -1067,10 +1066,13 @@ def test_review_remove_publishes_ordered_subset_without_retry(
     assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 6
     assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 4
     published = service.published_companion(completed.run_id)
-    assert sum(
-        ref.artifact_id.startswith("publication/fragments/companion-")
+    assert len(published.fragment_refs) == len(plan_source_chapters(document))
+    assert all(
+        ref.artifact_id.startswith(
+            "publication/fragments/revision-000001-"
+        )
         for ref in published.fragment_refs
-    ) == len(plan_source_chapters(document))
+    )
 
 
 @pytest.mark.parametrize(

@@ -358,8 +358,7 @@ def _translation_result(
             markdown_body=block_text_to_markdown(block, text),
         )
         relative = (
-            f"fragments/{revision.fragment_id}/"
-            f"{fragment_revision_filename(revision)}"
+            f"fragments/{fragment_revision_filename(revision)}"
         )
         reference = fragment_revision_ref(relative, revision)
         payload = encode_fragment_revision(revision).encode("utf-8")

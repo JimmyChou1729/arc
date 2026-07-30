@@ -55,6 +55,7 @@ define = undefined;
     state: state,
     browserCreatedHistory: browserCreatedHistory,
     effectiveEquationLabel: effectiveEquationLabel,
+    fragmentsDirectory: fragmentsDirectory,
     stableStringify: stableStringify,
     setupMarkdown: setupMarkdown,
     buildRenderChunks: buildRenderChunks,
@@ -164,6 +165,22 @@ if (
 ) {
   throw new Error("equation payload label fallback changed");
 }
+var requestedDirectory = null;
+helpers.state.directory = {
+  getDirectoryHandle: function (name, options) {
+    requestedDirectory = {name: name, create: options.create};
+    return Promise.resolve({name: name});
+  }
+};
+helpers.fragmentsDirectory(true).then(function (handle) {
+  if (
+    requestedDirectory.name !== "fragments" ||
+    requestedDirectory.create !== true ||
+    handle.name !== "fragments"
+  ) {
+    throw new Error("fragment storage used a semantic ID as a directory name");
+  }
+});
 var chunkBlocks = Array.from({length: 95}, function (_value, index) {
   return {block_id: "chunk-block-" + index};
 });
@@ -229,6 +246,10 @@ def test_reader_rebuilds_directory_state_and_guards_revision_lineage() -> None:
     assert "await loadDirectoryRevisions();" in javascript
     assert "current.semantic_digest !== base.semantic_digest" in javascript
     assert "throw new Error(labels().historyChanged)" in javascript
+    assert "var folder = await fragmentsDirectory(true);" in javascript
+    assert "async function fragmentsDirectory(create)" in javascript
+    assert "getDirectoryHandle(fragmentId" not in javascript
+    assert "fragmentDirectory(metadata.fragment_id" not in javascript
 
 
 def test_reader_enforces_strict_browser_revision_contract() -> None:

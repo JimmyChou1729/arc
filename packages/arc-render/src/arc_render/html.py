@@ -308,7 +308,15 @@ def _load_revisions(
                 resolved.relative_to(fragments_root.resolve())
             except ValueError as exc:
                 raise HTMLRenderError("fragment path escapes the project") from exc
-            fragment_id = claimed_paths.get(resolved, candidate.parent.name)
+            fragment_id = claimed_paths.get(resolved)
+            if fragment_id is None:
+                try:
+                    fragment_id = read_fragment_revision(resolved).fragment_id
+                except ValueError:
+                    # Keep malformed files grouped only long enough for the
+                    # resolver to diagnose them. Directory names are storage
+                    # organization and never define a valid fragment identity.
+                    fragment_id = candidate.parent.name
             if resolved not in paths_by_fragment[fragment_id]:
                 paths_by_fragment[fragment_id].append(resolved)
             if fragment_id not in fragment_order:

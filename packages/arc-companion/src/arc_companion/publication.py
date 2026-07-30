@@ -25,13 +25,14 @@ from arc_render import (
     AnchorKind,
     FragmentAnchor,
     FragmentRevision,
+    FragmentRevisionRef,
     Layer,
     Publication,
     PublicationOutlineItem,
     anchor_block_from_rich_block,
     encode_fragment_revision,
-    fragment_revision_filename,
     fragment_revision_ref,
+    fragment_revision_storage_path,
     layer_from_document,
     layer_to_document,
     normalize_markdown,
@@ -173,10 +174,7 @@ def publish_companion(
             continue
         revision_refs = []
         for revision in revisions:
-            relative = (
-                f"fragments/{revision.fragment_id}/"
-                f"{fragment_revision_filename(revision)}"
-            )
+            relative = fragment_revision_storage_path(revision)
             ref = context.artifacts.publish_bytes(
                 f"publication/{relative}",
                 encode_fragment_revision(revision).encode("utf-8"),
@@ -464,7 +462,7 @@ def materialize_published_companion(
     """Materialize exact run-owned artifacts into an arc-render workspace."""
 
     root = Path(workspace).resolve()
-    _validate_published_artifacts(store, published)
+    layers = _validate_published_artifacts(store, published)
     root.mkdir(parents=True, exist_ok=True)
     publication_path = root / "publication.json"
     _write_exact(publication_path, store.read_bytes(published.publication_ref))
@@ -472,18 +470,16 @@ def materialize_published_companion(
         raise CompanionPublicationError(
             "publication layer artifacts do not match its layer references"
         )
-    for layer, ref in zip(
+    for layer_reference, ref in zip(
         published.publication.layers, published.layer_refs, strict=True
     ):
-        _write_exact(root / layer.path, store.read_bytes(ref))
+        _write_exact(root / layer_reference.path, store.read_bytes(ref))
+    revision_paths = _revision_paths(layers)
     for ref in published.fragment_refs:
-        revision = _fragment_from_bytes(store.read_bytes(ref))
-        relative = (
-            Path("fragments")
-            / revision.fragment_id
-            / fragment_revision_filename(revision)
-        )
-        _write_exact(root / relative, store.read_bytes(ref))
+        payload = store.read_bytes(ref)
+        revision = _fragment_from_bytes(payload)
+        relative = revision_paths[_revision_identity(revision)][0]
+        _write_exact(root / relative, payload)
     resource_paths = {
         _string(item, "artifact_digest"): _string(item, "path")
         for item in published.publication.resources
@@ -506,7 +502,7 @@ def materialize_published_companion(
 def _validate_published_artifacts(
     store: ImmutableArtifactStore,
     published: PublishedCompanion,
-) -> None:
+) -> tuple[Layer, ...]:
     try:
         encoded_publication = json.loads(
             store.read_bytes(published.publication_ref).decode("utf-8")
@@ -536,31 +532,20 @@ def _validate_published_artifacts(
                 )
             layers.append(layer)
 
-        expected_revisions = {
-            reference.path: reference
-            for layer in layers
-            for reference in layer.initial_revisions
-        }
-        if len(expected_revisions) != sum(
-            len(layer.initial_revisions) for layer in layers
-        ):
-            raise ValueError("publication layers repeat a fragment path")
+        expected_revisions = _revision_paths(layers)
         actual_revisions = {}
         for artifact in published.fragment_refs:
             revision = _fragment_from_bytes(store.read_bytes(artifact))
-            relative = (
-                f"fragments/{revision.fragment_id}/"
-                f"{fragment_revision_filename(revision)}"
-            )
-            if relative in actual_revisions:
+            identity = _revision_identity(revision)
+            if identity in actual_revisions:
                 raise ValueError("publication repeats a fragment artifact")
-            actual_revisions[relative] = revision
+            actual_revisions[identity] = revision
         if set(actual_revisions) != set(expected_revisions):
             raise ValueError(
                 "publication fragment artifacts do not match its layers"
             )
-        for relative, revision in actual_revisions.items():
-            reference = expected_revisions[relative]
+        for identity, revision in actual_revisions.items():
+            reference = expected_revisions[identity][1]
             if (
                 revision.fragment_id != reference.fragment_id
                 or revision.revision != reference.revision
@@ -596,6 +581,7 @@ def _validate_published_artifacts(
                     "resource artifact metadata differs from the publication"
                 )
             store.read_bytes(artifact)
+        return tuple(layers)
     except (
         ArcJobsError,
         OSError,
@@ -607,6 +593,37 @@ def _validate_published_artifacts(
         raise CompanionPublicationError(
             "run publication artifacts are invalid"
         ) from exc
+
+
+def _revision_paths(
+    layers: Sequence[Layer],
+) -> dict[tuple[str, int, str], tuple[str, FragmentRevisionRef]]:
+    result: dict[
+        tuple[str, int, str], tuple[str, FragmentRevisionRef]
+    ] = {}
+    paths: set[str] = set()
+    for layer in layers:
+        for reference in layer.initial_revisions:
+            identity = _revision_identity(reference)
+            if identity in result:
+                raise ValueError(
+                    "publication layers repeat a fragment revision"
+                )
+            if reference.path in paths:
+                raise ValueError("publication layers repeat a fragment path")
+            result[identity] = (reference.path, reference)
+            paths.add(reference.path)
+    return result
+
+
+def _revision_identity(
+    value: FragmentRevision | FragmentRevisionRef,
+) -> tuple[str, int, str]:
+    return (
+        value.fragment_id,
+        value.revision,
+        value.semantic_digest,
+    )
 
 
 def _fragment_from_bytes(payload: bytes) -> FragmentRevision:

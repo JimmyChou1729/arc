@@ -20,11 +20,13 @@ from arc_paper import (
 )
 
 from arc_render import (
+    encode_fragment_revision,
     FragmentAnchor,
     FragmentRevision,
     Layer,
     Publication,
     anchor_block_from_rich_block,
+    fragment_revision_filename,
     fragment_revision_ref,
     source_identity_from_rich_document,
 )
@@ -284,6 +286,33 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     revisions = payload["revisions"]
     assert [item["metadata"]["revision"] for item in revisions] == [1, 2]
     assert revisions[-1]["markdown_body"] == "修订后的译文 [@ref-1]。"
+
+
+def test_renderer_groups_revision_by_front_matter_not_parent_directory(
+    tmp_path: Path,
+) -> None:
+    publication_path, _publication, first = _workspace(tmp_path)
+    second = _revision(
+        _rich_document(),
+        body="目录名不参与身份解析 [@ref-1]。",
+        revision=2,
+        parent=first.semantic_digest,
+    )
+    arbitrary = tmp_path / "fragments" / "opaque-storage-layout"
+    arbitrary.mkdir()
+    (arbitrary / fragment_revision_filename(second)).write_text(
+        encode_fragment_revision(second),
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "opaque-layout.html"
+    result = render_publication_html(publication_path, output)
+    payload = _payload(output.read_text(encoding="utf-8"))
+
+    assert result.selected_revision_digests == (second.semantic_digest,)
+    assert [
+        item["metadata"]["revision"] for item in payload["revisions"]
+    ] == [1, 2]
 
 
 def test_source_only_publication_renders_without_layers(tmp_path: Path) -> None:

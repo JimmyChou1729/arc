@@ -77,7 +77,7 @@ def test_successful_translation_delivery_is_native_layer_and_revision(
         markdown_body="翻译后的段落。",
     )
     filename = fragment_revision_filename(revision)
-    path = f"fragments/{revision.fragment_id}/{filename}"
+    path = f"fragments/{filename}"
     reference = fragment_revision_ref(path, revision)
     payload = encode_fragment_revision(revision).encode("utf-8")
     artifact_ref = ArtifactRef(
@@ -161,8 +161,7 @@ def test_invalid_revision_is_rejected_before_layer_replacement(tmp_path) -> None
         markdown_body=original.markdown_body,
     )
     invalid_path = (
-        f"fragments/{invalid.fragment_id}/"
-        f"{fragment_revision_filename(invalid)}"
+        f"fragments/{fragment_revision_filename(invalid)}"
     )
     invalid_ref = fragment_revision_ref(invalid_path, invalid)
     invalid_payload = encode_fragment_revision(invalid).encode("utf-8")
@@ -232,8 +231,7 @@ def _delivery_fixture(
         markdown_body="翻译后的段落。",
     )
     path = (
-        f"fragments/{revision.fragment_id}/"
-        f"{fragment_revision_filename(revision)}"
+        f"fragments/{fragment_revision_filename(revision)}"
     )
     reference = fragment_revision_ref(path, revision)
     payload = encode_fragment_revision(revision).encode("utf-8")

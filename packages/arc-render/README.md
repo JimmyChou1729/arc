@@ -19,6 +19,11 @@ The initial public API includes:
 - revision resolution with diagnostics for malformed files, dangling
   revisions, and forks.
 
+New immutable revisions are stored as
+`fragments/revision-<number>-<semantic-digest>.md`. The validated JSON front
+matter owns fragment identity; directory names below `fragments/` are opaque
+storage organization and are never interpreted as semantic IDs.
+
 Standalone HTML and command-line delivery are built on these contracts. For
 large publications, the reader renders an initial reading view first, loads
 nearby chunks on demand, and completes the remaining chunks during browser idle

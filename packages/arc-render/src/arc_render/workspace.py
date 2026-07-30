@@ -28,6 +28,14 @@ class RenderWorkspaceError(ValueError):
     """A publication workspace is unreadable, inconsistent, or unsafe."""
 
 
+def fragment_revision_storage_path(revision: FragmentRevision) -> str:
+    """Return ARC's portable project-relative path for a new revision."""
+
+    if not isinstance(revision, FragmentRevision):
+        raise TypeError("revision must be a FragmentRevision")
+    return f"fragments/{fragment_revision_filename(revision)}"
+
+
 def read_publication(path: str | Path) -> Publication:
     """Read one strict publication JSON document."""
 
@@ -68,19 +76,15 @@ def write_fragment_revision(
     project_root: str | Path,
     revision: FragmentRevision,
 ) -> Path:
-    """Create an immutable revision under ``fragments/<fragment-id>/``.
+    """Create an immutable revision directly below ``fragments/``.
 
     Repeating the exact write is idempotent. Existing different bytes are
-    never overwritten.
+    never overwritten. Semantic fragment IDs remain inside the validated
+    revision document and are never used as native path components.
     """
 
     root = Path(project_root).resolve()
-    target = (
-        root
-        / "fragments"
-        / revision.fragment_id
-        / fragment_revision_filename(revision)
-    )
+    target = root.joinpath(*fragment_revision_storage_path(revision).split("/"))
     payload = encode_fragment_revision(revision).encode("utf-8")
     if target.exists():
         try:
@@ -187,6 +191,7 @@ def _atomic_write(path: Path, payload: bytes) -> None:
 
 __all__ = [
     "RenderWorkspaceError",
+    "fragment_revision_storage_path",
     "read_layer",
     "read_publication",
     "relative_fragment_path",

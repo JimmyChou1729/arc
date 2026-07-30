@@ -1784,7 +1784,7 @@
       var digest = await semanticDigest(metadata, markdown);
       var filename = "revision-" + String(metadata.revision).padStart(6, "0") +
         "-" + digest + ".md";
-      var folder = await fragmentDirectory(metadata.fragment_id, true);
+      var folder = await fragmentsDirectory(true);
       try {
         await folder.getFileHandle(filename);
         throw new Error("revision file already exists; no file was overwritten");
@@ -1889,11 +1889,10 @@
     }
   }
 
-  async function fragmentDirectory(fragmentId, create) {
-    var fragments = await state.directory.getDirectoryHandle(
+  async function fragmentsDirectory(create) {
+    return state.directory.getDirectoryHandle(
       "fragments", {create: Boolean(create)}
     );
-    return fragments.getDirectoryHandle(fragmentId, {create: Boolean(create)});
   }
 
   async function parseRevisionFile(value, filename) {

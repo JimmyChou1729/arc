@@ -50,7 +50,7 @@ from arc_render import (
     block_text_to_markdown,
     decode_fragment_revision,
     encode_fragment_revision,
-    fragment_revision_filename,
+    fragment_revision_storage_path,
     fragment_revision_ref,
     fragment_revision_ref_from_document,
     fragment_revision_ref_to_document,
@@ -1986,8 +1986,7 @@ def _publish_translation_result(
             },
             markdown_body=markdown_body,
         )
-        filename = fragment_revision_filename(revision)
-        path = f"fragments/{revision.fragment_id}/{filename}"
+        path = fragment_revision_storage_path(revision)
         reference = fragment_revision_ref(path, revision)
         artifact = context.artifacts.publish_bytes(
             f"{artifact_prefix}/fragments/{revision.fragment_id}/revision-000001",

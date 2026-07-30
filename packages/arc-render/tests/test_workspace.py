@@ -59,7 +59,7 @@ def test_fragment_write_is_idempotent_and_never_replaces_bytes(
     document = _document()
     revision = FragmentRevision(
         source_identity_from_rich_document(document),
-        "note-1",
+        "translation:block-1",
         1,
         None,
         FragmentAnchor("section", "section-1", ()),
@@ -73,6 +73,8 @@ def test_fragment_write_is_idempotent_and_never_replaces_bytes(
     )
     path = write_fragment_revision(tmp_path, revision)
 
+    assert path.parent == tmp_path / "fragments"
+    assert ":" not in path.name
     assert write_fragment_revision(tmp_path, revision) == path
     path.write_text("conflict", encoding="utf-8")
     with pytest.raises(RenderWorkspaceError, match="other bytes"):

@@ -9,7 +9,7 @@ from arc_render import (
     AnchorKind,
     FragmentRevision,
     decode_fragment_revision,
-    fragment_revision_filename,
+    fragment_revision_storage_path,
     read_fragment_revision,
     read_layer,
     relative_fragment_path,
@@ -95,10 +95,7 @@ def _validated_revisions(
                 or revision.citation_ids
                 or revision.provenance.get("producer") != "arc-translate"
                 or item.revision.path
-                != (
-                    f"fragments/{revision.fragment_id}/"
-                    f"{fragment_revision_filename(revision)}"
-                )
+                != fragment_revision_storage_path(revision)
             ):
                 raise ValueError(
                     "revision does not match the translation result"

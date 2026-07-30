@@ -73,6 +73,7 @@ from .standalone_html import (
 )
 from .workspace import (
     RenderWorkspaceError,
+    fragment_revision_storage_path,
     read_layer,
     read_publication,
     relative_fragment_path,
@@ -118,6 +119,7 @@ __all__ = [
     "fragment_revision_ref_from_document",
     "fragment_revision_ref_to_document",
     "fragment_revision_to_document",
+    "fragment_revision_storage_path",
     "fragment_semantic_digest",
     "layer_from_document",
     "layer_ref_from_document",
