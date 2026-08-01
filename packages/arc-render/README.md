@@ -31,6 +31,12 @@ time. Contents links and URL fragments render their target before scrolling;
 printing renders every remaining chunk before the browser creates its preview.
 The reader never unloads a rendered chunk.
 
+Browser editing saves from the revision snapshot already loaded in the reader.
+Each save appends and verifies one immutable revision file, then updates only
+the affected fragment and render chunk; it does not rescan the fragments tree.
+Files added by another process are incorporated, with fork diagnostics when
+needed, the next time the reader connects to or restores the project directory.
+
 For now, a PDF copy may be made manually with Chrome's Print / Save as PDF
 command. Such a PDF is a user-side derivative, not an ARC release artifact,
 and ARC does not validate, reproduce, or automatically publish it.

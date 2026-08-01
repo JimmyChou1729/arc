@@ -35,6 +35,12 @@ resulting reader contains its assets and needs no filesystem permission to
 open. Browser editing, if used, writes new immutable fragment revisions rather
 than changing an existing revision.
 
+The browser editor saves from its currently loaded revision snapshot. A save
+writes and verifies only the new immutable revision, then refreshes the affected
+fragment and reading chunk without rescanning the fragments tree. Revisions
+written by another process are incorporated, and any resulting fork is
+reported, when the reader next connects to or restores the project directory.
+
 ## Progressive Reading
 
 Large publications become interactive after the initial reading view is
