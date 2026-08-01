@@ -6,6 +6,7 @@
   var FRAGMENT_SCHEMA = "arc.render.fragment_revision.v1";
   var MAX_BLOCKS_PER_RENDER_CHUNK = 36;
   var CHUNK_BLOCK_HEIGHT_ESTIMATE = 220;
+  var DIRECTORY_READ_CONCURRENCY = 8;
   var state = {
     payload: null,
     md: null,
@@ -15,7 +16,13 @@
     activeFragmentIds: new Set(),
     diagnostics: [],
     fileDiagnostics: [],
+    resolutionDiagnostics: new Map(),
     directory: null,
+    directoryCacheHandle: null,
+    directoryFileCache: new Map(),
+    directoryLoadGeneration: 0,
+    saveInProgress: false,
+    editorGeneration: 0,
     editorBase: null,
     editorAnchor: null,
     editorHistorical: null,
@@ -341,6 +348,10 @@
   }
 
   function addRevision(raw) {
+    addRevisionTo(raw, state.revisions, state.fileDiagnostics);
+  }
+
+  function addRevisionTo(raw, revisions, fileDiagnostics) {
     var revision = raw.metadata ? Object.assign({}, raw.metadata) : Object.assign({}, raw);
     revision.markdown_body = raw.markdown_body === undefined ?
       revision.markdown_body || "" : raw.markdown_body;
@@ -349,38 +360,70 @@
     try {
       validateRevisionMetadata(metadataOnly(revision));
     } catch (error) {
-      state.fileDiagnostics.push(
+      fileDiagnostics.push(
         "Ignored invalid fragment " + (revision.fragment_id || "(unknown)") + ": " +
         String(error.message || error)
       );
       return;
     }
-    var values = state.revisions.get(revision.fragment_id) || [];
+    var values = revisions.get(revision.fragment_id) || [];
     if (!values.some(function (item) {
       return item.semantic_digest &&
         item.semantic_digest === revision.semantic_digest;
     })) {
       values.push(revision);
-      state.revisions.set(revision.fragment_id, values);
+      revisions.set(revision.fragment_id, values);
     }
   }
 
   function resolveAll() {
     state.selected.clear();
+    state.resolutionDiagnostics = new Map();
+    state.revisions.forEach(function (values, fragmentId) {
+      resolveFragmentInState(fragmentId, values);
+    });
+    rebuildDiagnostics();
+  }
+
+  function resolveOne(fragmentId) {
+    resolveFragmentInState(fragmentId, state.revisions.get(fragmentId) || []);
+    rebuildDiagnostics();
+  }
+
+  function resolveFragmentInState(fragmentId, values) {
+    state.selected.delete(fragmentId);
+    state.resolutionDiagnostics.delete(fragmentId);
+    if (
+      !state.activeFragmentIds.has(fragmentId) &&
+      !browserCreatedHistory(values)
+    ) {
+      return;
+    }
+    var resolved = resolveFragment(values, fragmentId);
+    if (resolved.selected) state.selected.set(fragmentId, resolved.selected);
+    state.resolutionDiagnostics.set(fragmentId, resolved.diagnostics);
+  }
+
+  function rebuildDiagnostics() {
     state.diagnostics = (state.payload.diagnostics || []).slice().concat(
       state.fileDiagnostics
     );
-    state.revisions.forEach(function (values, fragmentId) {
-      if (
-        !state.activeFragmentIds.has(fragmentId) &&
-        !browserCreatedHistory(values)
-      ) {
-        return;
-      }
-      var resolved = resolveFragment(values, fragmentId);
-      if (resolved.selected) state.selected.set(fragmentId, resolved.selected);
-      state.diagnostics = state.diagnostics.concat(resolved.diagnostics);
+    state.resolutionDiagnostics.forEach(function (values) {
+      state.diagnostics = state.diagnostics.concat(values);
     });
+    state.diagnostics = state.diagnostics.concat(anchorDiagnostics());
+  }
+
+  function anchorDiagnostics() {
+    var diagnostics = [];
+    state.selected.forEach(function (fragment) {
+      if (!fragmentTargetId(fragment)) {
+        diagnostics.push(
+          "Fragment " + fragment.fragment_id + " has an unknown anchor."
+        );
+      }
+    });
+    return diagnostics;
   }
 
   function browserCreatedHistory(values) {
@@ -398,8 +441,13 @@
   function resolveFragment(values, fragmentId) {
     var diagnostics = [];
     var byDigest = new Map();
+    var childrenByParent = new Map();
     values.forEach(function (item) {
       if (item.semantic_digest) byDigest.set(item.semantic_digest, item);
+      if (item.revision <= 1 || !item.parent_semantic_digest) return;
+      var children = childrenByParent.get(item.parent_semantic_digest) || new Map();
+      children.set(item.semantic_digest, item);
+      childrenByParent.set(item.parent_semantic_digest, children);
     });
     var roots = values.filter(function (item) {
       return item.revision === 1 && item.parent_semantic_digest === null;
@@ -416,13 +464,11 @@
     }
     var current = uniqueRoots[0];
     while (true) {
-      var children = values.filter(function (item) {
-        return item.parent_semantic_digest === current.semantic_digest &&
-          item.revision === current.revision + 1;
+      var children = Array.from(
+        (childrenByParent.get(current.semantic_digest) || new Map()).values()
+      ).filter(function (item) {
+        return item.revision === current.revision + 1;
       });
-      children = Array.from(new Map(children.map(function (item) {
-        return [item.semantic_digest, item];
-      })).values());
       if (children.length === 0) break;
       if (children.length > 1) {
         diagnostics.push(
@@ -718,23 +764,59 @@
     updateRenderComplete();
   }
 
-  function refreshRenderedChunks() {
+  function refreshChangedSelections(previousSelected) {
     if (!state.readerShellReady) return;
-    state.fragmentGroups = groupedFragments(
-      state.payload.publication.source_document
-    );
+    var fragmentIds = new Set(previousSelected.keys());
+    state.selected.forEach(function (_revision, fragmentId) {
+      fragmentIds.add(fragmentId);
+    });
+    var changedAnchors = [];
+    fragmentIds.forEach(function (fragmentId) {
+      var previous = previousSelected.get(fragmentId);
+      var current = state.selected.get(fragmentId);
+      if (
+        (previous && previous.semantic_digest) ===
+        (current && current.semantic_digest)
+      ) {
+        return;
+      }
+      if (previous && previous.anchor) changedAnchors.push(previous.anchor);
+      if (current && current.anchor) changedAnchors.push(current.anchor);
+    });
+    if (changedAnchors.length) {
+      state.fragmentGroups = groupedFragments(
+        state.payload.publication.source_document
+      );
+    }
     renderDiagnostics(state.diagnosticsRoot);
-    state.renderPlan.forEach(rerenderChunk);
+    var chunks = new Set();
+    changedAnchors.forEach(function (anchor) {
+      var chunk = chunkForAnchor(anchor);
+      if (chunk) chunks.add(chunk);
+    });
+    chunks.forEach(rerenderChunk);
   }
 
   function refreshChunkForAnchor(anchor) {
     if (!state.readerShellReady) return;
-    state.fragmentGroups = groupedFragments(
-      state.payload.publication.source_document
-    );
     renderDiagnostics(state.diagnosticsRoot);
     var chunk = chunkForAnchor(anchor);
     rerenderChunk(chunk);
+  }
+
+  function refreshFragmentGroup(fragmentId, anchor) {
+    var target = fragmentTargetId({anchor: anchor});
+    if (!target) return;
+    var values = (state.fragmentGroups.get(target) || []).filter(function (item) {
+      return item.fragment_id !== fragmentId;
+    });
+    var selected = state.selected.get(fragmentId);
+    if (selected) values.push(selected);
+    values.sort(function (left, right) {
+      return left.priority - right.priority ||
+        left.fragment_id.localeCompare(right.fragment_id);
+    });
+    state.fragmentGroups.set(target, values);
   }
 
   function chunkForAnchor(anchor) {
@@ -783,23 +865,9 @@
 
   function groupedFragments(documentValue) {
     var groups = new Map();
-    var sections = new Map(
-      (state.payload.publication.outline || []).map(function (section) {
-        return [section.section_id, section];
-      })
-    );
     state.selected.forEach(function (fragment) {
-      var target = fragment.anchor && fragment.anchor.target_id;
-      if (fragment.anchor && fragment.anchor.kind === "section") {
-        var section = sections.get(target);
-        target = section ? section.anchor_block_id : null;
-      }
-      if (!target) {
-        state.diagnostics.push(
-          "Fragment " + fragment.fragment_id + " has an unknown anchor."
-        );
-        return;
-      }
+      var target = fragmentTargetId(fragment);
+      if (!target) return;
       var values = groups.get(target) || [];
       values.push(fragment);
       groups.set(target, values);
@@ -811,6 +879,18 @@
       });
     });
     return groups;
+  }
+
+  function fragmentTargetId(fragment) {
+    var anchor = fragment && fragment.anchor;
+    var target = anchor && anchor.target_id;
+    if (anchor && anchor.kind === "section") {
+      var section = (state.payload.publication.outline || []).find(
+        function (item) { return item.section_id === target; }
+      );
+      target = section ? section.anchor_block_id : null;
+    }
+    return target || null;
   }
 
   function renderSourceRow(block, fragments) {
@@ -1528,12 +1608,14 @@
     var strings = labels();
     var connect = document.getElementById("arc-connect");
     connect.textContent = strings.connect;
-    connect.addEventListener("click", connectDirectory);
     if (!window.showDirectoryPicker) {
       connect.disabled = true;
       setStatus(strings.noDirectoryApi, "error");
     } else {
+      connect.disabled = true;
       await restoreDirectoryHandle();
+      connect.disabled = false;
+      connect.addEventListener("click", connectDirectory);
     }
     var dialog = document.getElementById("arc-editor-dialog");
     document.getElementById("arc-editor-title-label").textContent =
@@ -1559,11 +1641,15 @@
     );
     close.onclick = function () { dialog.close(); };
     document.getElementById("arc-editor-cancel").onclick = function () { dialog.close(); };
+    dialog.addEventListener("cancel", function (event) {
+      if (state.saveInProgress) event.preventDefault();
+    });
     document.getElementById("arc-editor-markdown").addEventListener("input", updatePreview);
     document.getElementById("arc-editor-save").addEventListener("click", saveEditor);
   }
 
   async function connectDirectory() {
+    var previousDirectory = state.directory;
     try {
       var handle = await window.showDirectoryPicker({
         id: "arc-render-project",
@@ -1571,61 +1657,158 @@
       });
       var permission = await handle.requestPermission({mode: "readwrite"});
       if (permission !== "granted") throw new Error("read/write permission was not granted");
-      state.directory = handle;
-      await rememberDirectoryHandle(handle);
       setStatus(labels().loading);
-      await loadDirectoryRevisions();
+      if (!await loadDirectoryRevisions(handle)) return false;
+      await rememberDirectoryHandle(handle);
       setStatus(labels().connected);
       return true;
     } catch (error) {
       if (error && error.name === "AbortError") return false;
-      state.directory = null;
+      state.directory = previousDirectory;
       setStatus(String(error.message || error), "error");
       return false;
     }
   }
 
-  async function loadDirectoryRevisions() {
-    if (!state.directory) return;
-    resetRevisionState();
+  async function loadDirectoryRevisions(directory) {
+    var handle = directory || state.directory;
+    if (!handle) return false;
+    var generation = state.directoryLoadGeneration + 1;
+    state.directoryLoadGeneration = generation;
+    var revisions = new Map();
+    var fileDiagnostics = [];
+    state.embeddedRevisions.forEach(function (revision) {
+      addRevisionTo(revision, revisions, fileDiagnostics);
+    });
+    var previousCache = handle === state.directoryCacheHandle ?
+      state.directoryFileCache : new Map();
+    var nextCache = new Map();
     var fragments;
     try {
-      fragments = await state.directory.getDirectoryHandle("fragments");
+      fragments = await handle.getDirectoryHandle("fragments");
     } catch (error) {
       if (error.name === "NotFoundError") {
-        resolveAll();
-        refreshRenderedChunks();
-        return;
+        return commitDirectorySnapshot(
+          handle, revisions, fileDiagnostics, nextCache, generation
+        );
       }
-      resolveAll();
-      refreshRenderedChunks();
       throw error;
     }
     var files = [];
-    await collectMarkdownFiles(fragments, files);
-    for (var index = 0; index < files.length; index += 1) {
-      try {
-        var file = await files[index].getFile();
-        var revision = await parseRevisionFile(await file.text(), file.name);
-        revision._origin = "directory";
-        addRevision(revision);
-      } catch (error) {
-        state.fileDiagnostics.push(
-          "Ignored invalid fragment file " + files[index].name + ": " +
-          String(error.message || error)
+    await collectMarkdownFiles(fragments, files, []);
+    var outcomes = await loadDirectoryRevisionFiles(
+      files, embeddedRevisionFilenames(), previousCache, nextCache
+    );
+    outcomes.forEach(function (outcome) {
+      if (!outcome) return;
+      if (outcome.revision) {
+        addRevisionTo(outcome.revision, revisions, fileDiagnostics);
+      } else if (outcome.diagnostic) {
+        fileDiagnostics.push(outcome.diagnostic);
+      }
+    });
+    return commitDirectorySnapshot(
+      handle, revisions, fileDiagnostics, nextCache, generation
+    );
+  }
+
+  function commitDirectorySnapshot(
+    handle, revisions, fileDiagnostics, fileCache, generation
+  ) {
+    if (generation !== state.directoryLoadGeneration) return false;
+    var previousSelected = new Map(state.selected);
+    state.directory = handle;
+    state.revisions = revisions;
+    state.fileDiagnostics = fileDiagnostics;
+    state.directoryCacheHandle = handle;
+    state.directoryFileCache = fileCache;
+    resolveAll();
+    refreshChangedSelections(previousSelected);
+    return true;
+  }
+
+  function embeddedRevisionFilenames() {
+    var filenames = new Set();
+    state.embeddedRevisions.forEach(function (raw) {
+      var metadata = raw.metadata || raw;
+      var digest = raw.semantic_digest || metadata.semantic_digest;
+      if (
+        positiveInteger(metadata.revision) &&
+        typeof digest === "string" &&
+        /^[0-9a-f]{64}$/.test(digest)
+      ) {
+        filenames.add(revisionFilename(metadata.revision, digest));
+      }
+    });
+    return filenames;
+  }
+
+  async function loadDirectoryRevisionFiles(
+    files, embeddedFilenames, previousCache, nextCache
+  ) {
+    var outcomes = new Array(files.length);
+    var nextIndex = 0;
+    async function worker() {
+      while (true) {
+        var index = nextIndex;
+        nextIndex += 1;
+        if (index >= files.length) return;
+        outcomes[index] = await loadDirectoryRevisionFile(
+          files[index], embeddedFilenames, previousCache, nextCache
         );
       }
     }
-    resolveAll();
-    refreshRenderedChunks();
+    var workers = [];
+    var workerCount = Math.min(DIRECTORY_READ_CONCURRENCY, files.length);
+    for (var index = 0; index < workerCount; index += 1) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
+    return outcomes;
   }
 
-  async function collectMarkdownFiles(directory, output) {
+  async function loadDirectoryRevisionFile(
+    entry, embeddedFilenames, previousCache, nextCache
+  ) {
+    if (embeddedFilenames.has(entry.name)) return null;
+    var key = JSON.stringify(entry.path);
+    var file;
+    try {
+      file = await entry.handle.getFile();
+    } catch (error) {
+      return {
+        diagnostic: "Ignored invalid fragment file " + entry.name + ": " +
+          String(error.message || error)
+      };
+    }
+    var stamp = String(file.size) + ":" + String(file.lastModified);
+    var cached = previousCache.get(key);
+    if (cached && cached.stamp === stamp) {
+      nextCache.set(key, cached);
+      return cached.outcome;
+    }
+    var outcome;
+    try {
+      var revision = await parseRevisionFile(await file.text(), entry.name);
+      revision._origin = "directory";
+      outcome = {revision: revision};
+    } catch (error) {
+      outcome = {
+        diagnostic: "Ignored invalid fragment file " + entry.name + ": " +
+          String(error.message || error)
+      };
+    }
+    nextCache.set(key, {stamp: stamp, outcome: outcome});
+    return outcome;
+  }
+
+  async function collectMarkdownFiles(directory, output, parentPath) {
     for await (var entry of directory.values()) {
+      var path = parentPath.concat([entry.name]);
       if (entry.kind === "directory") {
-        await collectMarkdownFiles(entry, output);
+        await collectMarkdownFiles(entry, output, path);
       } else if (entry.kind === "file" && entry.name.endsWith(".md")) {
-        output.push(entry);
+        output.push({handle: entry, name: entry.name, path: path});
       }
     }
   }
@@ -1660,6 +1843,7 @@
 
   function fillEditor(fragment, heading) {
     var dialog = document.getElementById("arc-editor-dialog");
+    state.editorGeneration += 1;
     document.getElementById("arc-editor-heading").textContent = heading;
     document.getElementById("arc-editor-title").value = fragment.title || "";
     document.getElementById("arc-editor-role").value = fragment.role || "note";
@@ -1742,45 +1926,58 @@
 
   async function saveEditor(event) {
     event.preventDefault();
+    if (state.saveInProgress) return;
+    var saveButton = document.getElementById("arc-editor-save");
+    var dialog = document.getElementById("arc-editor-dialog");
+    var controls = Array.prototype.slice.call(
+      dialog.querySelectorAll("button, input, select, textarea")
+    );
+    var disabledStates = controls.map(function (control) {
+      return control.disabled;
+    });
+    state.saveInProgress = true;
+    controls.forEach(function (control) { control.disabled = true; });
+    saveButton.disabled = true;
     try {
+      var base = state.editorBase;
+      var editorGeneration = state.editorGeneration;
+      var editorAnchor = state.editorAnchor ?
+        JSON.parse(JSON.stringify(state.editorAnchor)) : null;
+      var markdown = normalizeMarkdown(
+        document.getElementById("arc-editor-markdown").value
+      );
+      var title = document.getElementById("arc-editor-title").value.trim() || null;
+      var role = document.getElementById("arc-editor-role").value;
+      var priority = Number(document.getElementById("arc-editor-priority").value);
+      if (!Number.isInteger(priority) || priority < 1) {
+        throw new Error("priority must be a positive integer");
+      }
       if (!state.directory) {
         if (!await connectDirectory()) return;
-      } else {
-        setStatus(labels().loading);
-        await loadDirectoryRevisions();
       }
       if (!state.directory) return;
-      var base = state.editorBase;
       if (base) {
         var current = state.selected.get(base.fragment_id);
-        var eligibleChildren = (
+        var nextChildren = (
           state.revisions.get(base.fragment_id) || []
         ).filter(function (revision) {
           return revision.parent_semantic_digest === base.semantic_digest &&
-            revision.revision === base.revision + 1 &&
-            stableStringify(revision.source) === stableStringify(base.source) &&
-            stableStringify(revision.anchor) === stableStringify(base.anchor);
+            revision.revision === base.revision + 1;
         });
         if (
           !current ||
           current.semantic_digest !== base.semantic_digest ||
-          eligibleChildren.length > 1
+          nextChildren.length > 0
         ) {
           throw new Error(labels().historyChanged);
         }
       }
-      var markdown = normalizeMarkdown(
-        document.getElementById("arc-editor-markdown").value
-      );
-      var metadata = base ? metadataOnly(base) : newNoteMetadata();
+      var metadata = base ? metadataOnly(base) : newNoteMetadata(editorAnchor);
       metadata.revision = base ? base.revision + 1 : 1;
       metadata.parent_semantic_digest = base ? base.semantic_digest : null;
-      metadata.title = document.getElementById("arc-editor-title").value.trim() || null;
-      metadata.role = document.getElementById("arc-editor-role").value;
-      metadata.priority = Number(document.getElementById("arc-editor-priority").value);
-      if (!Number.isInteger(metadata.priority) || metadata.priority < 1) {
-        throw new Error("priority must be a positive integer");
-      }
+      metadata.title = title;
+      metadata.role = role;
+      metadata.priority = priority;
       metadata.citation_ids = citationIds(markdown);
       assertKnownCitations(metadata.citation_ids);
       metadata.provenance = Object.assign({}, metadata.provenance || {}, {
@@ -1789,34 +1986,99 @@
       });
       validateRevisionMetadata(metadata);
       var digest = await semanticDigest(metadata, markdown);
-      var filename = "revision-" + String(metadata.revision).padStart(6, "0") +
-        "-" + digest + ".md";
-      var folder = await fragmentsDirectory(true);
-      try {
-        await folder.getFileHandle(filename);
-        throw new Error("revision file already exists; no file was overwritten");
-      } catch (error) {
-        if (error.name !== "NotFoundError") throw error;
-      }
-      var handle = await folder.getFileHandle(filename, {create: true});
-      var writable = await handle.createWritable();
       var encoded = FRONT_BEGIN + "\n" + stableStringify(metadata) + "\n" +
         FRONT_END + "\n" + markdown;
-      await writable.write(encoded);
-      await writable.close();
+      var filename = revisionFilename(metadata.revision, digest);
+      var folder = await fragmentsDirectory(true);
+      await writeImmutableRevision(folder, filename, encoded);
       var revision = Object.assign({}, metadata, {
         markdown_body: markdown,
         semantic_digest: digest,
         _origin: "directory"
       });
-      addRevision(revision);
-      resolveAll();
-      document.getElementById("arc-editor-dialog").close();
-      setStatus(labels().saveSuccess);
-      refreshChunkForAnchor(metadata.anchor);
+      try {
+        addRevision(revision);
+        resolveOne(revision.fragment_id);
+        refreshFragmentGroup(revision.fragment_id, revision.anchor);
+      } catch (error) {
+        setStatus(labels().saveSuccess + " " + String(error.message || error));
+        return;
+      }
+      var uiError = null;
+      try {
+        refreshChunkForAnchor(revision.anchor);
+      } catch (error) {
+        uiError = error;
+      }
+      if (state.editorGeneration === editorGeneration) {
+        try {
+          dialog.close();
+        } catch (error) {
+          uiError = uiError || error;
+        }
+      }
+      setStatus(
+        labels().saveSuccess +
+          (uiError ? " " + String(uiError.message || uiError) : "")
+      );
     } catch (error) {
       setStatus(String(error.message || error), "error");
+    } finally {
+      state.saveInProgress = false;
+      controls.forEach(function (control, index) {
+        control.disabled = disabledStates[index];
+      });
     }
+  }
+
+  async function writeImmutableRevision(folder, filename, encoded) {
+    var existing = null;
+    try {
+      existing = await folder.getFileHandle(filename);
+    } catch (error) {
+      if (error.name !== "NotFoundError") throw error;
+    }
+    if (existing) {
+      if (await revisionFileMatches(existing, encoded)) return;
+      throw new Error("revision file already exists; no file was overwritten");
+    }
+    var handle = await folder.getFileHandle(filename, {create: true});
+    var created = await handle.getFile();
+    if (created.size > 0) {
+      if (await created.text() === encoded) return;
+      throw new Error("revision file already exists; no file was overwritten");
+    }
+    var writable = await handle.createWritable();
+    try {
+      await writable.write(encoded);
+      await writable.close();
+    } catch (error) {
+      if (await revisionFileMatches(handle, encoded)) return;
+      if (typeof writable.abort === "function") {
+        try {
+          await writable.abort();
+        } catch (_abortError) {
+          /* The original write error is the useful failure. */
+        }
+      }
+      throw error;
+    }
+    if (!await revisionFileMatches(handle, encoded)) {
+      throw new Error("saved revision bytes could not be verified");
+    }
+  }
+
+  async function revisionFileMatches(handle, encoded) {
+    try {
+      return await (await handle.getFile()).text() === encoded;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function revisionFilename(revision, digest) {
+    return "revision-" + String(revision).padStart(6, "0") +
+      "-" + digest + ".md";
   }
 
   function metadataOnly(revision) {
@@ -1830,7 +2092,7 @@
     return JSON.parse(JSON.stringify(value));
   }
 
-  function newNoteMetadata() {
+  function newNoteMetadata(anchor) {
     var publication = state.payload.publication;
     var profile = publication.reader_profile || {};
     return {
@@ -1839,7 +2101,7 @@
       fragment_id: "user-" + crypto.randomUUID().toLowerCase(),
       revision: 1,
       parent_semantic_digest: null,
-      anchor: state.editorAnchor,
+      anchor: anchor,
       priority: 110,
       role: "note",
       language: profile.target_language || profile.source_language || "und",
@@ -2193,9 +2455,9 @@
       if (!handle) return;
       var permission = await handle.queryPermission({mode: "readwrite"});
       if (permission === "granted") {
-        state.directory = handle;
-        await loadDirectoryRevisions();
-        setStatus(labels().connected);
+        if (await loadDirectoryRevisions(handle)) {
+          setStatus(labels().connected);
+        }
       }
     } catch (_error) {
       state.directory = null;
