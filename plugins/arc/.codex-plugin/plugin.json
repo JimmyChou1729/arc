@@ -1,6 +1,6 @@
 {
   "name": "arc",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "CLI-first ARC paper, research-domain, and report typesetting tools.",
   "author": {
     "name": "ARC"
