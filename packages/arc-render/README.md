@@ -36,6 +36,16 @@ Each save appends and verifies one immutable revision file, then updates only
 the affected fragment and render chunk; it does not rescan the fragments tree.
 Files added by another process are incorporated, with fork diagnostics when
 needed, the next time the reader connects to or restores the project directory.
+That refresh enumerates nested fragment directories in bounded concurrent
+batches and reads changed files with bounded concurrency.
+
+The browser toolbar calls the directory action `New save location` until a
+project directory is available and `Change save location` afterwards. Export
+first refreshes that connected directory. Per-role Markdown can contain either
+all currently selected revisions or only selections changed from the reader's
+embedded baseline. Full-text HTML export always contains the complete latest
+publication and remains a standalone interactive reader; it is available only
+from a standalone reader whose assets are already embedded.
 
 For now, a PDF copy may be made manually with Chrome's Print / Save as PDF
 command. Such a PDF is a user-side derivative, not an ARC release artifact,

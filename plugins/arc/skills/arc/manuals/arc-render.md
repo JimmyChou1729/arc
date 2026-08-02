@@ -40,6 +40,17 @@ writes and verifies only the new immutable revision, then refreshes the affected
 fragment and reading chunk without rescanning the fragments tree. Revisions
 written by another process are incorporated, and any resulting fork is
 reported, when the reader next connects to or restores the project directory.
+Nested fragment directories and changed revision files are scanned with
+bounded concurrency during that refresh.
+
+The directory button reads `New save location` before a project directory is
+available and `Change save location` afterwards. The reader's Export panel
+refreshes a connected directory before producing any file. A role-specific
+Markdown export may include all latest selections or only selections changed
+from the HTML's embedded baseline. Full-text HTML export is always complete,
+independent of the Markdown scope, and produces another standalone interactive
+reader with the latest revision histories and selections. This HTML option is
+disabled for a non-standalone asset bundle.
 
 ## Progressive Reading
 
