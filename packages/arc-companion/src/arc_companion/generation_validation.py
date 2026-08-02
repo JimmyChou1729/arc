@@ -114,7 +114,7 @@ def validate_chapter_guide(
 
     def normalize_markdown(value: Any, description: str) -> tuple[str, list[str]]:
         markdown = _without_leading_heading(
-            _model_prose(value, description),
+            _nonempty(value, description),
             description=description,
         )
         for position, reference_id in citation_map.items():
@@ -324,7 +324,7 @@ def _guide_text(value: Any, description: str) -> dict[str, str]:
     result = _exact(value, {"title", "content_markdown"}, description)
     return {
         "title": _nonempty(result["title"], f"{description} title"),
-        "content_markdown": _model_prose(
+        "content_markdown": _nonempty(
             result["content_markdown"], f"{description} Markdown"
         ),
     }
@@ -509,13 +509,6 @@ def _nonempty(value: Any, description: str) -> str:
             "model_output_invalid", f"{description} must be non-empty"
         )
     return value.strip()
-
-
-def _model_prose(value: Any, description: str) -> str:
-    """Decode model-escaped line breaks in fields contracted as plain prose."""
-
-    text = _nonempty(value, description).replace(r"\r\n", "\n")
-    return re.sub(r"(?<!\\)\\n", "\n", text).strip()
 
 
 def _without_leading_heading(text: str, *, description: str) -> str:

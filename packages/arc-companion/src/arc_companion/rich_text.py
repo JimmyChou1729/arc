@@ -20,7 +20,7 @@ class RichTextError(ValueError):
 def parse_markdown(value: str) -> tuple[Token, ...]:
     if not isinstance(value, str) or not value.strip():
         raise RichTextError("learning-unit markdown must be a non-empty string")
-    tokens = tuple(_parser().parse(re.sub(r"(?<!\\)\\n", "\n", value)))
+    tokens = tuple(_parser().parse(value))
     _reject_raw_html(tokens)
     return tokens
 
