@@ -24,8 +24,10 @@
     directorySelectionInProgress: false,
     saveInProgress: false,
     exportInProgress: false,
+    activeDraft: null,
     editorGeneration: 0,
     editorPreviewDirty: true,
+    editorPreviewTimer: null,
     editorBase: null,
     editorAnchor: null,
     editorHistorical: null,
@@ -104,6 +106,7 @@
       role: "类型",
       priority: "优先级",
       advanced: "预览与更多设置",
+      advancedAction: "高级",
       markdown: "Markdown",
       preview: "预览",
       save: "保存",
@@ -133,6 +136,9 @@
       revisionBusy: "正在保存或同步最新版内容，请稍候。",
       noDirectoryApi: "当前浏览器不支持本地目录编辑；阅读功能不受影响。",
       saveSuccess: "新版本已保存。",
+      saveUnchanged: "内容没有变化。",
+      draftActive: "请先保存或取消当前编辑。",
+      editContent: "编辑这段 Markdown",
       loading: "正在读取版本……",
       historyChanged: "目录中的当前版本已变化；请关闭编辑器并重新打开后再保存。",
       unknownCitation: "引用不在当前参考文献中：",
@@ -155,6 +161,7 @@
       role: "Role",
       priority: "Priority",
       advanced: "Preview and more settings",
+      advancedAction: "Advanced",
       markdown: "Markdown",
       preview: "Preview",
       save: "Save",
@@ -184,6 +191,9 @@
       revisionBusy: "A save or latest-content sync is already in progress.",
       noDirectoryApi: "This browser cannot edit a local directory; reading is unaffected.",
       saveSuccess: "A new revision was saved.",
+      saveUnchanged: "Content is unchanged.",
+      draftActive: "Save or cancel the current edit first.",
+      editContent: "Edit this Markdown",
       loading: "Loading revisions…",
       historyChanged: "The current directory revision changed; close and reopen the editor before saving.",
       unknownCitation: "Citation is absent from the bibliography: ",
@@ -842,6 +852,10 @@
   }
 
   function refreshFragmentGroup(fragmentId, anchor) {
+    updateFragmentGroup(fragmentId, anchor);
+  }
+
+  function updateFragmentGroup(fragmentId, anchor) {
     var target = fragmentTargetId({anchor: anchor});
     if (!target) return;
     var values = (state.fragmentGroups.get(target) || []).filter(function (item) {
@@ -962,7 +976,7 @@
     noteButton.addEventListener("click", function () {
       openNewEditor(block);
     });
-    row.appendChild(noteButton);
+    source.appendChild(noteButton);
     return row;
   }
 
@@ -1128,15 +1142,93 @@
       "span", "arc-fragment-meta",
       roleLabel(fragment.role) + " · " + fragment.priority + " · v" + fragment.revision
     ));
-    var edit = iconButton(
-      "arc-edit-button arc-icon-button", "✎", labels().edit
+    var draft = state.activeDraft;
+    var editing = Boolean(
+      draft && draft.base && draft.base.fragment_id === fragment.fragment_id
     );
-    edit.addEventListener("click", function () { openEditEditor(fragment); });
-    actions.appendChild(edit);
+    if (editing) {
+      actions.classList.add("arc-inline-actions");
+      appendInlineActions(actions);
+    } else {
+      var accessibleEdit = element(
+        "button", "arc-edit-accessible", labels().editContent
+      );
+      accessibleEdit.type = "button";
+      accessibleEdit.addEventListener("click", function () {
+        beginInlineEdit(fragment);
+      });
+      actions.appendChild(accessibleEdit);
+    }
     header.appendChild(actions);
     card.appendChild(header);
-    card.appendChild(renderMarkdown(fragment.markdown_body));
+    var saved = element("div", "arc-fragment-saved-content");
+    saved.appendChild(renderMarkdown(fragment.markdown_body));
+    saved.addEventListener("click", function (event) {
+      if (interactiveFragmentTarget(event.target)) return;
+      beginInlineEdit(fragment);
+    });
+    card.appendChild(saved);
+    if (editing) {
+      card.classList.add("is-inline-editing");
+      card.appendChild(renderInlineEditor());
+    }
     return card;
+  }
+
+  function interactiveFragmentTarget(target) {
+    return Boolean(target && target.closest && target.closest(
+      "a, button, input, textarea, select, .glossary-term"
+    ));
+  }
+
+  function appendInlineActions(actions) {
+    var strings = labels();
+    var advanced = element("button", "arc-inline-advanced", strings.advancedAction);
+    advanced.type = "button";
+    advanced.addEventListener("click", openAdvancedEditor);
+    var cancel = element("button", "arc-inline-cancel", strings.cancel);
+    cancel.type = "button";
+    cancel.addEventListener("click", cancelActiveDraft);
+    var save = element("button", "arc-inline-save", strings.save);
+    save.type = "button";
+    save.disabled = !activeDraftHasChanges();
+    save.addEventListener("click", saveEditor);
+    actions.appendChild(advanced);
+    actions.appendChild(cancel);
+    actions.appendChild(save);
+  }
+
+  function renderInlineEditor() {
+    var root = element("div", "arc-inline-editor");
+    var textarea = element("textarea", "arc-inline-markdown");
+    textarea.value = state.activeDraft ? state.activeDraft.markdown_body : "";
+    textarea.setAttribute("aria-label", labels().markdown);
+    textarea.spellcheck = true;
+    textarea.addEventListener("input", function () {
+      if (!state.activeDraft) return;
+      state.activeDraft.markdown_body = textarea.value;
+      resizeInlineTextarea(textarea);
+      updateDraftSaveButtons(textarea.closest(".arc-fragment"));
+    });
+    textarea.addEventListener("keydown", function (event) {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        if (activeDraftHasChanges()) saveEditor(event);
+      }
+    });
+    root.appendChild(textarea);
+    window.requestAnimationFrame(function () {
+      resizeInlineTextarea(textarea);
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+    return root;
+  }
+
+  function resizeInlineTextarea(textarea) {
+    textarea.style.height = "auto";
+    var maximum = Math.max(160, Math.round(window.innerHeight * 0.6));
+    textarea.style.height = Math.min(textarea.scrollHeight, maximum) + "px";
   }
 
   function roleLabel(role) {
@@ -1701,6 +1793,10 @@
   }
 
   async function openExportPanel() {
+    if (state.activeDraft) {
+      setStatus(labels().draftActive, "error");
+      return;
+    }
     if (
       state.saveInProgress ||
       state.exportInProgress ||
@@ -1794,6 +1890,10 @@
   }
 
   async function runExport(request) {
+    if (state.activeDraft) {
+      setStatus(labels().draftActive, "error");
+      return;
+    }
     if (
       state.saveInProgress ||
       state.exportInProgress ||
@@ -2002,18 +2102,25 @@
       document.getElementById("arc-editor-role").options,
       function (option) { option.textContent = strings[option.value] || option.value; }
     );
-    close.onclick = function () { dialog.close(); };
-    document.getElementById("arc-editor-cancel").onclick = function () { dialog.close(); };
+    close.onclick = closeEditorDialog;
+    document.getElementById("arc-editor-cancel").onclick = closeEditorDialog;
     dialog.addEventListener("cancel", function (event) {
-      if (state.saveInProgress) event.preventDefault();
+      event.preventDefault();
+      if (!state.saveInProgress) closeEditorDialog();
     });
-    var advanced = document.getElementById("arc-editor-advanced");
-    advanced.addEventListener("toggle", function () {
-      if (advanced.open && state.editorPreviewDirty) updatePreview();
-    });
-    document.getElementById("arc-editor-markdown").addEventListener(
-      "input", markEditorPreviewDirty
+    document.getElementById("arc-editor-title").addEventListener(
+      "input", syncDraftAndSaveState
     );
+    document.getElementById("arc-editor-role").addEventListener(
+      "change", syncDraftAndSaveState
+    );
+    document.getElementById("arc-editor-priority").addEventListener(
+      "input", syncDraftAndSaveState
+    );
+    document.getElementById("arc-editor-markdown").addEventListener("input", function () {
+      syncDraftAndSaveState();
+      markEditorPreviewDirty();
+    });
     document.getElementById("arc-editor-save").addEventListener("click", saveEditor);
   }
 
@@ -2026,7 +2133,14 @@
   }
 
   async function connectDirectory() {
-    if (state.exportInProgress || state.directorySelectionInProgress) {
+    if (state.activeDraft && !state.saveInProgress) {
+      setStatus(labels().draftActive, "error");
+      return false;
+    }
+    if (
+      state.exportInProgress ||
+      state.directorySelectionInProgress
+    ) {
       setStatus(labels().revisionBusy, "error");
       return false;
     }
@@ -2225,14 +2339,60 @@
   }
 
   function openEditEditor(fragment) {
+    beginInlineEdit(fragment);
+  }
+
+  function beginInlineEdit(fragment) {
     if (state.exportInProgress || state.directorySelectionInProgress) {
       setStatus(labels().revisionBusy, "error");
       return;
     }
+    if (state.saveInProgress) return;
+    if (state.activeDraft) {
+      if (
+        state.activeDraft.base &&
+        state.activeDraft.base.fragment_id === fragment.fragment_id
+      ) {
+        focusInlineEditor(fragment.fragment_id);
+      } else {
+        setStatus(labels().draftActive, "error");
+      }
+      return;
+    }
+    state.activeDraft = draftFromFragment(fragment);
     state.editorBase = fragment;
     state.editorAnchor = fragment.anchor;
     state.editorHistorical = fragment;
-    fillEditor(fragment, labels().editor);
+    replaceFragmentCard(fragment.fragment_id, fragment.anchor);
+    focusInlineEditor(fragment.fragment_id);
+  }
+
+  function draftFromFragment(fragment) {
+    return {
+      base: fragment,
+      anchor: JSON.parse(JSON.stringify(fragment.anchor)),
+      title: fragment.title || null,
+      role: fragment.role,
+      priority: fragment.priority,
+      markdown_body: fragment.markdown_body || ""
+    };
+  }
+
+  function focusInlineEditor(fragmentId) {
+    window.requestAnimationFrame(function () {
+      var card = document.querySelector(
+        '.arc-fragment[data-fragment-id="' + cssString(fragmentId) + '"]'
+      );
+      var textarea = card && card.querySelector(".arc-inline-markdown");
+      if (textarea) textarea.focus();
+    });
+  }
+
+  function cssString(value) {
+    if (window.CSS && typeof window.CSS.escape === "function") {
+      return window.CSS.escape(String(value));
+    }
+    return String(value).replace(/["\\]/g, "\\$&");
   }
 
   function openNewEditor(block) {
@@ -2248,30 +2408,86 @@
       setStatus(labels().revisionBusy, "error");
       return;
     }
-    state.editorBase = null;
-    state.editorHistorical = null;
-    state.editorAnchor = anchor;
-    fillEditor({
+    if (state.activeDraft) {
+      setStatus(labels().draftActive, "error");
+      return;
+    }
+    state.activeDraft = {
+      base: null,
+      anchor: JSON.parse(JSON.stringify(anchor)),
       title: null,
       role: "note",
       priority: 110,
-      markdown_body: "",
-      revision: 0
-    }, labels().newNote);
+      markdown_body: ""
+    };
+    state.editorBase = null;
+    state.editorHistorical = null;
+    state.editorAnchor = anchor;
+    openAdvancedEditor(null, labels().newNote);
   }
 
-  function fillEditor(fragment, heading) {
+  function openAdvancedEditor(event, heading) {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    if (!state.activeDraft || state.saveInProgress) return;
     var dialog = document.getElementById("arc-editor-dialog");
+    var draft = state.activeDraft;
     state.editorGeneration += 1;
-    document.getElementById("arc-editor-heading").textContent = heading;
-    document.getElementById("arc-editor-title").value = fragment.title || "";
-    document.getElementById("arc-editor-role").value = fragment.role || "note";
-    document.getElementById("arc-editor-priority").value = String(fragment.priority || 110);
-    document.getElementById("arc-editor-markdown").value = fragment.markdown_body || "";
-    document.getElementById("arc-editor-advanced").open = false;
+    document.getElementById("arc-editor-heading").textContent =
+      heading || labels().editor;
+    document.getElementById("arc-editor-title").value = draft.title || "";
+    document.getElementById("arc-editor-role").value = draft.role || "note";
+    document.getElementById("arc-editor-priority").value = String(draft.priority || 110);
+    document.getElementById("arc-editor-markdown").value = draft.markdown_body || "";
     state.editorPreviewDirty = true;
-    renderHistory(fragment.fragment_id);
+    renderHistory(draft.base && draft.base.fragment_id);
+    updatePreview();
+    updateDraftSaveButtons();
     dialog.showModal();
+  }
+
+  function closeEditorDialog() {
+    if (state.saveInProgress) return;
+    var dialog = document.getElementById("arc-editor-dialog");
+    if (!state.activeDraft) {
+      if (dialog.open) dialog.close();
+      return;
+    }
+    syncDraftFromDialog();
+    if (!state.activeDraft.base) {
+      state.activeDraft = null;
+      state.editorBase = null;
+      state.editorAnchor = null;
+      state.editorHistorical = null;
+      if (dialog.open) dialog.close();
+      return;
+    }
+    var anchor = state.activeDraft.anchor;
+    if (dialog.open) dialog.close();
+    replaceFragmentCard(state.activeDraft.base.fragment_id, anchor);
+  }
+
+  function cancelActiveDraft(event) {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    if (!state.activeDraft || state.saveInProgress) return;
+    var anchor = state.activeDraft.anchor;
+    var fragmentId = state.activeDraft.base && state.activeDraft.base.fragment_id;
+    state.activeDraft = null;
+    state.editorBase = null;
+    state.editorAnchor = null;
+    state.editorHistorical = null;
+    var dialog = document.getElementById("arc-editor-dialog");
+    if (dialog && dialog.open) dialog.close();
+    if (fragmentId) replaceFragmentCard(fragmentId, anchor);
+  }
+
+  function replaceFragmentCard(fragmentId, anchor) {
+    var current = state.selected.get(fragmentId);
+    var card = document.querySelector(
+      '.arc-fragment[data-fragment-id="' + cssString(fragmentId) + '"]'
+    );
+    if (current && card && typeof card.replaceWith === "function") {
+      card.replaceWith(renderFragment(current));
+    }
   }
 
   function renderHistory(fragmentId) {
@@ -2328,17 +2544,48 @@
 
   function restoreHistoricalRevision() {
     var revision = state.editorHistorical;
-    if (!revision) return;
+    if (!revision || !state.activeDraft) return;
+    state.activeDraft.title = revision.title || null;
+    state.activeDraft.role = revision.role;
+    state.activeDraft.priority = revision.priority;
+    state.activeDraft.markdown_body = revision.markdown_body;
     document.getElementById("arc-editor-title").value = revision.title || "";
     document.getElementById("arc-editor-role").value = revision.role;
     document.getElementById("arc-editor-priority").value = String(revision.priority);
     document.getElementById("arc-editor-markdown").value = revision.markdown_body;
+    updateDraftSaveButtons();
     markEditorPreviewDirty();
+  }
+
+  function syncDraftAndSaveState() {
+    syncDraftFromDialog();
+    updateDraftSaveButtons();
+  }
+
+  function syncDraftFromDialog() {
+    if (!state.activeDraft) return;
+    var dialog = document.getElementById("arc-editor-dialog");
+    if (!dialog || !dialog.open) return;
+    state.activeDraft.title =
+      document.getElementById("arc-editor-title").value;
+    state.activeDraft.role =
+      document.getElementById("arc-editor-role").value;
+    state.activeDraft.priority =
+      document.getElementById("arc-editor-priority").value;
+    state.activeDraft.markdown_body =
+      document.getElementById("arc-editor-markdown").value;
   }
 
   function markEditorPreviewDirty() {
     state.editorPreviewDirty = true;
-    if (document.getElementById("arc-editor-advanced").open) updatePreview();
+    if (state.editorPreviewTimer !== null) {
+      window.clearTimeout(state.editorPreviewTimer);
+    }
+    state.editorPreviewTimer = window.setTimeout(function () {
+      state.editorPreviewTimer = null;
+      var dialog = document.getElementById("arc-editor-dialog");
+      if (dialog && dialog.open && state.editorPreviewDirty) updatePreview();
+    }, 150);
   }
 
   function updatePreview() {
@@ -2350,100 +2597,114 @@
   }
 
   async function saveEditor(event) {
-    event.preventDefault();
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
     if (state.exportInProgress || state.directorySelectionInProgress) {
       setStatus(labels().revisionBusy, "error");
       return;
     }
-    if (state.saveInProgress) return;
+    if (state.saveInProgress || !state.activeDraft) return;
+    syncDraftFromDialog();
     var saveButton = document.getElementById("arc-editor-save");
     var dialog = document.getElementById("arc-editor-dialog");
-    var controls = Array.prototype.slice.call(
+    var controls = dialog ? Array.prototype.slice.call(
       dialog.querySelectorAll("button, input, select, textarea")
-    );
+    ) : [];
+    if (typeof document.querySelectorAll === "function") {
+      Array.prototype.forEach.call(document.querySelectorAll(
+        ".arc-inline-editor button, .arc-inline-editor textarea, " +
+        ".arc-inline-actions button"
+      ), function (control) {
+        if (controls.indexOf(control) < 0) controls.push(control);
+      });
+    }
     var disabledStates = controls.map(function (control) {
       return control.disabled;
     });
     state.saveInProgress = true;
     controls.forEach(function (control) { control.disabled = true; });
-    saveButton.disabled = true;
+    if (saveButton) saveButton.disabled = true;
     try {
-      var base = state.editorBase;
+      var draft = state.activeDraft;
+      var base = draft.base;
       var editorGeneration = state.editorGeneration;
-      var editorAnchor = state.editorAnchor ?
-        JSON.parse(JSON.stringify(state.editorAnchor)) : null;
-      var markdown = normalizeMarkdown(
-        document.getElementById("arc-editor-markdown").value
-      );
-      var title = document.getElementById("arc-editor-title").value.trim() || null;
-      var role = document.getElementById("arc-editor-role").value;
-      var priority = Number(document.getElementById("arc-editor-priority").value);
-      if (!Number.isInteger(priority) || priority < 1) {
-        throw new Error("priority must be a positive integer");
+      var editorAnchor = JSON.parse(JSON.stringify(draft.anchor));
+      var editable = editableDraftState(draft);
+      assertKnownCitations(editable.citation_ids);
+      if (base) assertEditorBaseCurrent(base);
+      if (
+        base &&
+        stableStringify(editable) ===
+          stableStringify(editableRevisionState(base))
+      ) {
+        finishActiveDraft(base.fragment_id, editorAnchor, editorGeneration);
+        setStatus(labels().saveUnchanged);
+        return;
       }
       if (!state.directory) {
         if (!await connectDirectory()) return;
       }
       if (!state.directory) return;
-      if (base) {
-        var current = state.selected.get(base.fragment_id);
-        var nextChildren = (
-          state.revisions.get(base.fragment_id) || []
-        ).filter(function (revision) {
-          return revision.parent_semantic_digest === base.semantic_digest &&
-            revision.revision === base.revision + 1;
-        });
-        if (
-          !current ||
-          current.semantic_digest !== base.semantic_digest ||
-          nextChildren.length > 0
-        ) {
-          throw new Error(labels().historyChanged);
-        }
-      }
+      if (base) assertEditorBaseCurrent(base);
       var metadata = base ? metadataOnly(base) : newNoteMetadata(editorAnchor);
       metadata.revision = base ? base.revision + 1 : 1;
       metadata.parent_semantic_digest = base ? base.semantic_digest : null;
-      metadata.title = title;
-      metadata.role = role;
-      metadata.priority = priority;
-      metadata.citation_ids = citationIds(markdown);
-      assertKnownCitations(metadata.citation_ids);
+      metadata.title = editable.title;
+      metadata.role = editable.role;
+      metadata.priority = editable.priority;
+      metadata.citation_ids = editable.citation_ids;
       metadata.provenance = Object.assign({}, metadata.provenance || {}, {
         last_editor: "arc-render-browser",
         edited_at: new Date().toISOString()
       });
       validateRevisionMetadata(metadata);
-      var digest = await semanticDigest(metadata, markdown);
+      var digest = await semanticDigest(metadata, editable.markdown_body);
       var encoded = FRONT_BEGIN + "\n" + stableStringify(metadata) + "\n" +
-        FRONT_END + "\n" + markdown;
+        FRONT_END + "\n" + editable.markdown_body;
       var filename = revisionFilename(metadata.revision, digest);
       var folder = await fragmentsDirectory(true);
       await writeImmutableRevision(folder, filename, encoded);
       var revision = Object.assign({}, metadata, {
-        markdown_body: markdown,
+        markdown_body: editable.markdown_body,
         semantic_digest: digest,
         _origin: "directory"
       });
+      state.activeDraft = null;
+      state.editorBase = null;
+      state.editorAnchor = null;
+      state.editorHistorical = null;
+      var uiError = null;
       try {
         addRevision(revision);
         resolveOne(revision.fragment_id);
         refreshFragmentGroup(revision.fragment_id, revision.anchor);
       } catch (error) {
-        setStatus(labels().saveSuccess + " " + String(error.message || error));
-        return;
+        uiError = error;
       }
-      var uiError = null;
       try {
         refreshChunkForAnchor(revision.anchor);
       } catch (error) {
-        uiError = error;
+        uiError = uiError || error;
       }
       if (state.editorGeneration === editorGeneration) {
         try {
-          dialog.close();
+          if (dialog && dialog.open) dialog.close();
         } catch (error) {
           uiError = uiError || error;
+        }
+      }
+      if (uiError && base) {
+        try {
+          replaceFragmentCard(revision.fragment_id, revision.anchor);
+        } catch (_replaceError) {
+          /* The saved revision and original UI error remain authoritative. */
+        }
+      }
+      if (uiError) {
+        try {
+          updateFragmentGroup(revision.fragment_id, revision.anchor);
+          rerenderChunk(chunkForAnchor(revision.anchor));
+        } catch (_recoveryError) {
+          /* The status below reports the first post-commit UI error. */
         }
       }
       setStatus(
@@ -2458,6 +2719,91 @@
         control.disabled = disabledStates[index];
       });
     }
+  }
+
+  function editableDraftState(draft) {
+    var markdown = normalizeMarkdown(draft.markdown_body);
+    var priority = Number(draft.priority);
+    if (!Number.isInteger(priority) || priority < 1) {
+      throw new Error("priority must be a positive integer");
+    }
+    return {
+      title: String(draft.title || "").normalize("NFC").trim() || null,
+      markdown_body: markdown,
+      role: String(draft.role || ""),
+      priority: priority,
+      citation_ids: citationIds(markdown)
+    };
+  }
+
+  function editableRevisionState(revision) {
+    var markdown = normalizeMarkdown(revision.markdown_body);
+    return {
+      title: String(revision.title || "").normalize("NFC").trim() || null,
+      markdown_body: markdown,
+      role: revision.role,
+      priority: revision.priority,
+      citation_ids: citationIds(markdown)
+    };
+  }
+
+  function activeDraftHasChanges() {
+    var draft = state.activeDraft;
+    if (!draft) return false;
+    if (!draft.base) return true;
+    try {
+      return stableStringify(editableDraftState(draft)) !==
+        stableStringify(editableRevisionState(draft.base));
+    } catch (_error) {
+      return true;
+    }
+  }
+
+  function updateDraftSaveButtons(scope) {
+    var disabled = !activeDraftHasChanges() || state.saveInProgress;
+    var dialogSave = document.getElementById("arc-editor-save");
+    if (dialogSave) dialogSave.disabled = disabled;
+    var localSave = scope && typeof scope.querySelector === "function" ?
+      scope.querySelector(".arc-inline-save") : null;
+    if (localSave) localSave.disabled = disabled;
+    if (typeof document.querySelectorAll !== "function") return;
+    Array.prototype.forEach.call(
+      document.querySelectorAll(".arc-inline-save"),
+      function (button) { button.disabled = disabled; }
+    );
+  }
+
+  function assertEditorBaseCurrent(base) {
+    var current = state.selected.get(base.fragment_id);
+    var nextChildren = (
+      state.revisions.get(base.fragment_id) || []
+    ).filter(function (revision) {
+      return revision.parent_semantic_digest === base.semantic_digest &&
+        revision.revision === base.revision + 1;
+    });
+    if (
+      !current ||
+      current.semantic_digest !== base.semantic_digest ||
+      nextChildren.length > 0
+    ) {
+      throw new Error(labels().historyChanged);
+    }
+  }
+
+  function finishActiveDraft(fragmentId, anchor, editorGeneration) {
+    state.activeDraft = null;
+    state.editorBase = null;
+    state.editorAnchor = null;
+    state.editorHistorical = null;
+    var dialog = document.getElementById("arc-editor-dialog");
+    if (
+      dialog &&
+      dialog.open &&
+      state.editorGeneration === editorGeneration
+    ) {
+      dialog.close();
+    }
+    replaceFragmentCard(fragmentId, anchor);
   }
 
   async function writeImmutableRevision(folder, filename, encoded) {

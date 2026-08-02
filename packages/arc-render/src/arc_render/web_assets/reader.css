@@ -89,9 +89,9 @@ button { cursor: pointer; }
   gap: .35rem;
 }
 .arc-tool-button,
-.arc-edit-button,
 .arc-note-button,
 .arc-dialog button,
+.arc-inline-actions button,
 .arc-export-panel button {
   min-height: 2rem;
   padding: .28rem .55rem;
@@ -103,9 +103,9 @@ button { cursor: pointer; }
   font-size: .76rem;
 }
 .arc-tool-button:focus-visible,
-.arc-edit-button:focus-visible,
 .arc-note-button:focus-visible,
 .arc-dialog button:focus-visible,
+.arc-inline-actions button:focus-visible,
 .arc-export-panel button:focus-visible {
   outline: 3px solid #9ec4df;
   outline-offset: 2px;
@@ -252,7 +252,27 @@ button { cursor: pointer; }
   gap: .3rem;
   align-items: center;
 }
-.arc-edit-button, .arc-note-button {
+.arc-edit-accessible {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.arc-edit-accessible:focus-visible {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: .2rem .4rem;
+  border: 1px solid #9ec4df;
+  clip-path: none;
+  background: white;
+  outline: 2px solid #9ec4df;
+}
+.arc-note-button {
   box-shadow: none;
 }
 .arc-icon-button {
@@ -541,8 +561,8 @@ figcaption, .arc-citations, .arc-figure-note {
 }
 .arc-inline-markdown {
   width: 100%;
-  min-height: 20rem;
-  max-height: 70dvh;
+  min-height: 8rem;
+  max-height: 60dvh;
   padding: .7rem;
   border: 1px solid #bac4cc;
   border-radius: 0;
@@ -558,7 +578,22 @@ figcaption, .arc-citations, .arc-figure-note {
   gap: .4rem;
 }
 .arc-inline-actions button { min-height: 2.2rem; }
-.arc-fragment-saved-content { display: block; }
+.arc-inline-actions button:disabled,
+.arc-dialog button:disabled {
+  border-color: #d2d6da;
+  color: #8a9299;
+  background: #eceff1;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+.arc-fragment-saved-content { display: block; cursor: text; }
+.arc-fragment-saved-content:focus-visible {
+  outline: 2px solid #9ec4df;
+  outline-offset: -2px;
+}
+.arc-fragment.is-inline-editing > .arc-fragment-saved-content {
+  display: none;
+}
 
 @media (max-width: 899px) {
   .arc-shell, .arc-shell.contents-collapsed { display: block; }
@@ -593,7 +628,7 @@ figcaption, .arc-citations, .arc-figure-note {
     height: min(22rem, 48dvh);
   }
   .arc-inline-markdown {
-    min-height: min(18rem, 46dvh);
+    min-height: min(10rem, 40dvh);
     max-height: 62dvh;
   }
   .arc-inline-actions button { min-height: 2.5rem; }
@@ -605,7 +640,7 @@ figcaption, .arc-citations, .arc-figure-note {
   .arc-contents,
   .arc-fixed-tools,
   .arc-storage-status,
-  .arc-edit-button,
+  .arc-edit-accessible,
   .arc-note-button,
   .arc-inline-editor,
   .arc-inline-actions,

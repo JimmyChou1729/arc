@@ -35,9 +35,16 @@ resulting reader contains its assets and needs no filesystem permission to
 open. Browser editing, if used, writes new immutable fragment revisions rather
 than changing an existing revision.
 
-The browser editor saves from its currently loaded revision snapshot. A save
-writes and verifies only the new immutable revision, then refreshes the affected
-fragment and reading chunk without rescanning the fragments tree. Revisions
+Click a translation, companion, guide, or note body to replace its rendered
+content with an inline raw-Markdown editor. One draft may be active at a time.
+Advanced opens the full title, Markdown, preview, metadata, and history view;
+closing it returns the latest unsaved values to the inline editor. Cancelling
+inline editing discards the draft. The browser editor saves from its currently
+loaded revision snapshot. Save is disabled while normalized content is
+unchanged; the defensive no-op path uses no directory picker and creates no new
+revision. A changed save writes and verifies only the
+new immutable revision, then refreshes the affected fragment and reading chunk
+without rescanning the fragments tree. Revisions
 written by another process are incorporated, and any resulting fork is
 reported, when the reader next connects to or restores the project directory.
 Nested fragment directories and changed revision files are scanned with
@@ -50,7 +57,8 @@ Markdown export may include all latest selections or only selections changed
 from the HTML's embedded baseline. Full-text HTML export is always complete,
 independent of the Markdown scope, and produces another standalone interactive
 reader with the latest revision histories and selections. This HTML option is
-disabled for a non-standalone asset bundle.
+disabled for a non-standalone asset bundle. Directory changes, exports, and a
+second edit are blocked until the active draft is saved or cancelled.
 
 ## Progressive Reading
 

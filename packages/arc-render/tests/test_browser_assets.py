@@ -305,6 +305,21 @@ globalThis.window = globalThis;
     installRenderSpies: function (rerender) {
       renderDiagnostics = function () {};
       rerenderChunk = rerender;
+    },
+    installPostCommitFailureSpies: function (failures, recoveredCards) {
+      var originalGroupRefresh = refreshFragmentGroup;
+      var originalChunkRefresh = refreshChunkForAnchor;
+      refreshFragmentGroup = function (fragmentId, anchor) {
+        if (failures.group) throw new Error("group refresh failed");
+        return originalGroupRefresh(fragmentId, anchor);
+      };
+      refreshChunkForAnchor = function (anchor) {
+        if (failures.chunk) throw new Error("chunk refresh failed");
+        return originalChunkRefresh(anchor);
+      };
+      replaceFragmentCard = function (fragmentId, anchor) {
+        recoveredCards.push({fragmentId: fragmentId, anchor: anchor});
+      };
     }
   };
 }());
@@ -355,7 +370,8 @@ var nodes = {
   "arc-editor-priority": {value: "110"},
   "arc-editor-save": {disabled: false},
   "arc-editor-dialog": {
-    close: function () { this.closeCalls += 1; },
+    open: true,
+    close: function () { this.open = false; this.closeCalls += 1; },
     closeCalls: 0,
     querySelectorAll: function () {
       return [
@@ -457,8 +473,27 @@ helpers.state.readerShellReady = true;
 helpers.state.chunkByTargetId = new Map([["block-" + anchor.target_id, {chunk_id: "chunk-1"}]]);
 var renderedChunks = [];
 helpers.installRenderSpies(function (chunk) { renderedChunks.push(chunk); });
+var postCommitFailures = {group: false, chunk: false};
+var recoveredCards = [];
+helpers.installPostCommitFailureSpies(postCommitFailures, recoveredCards);
+
+function prepareDraft(revision) {
+  helpers.state.editorBase = revision;
+  helpers.state.editorAnchor = revision.anchor;
+  helpers.state.editorHistorical = revision;
+  helpers.state.activeDraft = {
+    base: revision,
+    anchor: revision.anchor,
+    title: nodes["arc-editor-title"].value,
+    role: nodes["arc-editor-role"].value,
+    priority: Number(nodes["arc-editor-priority"].value),
+    markdown_body: nodes["arc-editor-markdown"].value
+  };
+  nodes["arc-editor-dialog"].open = true;
+}
 
 (async function () {
+  prepareDraft(base);
   helpers.state.exportInProgress = true;
   var fileCallsBeforeBlockedSave = fileCalls.length;
   await helpers.saveEditor({preventDefault: function () {}});
@@ -511,8 +546,8 @@ helpers.installRenderSpies(function (chunk) { renderedChunks.push(chunk); });
     "saved bytes do not contain the editor value"
   );
 
-  helpers.state.editorBase = selected;
   nodes["arc-editor-markdown"].value = "failed update";
+  prepareDraft(selected);
   failClose = true;
   await helpers.saveEditor({preventDefault: function () {}});
   assert(
@@ -535,8 +570,8 @@ helpers.installRenderSpies(function (chunk) { renderedChunks.push(chunk); });
     "save guard was not reusable after failure"
   );
   var latest = helpers.state.selected.get(base.fragment_id);
-  helpers.state.editorBase = latest;
   nodes["arc-editor-markdown"].value = "committed despite close error";
+  prepareDraft(latest);
   failClose = true;
   commitOnCloseFailure = true;
   await helpers.saveEditor({preventDefault: function () {}});
@@ -551,9 +586,94 @@ helpers.installRenderSpies(function (chunk) { renderedChunks.push(chunk); });
   failClose = false;
   commitOnCloseFailure = false;
   latest = helpers.state.selected.get(base.fragment_id);
-  helpers.state.editorBase = latest;
+
+  nodes["arc-editor-markdown"].value = "saved before chunk refresh failed";
+  prepareDraft(latest);
+  postCommitFailures.chunk = true;
+  await helpers.saveEditor({preventDefault: function () {}});
+  postCommitFailures.chunk = false;
+  latest = helpers.state.selected.get(base.fragment_id);
+  assert(
+    latest.revision === 5 && helpers.state.activeDraft === null,
+    "chunk refresh failure left a persisted revision as an active draft"
+  );
+  assert(
+    recoveredCards.length === 1 &&
+      recoveredCards[0].fragmentId === base.fragment_id,
+    "chunk refresh failure did not restore a readable fragment card"
+  );
+  assert(
+    nodes["arc-storage-status"].dataset.kind === "info" &&
+      nodes["arc-storage-status"].textContent.includes("chunk refresh failed"),
+    "post-commit chunk failure was not reported as saved with a UI warning"
+  );
+
+  nodes["arc-editor-markdown"].value = "saved before group refresh failed";
+  prepareDraft(latest);
+  postCommitFailures.group = true;
+  await helpers.saveEditor({preventDefault: function () {}});
+  postCommitFailures.group = false;
+  latest = helpers.state.selected.get(base.fragment_id);
+  assert(
+    latest.revision === 6 && helpers.state.activeDraft === null,
+    "group refresh failure left a persisted revision as an active draft"
+  );
+  assert(
+    recoveredCards.length === 2 &&
+      recoveredCards[1].fragmentId === base.fragment_id,
+    "group refresh failure did not restore a readable fragment card"
+  );
+  assert(
+    nodes["arc-storage-status"].dataset.kind === "info" &&
+      nodes["arc-storage-status"].textContent.includes("group refresh failed"),
+    "post-commit group failure was not reported as saved with a UI warning"
+  );
+
+  nodes["arc-editor-title"].value = "New saved note";
+  nodes["arc-editor-role"].value = "note";
+  nodes["arc-editor-priority"].value = "110";
+  nodes["arc-editor-markdown"].value = "new note survives UI recovery";
+  helpers.state.editorBase = null;
+  helpers.state.editorAnchor = anchor;
+  helpers.state.editorHistorical = null;
+  helpers.state.activeDraft = {
+    base: null,
+    anchor: anchor,
+    title: nodes["arc-editor-title"].value,
+    role: nodes["arc-editor-role"].value,
+    priority: Number(nodes["arc-editor-priority"].value),
+    markdown_body: nodes["arc-editor-markdown"].value
+  };
+  nodes["arc-editor-dialog"].open = true;
+  var renderedBeforeNewNoteRecovery = renderedChunks.length;
+  postCommitFailures.chunk = true;
+  await helpers.saveEditor({preventDefault: function () {}});
+  postCommitFailures.chunk = false;
+  var newNote = Array.from(helpers.state.selected.values()).find(function (item) {
+    return item.fragment_id.indexOf("user-") === 0;
+  });
+  assert(
+    newNote && helpers.state.activeDraft === null,
+    "new note was not retained after its post-commit chunk failure"
+  );
+  assert(
+    helpers.state.fragmentGroups.get(anchor.target_id).some(function (item) {
+      return item.fragment_id === newNote.fragment_id;
+    }),
+    "new note recovery did not repair its fragment group"
+  );
+  assert(
+    renderedChunks.length === renderedBeforeNewNoteRecovery + 1,
+    "new note recovery did not retry the affected rendered chunk"
+  );
+
+  nodes["arc-editor-title"].value = latest.title || "";
+  nodes["arc-editor-role"].value = latest.role;
+  nodes["arc-editor-priority"].value = String(latest.priority);
+  nodes["arc-editor-markdown"].value = latest.markdown_body;
+  prepareDraft(latest);
   helpers.state.revisions.get(base.fragment_id).push(Object.assign({}, latest, {
-    revision: 5,
+    revision: 7,
     parent_semantic_digest: latest.semantic_digest,
     semantic_digest: "e".repeat(64),
     anchor: {kind: "block", target_id: "other", related_blocks: []}
@@ -568,6 +688,562 @@ helpers.installRenderSpies(function (chunk) { renderedChunks.push(chunk); });
     nodes["arc-storage-status"].textContent.includes("current directory revision changed"),
     "known next revision did not report stale editor state"
   );
+})().catch(function (error) {
+  console.error(error.stack || error);
+  process.exitCode = 1;
+});
+"""
+    )
+
+    subprocess.run(
+        [node, "-"],
+        input=instrumented,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_reader_unchanged_save_is_a_normalized_zero_work_noop_under_node() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        """
+globalThis.window = globalThis;
+"""
+        + javascript[:startup]
+        + """
+  globalThis.__arcReaderTest = {
+    state: state,
+    saveEditor: saveEditor,
+    installNoopSpies: function (calls) {
+      connectDirectory = async function () { calls.picker += 1; return false; };
+      semanticDigest = async function () { calls.digest += 1; return "f".repeat(64); };
+      fragmentsDirectory = async function () { calls.filesystem += 1; return {}; };
+      writeImmutableRevision = async function () { calls.filesystem += 1; };
+      refreshFragmentGroup = function () { calls.rerender += 1; };
+      refreshChunkForAnchor = function () { calls.rerender += 1; };
+      replaceFragmentCard = function () { calls.cardReplace += 1; };
+    }
+  };
+}());
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+var source = {
+  source_format: "markdown",
+  media_type: "text/markdown",
+  artifact_digest: "a".repeat(64),
+  size: 4,
+  rich_document_digest: "b".repeat(64)
+};
+var anchor = {
+  kind: "block",
+  target_id: "block-1",
+  related_blocks: [{
+    block_id: "block-1",
+    kind: "paragraph",
+    ordinal: 0,
+    locator: {line_start: 1},
+    content_fingerprint: "c".repeat(64)
+  }]
+};
+var base = {
+  schema_version: "arc.render.fragment_revision.v1",
+  source: source,
+  fragment_id: "note-1",
+  revision: 1,
+  parent_semantic_digest: null,
+  anchor: anchor,
+  priority: 110,
+  role: "note",
+  language: "en",
+  title: "Caf\u00e9",
+  citation_ids: ["ref-1"],
+  provenance: {
+    producer: "some-other-editor",
+    last_editor: "some-other-editor",
+    edited_at: "2000-01-01T00:00:00.000Z"
+  },
+  markdown_body: "Caf\u00e9 [@ref-1]\\nsecond line",
+  semantic_digest: "d".repeat(64),
+  _origin: "embedded"
+};
+var controls = {
+  title: {value: base.title, disabled: false},
+  role: {value: base.role, disabled: false},
+  priority: {value: String(base.priority), disabled: false},
+  markdown: {value: base.markdown_body, disabled: false},
+  save: {disabled: false}
+};
+var nodes = {
+  "arc-editor-title": controls.title,
+  "arc-editor-role": controls.role,
+  "arc-editor-priority": controls.priority,
+  "arc-editor-markdown": controls.markdown,
+  "arc-editor-save": controls.save,
+  "arc-editor-dialog": {
+    open: true,
+    closeCalls: 0,
+    close: function () { this.open = false; this.closeCalls += 1; },
+    querySelectorAll: function () { return Object.values(controls); }
+  },
+  "arc-storage-status": {textContent: "", dataset: {}, hidden: true}
+};
+globalThis.document = {
+  getElementById: function (id) {
+    if (!nodes[id]) throw new Error("unexpected DOM lookup: " + id);
+    return nodes[id];
+  }
+};
+
+var helpers = globalThis.__arcReaderTest;
+var calls = {picker: 0, digest: 0, filesystem: 0, rerender: 0, cardReplace: 0};
+helpers.installNoopSpies(calls);
+helpers.state.payload = {
+  source_identity: source,
+  block_fingerprints: {"block-1": "c".repeat(64)},
+  publication: {
+    source_document: {blocks: []},
+    bibliography: [{evidence_id: "ref-1"}],
+    labels: {},
+    reader_profile: {source_language: "en", target_language: "en"}
+  }
+};
+helpers.state.directory = null;
+helpers.state.revisions = new Map([[base.fragment_id, [base]]]);
+helpers.state.selected = new Map([[base.fragment_id, base]]);
+
+function prepareDraft() {
+  nodes["arc-editor-dialog"].open = true;
+  helpers.state.editorBase = base;
+  helpers.state.editorAnchor = anchor;
+  helpers.state.editorHistorical = base;
+  helpers.state.editorGeneration += 1;
+  helpers.state.activeDraft = {
+    base: base,
+    anchor: anchor,
+    historical: base,
+    title: controls.title.value,
+    role: controls.role.value,
+    priority: Number(controls.priority.value),
+    markdown_body: controls.markdown.value
+  };
+}
+
+function assertNoWork(description) {
+  assert(calls.picker === 0, description + " opened a directory picker");
+  assert(calls.digest === 0, description + " computed a digest");
+  assert(calls.filesystem === 0, description + " touched the filesystem");
+  assert(calls.rerender === 0, description + " rerendered content");
+}
+
+(async function () {
+  prepareDraft();
+  await helpers.saveEditor({preventDefault: function () {}});
+  assertNoWork("exact unchanged save");
+  assert(calls.cardReplace === 1, "unchanged inline card was not restored locally");
+  assert(
+    helpers.state.selected.get(base.fragment_id) === base &&
+      helpers.state.revisions.get(base.fragment_id).length === 1,
+    "unchanged save mutated selected revision state"
+  );
+  assert(nodes["arc-editor-dialog"].closeCalls === 1, "unchanged save did not close");
+  assert(
+    nodes["arc-storage-status"].dataset.kind === "info" &&
+      nodes["arc-storage-status"].textContent === "Content is unchanged.",
+    "unchanged save did not report the neutral status"
+  );
+
+  controls.title.value = "Cafe\u0301";
+  controls.markdown.value = "Cafe\u0301 [@ref-1]\\r\\nsecond line";
+  prepareDraft();
+  await helpers.saveEditor({preventDefault: function () {}});
+  assertNoWork("normalized unchanged save");
+  assert(calls.cardReplace === 2, "normalized unchanged inline card was not restored");
+  assert(
+    helpers.state.selected.get(base.fragment_id) === base &&
+      helpers.state.revisions.get(base.fragment_id).length === 1,
+    "normalized unchanged save created a revision"
+  );
+  assert(
+    nodes["arc-editor-dialog"].closeCalls === 2,
+    "CRLF/NFC-equivalent save did not close as unchanged"
+  );
+
+  helpers.state.revisions.get(base.fragment_id).push(Object.assign({}, base, {
+    revision: 2,
+    parent_semantic_digest: base.semantic_digest,
+    semantic_digest: "e".repeat(64)
+  }));
+  prepareDraft();
+  await helpers.saveEditor({preventDefault: function () {}});
+  assertNoWork("known-stale unchanged save");
+  assert(calls.cardReplace === 2, "known-stale save replaced the inline card");
+  assert(
+    nodes["arc-editor-dialog"].closeCalls === 2,
+    "known-stale unchanged save closed the editor"
+  );
+  assert(
+    nodes["arc-storage-status"].dataset.kind === "error" &&
+      nodes["arc-storage-status"].textContent.includes("current directory revision changed"),
+    "known-stale unchanged save bypassed lineage rejection"
+  );
+})().catch(function (error) {
+  console.error(error.stack || error);
+  process.exitCode = 1;
+});
+"""
+    )
+
+    subprocess.run(
+        [node, "-"],
+        input=instrumented,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_reader_inline_draft_lifecycle_and_mutexes_execute_under_node() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        """
+globalThis.window = globalThis;
+"""
+        + javascript[:startup]
+        + """
+  globalThis.__arcReaderTest = {
+    state: state,
+    renderFragment: renderFragment,
+    beginInlineEdit: beginInlineEdit,
+    openAdvancedEditor: openAdvancedEditor,
+    closeEditorDialog: closeEditorDialog,
+    cancelActiveDraft: cancelActiveDraft,
+    restoreHistoricalRevision: restoreHistoricalRevision,
+    syncDraftFromDialog: syncDraftFromDialog,
+    openNewEditorForAnchor: openNewEditorForAnchor,
+    openExportPanel: openExportPanel,
+    connectDirectory: connectDirectory,
+    installDraftSpies: function (calls, render) {
+      renderMarkdown = render;
+      decorateGlossary = function () {};
+      typeset = function () {};
+      refreshChunkForAnchor = function (anchor) { calls.refresh.push(anchor); };
+      saveEditor = function () { calls.save += 1; };
+      markEditorPreviewDirty = function () { state.editorPreviewDirty = true; };
+    }
+  };
+}());
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function FakeNode(tag) {
+  this.tagName = String(tag || "div").toUpperCase();
+  this.className = "";
+  this.children = [];
+  this.parentElement = null;
+  this.listeners = {};
+  this.attrs = {};
+  this.dataset = {};
+  this.style = {};
+  this.textContent = "";
+  this.value = "";
+  this.disabled = false;
+  this.hidden = false;
+  this.open = false;
+  this.scrollHeight = 240;
+  this.classList = {
+    owner: this,
+    contains: function (name) {
+      return this.owner.className.split(/\\s+/).includes(name);
+    },
+    add: function (name) {
+      if (!this.contains(name)) {
+        this.owner.className = (this.owner.className + " " + name).trim();
+      }
+    },
+    toggle: function (name, enabled) {
+      if (enabled) this.add(name);
+    }
+  };
+}
+FakeNode.prototype.appendChild = function (child) {
+  child.parentElement = this;
+  this.children.push(child);
+  return child;
+};
+FakeNode.prototype.replaceChildren = function () {
+  this.children = [];
+  for (var index = 0; index < arguments.length; index += 1) {
+    this.appendChild(arguments[index]);
+  }
+};
+FakeNode.prototype.setAttribute = function (name, value) {
+  this.attrs[name] = String(value);
+};
+FakeNode.prototype.addEventListener = function (name, listener) {
+  (this.listeners[name] = this.listeners[name] || []).push(listener);
+};
+FakeNode.prototype.dispatch = function (name, event) {
+  event = event || {};
+  if (!event.target) event.target = this;
+  (this.listeners[name] || []).forEach(function (listener) { listener(event); });
+};
+FakeNode.prototype.matchesSelector = function (selector) {
+  if (selector[0] === ".") return this.classList.contains(selector.slice(1));
+  return this.tagName.toLowerCase() === selector.toLowerCase();
+};
+FakeNode.prototype.closest = function (selectors) {
+  var choices = selectors.split(",").map(function (value) { return value.trim(); });
+  var current = this;
+  while (current) {
+    if (choices.some(function (choice) { return current.matchesSelector(choice); })) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+};
+FakeNode.prototype.querySelector = function (selector) {
+  for (var index = 0; index < this.children.length; index += 1) {
+    var child = this.children[index];
+    if (child.matchesSelector(selector)) return child;
+    var nested = child.querySelector(selector);
+    if (nested) return nested;
+  }
+  return null;
+};
+FakeNode.prototype.focus = function () { this.focused = true; };
+FakeNode.prototype.setSelectionRange = function (start, end) {
+  this.selection = [start, end];
+};
+FakeNode.prototype.showModal = function () {
+  this.open = true;
+  this.showCalls = (this.showCalls || 0) + 1;
+};
+FakeNode.prototype.close = function () {
+  this.open = false;
+  this.closeCalls = (this.closeCalls || 0) + 1;
+};
+
+var nodes = {
+  "arc-editor-dialog": new FakeNode("dialog"),
+  "arc-editor-heading": new FakeNode("h2"),
+  "arc-editor-title": new FakeNode("input"),
+  "arc-editor-role": new FakeNode("select"),
+  "arc-editor-priority": new FakeNode("input"),
+  "arc-editor-markdown": new FakeNode("textarea"),
+  "arc-editor-save": new FakeNode("button"),
+  "arc-editor-history": new FakeNode("div"),
+  "arc-editor-preview": new FakeNode("div"),
+  "arc-export": new FakeNode("button"),
+  "arc-export-panel": new FakeNode("div"),
+  "arc-storage-status": new FakeNode("div")
+};
+nodes["arc-export-panel"].hidden = true;
+globalThis.document = {
+  createElement: function (tag) { return new FakeNode(tag); },
+  getElementById: function (id) {
+    if (!nodes[id]) throw new Error("unexpected DOM lookup: " + id);
+    return nodes[id];
+  },
+  querySelector: function () { return null; }
+};
+globalThis.innerHeight = 900;
+globalThis.requestAnimationFrame = function (callback) { callback(); };
+globalThis.CSS = {escape: function (value) { return value; }};
+var pickerCalls = 0;
+globalThis.showDirectoryPicker = async function () { pickerCalls += 1; return {}; };
+
+var source = {
+  source_format: "markdown",
+  media_type: "text/markdown",
+  artifact_digest: "a".repeat(64),
+  size: 4,
+  rich_document_digest: "b".repeat(64)
+};
+function anchor(id) {
+  return {kind: "block", target_id: id, related_blocks: []};
+}
+var first = {
+  fragment_id: "note-1",
+  revision: 2,
+  semantic_digest: "c".repeat(64),
+  anchor: anchor("block-1"),
+  title: "First",
+  role: "note",
+  priority: 110,
+  markdown_body: "saved body"
+};
+var second = Object.assign({}, first, {
+  fragment_id: "note-2",
+  semantic_digest: "d".repeat(64),
+  anchor: anchor("block-2"),
+  title: "Second"
+});
+var historical = Object.assign({}, first, {
+  revision: 1,
+  semantic_digest: "e".repeat(64),
+  title: "Historical",
+  role: "guide",
+  priority: 70,
+  markdown_body: "historical body"
+});
+var helpers = globalThis.__arcReaderTest;
+var calls = {refresh: [], save: 0};
+helpers.installDraftSpies(calls, function (markdown) {
+  var rendered = new FakeNode("div");
+  rendered.className = "arc-markdown";
+  rendered.textContent = markdown;
+  return rendered;
+});
+helpers.state.payload = {
+  source_identity: source,
+  publication: {
+    source_document: {blocks: []},
+    bibliography: [],
+    labels: {},
+    reader_profile: {source_language: "en", target_language: "en"}
+  }
+};
+helpers.state.revisions = new Map([[first.fragment_id, [historical, first]]]);
+helpers.state.selected = new Map([[first.fragment_id, first]]);
+
+(async function () {
+  var firstCard = helpers.renderFragment(first);
+  assert(!firstCard.querySelector(".arc-edit-button"), "fragment retained an edit pencil");
+  assert(
+    firstCard.querySelector(".arc-edit-accessible"),
+    "fragment lost its keyboard-accessible edit action"
+  );
+  var saved = firstCard.querySelector(".arc-fragment-saved-content");
+  assert(
+    !saved.attrs.role && saved.tabIndex === undefined,
+    "clickable Markdown became a nested interactive container"
+  );
+  var link = new FakeNode("a");
+  saved.appendChild(link);
+  saved.dispatch("click", {target: link});
+  assert(helpers.state.activeDraft === null, "interactive descendant started editing");
+
+  saved.dispatch("click", {target: saved});
+  assert(
+    helpers.state.activeDraft && helpers.state.activeDraft.base === first,
+    "body click did not establish the active draft"
+  );
+  var active = helpers.state.activeDraft;
+  var secondCard = helpers.renderFragment(second);
+  secondCard.querySelector(".arc-fragment-saved-content").dispatch("click");
+  assert(helpers.state.activeDraft === active, "a second fragment replaced the active draft");
+  assert(
+    nodes["arc-storage-status"].textContent === "Save or cancel the current edit first.",
+    "second edit did not report the single-draft guard"
+  );
+
+  var editingCard = helpers.renderFragment(first);
+  var textarea = editingCard.querySelector(".arc-inline-markdown");
+  assert(textarea && textarea.value === "saved body", "inline editor missed draft content");
+  var inlineSave = editingCard.querySelector(".arc-inline-save");
+  assert(inlineSave.disabled, "unchanged inline draft left Save enabled");
+  var prevented = 0;
+  textarea.dispatch("keydown", {
+    key: "Enter", ctrlKey: true, metaKey: false,
+    preventDefault: function () { prevented += 1; }
+  });
+  textarea.dispatch("keydown", {
+    key: "Enter", ctrlKey: false, metaKey: true,
+    preventDefault: function () { prevented += 1; }
+  });
+  assert(
+    calls.save === 0 && prevented === 2,
+    "unchanged Ctrl/Cmd+Enter bypassed disabled Save"
+  );
+
+  textarea.value = "latest inline draft";
+  textarea.dispatch("input");
+  assert(!inlineSave.disabled, "changed inline draft did not enable Save");
+  textarea.dispatch("keydown", {
+    key: "Enter", ctrlKey: true, metaKey: false,
+    preventDefault: function () { prevented += 1; }
+  });
+  textarea.dispatch("keydown", {
+    key: "Enter", ctrlKey: false, metaKey: true,
+    preventDefault: function () { prevented += 1; }
+  });
+  assert(calls.save === 2 && prevented === 4, "changed Ctrl/Cmd+Enter did not save");
+  editingCard.querySelector(".arc-inline-advanced").dispatch("click", {
+    preventDefault: function () {}
+  });
+  assert(
+    nodes["arc-editor-dialog"].open &&
+      nodes["arc-editor-markdown"].value === "latest inline draft",
+    "Advanced did not open on the latest inline draft"
+  );
+  assert(!nodes["arc-editor-save"].disabled, "changed Advanced draft disabled Save");
+  nodes["arc-editor-title"].value = "Latest title";
+  nodes["arc-editor-role"].value = "companion";
+  nodes["arc-editor-priority"].value = "80";
+  nodes["arc-editor-markdown"].value = "latest advanced draft";
+  helpers.closeEditorDialog();
+  assert(
+    helpers.state.activeDraft === active &&
+      active.title === "Latest title" &&
+      active.role === "companion" &&
+      Number(active.priority) === 80 &&
+      active.markdown_body === "latest advanced draft",
+    "closing Advanced discarded or failed to share the draft"
+  );
+
+  nodes["arc-editor-dialog"].showModal();
+  helpers.state.editorHistorical = historical;
+  helpers.restoreHistoricalRevision();
+  assert(
+    active.title === historical.title &&
+      active.role === historical.role &&
+      active.priority === historical.priority &&
+      active.markdown_body === historical.markdown_body,
+    "history restore did not update the shared draft"
+  );
+  assert(
+    nodes["arc-editor-title"].value === historical.title &&
+      nodes["arc-editor-markdown"].value === historical.markdown_body,
+    "history restore did not update Advanced controls"
+  );
+  assert(
+    helpers.renderFragment(first).querySelector(".arc-inline-markdown").value ===
+      historical.markdown_body,
+    "history restore did not flow back to the inline editor"
+  );
+
+  var showCalls = nodes["arc-editor-dialog"].showCalls;
+  helpers.openNewEditorForAnchor(anchor("block-3"));
+  assert(
+    helpers.state.activeDraft === active &&
+      nodes["arc-editor-dialog"].showCalls === showCalls,
+    "add-note bypassed the active-draft guard"
+  );
+  await helpers.openExportPanel();
+  assert(nodes["arc-export-panel"].hidden, "export opened during an active draft");
+  var connected = await helpers.connectDirectory();
+  assert(!connected && pickerCalls === 0, "directory selection opened during an active draft");
+
+  var cancel = helpers.renderFragment(first).querySelector(".arc-inline-cancel");
+  cancel.dispatch("click", {preventDefault: function () {}});
+  assert(helpers.state.activeDraft === null, "inline cancel retained the active draft");
 })().catch(function (error) {
   console.error(error.stack || error);
   process.exitCode = 1;
@@ -1337,10 +2013,10 @@ def test_reader_enforces_strict_browser_revision_contract() -> None:
     assert "validateIntegerJson(metadata, \"fragment revision\")" in javascript
     assert "Number.isSafeInteger(value)" in javascript
     assert "anchor related block differs from the rich source" in javascript
-    assert "assertKnownCitations(metadata.citation_ids)" in javascript
+    assert "assertKnownCitations(editable.citation_ids)" in javascript
 
 
-def test_reader_uses_low_distraction_controls_and_collapsed_advanced_editor() -> None:
+def test_reader_uses_low_distraction_controls_and_inline_editor() -> None:
     javascript = _text("reader.js")
     stylesheet = _text("reader.css")
 
@@ -1365,26 +2041,16 @@ def test_reader_uses_low_distraction_controls_and_collapsed_advanced_editor() ->
         '"arc-note-button arc-icon-button", "+", labels().addNote'
         in javascript
     )
-    assert (
-        '"arc-edit-button arc-icon-button", "✎", labels().edit'
-        in javascript
-    )
+    assert "arc-edit-button" not in javascript
+    assert "beginInlineEdit" in javascript
+    assert "openAdvancedEditor" in javascript
     assert "openNewSectionEditor" not in javascript
-    assert (
-        'document.getElementById("arc-editor-advanced").open = false'
-        in javascript
-    )
     assert ".arc-history-compare" in stylesheet
     assert ".arc-section-note-button" not in stylesheet
     assert ".arc-icon-button" in stylesheet
     assert "position: fixed" in stylesheet
-    assert 'content: "▸"' in stylesheet
-    assert ".arc-editor-advanced[open]" in stylesheet
     assert "width: min(29rem, calc(100vw - 2rem))" in stylesheet
     assert "height: min(39.5rem, calc(100dvh - 2rem))" in stylesheet
-    assert ".arc-source-row {\n  position: relative;\n  margin: .35rem 0" in stylesheet
-    assert "background: transparent;" in stylesheet
-    assert "border: 0;\n  border-radius: 0;" in stylesheet
     assert "newSaveLocation" in javascript
     assert "changeSaveLocation" in javascript
     assert "buildStandaloneExportHtml" in javascript
