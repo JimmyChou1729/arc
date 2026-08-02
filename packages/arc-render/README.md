@@ -35,7 +35,9 @@ Clicking a translation, companion, guide, or note body opens its raw Markdown
 inline. The inline controls save or discard the single active draft; Advanced
 opens the complete title, Markdown, preview, metadata, and history editor while
 preserving the same unsaved values. Browser editing saves from the revision
-snapshot already loaded in the reader. Save remains disabled while normalized
+snapshot already loaded in the reader. Reading mode shows the fragment role and
+shows its revision only when it is not v1; inline editing shows the role,
+priority, and revision. Save remains disabled while normalized
 content is unchanged, and the defensive no-op path chooses no directory and
 creates no revision. A changed save
 appends and verifies one immutable revision file, then updates only the affected

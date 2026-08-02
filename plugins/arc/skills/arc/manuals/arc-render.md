@@ -40,7 +40,9 @@ content with an inline raw-Markdown editor. One draft may be active at a time.
 Advanced opens the full title, Markdown, preview, metadata, and history view;
 closing it returns the latest unsaved values to the inline editor. Cancelling
 inline editing discards the draft. The browser editor saves from its currently
-loaded revision snapshot. Save is disabled while normalized content is
+loaded revision snapshot. Reading mode shows the fragment role and shows its
+revision only when it is not v1; inline editing shows the role, priority, and
+revision. Save is disabled while normalized content is
 unchanged; the defensive no-op path uses no directory picker and creates no new
 revision. A changed save writes and verifies only the
 new immutable revision, then refreshes the affected fragment and reading chunk

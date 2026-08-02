@@ -1127,6 +1127,15 @@ helpers.state.selected = new Map([[first.fragment_id, first]]);
   var firstCard = helpers.renderFragment(first);
   assert(!firstCard.querySelector(".arc-edit-button"), "fragment retained an edit pencil");
   assert(
+    firstCard.querySelector(".arc-fragment-meta").textContent === "Note · v2",
+    "reading mode exposed priority or hid a non-v1 revision"
+  );
+  assert(
+    helpers.renderFragment(historical)
+      .querySelector(".arc-fragment-meta").textContent === "Guide",
+    "reading mode exposed priority or v1"
+  );
+  assert(
     firstCard.querySelector(".arc-edit-accessible"),
     "fragment lost its keyboard-accessible edit action"
   );
@@ -1155,6 +1164,10 @@ helpers.state.selected = new Map([[first.fragment_id, first]]);
   );
 
   var editingCard = helpers.renderFragment(first);
+  assert(
+    editingCard.querySelector(".arc-fragment-meta").textContent === "Note · 110 · v2",
+    "editing mode hid priority or revision"
+  );
   var textarea = editingCard.querySelector(".arc-inline-markdown");
   assert(textarea && textarea.value === "saved body", "inline editor missed draft content");
   var inlineSave = editingCard.querySelector(".arc-inline-save");

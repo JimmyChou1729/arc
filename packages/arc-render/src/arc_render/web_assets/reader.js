@@ -1127,6 +1127,16 @@
     });
   }
 
+  function fragmentMetaText(fragment, editing) {
+    var role = roleLabel(fragment.role);
+    if (editing) {
+      return role + " · " + fragment.priority + " · v" + fragment.revision;
+    }
+    return fragment.revision === 1
+      ? role
+      : role + " · v" + fragment.revision;
+  }
+
   function renderFragment(fragment) {
     var card = element("aside", "arc-fragment");
     card.dataset.fragmentId = fragment.fragment_id;
@@ -1138,14 +1148,13 @@
     decorateGlossary(title, "target");
     header.appendChild(title);
     var actions = element("div", "arc-fragment-actions");
-    actions.appendChild(element(
-      "span", "arc-fragment-meta",
-      roleLabel(fragment.role) + " · " + fragment.priority + " · v" + fragment.revision
-    ));
     var draft = state.activeDraft;
     var editing = Boolean(
       draft && draft.base && draft.base.fragment_id === fragment.fragment_id
     );
+    actions.appendChild(element(
+      "span", "arc-fragment-meta", fragmentMetaText(fragment, editing)
+    ));
     if (editing) {
       actions.classList.add("arc-inline-actions");
       appendInlineActions(actions);
