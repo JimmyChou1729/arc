@@ -619,8 +619,9 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
           </label>
         </div>
       </div>
-      <details id="arc-editor-advanced" class="arc-editor-advanced">
-        <summary><span id="arc-editor-advanced-label">Preview and more settings</span></summary>
+      <section id="arc-editor-advanced" class="arc-editor-advanced"
+        aria-labelledby="arc-editor-advanced-label">
+        <h3 id="arc-editor-advanced-label" class="arc-editor-advanced-heading">Preview and more settings</h3>
         <div class="arc-editor-extra-content">
           <div class="arc-editor-preview-pane">
             <span id="arc-editor-preview-label">Preview</span>
@@ -641,7 +642,7 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
           </div>
           <div id="arc-editor-history" class="arc-history"></div>
         </div>
-      </details>
+      </section>
       <footer class="arc-dialog-footer">
         <button id="arc-editor-cancel" type="button">Cancel</button>
         <button id="arc-editor-save" type="button">Save</button>

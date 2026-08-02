@@ -264,9 +264,10 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert 'id="arc-export-panel"' in text
     assert 'id="arc-export-scope"' in text
     assert 'id="arc-export-html"' in text
-    assert '<details id="arc-editor-advanced"' in text
+    assert '<section id="arc-editor-advanced"' in text
     assert (
-        '<span id="arc-editor-advanced-label">Preview and more settings</span>'
+        '<h3 id="arc-editor-advanced-label" class="arc-editor-advanced-heading">'
+        "Preview and more settings</h3>"
         in text
     )
     assert 'id="arc-editor-priority"' in text
