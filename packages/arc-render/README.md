@@ -50,8 +50,9 @@ project directory is available and `Change save location` afterwards. Export
 first refreshes that connected directory. Per-role Markdown can contain either
 all currently selected revisions or only selections changed from the reader's
 embedded baseline. Full-text HTML export always contains the complete latest
-publication and remains a standalone interactive reader; it is available only
-from a standalone reader whose assets are already embedded. Directory changes,
+publication and remains a standalone interactive reader, so its action is shown
+only for the all-latest scope. It is available only from a standalone reader
+whose assets are already embedded. Directory changes,
 exports, and another edit wait until the active draft is saved or cancelled.
 
 For now, a PDF copy may be made manually with Chrome's Print / Save as PDF

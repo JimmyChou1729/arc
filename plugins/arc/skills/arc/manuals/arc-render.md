@@ -55,9 +55,10 @@ available and `Change save location` afterwards. The reader's Export panel
 refreshes a connected directory before producing any file. A role-specific
 Markdown export may include all latest selections or only selections changed
 from the HTML's embedded baseline. Full-text HTML export is always complete,
-independent of the Markdown scope, and produces another standalone interactive
-reader with the latest revision histories and selections. This HTML option is
-disabled for a non-standalone asset bundle. Directory changes, exports, and a
+so its action is shown only when all latest selections are requested. It
+produces another standalone interactive reader with the latest revision
+histories and selections. This HTML option is disabled for a non-standalone
+asset bundle. Directory changes, exports, and a
 second edit are blocked until the active draft is saved or cancelled.
 
 ## Progressive Reading

@@ -1820,6 +1820,7 @@ def test_export_panel_syncs_external_changes_before_building_roles() -> None:
   globalThis.__arcReaderTest = {
     state: state,
     openExportPanel: openExportPanel,
+    renderExportOptions: renderExportOptions,
     semanticDigest: semanticDigest,
     stableStringify: stableStringify
   };
@@ -1887,13 +1888,15 @@ var nodes = {
     appendChild: function (child) { roleButtons.push(child); }
   },
   "arc-export-empty": {hidden: true},
-  "arc-export-html": {disabled: false},
+  "arc-export-html": {disabled: false, hidden: false},
   "arc-storage-status": {textContent: "", dataset: {}, hidden: true}
 };
 globalThis.document = {
   getElementById: function (id) { return nodes[id]; },
   querySelector: function (selector) {
-    if (selector.includes("arc-export-scope")) return scopeInput;
+    if (selector.includes("arc-export-scope")) {
+      return scopeInput.checked ? scopeInput : otherScopeInput;
+    }
     throw new Error("unexpected selector: " + selector);
   },
   querySelectorAll: function (selector) {
@@ -1951,6 +1954,7 @@ globalThis.document = {
       return Promise.resolve(fragments);
     }
   };
+  helpers.state.exportStandaloneSupported = true;
   assert(roleButtons.length === 0, "fixture unexpectedly started with a role");
   await helpers.openExportPanel();
   assert(
@@ -1964,6 +1968,17 @@ globalThis.document = {
   assert(
     nodes["arc-export"].attrs["aria-expanded"] === "true",
     "synchronized export panel did not remain open"
+  );
+  assert(
+    nodes["arc-export-html"].hidden,
+    "changed-only Markdown scope exposed the full HTML action"
+  );
+  scopeInput.checked = false;
+  otherScopeInput.checked = true;
+  helpers.renderExportOptions();
+  assert(
+    !nodes["arc-export-html"].hidden && !nodes["arc-export-html"].disabled,
+    "all-latest scope did not restore the full HTML action"
   );
 })().catch(function (error) {
   console.error(error.stack || error);

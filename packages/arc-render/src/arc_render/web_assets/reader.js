@@ -1885,7 +1885,9 @@
       input.disabled = state.exportInProgress;
     });
     var htmlButton = document.getElementById("arc-export-html");
-    htmlButton.disabled = state.exportInProgress ||
+    var changedOnly = exportScope() === "changed";
+    htmlButton.hidden = changedOnly;
+    htmlButton.disabled = changedOnly || state.exportInProgress ||
       !state.exportStandaloneSupported;
   }
 
