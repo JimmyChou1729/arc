@@ -57,6 +57,7 @@ define = undefined;
     effectiveEquationLabel: effectiveEquationLabel,
     fragmentsDirectory: fragmentsDirectory,
     labels: labels,
+    setStatus: setStatus,
     updateDirectoryControl: updateDirectoryControl,
     stableStringify: stableStringify,
     setupMarkdown: setupMarkdown,
@@ -160,9 +161,12 @@ if (
 helpers.state.payload.publication.reader_profile.target_language = "zh-CN";
 helpers.state.payload.publication.labels = {};
 var connectControl = {textContent: ""};
+var statusControl = {textContent: "", dataset: {}, hidden: true};
 globalThis.document = {
   getElementById: function (id) {
-    return id === "arc-connect" ? connectControl : null;
+    if (id === "arc-connect") return connectControl;
+    if (id === "arc-storage-status") return statusControl;
+    return null;
   }
 };
 helpers.state.directory = null;
@@ -174,6 +178,34 @@ helpers.state.directory = {};
 helpers.updateDirectoryControl();
 if (connectControl.textContent !== "更改保存位置") {
   throw new Error("connected-directory button label changed");
+}
+var statusTimers = [];
+var clearedStatusTimers = [];
+window.setTimeout = function (callback, delay) {
+  statusTimers.push({callback: callback, delay: delay});
+  return statusTimers.length;
+};
+window.clearTimeout = function (timer) {
+  clearedStatusTimers.push(timer);
+};
+helpers.setStatus("Save or cancel the current edit first.", "error");
+if (
+  statusControl.hidden || statusTimers.length !== 1 ||
+  statusTimers[0].delay !== 10000
+) {
+  throw new Error("toolbar status did not receive a ten-second expiry");
+}
+helpers.setStatus("Newer status");
+if (clearedStatusTimers[0] !== 1) {
+  throw new Error("new toolbar status did not cancel the previous expiry");
+}
+statusTimers[0].callback();
+if (statusControl.textContent !== "Newer status" || statusControl.hidden) {
+  throw new Error("stale expiry cleared a newer toolbar status");
+}
+statusTimers[1].callback();
+if (statusControl.textContent || !statusControl.hidden) {
+  throw new Error("toolbar status remained visible after ten seconds");
 }
 helpers.validateRevisionMetadata({
   schema_version: "arc.render.fragment_revision.v1",

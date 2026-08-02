@@ -46,6 +46,7 @@ Files added by another process are incorporated, with fork diagnostics when
 needed, the next time the reader connects to or restores the project directory.
 That refresh enumerates nested fragment directories in bounded concurrent
 batches and reads changed files with bounded concurrency.
+Toolbar status messages clear automatically after ten seconds.
 
 The browser toolbar calls the directory action `New save location` until a
 project directory is available and `Change save location` afterwards. Export

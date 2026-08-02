@@ -51,6 +51,7 @@ written by another process are incorporated, and any resulting fork is
 reported, when the reader next connects to or restores the project directory.
 Nested fragment directories and changed revision files are scanned with
 bounded concurrency during that refresh.
+Toolbar status messages clear automatically after ten seconds.
 
 The directory button reads `New save location` before a project directory is
 available and `Change save location` afterwards. The reader's Export panel

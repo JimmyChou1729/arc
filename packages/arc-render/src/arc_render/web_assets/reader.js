@@ -7,6 +7,7 @@
   var MAX_BLOCKS_PER_RENDER_CHUNK = 36;
   var CHUNK_BLOCK_HEIGHT_ESTIMATE = 220;
   var DIRECTORY_READ_CONCURRENCY = 8;
+  var STATUS_EXPIRY_MS = 10000;
   var state = {
     payload: null,
     md: null,
@@ -28,6 +29,7 @@
     editorGeneration: 0,
     editorPreviewDirty: true,
     editorPreviewTimer: null,
+    statusTimer: null,
     editorBase: null,
     editorAnchor: null,
     editorHistorical: null,
@@ -3201,9 +3203,22 @@
 
   function setStatus(value, kind) {
     var status = document.getElementById("arc-storage-status");
+    if (state.statusTimer !== null) {
+      window.clearTimeout(state.statusTimer);
+      state.statusTimer = null;
+    }
     status.textContent = value || "";
     status.dataset.kind = kind || "info";
     status.hidden = !value;
+    if (!value) return;
+    var timer = window.setTimeout(function () {
+      if (state.statusTimer !== timer) return;
+      state.statusTimer = null;
+      status.textContent = "";
+      status.hidden = true;
+    }, STATUS_EXPIRY_MS);
+    state.statusTimer = timer;
+    if (timer && typeof timer.unref === "function") timer.unref();
   }
 
   function openDatabase() {
