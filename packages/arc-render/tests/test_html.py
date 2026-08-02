@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
+import subprocess
 
 import pytest
 from arc_paper import (
@@ -258,8 +260,15 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert "showDirectoryPicker" in text
     assert "@media print" in text
     assert "--print-to-pdf" not in text
+    assert 'id="arc-export"' in text
+    assert 'id="arc-export-panel"' in text
+    assert 'id="arc-export-scope"' in text
+    assert 'id="arc-export-html"' in text
     assert '<details id="arc-editor-advanced"' in text
-    assert '<span id="arc-editor-advanced-label">More options</span>' in text
+    assert (
+        '<span id="arc-editor-advanced-label">Preview and more settings</span>'
+        in text
+    )
     assert 'id="arc-editor-priority"' in text
     assert '<h2 id="arc-editor-heading">Edit</h2>' in text
     assert '<button id="arc-editor-cancel" type="button">Cancel</button>' in text
@@ -267,6 +276,7 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert "Edit overlay" not in text
     assert "Save as new revision" not in text
     assert "data:image/png;base64," in text
+    validate_standalone_html(publication, output)
     assert payload["publication"]["publication_digest"] == (
         publication.publication_digest
     )
@@ -286,6 +296,94 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     revisions = payload["revisions"]
     assert [item["metadata"]["revision"] for item in revisions] == [1, 2]
     assert revisions[-1]["markdown_body"] == "修订后的译文 [@ref-1]。"
+
+
+def test_browser_exported_html_remains_a_valid_latest_reader(
+    tmp_path: Path,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    publication_path, publication, selected = _workspace(tmp_path)
+    initial_path = tmp_path / "initial.html"
+    render_publication_html(publication_path, initial_path)
+    initial_html = initial_path.read_text(encoding="utf-8")
+    payload = _payload(initial_html)
+    javascript = (
+        Path(__file__).parents[1]
+        / "src"
+        / "arc_render"
+        / "web_assets"
+        / "reader.js"
+    ).read_text(encoding="utf-8")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        "globalThis.window = globalThis;\n"
+        + javascript[:startup]
+        + """
+  globalThis.__arcReaderTest = {
+    state: state,
+    addRevision: addRevision,
+    buildStandaloneExportHtml: buildStandaloneExportHtml,
+    initialRevisions: initialRevisions,
+    metadataOnly: metadataOnly,
+    resolveOne: resolveOne,
+    semanticDigest: semanticDigest
+  };
+}());
+var fs = require("fs");
+var helpers = globalThis.__arcReaderTest;
+helpers.state.payload = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+helpers.state.exportStandaloneSupported = true;
+helpers.state.exportHtmlTemplate = fs.readFileSync(process.argv[3], "utf8");
+helpers.initialRevisions();
+var current = helpers.state.selected.values().next().value;
+var metadata = helpers.metadataOnly(current);
+metadata.revision = current.revision + 1;
+metadata.parent_semantic_digest = current.semantic_digest;
+metadata.title = "Browser export";
+metadata.provenance = {producer: "arc-render-browser"};
+var body = "浏览器中的最新版 [@ref-1]。";
+(async function () {
+  var digest = await helpers.semanticDigest(metadata, body);
+  helpers.addRevision({
+    metadata: metadata,
+    markdown_body: body,
+    semantic_digest: digest
+  });
+  helpers.resolveOne(metadata.fragment_id);
+  process.stdout.write(helpers.buildStandaloneExportHtml());
+})().catch(function (error) {
+  console.error(error.stack || error);
+  process.exitCode = 1;
+});
+"""
+    )
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    completed = subprocess.run(
+        [node, "-", str(payload_path), str(initial_path)],
+        input=instrumented,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    exported_path = tmp_path / "exported.html"
+    exported_path.write_text(completed.stdout, encoding="utf-8")
+    exported = _payload(completed.stdout)
+
+    assert exported["selected_revision_digests"] != [selected.semantic_digest]
+    assert [item["metadata"]["revision"] for item in exported["revisions"]] == [
+        1,
+        2,
+    ]
+    assert exported["revisions"][-1]["markdown_body"] == (
+        "浏览器中的最新版 [@ref-1]。"
+    )
+    assert 'id="arc-export"' in completed.stdout
+    assert "showDirectoryPicker" in completed.stdout
+    validate_standalone_html(publication, exported_path)
 
 
 def test_renderer_groups_revision_by_front_matter_not_parent_directory(

@@ -56,6 +56,8 @@ define = undefined;
     browserCreatedHistory: browserCreatedHistory,
     effectiveEquationLabel: effectiveEquationLabel,
     fragmentsDirectory: fragmentsDirectory,
+    labels: labels,
+    updateDirectoryControl: updateDirectoryControl,
     stableStringify: stableStringify,
     setupMarkdown: setupMarkdown,
     buildRenderChunks: buildRenderChunks,
@@ -137,9 +139,42 @@ helpers.state.payload = {
     outline: [],
     bibliography: [],
     labels: {},
-    reader_profile: {}
+    reader_profile: {target_language: "zh-CN"}
   }
 };
+helpers.state.payload.publication.labels.translation = "译名";
+if (
+  helpers.labels().translation !== "译文" ||
+  helpers.labels().translatedTerm !== "译文"
+) {
+  throw new Error("legacy simplified Chinese translation labels were not normalized");
+}
+helpers.state.payload.publication.reader_profile.target_language = "zh-TW";
+helpers.state.payload.publication.labels.translation = "譯名";
+if (
+  helpers.labels().translation !== "譯文" ||
+  helpers.labels().translatedTerm !== "譯文"
+) {
+  throw new Error("legacy traditional Chinese translation labels were not normalized");
+}
+helpers.state.payload.publication.reader_profile.target_language = "zh-CN";
+helpers.state.payload.publication.labels = {};
+var connectControl = {textContent: ""};
+globalThis.document = {
+  getElementById: function (id) {
+    return id === "arc-connect" ? connectControl : null;
+  }
+};
+helpers.state.directory = null;
+helpers.updateDirectoryControl();
+if (connectControl.textContent !== "新建保存位置") {
+  throw new Error("missing-directory button label changed");
+}
+helpers.state.directory = {};
+helpers.updateDirectoryControl();
+if (connectControl.textContent !== "更改保存位置") {
+  throw new Error("connected-directory button label changed");
+}
 helpers.validateRevisionMetadata({
   schema_version: "arc.render.fragment_revision.v1",
   source: helpers.state.payload.source_identity,
@@ -424,6 +459,18 @@ var renderedChunks = [];
 helpers.installRenderSpies(function (chunk) { renderedChunks.push(chunk); });
 
 (async function () {
+  helpers.state.exportInProgress = true;
+  var fileCallsBeforeBlockedSave = fileCalls.length;
+  await helpers.saveEditor({preventDefault: function () {}});
+  assert(
+    fileCalls.length === fileCallsBeforeBlockedSave,
+    "save overlapped a latest-content export sync"
+  );
+  assert(
+    nodes["arc-storage-status"].textContent.includes("sync is already in progress"),
+    "export/save overlap did not report the shared revision guard"
+  );
+  helpers.state.exportInProgress = false;
   var first = helpers.saveEditor({preventDefault: function () {}});
   assert(
     nodes["arc-editor-dialog"].querySelectorAll().every(function (control) {
@@ -883,6 +930,381 @@ assert(
     )
 
 
+def test_reader_markdown_export_uses_latest_or_embedded_change_scope() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        """
+globalThis.window = globalThis;
+"""
+        + javascript[:startup]
+        + """
+  globalThis.__arcReaderTest = {
+    state: state,
+    buildRoleMarkdown: buildRoleMarkdown,
+    captureInitialSelection: captureInitialSelection,
+    exportRevisionState: exportRevisionState
+  };
+}());
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+var helpers = globalThis.__arcReaderTest;
+var source = {
+  source_format: "markdown",
+  media_type: "text/markdown",
+  artifact_digest: "a".repeat(64),
+  size: 4,
+  rich_document_digest: "b".repeat(64)
+};
+var blocks = [
+  {block_id: "block-1", kind: "paragraph", ordinal: 0, locator: {}, payload: {text: "one"}},
+  {block_id: "block-2", kind: "paragraph", ordinal: 1, locator: {}, payload: {text: "two"}}
+];
+function revision(fragmentId, digest, role, target, body, priority, number, parent, title) {
+  return {
+    schema_version: "arc.render.fragment_revision.v1",
+    source: source,
+    fragment_id: fragmentId,
+    revision: number,
+    parent_semantic_digest: parent,
+    anchor: {kind: "block", target_id: target, related_blocks: []},
+    priority: priority,
+    role: role,
+    language: "zh-CN",
+    title: title || null,
+    citation_ids: [],
+    provenance: {producer: "arc-render-browser"},
+    markdown_body: body,
+    semantic_digest: digest
+  };
+}
+var first = revision("translation-1", "1".repeat(64), "translation", "block-1", "旧译文", 10, 1, null);
+var unchanged = revision("translation-2", "2".repeat(64), "translation", "block-2", "未改译文", 10, 1, null);
+var companion = revision("companion-1", "3".repeat(64), "companion", "block-1", "未改伴读", 20, 1, null);
+helpers.state.payload = {
+  publication: {
+    source_document: {blocks: blocks},
+    outline: [],
+    labels: {document_title: "Fearful Symmetry", translation: "译名"},
+    reader_profile: {target_language: "zh-CN"}
+  }
+};
+helpers.state.selected = new Map([
+  [first.fragment_id, first],
+  [unchanged.fragment_id, unchanged],
+  [companion.fragment_id, companion]
+]);
+helpers.captureInitialSelection();
+var revised = revision(
+  first.fragment_id, "4".repeat(64), "translation", "block-1",
+  "最新译文", 10, 2, first.semantic_digest, "改动标题"
+);
+var note = revision("note-1", "5".repeat(64), "note", "block-2", "新增笔记", 110, 1, null);
+helpers.state.selected = new Map([
+  [first.fragment_id, revised],
+  [unchanged.fragment_id, unchanged],
+  [companion.fragment_id, companion],
+  [note.fragment_id, note]
+]);
+helpers.state.revisions = new Map([
+  [first.fragment_id, [first, revised]],
+  [unchanged.fragment_id, [unchanged]],
+  [companion.fragment_id, [companion]],
+  [note.fragment_id, [note]]
+]);
+helpers.state.activeFragmentIds = new Set([
+  first.fragment_id, unchanged.fragment_id, companion.fragment_id
+]);
+var all = helpers.buildRoleMarkdown("translation", "all");
+var changed = helpers.buildRoleMarkdown("translation", "changed");
+assert(all.includes("# Fearful Symmetry — 译文"), "role label did not use 译文");
+assert(all.includes("最新译文") && all.includes("未改译文"), "all-latest Markdown omitted content");
+assert(changed.includes("最新译文"), "changed Markdown omitted the revised fragment");
+assert(!changed.includes("未改译文"), "changed Markdown included an unchanged fragment");
+assert(changed.includes("## 改动标题"), "fragment title was not exported");
+assert(
+  helpers.buildRoleMarkdown("companion", "changed") === "",
+  "unchanged companion content was exported as changed"
+);
+assert(
+  helpers.buildRoleMarkdown("note", "changed").includes("新增笔记"),
+  "new browser fragment was not exported as changed"
+);
+var exported = helpers.exportRevisionState();
+assert(exported.revisions.length === 5, "full export omitted a revision history entry");
+assert(
+  exported.selected_revision_digests.join(",") === [
+    revised.semantic_digest,
+    unchanged.semantic_digest,
+    companion.semantic_digest,
+    note.semantic_digest
+  ].join(","),
+  "full export selected digest order changed"
+);
+"""
+    )
+
+    subprocess.run(
+        [node, "-"],
+        input=instrumented,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_reader_scans_nested_revision_directories_with_bounded_concurrency() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        """
+globalThis.window = globalThis;
+"""
+        + javascript[:startup]
+        + """
+  globalThis.__arcReaderTest = {collectMarkdownFiles: collectMarkdownFiles};
+}());
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+var active = 0;
+var maximum = 0;
+function directory(name) {
+  return {
+    kind: "directory",
+    name: name,
+    values: async function* () {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise(function (resolve) { setTimeout(resolve, 5); });
+      yield {
+        kind: "file",
+        name: "revision-" + name + ".md",
+        getFile: function () { throw new Error("file bytes were read during enumeration"); }
+      };
+      active -= 1;
+    }
+  };
+}
+var directories = Array.from({length: 24}, function (_value, index) {
+  return directory(String(24 - index).padStart(2, "0"));
+});
+var root = {
+  values: async function* () {
+    for (var index = 0; index < directories.length; index += 1) {
+      yield directories[index];
+    }
+  }
+};
+(async function () {
+  var files = await globalThis.__arcReaderTest.collectMarkdownFiles(root);
+  assert(maximum === 8, "directory enumeration was not bounded at eight");
+  assert(files.length === 24, "directory enumeration lost files");
+  var paths = files.map(function (entry) { return entry.path.join("/"); });
+  var sorted = paths.slice().sort();
+  assert(paths.join(",") === sorted.join(","), "directory results were not deterministic");
+})().catch(function (error) {
+  console.error(error.stack || error);
+  process.exitCode = 1;
+});
+"""
+    )
+
+    subprocess.run(
+        [node, "-"],
+        input=instrumented,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_export_panel_syncs_external_changes_before_building_roles() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        "globalThis.window = globalThis;\n"
+        + javascript[:startup]
+        + """
+  globalThis.__arcReaderTest = {
+    state: state,
+    openExportPanel: openExportPanel,
+    semanticDigest: semanticDigest,
+    stableStringify: stableStringify
+  };
+}());
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+var helpers = globalThis.__arcReaderTest;
+var source = {
+  source_format: "markdown",
+  media_type: "text/markdown",
+  artifact_digest: "a".repeat(64),
+  size: 4,
+  rich_document_digest: "b".repeat(64)
+};
+var anchor = {
+  kind: "block",
+  target_id: "block-1",
+  related_blocks: [{
+    block_id: "block-1",
+    kind: "paragraph",
+    ordinal: 0,
+    locator: {line_start: 1},
+    content_fingerprint: "c".repeat(64)
+  }]
+};
+helpers.state.payload = {
+  source_identity: source,
+  block_fingerprints: {"block-1": "c".repeat(64)},
+  revisions: [],
+  diagnostics: [],
+  publication: {
+    source_document: {
+      blocks: [{
+        block_id: "block-1",
+        kind: "paragraph",
+        ordinal: 0,
+        locator: {line_start: 1},
+        payload: {text: "source"}
+      }]
+    },
+    outline: [],
+    bibliography: [],
+    labels: {},
+    reader_profile: {title: "Reader", target_language: "en"}
+  }
+};
+helpers.state.embeddedRevisions = [];
+helpers.state.activeFragmentIds = new Set();
+helpers.state.readerShellReady = false;
+helpers.state.initialSelectedDigests = new Map();
+
+var roleButtons = [];
+var scopeInput = {value: "changed", checked: true, disabled: false};
+var otherScopeInput = {value: "all", checked: false, disabled: false};
+var nodes = {
+  "arc-export": {
+    attrs: {},
+    setAttribute: function (name, value) { this.attrs[name] = value; }
+  },
+  "arc-export-panel": {hidden: true},
+  "arc-export-role-options": {
+    replaceChildren: function () { roleButtons = []; },
+    appendChild: function (child) { roleButtons.push(child); }
+  },
+  "arc-export-empty": {hidden: true},
+  "arc-export-html": {disabled: false},
+  "arc-storage-status": {textContent: "", dataset: {}, hidden: true}
+};
+globalThis.document = {
+  getElementById: function (id) { return nodes[id]; },
+  querySelector: function (selector) {
+    if (selector.includes("arc-export-scope")) return scopeInput;
+    throw new Error("unexpected selector: " + selector);
+  },
+  querySelectorAll: function (selector) {
+    if (selector.includes("arc-export-scope")) {
+      return [scopeInput, otherScopeInput];
+    }
+    throw new Error("unexpected selector: " + selector);
+  },
+  createElement: function (tag) {
+    return {
+      tagName: tag,
+      disabled: false,
+      addEventListener: function () {}
+    };
+  }
+};
+
+(async function () {
+  var metadata = {
+    schema_version: "arc.render.fragment_revision.v1",
+    source: source,
+    fragment_id: "external-note",
+    revision: 1,
+    parent_semantic_digest: null,
+    anchor: anchor,
+    priority: 110,
+    role: "note",
+    language: "en",
+    title: "External note",
+    citation_ids: [],
+    provenance: {producer: "arc-render-browser"}
+  };
+  var markdown = "new external change";
+  var digest = await helpers.semanticDigest(metadata, markdown);
+  var encoded = "<!-- ARC:FRAGMENT-JSON:BEGIN -->\\n" +
+    helpers.stableStringify(metadata) +
+    "\\n<!-- ARC:FRAGMENT-JSON:END -->\\n" + markdown;
+  var file = {
+    kind: "file",
+    name: "revision-000001-" + digest + ".md",
+    getFile: function () {
+      return Promise.resolve({
+        size: encoded.length,
+        lastModified: 1,
+        text: function () { return Promise.resolve(encoded); }
+      });
+    }
+  };
+  var fragments = {
+    values: async function* () { yield file; }
+  };
+  helpers.state.directory = {
+    getDirectoryHandle: function (name) {
+      assert(name === "fragments", "export sync requested the wrong directory");
+      return Promise.resolve(fragments);
+    }
+  };
+  assert(roleButtons.length === 0, "fixture unexpectedly started with a role");
+  await helpers.openExportPanel();
+  assert(
+    helpers.state.selected.get("external-note").semantic_digest === digest,
+    "opening export did not synchronize the external latest revision"
+  );
+  assert(
+    roleButtons.length === 1 && roleButtons[0].textContent === "Note => MD",
+    "export roles were rendered before the synchronized selection"
+  );
+  assert(
+    nodes["arc-export"].attrs["aria-expanded"] === "true",
+    "synchronized export panel did not remain open"
+  );
+})().catch(function (error) {
+  console.error(error.stack || error);
+  process.exitCode = 1;
+});
+"""
+    )
+
+    subprocess.run(
+        [node, "-"],
+        input=instrumented,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_reader_rebuilds_directory_state_and_guards_revision_lineage() -> None:
     javascript = _text("reader.js")
 
@@ -958,6 +1380,15 @@ def test_reader_uses_low_distraction_controls_and_collapsed_advanced_editor() ->
     assert "position: fixed" in stylesheet
     assert 'content: "▸"' in stylesheet
     assert ".arc-editor-advanced[open]" in stylesheet
+    assert "width: min(29rem, calc(100vw - 2rem))" in stylesheet
+    assert "height: min(39.5rem, calc(100dvh - 2rem))" in stylesheet
+    assert ".arc-source-row {\n  position: relative;\n  margin: .35rem 0" in stylesheet
+    assert "background: transparent;" in stylesheet
+    assert "border: 0;\n  border-radius: 0;" in stylesheet
+    assert "newSaveLocation" in javascript
+    assert "changeSaveLocation" in javascript
+    assert "buildStandaloneExportHtml" in javascript
+    assert "collectMarkdownFiles" in javascript
 
 
 def test_reader_progressively_hydrates_navigation_find_and_print_content() -> None:

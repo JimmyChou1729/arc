@@ -565,6 +565,26 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
   <div class="arc-fixed-tools">
     <button id="arc-contents-toggle" class="arc-tool-button" type="button"
       aria-controls="arc-contents" aria-expanded="true">☰</button>
+    <div class="arc-export-control">
+      <button id="arc-export" class="arc-tool-button" type="button"
+        aria-controls="arc-export-panel" aria-expanded="false">Export</button>
+      <div id="arc-export-panel" class="arc-export-panel" hidden>
+        <fieldset id="arc-export-scope">
+          <legend id="arc-export-scope-label">Markdown content</legend>
+          <label>
+            <input type="radio" name="arc-export-scope" value="all" checked>
+            <span id="arc-export-all-label">All latest</span>
+          </label>
+          <label>
+            <input type="radio" name="arc-export-scope" value="changed">
+            <span id="arc-export-changed-label">Latest changes only</span>
+          </label>
+        </fieldset>
+        <div id="arc-export-role-options" class="arc-export-options"></div>
+        <p id="arc-export-empty" class="arc-export-empty" hidden></p>
+        <button id="arc-export-html" type="button">Full text =&gt; Single HTML</button>
+      </div>
+    </div>
     <button id="arc-connect" class="arc-tool-button" type="button"></button>
   </div>
   <p id="arc-storage-status" class="arc-storage-status" hidden></p>
@@ -598,27 +618,29 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
             <textarea id="arc-editor-markdown" spellcheck="true"></textarea>
           </label>
         </div>
-        <div class="arc-editor-pane">
-          <span id="arc-editor-preview-label">Preview</span>
-          <div id="arc-editor-preview" class="arc-editor-preview"></div>
-        </div>
       </div>
       <details id="arc-editor-advanced" class="arc-editor-advanced">
-        <summary><span id="arc-editor-advanced-label">More options</span></summary>
-        <div class="arc-dialog-fields arc-dialog-advanced-fields">
-          <label><span id="arc-editor-role-label">Role</span>
-            <select id="arc-editor-role">
-              <option value="translation">Translation</option>
-              <option value="companion">Companion</option>
-              <option value="guide">Guide</option>
-              <option value="note">Note</option>
-            </select>
-          </label>
-          <label><span id="arc-editor-priority-label">Priority</span>
-            <input id="arc-editor-priority" type="number" min="1">
-          </label>
+        <summary><span id="arc-editor-advanced-label">Preview and more settings</span></summary>
+        <div class="arc-editor-extra-content">
+          <div class="arc-editor-preview-pane">
+            <span id="arc-editor-preview-label">Preview</span>
+            <div id="arc-editor-preview" class="arc-editor-preview"></div>
+          </div>
+          <div class="arc-dialog-fields arc-dialog-advanced-fields">
+            <label><span id="arc-editor-role-label">Role</span>
+              <select id="arc-editor-role">
+                <option value="translation">Translation</option>
+                <option value="companion">Companion</option>
+                <option value="guide">Guide</option>
+                <option value="note">Note</option>
+              </select>
+            </label>
+            <label><span id="arc-editor-priority-label">Priority</span>
+              <input id="arc-editor-priority" type="number" min="1">
+            </label>
+          </div>
+          <div id="arc-editor-history" class="arc-history"></div>
         </div>
-        <div id="arc-editor-history" class="arc-history"></div>
       </details>
       <footer class="arc-dialog-footer">
         <button id="arc-editor-cancel" type="button">Cancel</button>

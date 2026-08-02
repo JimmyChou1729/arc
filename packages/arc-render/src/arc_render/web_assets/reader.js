@@ -21,8 +21,11 @@
     directoryCacheHandle: null,
     directoryFileCache: new Map(),
     directoryLoadGeneration: 0,
+    directorySelectionInProgress: false,
     saveInProgress: false,
+    exportInProgress: false,
     editorGeneration: 0,
+    editorPreviewDirty: true,
     editorBase: null,
     editorAnchor: null,
     editorHistorical: null,
@@ -43,7 +46,10 @@
     diagnosticsRoot: null,
     readerShellReady: false,
     navigationReady: false,
-    printReady: false
+    printReady: false,
+    initialSelectedDigests: new Map(),
+    exportHtmlTemplate: null,
+    exportStandaloneSupported: false
   };
 
   function element(tag, className, text) {
@@ -80,12 +86,16 @@
       (publication.reader_profile || {}).target_language || ""
     ).toLowerCase();
     var chinese = language === "zh" || language.indexOf("zh-") === 0;
+    var traditional = chinese && /(?:^|-)hant(?:-|$)|(?:^|-)(?:tw|hk|mo)(?:-|$)/.test(
+      language
+    );
     var defaults = chinese ? {
       contents: "目录",
       collapse: "收起目录",
       expand: "展开目录",
-      connect: "连接项目目录",
-      connected: "已连接项目目录",
+      newSaveLocation: "新建保存位置",
+      changeSaveLocation: "更改保存位置",
+      connected: "保存位置已设置",
       edit: "编辑",
       addNote: "添加",
       editor: "编辑",
@@ -93,7 +103,7 @@
       title: "标题",
       role: "类型",
       priority: "优先级",
-      advanced: "更多设置",
+      advanced: "预览与更多设置",
       markdown: "Markdown",
       preview: "预览",
       save: "保存",
@@ -101,15 +111,26 @@
       close: "关闭",
       history: "版本历史",
       source: "原文",
-      translation: "翻译",
+      translation: traditional ? "譯文" : "译文",
       companion: "伴读",
       guide: "导读",
       note: "笔记",
       glossary: "术语表",
       references: "参考文献",
       originalTerm: "原文术语",
-      translatedTerm: "译名",
+      translatedTerm: traditional ? "譯文" : "译文",
       definition: "释义",
+      export: "导出",
+      markdownScope: "Markdown 内容",
+      allLatest: "全部最新版",
+      changedLatest: "仅最新版改动",
+      noExportChanges: "没有可导出的改动",
+      fullHtml: "全文 => 单个 HTML",
+      exportUnavailable: "当前页面不是完整的单文件阅读器，无法导出单个 HTML。",
+      exportLoading: "正在同步最新版内容……",
+      exportSyncFailed: "未能同步最新版内容，导出已取消。",
+      exportStarted: "已开始导出。",
+      revisionBusy: "正在保存或同步最新版内容，请稍候。",
       noDirectoryApi: "当前浏览器不支持本地目录编辑；阅读功能不受影响。",
       saveSuccess: "新版本已保存。",
       loading: "正在读取版本……",
@@ -123,8 +144,9 @@
       contents: "Contents",
       collapse: "Collapse contents",
       expand: "Expand contents",
-      connect: "Connect project directory",
-      connected: "Project directory connected",
+      newSaveLocation: "New save location",
+      changeSaveLocation: "Change save location",
+      connected: "Save location ready",
       edit: "Edit",
       addNote: "Add",
       editor: "Edit",
@@ -132,7 +154,7 @@
       title: "Title",
       role: "Role",
       priority: "Priority",
-      advanced: "More options",
+      advanced: "Preview and more settings",
       markdown: "Markdown",
       preview: "Preview",
       save: "Save",
@@ -149,6 +171,17 @@
       originalTerm: "Original term",
       translatedTerm: "Translation",
       definition: "Definition",
+      export: "Export",
+      markdownScope: "Markdown content",
+      allLatest: "All latest",
+      changedLatest: "Latest changes only",
+      noExportChanges: "No changed content to export",
+      fullHtml: "Full text => Single HTML",
+      exportUnavailable: "This page is not a complete standalone reader and cannot export a single HTML file.",
+      exportLoading: "Synchronizing latest content…",
+      exportSyncFailed: "Latest content could not be synchronized; export was cancelled.",
+      exportStarted: "Export started.",
+      revisionBusy: "A save or latest-content sync is already in progress.",
       noDirectoryApi: "This browser cannot edit a local directory; reading is unaffected.",
       saveSuccess: "A new revision was saved.",
       loading: "Loading revisions…",
@@ -162,6 +195,12 @@
     Object.keys(publication.labels || {}).forEach(function (key) {
       defaults[key] = publication.labels[key];
     });
+    if (chinese && ["译名", "翻译", "譯名", "翻譯"].indexOf(defaults.translation) >= 0) {
+      defaults.translation = traditional ? "譯文" : "译文";
+    }
+    if (chinese && ["译名", "翻译", "譯名", "翻譯"].indexOf(defaults.translatedTerm) >= 0) {
+      defaults.translatedTerm = traditional ? "譯文" : "译文";
+    }
     return defaults;
   }
 
@@ -509,9 +548,7 @@
     var documentValue = publication.source_document;
     var profile = publication.reader_profile || {};
     var strings = labels();
-    var title = profile.title || publication.labels.document_title ||
-      sourceTitle(documentValue) || publication.labels.untitled_document ||
-      "Untitled document";
+    var title = readerTitle();
     document.title = title;
     document.documentElement.lang = profile.target_language ||
       profile.source_language || "und";
@@ -1604,16 +1641,342 @@
     window.addEventListener("scroll", close, {passive: true});
   }
 
+  function captureExportTemplate() {
+    state.exportStandaloneSupported = !document.querySelector(
+      'script[src], link[rel~="stylesheet"][href]'
+    );
+    if (!state.exportStandaloneSupported) return;
+    state.exportHtmlTemplate = "<!doctype html>\n" +
+      document.documentElement.outerHTML;
+  }
+
+  function captureInitialSelection() {
+    state.initialSelectedDigests = new Map();
+    state.selected.forEach(function (revision, fragmentId) {
+      state.initialSelectedDigests.set(fragmentId, revision.semantic_digest);
+    });
+  }
+
+  function setupExport() {
+    var strings = labels();
+    var control = document.querySelector(".arc-export-control");
+    var trigger = document.getElementById("arc-export");
+    var panel = document.getElementById("arc-export-panel");
+    trigger.textContent = strings.export;
+    document.getElementById("arc-export-scope-label").textContent =
+      strings.markdownScope;
+    document.getElementById("arc-export-all-label").textContent =
+      strings.allLatest;
+    document.getElementById("arc-export-changed-label").textContent =
+      strings.changedLatest;
+    document.getElementById("arc-export-empty").textContent =
+      strings.noExportChanges;
+    var htmlButton = document.getElementById("arc-export-html");
+    htmlButton.textContent = strings.fullHtml;
+    htmlButton.title = state.exportStandaloneSupported ? "" :
+      strings.exportUnavailable;
+    trigger.addEventListener("click", function () {
+      if (panel.hidden) {
+        openExportPanel();
+      } else {
+        closeExportPanel(false);
+      }
+    });
+    document.getElementById("arc-export-scope").addEventListener(
+      "change", renderExportOptions
+    );
+    htmlButton.addEventListener("click", function () {
+      runExport({kind: "html"});
+    });
+    document.addEventListener("click", function (event) {
+      if (!panel.hidden && !control.contains(event.target)) closeExportPanel(false);
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && !panel.hidden) {
+        event.preventDefault();
+        closeExportPanel(true);
+      }
+    });
+    renderExportOptions();
+  }
+
+  async function openExportPanel() {
+    if (
+      state.saveInProgress ||
+      state.exportInProgress ||
+      state.directorySelectionInProgress
+    ) {
+      setStatus(labels().revisionBusy, "error");
+      return;
+    }
+    var trigger = document.getElementById("arc-export");
+    var panel = document.getElementById("arc-export-panel");
+    panel.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    if (!state.directory) {
+      renderExportOptions();
+      return;
+    }
+    state.exportInProgress = true;
+    renderExportOptions();
+    try {
+      setStatus(labels().exportLoading);
+      if (!await loadDirectoryRevisions(state.directory)) {
+        throw new Error(labels().exportSyncFailed);
+      }
+    } catch (error) {
+      setStatus(String(error.message || error), "error");
+    } finally {
+      state.exportInProgress = false;
+      renderExportOptions();
+    }
+  }
+
+  function closeExportPanel(restoreFocus) {
+    var trigger = document.getElementById("arc-export");
+    document.getElementById("arc-export-panel").hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus();
+  }
+
+  function exportScope() {
+    var checked = document.querySelector(
+      'input[name="arc-export-scope"]:checked'
+    );
+    return checked && checked.value === "changed" ? "changed" : "all";
+  }
+
+  function selectedForMarkdown(scope) {
+    var values = Array.from(state.selected.values());
+    if (scope === "changed") {
+      values = values.filter(function (revision) {
+        return state.initialSelectedDigests.get(revision.fragment_id) !==
+          revision.semantic_digest;
+      });
+    }
+    return values;
+  }
+
+  function renderExportOptions() {
+    var root = document.getElementById("arc-export-role-options");
+    var empty = document.getElementById("arc-export-empty");
+    root.replaceChildren();
+    var roles = Array.from(new Set(selectedForMarkdown(exportScope()).map(
+      function (revision) { return revision.role; }
+    )));
+    var preferred = ["translation", "companion", "guide", "note"];
+    roles.sort(function (left, right) {
+      var leftIndex = preferred.indexOf(left);
+      var rightIndex = preferred.indexOf(right);
+      if (leftIndex < 0) leftIndex = preferred.length;
+      if (rightIndex < 0) rightIndex = preferred.length;
+      return leftIndex - rightIndex || left.localeCompare(right);
+    });
+    roles.forEach(function (role) {
+      var button = element("button", "", roleLabel(role) + " => MD");
+      button.type = "button";
+      button.disabled = state.exportInProgress;
+      button.addEventListener("click", function () {
+        runExport({kind: "markdown", role: role});
+      });
+      root.appendChild(button);
+    });
+    empty.hidden = roles.length > 0 || exportScope() !== "changed";
+    var scopeControls = document.querySelectorAll(
+      'input[name="arc-export-scope"]'
+    );
+    Array.prototype.forEach.call(scopeControls, function (input) {
+      input.disabled = state.exportInProgress;
+    });
+    var htmlButton = document.getElementById("arc-export-html");
+    htmlButton.disabled = state.exportInProgress ||
+      !state.exportStandaloneSupported;
+  }
+
+  async function runExport(request) {
+    if (
+      state.saveInProgress ||
+      state.exportInProgress ||
+      state.directorySelectionInProgress
+    ) {
+      setStatus(labels().revisionBusy, "error");
+      return;
+    }
+    state.exportInProgress = true;
+    renderExportOptions();
+    try {
+      if (state.directory) {
+        setStatus(labels().exportLoading);
+        if (!await loadDirectoryRevisions(state.directory)) {
+          throw new Error(labels().exportSyncFailed);
+        }
+      }
+      if (request.kind === "markdown") {
+        var markdown = buildRoleMarkdown(request.role, exportScope());
+        if (!markdown) {
+          setStatus(labels().noExportChanges);
+          return;
+        }
+        downloadText(
+          exportFilename(request.role, "md"),
+          markdown,
+          "text/markdown;charset=utf-8"
+        );
+      } else {
+        if (!state.exportStandaloneSupported) {
+          throw new Error(labels().exportUnavailable);
+        }
+        downloadText(
+          exportFilename("latest", "html"),
+          buildStandaloneExportHtml(),
+          "text/html;charset=utf-8"
+        );
+      }
+      closeExportPanel(false);
+      setStatus(labels().exportStarted);
+    } catch (error) {
+      setStatus(String(error.message || error), "error");
+    } finally {
+      state.exportInProgress = false;
+      renderExportOptions();
+    }
+  }
+
+  function buildRoleMarkdown(role, scope) {
+    var revisions = selectedForMarkdown(scope).filter(function (revision) {
+      return revision.role === role;
+    });
+    if (!revisions.length) return "";
+    var blockOrder = new Map(
+      (state.payload.publication.source_document.blocks || []).map(
+        function (block, index) { return [block.block_id, index]; }
+      )
+    );
+    revisions.sort(function (left, right) {
+      var leftTarget = fragmentTargetId(left);
+      var rightTarget = fragmentTargetId(right);
+      var leftOrder = blockOrder.has(leftTarget) ? blockOrder.get(leftTarget) : Infinity;
+      var rightOrder = blockOrder.has(rightTarget) ? blockOrder.get(rightTarget) : Infinity;
+      return leftOrder - rightOrder || left.priority - right.priority ||
+        left.fragment_id.localeCompare(right.fragment_id);
+    });
+    var parts = ["# " + markdownHeading(readerTitle() + " — " + roleLabel(role))];
+    revisions.forEach(function (revision) {
+      if (revision.title) parts.push("## " + markdownHeading(revision.title));
+      parts.push(normalizeMarkdown(revision.markdown_body).replace(/\n+$/, ""));
+    });
+    return parts.filter(function (part) { return part !== ""; }).join("\n\n") + "\n";
+  }
+
+  function markdownHeading(value) {
+    return String(value || "")
+      .replace(/<\/?[A-Za-z][^>]*>/g, "")
+      .replace(/[\r\n]+/g, " ")
+      .trim() || "Untitled";
+  }
+
+  function readerTitle() {
+    var publication = state.payload.publication;
+    var profile = publication.reader_profile || {};
+    return profile.title || publication.labels.document_title ||
+      sourceTitle(publication.source_document) ||
+      publication.labels.untitled_document || "Untitled document";
+  }
+
+  function exportFilename(suffix, extension) {
+    var title = String(readerTitle()).normalize("NFC")
+      .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ")
+      .trim()
+      .replace(/[. ]+$/g, "")
+      .replace(/\s+/g, "-")
+      .slice(0, 80) || "arc-render";
+    var role = String(suffix || "export").replace(/[^A-Za-z0-9_-]+/g, "-");
+    return title + "-" + role + "." + extension;
+  }
+
+  function downloadText(filename, value, mediaType) {
+    var url = URL.createObjectURL(new Blob([value], {type: mediaType}));
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.hidden = true;
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(function () {
+      link.remove();
+      URL.revokeObjectURL(url);
+    }, 0);
+  }
+
+  function exportRevisionState() {
+    var records = [];
+    var fragmentOrder = [];
+    state.revisions.forEach(function (values, fragmentId) {
+      if (
+        !state.activeFragmentIds.has(fragmentId) &&
+        !browserCreatedHistory(values)
+      ) {
+        return;
+      }
+      fragmentOrder.push(fragmentId);
+      values.slice().sort(function (left, right) {
+        return left.revision - right.revision ||
+          left.semantic_digest.localeCompare(right.semantic_digest);
+      }).forEach(function (revision) {
+        records.push({
+          metadata: metadataOnly(revision),
+          markdown_body: normalizeMarkdown(revision.markdown_body),
+          semantic_digest: revision.semantic_digest
+        });
+      });
+    });
+    var positions = new Map(fragmentOrder.map(function (fragmentId, index) {
+      return [fragmentId, index];
+    }));
+    var selected = Array.from(state.selected.values()).filter(function (revision) {
+      return positions.has(revision.fragment_id);
+    });
+    selected.sort(function (left, right) {
+      return left.priority - right.priority ||
+        positions.get(left.fragment_id) - positions.get(right.fragment_id);
+    });
+    return {
+      revisions: records,
+      selected_revision_digests: selected.map(function (revision) {
+        return revision.semantic_digest;
+      })
+    };
+  }
+
+  function buildStandaloneExportHtml() {
+    if (!state.exportStandaloneSupported || !state.exportHtmlTemplate) {
+      throw new Error(labels().exportUnavailable);
+    }
+    var payload = JSON.parse(JSON.stringify(state.payload));
+    var revisionState = exportRevisionState();
+    payload.revisions = revisionState.revisions;
+    payload.selected_revision_digests = revisionState.selected_revision_digests;
+    var encoded = JSON.stringify(payload).replace(/<\/script/gi, "<\\/script");
+    var pattern = /(<script[^>]*\bid=["']arc-render-payload["'][^>]*>)[\s\S]*?(<\/script>)/i;
+    if (!pattern.test(state.exportHtmlTemplate)) {
+      throw new Error(labels().exportUnavailable);
+    }
+    return state.exportHtmlTemplate.replace(pattern, function (_match, open, close) {
+      return open + encoded + close;
+    });
+  }
+
   async function setupEditor() {
     var strings = labels();
     var connect = document.getElementById("arc-connect");
-    connect.textContent = strings.connect;
+    updateDirectoryControl();
     if (!window.showDirectoryPicker) {
       connect.disabled = true;
       setStatus(strings.noDirectoryApi, "error");
     } else {
       connect.disabled = true;
       await restoreDirectoryHandle();
+      updateDirectoryControl();
       connect.disabled = false;
       connect.addEventListener("click", connectDirectory);
     }
@@ -1644,11 +2007,30 @@
     dialog.addEventListener("cancel", function (event) {
       if (state.saveInProgress) event.preventDefault();
     });
-    document.getElementById("arc-editor-markdown").addEventListener("input", updatePreview);
+    var advanced = document.getElementById("arc-editor-advanced");
+    advanced.addEventListener("toggle", function () {
+      if (advanced.open && state.editorPreviewDirty) updatePreview();
+    });
+    document.getElementById("arc-editor-markdown").addEventListener(
+      "input", markEditorPreviewDirty
+    );
     document.getElementById("arc-editor-save").addEventListener("click", saveEditor);
   }
 
+  function updateDirectoryControl() {
+    var connect = document.getElementById("arc-connect");
+    if (!connect) return;
+    var strings = labels();
+    connect.textContent = state.directory ?
+      strings.changeSaveLocation : strings.newSaveLocation;
+  }
+
   async function connectDirectory() {
+    if (state.exportInProgress || state.directorySelectionInProgress) {
+      setStatus(labels().revisionBusy, "error");
+      return false;
+    }
+    state.directorySelectionInProgress = true;
     var previousDirectory = state.directory;
     try {
       var handle = await window.showDirectoryPicker({
@@ -1660,13 +2042,17 @@
       setStatus(labels().loading);
       if (!await loadDirectoryRevisions(handle)) return false;
       await rememberDirectoryHandle(handle);
+      updateDirectoryControl();
       setStatus(labels().connected);
       return true;
     } catch (error) {
       if (error && error.name === "AbortError") return false;
       state.directory = previousDirectory;
+      updateDirectoryControl();
       setStatus(String(error.message || error), "error");
       return false;
+    } finally {
+      state.directorySelectionInProgress = false;
     }
   }
 
@@ -1694,8 +2080,7 @@
       }
       throw error;
     }
-    var files = [];
-    await collectMarkdownFiles(fragments, files, []);
+    var files = await collectMarkdownFiles(fragments);
     var outcomes = await loadDirectoryRevisionFiles(
       files, embeddedRevisionFilenames(), previousCache, nextCache
     );
@@ -1802,18 +2187,48 @@
     return outcome;
   }
 
-  async function collectMarkdownFiles(directory, output, parentPath) {
-    for await (var entry of directory.values()) {
-      var path = parentPath.concat([entry.name]);
+  async function collectMarkdownFiles(directory) {
+    var output = [];
+    var pending = [{handle: directory, path: []}];
+    while (pending.length) {
+      var batch = pending.splice(0, DIRECTORY_READ_CONCURRENCY);
+      var scans = await Promise.all(batch.map(scanMarkdownDirectory));
+      scans.forEach(function (scan) {
+        output = output.concat(scan.files);
+        pending = pending.concat(scan.directories);
+      });
+    }
+    output.sort(function (left, right) {
+      return JSON.stringify(left.path).localeCompare(JSON.stringify(right.path));
+    });
+    return output;
+  }
+
+  async function scanMarkdownDirectory(item) {
+    var directories = [];
+    var files = [];
+    for await (var entry of item.handle.values()) {
+      var path = item.path.concat([entry.name]);
       if (entry.kind === "directory") {
-        await collectMarkdownFiles(entry, output, path);
+        directories.push({handle: entry, path: path});
       } else if (entry.kind === "file" && entry.name.endsWith(".md")) {
-        output.push({handle: entry, name: entry.name, path: path});
+        files.push({handle: entry, name: entry.name, path: path});
       }
     }
+    directories.sort(function (left, right) {
+      return JSON.stringify(left.path).localeCompare(JSON.stringify(right.path));
+    });
+    files.sort(function (left, right) {
+      return JSON.stringify(left.path).localeCompare(JSON.stringify(right.path));
+    });
+    return {directories: directories, files: files};
   }
 
   function openEditEditor(fragment) {
+    if (state.exportInProgress || state.directorySelectionInProgress) {
+      setStatus(labels().revisionBusy, "error");
+      return;
+    }
     state.editorBase = fragment;
     state.editorAnchor = fragment.anchor;
     state.editorHistorical = fragment;
@@ -1829,6 +2244,10 @@
   }
 
   function openNewEditorForAnchor(anchor) {
+    if (state.exportInProgress || state.directorySelectionInProgress) {
+      setStatus(labels().revisionBusy, "error");
+      return;
+    }
     state.editorBase = null;
     state.editorHistorical = null;
     state.editorAnchor = anchor;
@@ -1850,8 +2269,8 @@
     document.getElementById("arc-editor-priority").value = String(fragment.priority || 110);
     document.getElementById("arc-editor-markdown").value = fragment.markdown_body || "";
     document.getElementById("arc-editor-advanced").open = false;
+    state.editorPreviewDirty = true;
     renderHistory(fragment.fragment_id);
-    updatePreview();
     dialog.showModal();
   }
 
@@ -1914,7 +2333,12 @@
     document.getElementById("arc-editor-role").value = revision.role;
     document.getElementById("arc-editor-priority").value = String(revision.priority);
     document.getElementById("arc-editor-markdown").value = revision.markdown_body;
-    updatePreview();
+    markEditorPreviewDirty();
+  }
+
+  function markEditorPreviewDirty() {
+    state.editorPreviewDirty = true;
+    if (document.getElementById("arc-editor-advanced").open) updatePreview();
   }
 
   function updatePreview() {
@@ -1922,10 +2346,15 @@
     preview.replaceChildren(renderMarkdown(
       document.getElementById("arc-editor-markdown").value
     ));
+    state.editorPreviewDirty = false;
   }
 
   async function saveEditor(event) {
     event.preventDefault();
+    if (state.exportInProgress || state.directorySelectionInProgress) {
+      setStatus(labels().revisionBusy, "error");
+      return;
+    }
     if (state.saveInProgress) return;
     var saveButton = document.getElementById("arc-editor-save");
     var dialog = document.getElementById("arc-editor-dialog");
@@ -2456,6 +2885,7 @@
       var permission = await handle.queryPermission({mode: "readwrite"});
       if (permission === "granted") {
         if (await loadDirectoryRevisions(handle)) {
+          updateDirectoryControl();
           setStatus(labels().connected);
         }
       }
@@ -2467,14 +2897,17 @@
 
   async function initialize() {
     try {
+      captureExportTemplate();
       document.body.dataset.arcRenderReady = "loading";
       document.body.dataset.arcRenderComplete = "false";
       state.payload = readPayload();
       setupMarkdown();
       initialRevisions();
+      captureInitialSelection();
       renderReader();
       setupTooltip();
       await setupEditor();
+      setupExport();
       if (document.fonts && document.fonts.ready) await document.fonts.ready;
       await Promise.all(Array.prototype.slice.call(document.images).map(function (image) {
         if (image.complete) return Promise.resolve();
