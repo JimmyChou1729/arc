@@ -1,0 +1,15 @@
+{
+  "name": "arc",
+  "description": "ARC research tooling for papers, research domains, translation, companion readers, calculation, and report typesetting.",
+  "owner": {
+    "name": "ARC"
+  },
+  "plugins": [
+    {
+      "name": "arc",
+      "description": "CLI-first ARC paper, research-domain, and report typesetting tools.",
+      "source": "./plugins/arc",
+      "category": "productivity"
+    }
+  ]
+}
