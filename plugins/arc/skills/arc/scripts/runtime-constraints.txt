@@ -1,4 +1,4 @@
-# Direct external dependencies tested for ARC v1.0.2.
+# Direct external dependencies tested for ARC v1.0.3.
 beautifulsoup4==4.14.3
 httpx==0.28.1
 json-repair==0.59.10

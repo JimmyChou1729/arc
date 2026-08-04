@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arc-render"
-version = "1.0.2"
+version = "1.0.3"
 description = "Atomic overlay contracts and standalone document rendering for ARC."
 readme = "README.md"
 license = "MIT"
