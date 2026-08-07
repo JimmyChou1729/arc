@@ -763,77 +763,152 @@ class TranslationWorkflowService:
                     context.run_directory / draft_ref.relative_path
                 )
                 return _candidate_run_error(exc, error_path)
-            review_text = review_prompt(
-                blocks=[prompt_block(item) for item in window],
-                translations=draft,
-                glossary=_window_glossary(window, glossary.entries),
-                target_language=target_language,
-                window_ordinal=ordinal,
-            )
-            if len(review_text.encode("utf-8")) > input_budget_bytes:
-                return RunError(
-                    "translation_review_exceeds_input_budget",
-                    f"review window {ordinal} exceeds the "
-                    f"{input_budget_bytes}-byte translation input budget",
+            try:
+                review_windows = _translation_review_windows(
+                    window,
+                    draft,
+                    glossary=glossary.entries,
+                    target_language=target_language,
+                    window_ordinal=ordinal,
+                    budget_bytes=input_budget_bytes,
                 )
-            review_request = LLMRequest(
-                _task_id(
-                    "translation-review",
-                    {
-                        "document_digest": source.document_digest,
-                        "block_ids": [item["block_id"] for item in window],
-                        "draft_digest": _digest(draft),
-                        "target_language": target_language,
-                        "window_ordinal": ordinal,
-                        "prompt_contract": REVIEW_PROMPT_VERSION,
-                    },
-                ),
-                review_text,
-                JsonOutput(REVIEW_SCHEMA, repair="format"),
-                model,
-            )
-            review_generated = _validated_generation(
-                self.task_service,
-                context,
-                review_request,
-                validator=lambda value: _apply_review(value, draft, window),
-                candidate_id=(
-                    f"translation/{artifact_prefix}/windows/"
-                    f"{ordinal:04d}/review.json"
-                ),
-                resume_input=resume_input,
-                options=execution,
-                stopped_message="translation review stopped",
-            )
-            if isinstance(review_generated, Paused):
-                return review_generated
-            review_error: tuple[str, str] | None = None
-            reviewed: list[dict[str, str]] | None = None
-            if isinstance(review_generated, RunError):
-                review_error = (
-                    review_generated.code,
-                    review_generated.message,
-                )
-            elif isinstance(review_generated, _InvalidGeneratedOutput):
-                review_error = (
-                    review_generated.error.code,
-                    str(review_generated.error),
-                )
+            except TranslationWorkflowError as exc:
+                return RunError(exc.code, str(exc))
             else:
-                reviewed = review_generated
-            if review_error is not None:
-                supervision = _review_supervision(
-                    context,
-                    artifact_prefix=artifact_prefix,
-                    ordinal=ordinal,
-                    draft=draft,
-                    error_code=review_error[0],
-                    error_message=review_error[1],
-                )
-                if isinstance(supervision, Paused):
-                    return supervision
-                reviewed = supervision
-            assert reviewed is not None
+                reviewed = []
+                split_review = len(review_windows) > 1
+                for review_ordinal, (
+                    review_blocks,
+                    review_draft,
+                ) in enumerate(review_windows):
+                    review_draft_digest = _digest(review_draft)[:24]
+                    review_accepted_id = (
+                        f"{artifact_prefix}/windows/{ordinal:04d}/reviews/"
+                        f"{review_ordinal:04d}/{review_draft_digest}/accepted"
+                    )
+                    if split_review:
+                        review_accepted_ref = context.artifacts.find(
+                            review_accepted_id
+                        )
+                        if review_accepted_ref is not None:
+                            reviewed.extend(
+                                _validate_accepted_window(
+                                    _read_json_artifact(
+                                        context,
+                                        review_accepted_ref,
+                                        "accepted translation review subwindow",
+                                    ),
+                                    review_blocks,
+                                )
+                            )
+                            continue
+                    review_text = review_prompt(
+                        blocks=[prompt_block(item) for item in review_blocks],
+                        translations=review_draft,
+                        glossary=_window_glossary(
+                            review_blocks, glossary.entries
+                        ),
+                        target_language=target_language,
+                        window_ordinal=ordinal,
+                    )
+                    review_error: tuple[str, str] | None = None
+                    reviewed_window: list[dict[str, str]] | None = None
+                    if len(review_text.encode("utf-8")) > input_budget_bytes:
+                        block_id = review_blocks[0].get(
+                            "block_id", "<unknown>"
+                        )
+                        review_error = (
+                            "translation_review_exceeds_input_budget",
+                            f"review block {block_id} exceeds the "
+                            f"{input_budget_bytes}-byte translation input "
+                            "budget",
+                        )
+                    else:
+                        task_identity = {
+                            "document_digest": source.document_digest,
+                            "block_ids": [
+                                item["block_id"] for item in review_blocks
+                            ],
+                            "draft_digest": _digest(review_draft),
+                            "target_language": target_language,
+                            "window_ordinal": ordinal,
+                            "prompt_contract": REVIEW_PROMPT_VERSION,
+                        }
+                        if split_review:
+                            task_identity["review_subwindow_ordinal"] = (
+                                review_ordinal
+                            )
+                        review_request = LLMRequest(
+                            _task_id("translation-review", task_identity),
+                            review_text,
+                            JsonOutput(REVIEW_SCHEMA, repair="format"),
+                            model,
+                        )
+                        review_candidate = (
+                            f"translation/{artifact_prefix}/windows/"
+                            f"{ordinal:04d}/review.json"
+                            if not split_review
+                            else (
+                                f"translation/{artifact_prefix}/windows/"
+                                f"{ordinal:04d}/reviews/"
+                                f"{review_ordinal:04d}.json"
+                            )
+                        )
+                        review_generated = _validated_generation(
+                            self.task_service,
+                            context,
+                            review_request,
+                            validator=lambda value, draft=review_draft,
+                            blocks=review_blocks: _apply_review(
+                                value, draft, blocks
+                            ),
+                            candidate_id=review_candidate,
+                            resume_input=resume_input,
+                            options=execution,
+                            stopped_message="translation review stopped",
+                        )
+                        if isinstance(review_generated, Paused):
+                            return review_generated
+                        if isinstance(review_generated, RunError):
+                            review_error = (
+                                review_generated.code,
+                                review_generated.message,
+                            )
+                        elif isinstance(
+                            review_generated, _InvalidGeneratedOutput
+                        ):
+                            review_error = (
+                                review_generated.error.code,
+                                str(review_generated.error),
+                            )
+                        else:
+                            reviewed_window = review_generated
+                    if review_error is not None:
+                        supervision = _review_supervision(
+                            context,
+                            artifact_prefix=(
+                                artifact_prefix
+                                if not split_review
+                                else (
+                                    f"{artifact_prefix}-review-"
+                                    f"{ordinal:04d}-{review_ordinal:04d}"
+                                )
+                            ),
+                            ordinal=ordinal,
+                            draft=review_draft,
+                            error_code=review_error[0],
+                            error_message=review_error[1],
+                        )
+                        if isinstance(supervision, Paused):
+                            return supervision
+                        reviewed_window = supervision
+                    assert reviewed_window is not None
+                    if split_review:
+                        context.artifacts.publish_json(
+                            review_accepted_id,
+                            {"translations": reviewed_window},
+                        )
+                    reviewed.extend(reviewed_window)
             accepted_doc = {"translations": reviewed}
             context.artifacts.publish_json(accepted_id, accepted_doc)
             translations.extend(reviewed)
@@ -1621,6 +1696,71 @@ def _translation_review_estimate_size(
     )
 
 
+def _translation_review_windows(
+    blocks: Sequence[Mapping[str, Any]],
+    translations: Sequence[Mapping[str, Any]],
+    *,
+    glossary: Sequence[Mapping[str, Any]],
+    target_language: str,
+    window_ordinal: int,
+    budget_bytes: int,
+) -> tuple[
+    tuple[
+        tuple[Mapping[str, Any], ...],
+        tuple[Mapping[str, Any], ...],
+    ],
+    ...,
+]:
+    if len(blocks) != len(translations):
+        raise TranslationWorkflowError(
+            "translation_coverage_invalid",
+            "review blocks and translations differ in length",
+        )
+    windows: list[
+        tuple[
+            tuple[Mapping[str, Any], ...],
+            tuple[Mapping[str, Any], ...],
+        ]
+    ] = []
+    current_blocks: list[Mapping[str, Any]] = []
+    current_translations: list[Mapping[str, Any]] = []
+    for block, translation in zip(blocks, translations, strict=True):
+        candidate_blocks = [*current_blocks, block]
+        candidate_translations = [*current_translations, translation]
+        candidate_text = review_prompt(
+            blocks=[prompt_block(item) for item in candidate_blocks],
+            translations=candidate_translations,
+            glossary=_window_glossary(candidate_blocks, glossary),
+            target_language=target_language,
+            window_ordinal=window_ordinal,
+        )
+        if len(candidate_text.encode("utf-8")) <= budget_bytes:
+            current_blocks = candidate_blocks
+            current_translations = candidate_translations
+            continue
+        if current_blocks:
+            windows.append(
+                (tuple(current_blocks), tuple(current_translations))
+            )
+        single_text = review_prompt(
+            blocks=[prompt_block(block)],
+            translations=[translation],
+            glossary=_window_glossary([block], glossary),
+            target_language=target_language,
+            window_ordinal=window_ordinal,
+        )
+        if len(single_text.encode("utf-8")) > budget_bytes:
+            windows.append(((block,), (translation,)))
+            current_blocks = []
+            current_translations = []
+        else:
+            current_blocks = [block]
+            current_translations = [translation]
+    if current_blocks:
+        windows.append((tuple(current_blocks), tuple(current_translations)))
+    return tuple(windows)
+
+
 def _validate_draft_window(
     value: Mapping[str, Any],
     blocks: Sequence[Mapping[str, Any]],
@@ -1747,6 +1887,7 @@ def _review_supervision(
             "window_ordinal": ordinal,
             "draft": list(draft),
             "error_code": error_code,
+            "error_message": error_message,
         }
     )[:24]
     resume_key = f"review-{digest}"
@@ -1761,7 +1902,10 @@ def _review_supervision(
                 "only accept_pre_review is supported for a failed review",
             )
         return [dict(item) for item in draft]
-    request_id = f"{artifact_prefix}/windows/{ordinal:04d}/review-supervision"
+    request_id = (
+        f"{artifact_prefix}/windows/{ordinal:04d}/"
+        f"review-supervision/{digest}"
+    )
     request_ref = context.artifacts.find(request_id)
     if request_ref is None:
         request_ref = context.artifacts.publish_json(

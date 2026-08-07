@@ -59,22 +59,26 @@ class FakeTasks:
         classification: str = "known",
         invalid_review: bool = False,
         translation_prefix: str = "translated:",
+        translation_prefix_by_text: dict[str, str] | None = None,
     ) -> None:
         self.language = language
         self.classification = classification
         self.invalid_review = invalid_review
         self.translation_prefix = translation_prefix
+        self.translation_prefix_by_text = translation_prefix_by_text or {}
         self.calls: list[str] = []
         self.translation_glossaries: list[list[str]] = []
         self.prompt_glossary_fields: list[list[set[str]]] = []
         self.translation_blocks: list[list[dict[str, Any]]] = []
         self.review_blocks: list[list[dict[str, Any]]] = []
+        self.prompt_sizes: list[tuple[str, int]] = []
 
     def execute_or_resume(
         self, _context, request, *, input=None, options=None
     ):
         contract, payload = _prompt(request.prompt)
         self.calls.append(contract)
+        self.prompt_sizes.append((contract, len(request.prompt.encode("utf-8"))))
         if contract == LANGUAGE_PROMPT_VERSION:
             value = {
                 "language_tag": self.language,
@@ -108,7 +112,18 @@ class FakeTasks:
                 elif block["kind"] == "equation":
                     text = block_text(block)
                 else:
-                    text = f"{self.translation_prefix}{block_text(block)}"
+                    source_text = block_text(block)
+                    prefix = next(
+                        (
+                            value
+                            for marker, value in (
+                                self.translation_prefix_by_text.items()
+                            )
+                            if marker in source_text
+                        ),
+                        self.translation_prefix,
+                    )
+                    text = f"{prefix}{source_text}"
                 for token in [
                     *identity["equations"],
                     *identity["link_targets"],
@@ -1024,7 +1039,7 @@ def test_failed_review_can_accept_validated_pre_review_translation(tmp_path):
     assert tasks.calls.count(REVIEW_PROMPT_VERSION) == 2
 
 
-def test_review_prompt_obeys_the_same_complete_input_budget(tmp_path):
+def test_oversized_single_block_review_requests_supervision(tmp_path):
     markdown = tmp_path / "long.md"
     markdown.write_text("# Long\n\n" + ("source prose " * 100), encoding="utf-8")
     paper = ArcPaperService(cache_root=tmp_path / "long-cache")
@@ -1032,8 +1047,10 @@ def test_review_prompt_obeys_the_same_complete_input_budget(tmp_path):
     source = TranslationSource(
         RichDocumentParserService(paper.repository).parse_source(artifact)
     )
-    result = TranslationWorkflowService(FakeTasks()).translate_blocks(
-        _context(tmp_path, "review-budget"),
+    context = _context(tmp_path, "review-budget")
+    workflow = TranslationWorkflowService(FakeTasks())
+    result = workflow.translate_blocks(
+        context,
         source,
         language=LanguageResult(
             source.document_digest,
@@ -1055,8 +1072,123 @@ def test_review_prompt_obeys_the_same_complete_input_budget(tmp_path):
         target_language="fr",
         input_budget_bytes=4500,
     )
-    assert isinstance(result, RunError)
-    assert result.code == "translation_review_exceeds_input_budget"
+    assert isinstance(result, Paused)
+    assert result.awaiting.response_contract == REVIEW_SUPERVISION_SCHEMA
+
+    resumed_context = RunContext(
+        context.repository,
+        context.repository.inspect("review-budget").snapshot,
+        resume_input={
+            "schema_version": REVIEW_SUPERVISION_SCHEMA,
+            "resume_key": result.awaiting.resume_key,
+            "action": "accept_pre_review",
+        },
+    )
+    resumed = workflow.translate_blocks(
+        resumed_context,
+        source,
+        language=LanguageResult(
+            source.document_digest,
+            source.source_digest,
+            "en",
+            "known",
+            1,
+            "fr",
+            "enabled",
+        ),
+        glossary=GlossaryResult(
+            source.document_digest,
+            source.source_digest,
+            "fr",
+            1,
+            "c" * 64,
+            (),
+        ),
+        target_language="fr",
+        input_budget_bytes=4500,
+    )
+    assert isinstance(resumed, TranslationResult)
+
+
+def test_oversized_review_block_does_not_skip_neighbor_reviews(tmp_path):
+    markdown = tmp_path / "mixed-review.md"
+    markdown.write_text(
+        "small before\n\nmiddle expands\n\nsmall after",
+        encoding="utf-8",
+    )
+    paper = ArcPaperService(cache_root=tmp_path / "mixed-review-cache")
+    artifact = paper.import_source(markdown)
+    source = TranslationSource(
+        RichDocumentParserService(paper.repository).parse_source(artifact)
+    )
+    tasks = FakeTasks(
+        translation_prefix_by_text={"middle expands": "译" * 2_000}
+    )
+    workflow = TranslationWorkflowService(tasks)
+    context = _context(tmp_path, "mixed-review")
+    language = LanguageResult(
+        source.document_digest,
+        source.source_digest,
+        "en",
+        "known",
+        1,
+        "zh-CN",
+        "enabled",
+    )
+    glossary = GlossaryResult(
+        source.document_digest,
+        source.source_digest,
+        "zh-CN",
+        1,
+        "d" * 64,
+        (),
+    )
+
+    paused = workflow.translate_blocks(
+        context,
+        source,
+        language=language,
+        glossary=glossary,
+        target_language="zh-CN",
+        input_budget_bytes=4_800,
+    )
+    assert isinstance(paused, Paused)
+    assert len(tasks.review_blocks) == 1
+    assert all(
+        "middle expands" not in block_text(block)
+        for block in tasks.review_blocks[0]
+    )
+
+    resumed_context = RunContext(
+        context.repository,
+        context.repository.inspect("mixed-review").snapshot,
+        resume_input={
+            "schema_version": REVIEW_SUPERVISION_SCHEMA,
+            "resume_key": paused.awaiting.resume_key,
+            "action": "accept_pre_review",
+        },
+    )
+    resumed = workflow.translate_blocks(
+        resumed_context,
+        source,
+        language=language,
+        glossary=glossary,
+        target_language="zh-CN",
+        input_budget_bytes=4_800,
+    )
+
+    assert isinstance(resumed, TranslationResult)
+    assert len(tasks.review_blocks) == 2
+    assert all(
+        "middle expands" not in block_text(block)
+        for blocks in tasks.review_blocks
+        for block in blocks
+    )
+    assert max(
+        size
+        for contract, size in tasks.prompt_sizes
+        if contract == REVIEW_PROMPT_VERSION
+    ) <= 4_800
 
 
 def test_translation_windows_reserve_space_for_review(tmp_path):
@@ -1098,6 +1230,115 @@ def test_translation_windows_reserve_space_for_review(tmp_path):
     assert isinstance(result, TranslationResult)
     assert tasks.calls.count(TRANSLATION_PROMPT_VERSION) == 4
     assert tasks.calls.count(REVIEW_PROMPT_VERSION) == 4
+
+
+def test_actual_translation_expansion_splits_review_windows(tmp_path):
+    markdown = tmp_path / "expanded-review.md"
+    markdown.write_text(
+        "# Long\n\n" + "\n\n".join(["source prose " * 8] * 6),
+        encoding="utf-8",
+    )
+    paper = ArcPaperService(cache_root=tmp_path / "expanded-review-cache")
+    artifact = paper.import_source(markdown)
+    source = TranslationSource(
+        RichDocumentParserService(paper.repository).parse_source(artifact)
+    )
+    tasks = FakeTasks(translation_prefix="译" * 600)
+    result = TranslationWorkflowService(tasks).translate_blocks(
+        _context(tmp_path, "expanded-review"),
+        source,
+        language=LanguageResult(
+            source.document_digest,
+            source.source_digest,
+            "en",
+            "known",
+            1,
+            "zh-CN",
+            "enabled",
+        ),
+        glossary=GlossaryResult(
+            source.document_digest,
+            source.source_digest,
+            "zh-CN",
+            1,
+            "e" * 64,
+            (),
+        ),
+        target_language="zh-CN",
+        input_budget_bytes=4_800,
+    )
+
+    assert isinstance(result, TranslationResult)
+    translation_count = tasks.calls.count(TRANSLATION_PROMPT_VERSION)
+    review_count = tasks.calls.count(REVIEW_PROMPT_VERSION)
+    assert review_count > translation_count
+    assert max(
+        size
+        for contract, size in tasks.prompt_sizes
+        if contract == REVIEW_PROMPT_VERSION
+    ) <= 4_800
+
+
+def test_split_review_supervision_progresses_across_subwindows(tmp_path):
+    markdown = tmp_path / "split-review-supervision.md"
+    markdown.write_text(
+        "# Long\n\n" + "\n\n".join(["source prose " * 8] * 4),
+        encoding="utf-8",
+    )
+    paper = ArcPaperService(cache_root=tmp_path / "split-supervision-cache")
+    artifact = paper.import_source(markdown)
+    source = TranslationSource(
+        RichDocumentParserService(paper.repository).parse_source(artifact)
+    )
+    language = LanguageResult(
+        source.document_digest,
+        source.source_digest,
+        "en",
+        "known",
+        1,
+        "zh-CN",
+        "enabled",
+    )
+    glossary = GlossaryResult(
+        source.document_digest,
+        source.source_digest,
+        "zh-CN",
+        1,
+        "f" * 64,
+        (),
+    )
+    tasks = FakeTasks(
+        invalid_review=True,
+        translation_prefix="译" * 600,
+    )
+    workflow = TranslationWorkflowService(tasks)
+    context = _context(tmp_path, "split-review-supervision")
+    resume_keys: list[str] = []
+
+    for _ in range(10):
+        result = workflow.translate_blocks(
+            context,
+            source,
+            language=language,
+            glossary=glossary,
+            target_language="zh-CN",
+            input_budget_bytes=4_800,
+        )
+        if not isinstance(result, Paused):
+            break
+        resume_keys.append(result.awaiting.resume_key)
+        context = RunContext(
+            context.repository,
+            context.repository.inspect("split-review-supervision").snapshot,
+            resume_input={
+                "schema_version": REVIEW_SUPERVISION_SCHEMA,
+                "resume_key": result.awaiting.resume_key,
+                "action": "accept_pre_review",
+            },
+        )
+
+    assert isinstance(result, TranslationResult)
+    assert len(set(resume_keys)) > 1
 
 
 def test_non_rich_pdf_source_is_rejected(tmp_path):
