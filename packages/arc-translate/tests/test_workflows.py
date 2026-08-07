@@ -48,7 +48,12 @@ from arc_translate.source import (
     TranslationSourceError,
     resolve_translation_source,
 )
-from arc_translate.workflow import REVIEW_SUPERVISION_SCHEMA
+from arc_translate.workflow import (
+    OUTPUT_SUPERVISION_SCHEMA,
+    REVIEW_SUPERVISION_SCHEMA,
+    TranslationWorkflowError,
+    _output_supervision,
+)
 
 
 class FakeTasks:
@@ -702,6 +707,35 @@ def test_invalid_translation_draft_gets_one_fresh_retry(tmp_path):
     assert isinstance(result, TranslationResult)
     assert result.coverage == "document"
     assert tasks.calls.count(TRANSLATION_PROMPT_VERSION) == 2
+
+
+def test_output_supervision_request_tracks_current_error(tmp_path):
+    context = _context(tmp_path, "output-supervision-identity")
+    candidate = tmp_path / "candidate.json"
+    first = _output_supervision(
+        context,
+        artifact_prefix="translation",
+        stage="draft-0001",
+        error=TranslationWorkflowError("invalid", "first error"),
+        candidate_path=candidate,
+    )
+    second = _output_supervision(
+        context,
+        artifact_prefix="translation",
+        stage="draft-0001",
+        error=TranslationWorkflowError("invalid", "second error"),
+        candidate_path=candidate,
+    )
+
+    assert first.awaiting.response_contract is None
+    assert first.awaiting.resume_key != second.awaiting.resume_key
+    assert first.awaiting.request_ref != second.awaiting.request_ref
+    assert second.awaiting.request_ref is not None
+    request = json.loads(
+        context.artifacts.read_bytes(second.awaiting.request_ref)
+    )
+    assert request["schema_version"] == OUTPUT_SUPERVISION_SCHEMA
+    assert request["message"] == "second error"
 
 
 def test_changed_translation_gets_a_distinct_fragment_identity(tmp_path) -> None:

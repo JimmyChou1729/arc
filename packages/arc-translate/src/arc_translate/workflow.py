@@ -1105,10 +1105,14 @@ def _output_supervision(
         {
             "stage": stage,
             "candidate_path": str(candidate_path),
+            "error_code": error.code,
+            "error_message": str(error),
         }
     )[:24]
     resume_key = f"output-{digest}"
-    request_id = f"{artifact_prefix}/output-supervision/{stage}"
+    request_id = (
+        f"{artifact_prefix}/output-supervision/{stage}-{digest}"
+    )
     request_ref = context.artifacts.find(request_id)
     if request_ref is None:
         request_ref = context.artifacts.publish_json(
