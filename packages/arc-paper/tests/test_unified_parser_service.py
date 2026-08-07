@@ -321,6 +321,79 @@ def test_standard_parser_rejects_unclosed_rich_blocks(
     assert error.value.code == "unclosed_rich_block"
 
 
+def test_markdown_aligned_row_spacing_is_not_a_display_delimiter(tmp_path):
+    payload = (
+        b"# Relations\n\n"
+        b"\\[\n"
+        b"\\begin{aligned}\n"
+        b"a&=1,\\\\[4pt]\n"
+        b"b&=2.\n"
+        b"\\end{aligned}\n"
+        b"\\]\n"
+    )
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, SourceFormat.MARKDOWN)
+
+    standard = PaperParserService(repository).parse_source(artifact)
+    rich = RichDocumentParserService(repository).parse_source(artifact)
+
+    assert [item.kind for item in standard.math_spans] == [
+        MathSpanKind.DISPLAY
+    ]
+    assert (
+        standard.math_spans[0].source_line_start,
+        standard.math_spans[0].source_line_end,
+    ) == (3, 8)
+    assert r"\\[4pt]" in standard.math_spans[0].normalized_tex
+    assert any(
+        block.kind.value == "equation" for block in rich.blocks
+    )
+
+
+def test_tex_delimiter_activity_uses_backslash_run_parity(tmp_path):
+    payload = (
+        b"# Parity\n"
+        + br"Row spacing \\[4pt] is text; \\\[x\\\] and \\\(y\\\) are math."
+        + b"\n"
+    )
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, SourceFormat.MARKDOWN)
+
+    document = PaperParserService(repository).parse_source(artifact)
+
+    assert [item.kind for item in document.math_spans] == [
+        MathSpanKind.DISPLAY,
+        MathSpanKind.INLINE,
+    ]
+    assert [item.normalized_tex for item in document.math_spans] == [
+        r"x\\",
+        r"y\\",
+    ]
+
+
+def test_bracket_like_ocr_inside_dollar_math_is_not_an_outer_delimiter(
+    tmp_path,
+):
+    payload = (
+        b"# OCR\n"
+        b"Inline $S\\[\\phi\\]$ text.\n\n"
+        b"$$T\\[\\psi\\]$$\n"
+    )
+    repository = SourceRepository(tmp_path / "cache")
+    artifact = _store(repository, payload, SourceFormat.MARKDOWN)
+
+    standard = PaperParserService(repository).parse_source(artifact)
+    rich = RichDocumentParserService(repository).parse_source(artifact)
+
+    assert [item.kind for item in standard.math_spans] == [
+        MathSpanKind.INLINE,
+        MathSpanKind.DISPLAY,
+    ]
+    assert any(
+        block.kind.value == "equation" for block in rich.blocks
+    )
+
+
 def test_standard_markdown_projection_has_canonical_encoded_output(tmp_path):
     repository = SourceRepository(tmp_path / "cache")
     artifact = _store(

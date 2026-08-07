@@ -522,10 +522,21 @@ def _scan_delimited_math(
         else lines
     )
     joined = "\n".join(scan_lines)
+    bracket_joined = _mask_pattern_preserving_lines(
+        joined,
+        re.compile(r"(?<!\\)\$\$(.+?)(?<!\\)\$\$", re.DOTALL),
+    )
+    bracket_joined = _mask_pattern_preserving_lines(
+        bracket_joined,
+        re.compile(r"(?<!\\)(?<!\$)\$(?!\$)(.+?)(?<!\\)\$(?!\$)"),
+    )
     offsets = _line_offsets(lines)
-    patterns: list[tuple[MathSpanKind, re.Pattern[str]]] = [
-        (MathSpanKind.DISPLAY, re.compile(r"\$\$(.+?)\$\$", re.DOTALL)),
-        (MathSpanKind.DISPLAY, re.compile(r"\\\[(.+?)\\\]", re.DOTALL)),
+    patterns: list[tuple[MathSpanKind, re.Pattern[str], str]] = [
+        (
+            MathSpanKind.DISPLAY,
+            re.compile(r"\$\$(.+?)\$\$", re.DOTALL),
+            joined,
+        ),
     ]
     if include_tex_environments:
         patterns.append(
@@ -536,42 +547,67 @@ def _scan_delimited_math(
                     rf"\\end\{{(?P=env)\*?\}}",
                     re.DOTALL,
                 ),
+                joined,
             )
         )
-    for kind, pattern in patterns:
-        for match in pattern.finditer(joined):
-            start_line, start_column = _offset_position(offsets, match.start())
-            end_line, end_column = _offset_position(offsets, max(match.start(), match.end() - 1))
-            if any(line in excluded_lines for line in range(start_line, end_line + 1)):
-                continue
-            cells = {
-                (line, column)
-                for line in range(start_line, end_line + 1)
-                for column in range(
-                    start_column if line == start_line else 1,
-                    (end_column if line == end_line else len(lines[line - 1])) + 1,
-                )
-            }
-            if cells.intersection(occupied):
-                continue
-            span = _make_span(
-                artifact,
-                lines,
-                kind=kind,
-                start_line=start_line,
-                start_column=start_column,
-                end_line=end_line,
-                end_column=end_column,
-                raw=match.group(0),
-                precise_columns=precise_columns,
-            )
-            if span:
-                spans.append(span)
-                occupied.update(cells)
 
-    inline_patterns = (
-        re.compile(r"(?<!\\)(?<!\$)\$(?!\$)(.+?)(?<!\\)\$(?!\$)"),
-        re.compile(r"\\\((.+?)\\\)"),
+    def record_span(
+        kind: MathSpanKind, start: int, end: int, raw: str
+    ) -> None:
+        start_line, start_column = _offset_position(offsets, start)
+        end_line, end_column = _offset_position(
+            offsets, max(start, end - 1)
+        )
+        if any(
+            line in excluded_lines
+            for line in range(start_line, end_line + 1)
+        ):
+            return
+        cells = {
+            (line, column)
+            for line in range(start_line, end_line + 1)
+            for column in range(
+                start_column if line == start_line else 1,
+                (
+                    end_column
+                    if line == end_line
+                    else len(lines[line - 1])
+                )
+                + 1,
+            )
+        }
+        if cells.intersection(occupied):
+            return
+        span = _make_span(
+            artifact,
+            lines,
+            kind=kind,
+            start_line=start_line,
+            start_column=start_column,
+            end_line=end_line,
+            end_column=end_column,
+            raw=raw,
+            precise_columns=precise_columns,
+        )
+        if span:
+            spans.append(span)
+            occupied.update(cells)
+
+    for kind, pattern, search_text in patterns:
+        for match in pattern.finditer(search_text):
+            record_span(kind, match.start(), match.end(), match.group(0))
+    for start, end in _active_tex_delimited_ranges(
+        bracket_joined, r"\[", r"\]"
+    ):
+        record_span(
+            MathSpanKind.DISPLAY,
+            start,
+            end,
+            joined[start:end],
+        )
+
+    inline_pattern = re.compile(
+        r"(?<!\\)(?<!\$)\$(?!\$)(.+?)(?<!\\)\$(?!\$)"
     )
     for line_number, line in enumerate(lines, 1):
         if line_number in excluded_lines:
@@ -581,29 +617,40 @@ def _scan_delimited_math(
             range(match.start() + 1, match.end() + 1)
             for match in re.finditer(r"`+[^`]*`+", line)
         ]
-        for pattern in inline_patterns:
-            for match in pattern.finditer(line):
-                columns = range(match.start() + 1, match.end() + 1)
-                if any(
-                    (line_number, column) in occupied
-                    or any(column in code_range for code_range in code_ranges)
-                    for column in columns
-                ):
-                    continue
-                span = _make_span(
-                    artifact,
-                    lines,
-                    kind=MathSpanKind.INLINE,
-                    start_line=line_number,
-                    start_column=match.start() + 1,
-                    end_line=line_number,
-                    end_column=match.end(),
-                    raw=match.group(0),
-                    precise_columns=precise_columns,
+        inline_ranges = [
+            (match.start(), match.end(), match.group(0))
+            for match in inline_pattern.finditer(line)
+        ]
+        inline_ranges.extend(
+            (start, end, line[start:end])
+            for start, end in _active_tex_delimited_ranges(
+                line, r"\(", r"\)"
+            )
+        )
+        for start, end, raw in inline_ranges:
+            columns = range(start + 1, end + 1)
+            if any(
+                (line_number, column) in occupied
+                or any(column in code_range for code_range in code_ranges)
+                for column in columns
+            ):
+                continue
+            span = _make_span(
+                artifact,
+                lines,
+                kind=MathSpanKind.INLINE,
+                start_line=line_number,
+                start_column=start + 1,
+                end_line=line_number,
+                end_column=end,
+                raw=raw,
+                precise_columns=precise_columns,
+            )
+            if span:
+                spans.append(span)
+                occupied.update(
+                    (line_number, column) for column in columns
                 )
-                if span:
-                    spans.append(span)
-                    occupied.update((line_number, column) for column in columns)
     return tuple(
         sorted(
             spans,
@@ -642,9 +689,23 @@ def _validate_display_math(
             "unclosed display-math delimiter $$",
             artifact=artifact,
         )
+    # Bracket delimiters are not active while another math delimiter owns the
+    # same text.  Mask balanced dollar-math first so OCR text such as
+    # ``$S\[\phi\]$`` does not look like an unclosed outer display block; the
+    # span scanner already resolves these overlaps in favor of dollar math.
+    bracket_active = _mask_pattern_preserving_lines(
+        active,
+        re.compile(r"(?<!\\)\$\$(.+?)(?<!\\)\$\$", re.DOTALL),
+    )
+    bracket_active = _mask_pattern_preserving_lines(
+        bracket_active,
+        re.compile(r"(?<!\\)(?<!\$)\$(?!\$)(.+?)(?<!\\)\$(?!\$)"),
+    )
     bracket_depth = 0
-    for token in re.finditer(r"\\\[|\\\]", active):
-        if token.group(0) == r"\[":
+    for _position, token in _active_tex_delimiter_tokens(
+        bracket_active, r"\[", r"\]"
+    ):
+        if token == r"\[":
             bracket_depth += 1
         elif bracket_depth:
             bracket_depth -= 1
@@ -672,6 +733,50 @@ def _validate_display_math(
             f"unclosed {stack[-1]} environment",
             artifact=artifact,
         )
+
+
+def _mask_pattern_preserving_lines(
+    value: str, pattern: re.Pattern[str]
+) -> str:
+    return pattern.sub(
+        lambda match: re.sub(r"[^\n]", " ", match.group(0)),
+        value,
+    )
+
+
+def _active_tex_delimiter_tokens(
+    value: str, opening: str, closing: str
+) -> tuple[tuple[int, str], ...]:
+    pattern = re.compile(
+        rf"{re.escape(opening)}|{re.escape(closing)}"
+    )
+    values: list[tuple[int, str]] = []
+    for match in pattern.finditer(value):
+        preceding = 0
+        cursor = match.start() - 1
+        while cursor >= 0 and value[cursor] == "\\":
+            preceding += 1
+            cursor -= 1
+        if preceding % 2 == 0:
+            values.append((match.start(), match.group(0)))
+    return tuple(values)
+
+
+def _active_tex_delimited_ranges(
+    value: str, opening: str, closing: str
+) -> tuple[tuple[int, int], ...]:
+    start: int | None = None
+    values: list[tuple[int, int]] = []
+    for position, token in _active_tex_delimiter_tokens(
+        value, opening, closing
+    ):
+        if token == opening:
+            if start is None:
+                start = position
+        elif start is not None:
+            values.append((start, position + len(closing)))
+            start = None
+    return tuple(values)
 
 
 def _mask_markdown_inline_code(value: str) -> str:
