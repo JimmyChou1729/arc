@@ -351,6 +351,13 @@ figcaption, .arc-citations, .arc-figure-note {
 }
 .arc-citation { margin-left: .12em; white-space: nowrap; }
 .arc-markdown-image { font-size: .9em; }
+img.arc-markdown-image {
+  display: block;
+  max-width: 100%;
+  max-height: 38rem;
+  object-fit: contain;
+  margin: .4rem auto;
+}
 
 .glossary-term {
   color: inherit;

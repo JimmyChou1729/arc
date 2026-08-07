@@ -232,14 +232,41 @@ helpers.validateRevisionMetadata({
   provenance: {producer: "test"}
 });
 helpers.setupMarkdown();
+helpers.state.payload.resources = [{
+  artifact_digest: "f".repeat(64),
+  media_type: "image/jpeg",
+  logical_name: "note-figures/owned.jpg",
+  size: 3,
+  data_uri: "data:image/jpeg;base64,AAEC"
+}];
+var ownedImageMarkup = helpers.state.md.render(
+  "![owned diagram](note-figures/owned.jpg)"
+);
+if (
+  !ownedImageMarkup.includes('<img class="arc-markdown-image"') ||
+  !ownedImageMarkup.includes('src="data:image/jpeg;base64,AAEC"') ||
+  !ownedImageMarkup.includes('alt="owned diagram"')
+) {
+  throw new Error("publication-owned Markdown image was not rendered");
+}
 var imageMarkup = helpers.state.md.render(
   "![remote](https://example.test/image.png)"
 );
 if (!imageMarkup.includes("arc-markdown-image")) {
   throw new Error("Markdown image placeholder is missing");
 }
-if (/\\b(?:src|href)=/.test(imageMarkup)) {
+if (/\b(?:src|href)=/.test(imageMarkup)) {
   throw new Error("Markdown image placeholder retained a fetchable URL");
+}
+var nearMatchImageMarkup = helpers.state.md.render(
+  "![near match](note-figures/owned.jpg?variant=1)"
+);
+if (
+  !nearMatchImageMarkup.includes("arc-markdown-image") ||
+  /\b(?:src|href)=/.test(nearMatchImageMarkup) ||
+  nearMatchImageMarkup.includes("data:image/jpeg")
+) {
+  throw new Error("Markdown image resource matching was not exact");
 }
 if (
   helpers.effectiveEquationLabel({block_id: "eq-1"}, {label: "(3)"}) !== "(7)"

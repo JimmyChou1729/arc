@@ -326,6 +326,13 @@
     md.renderer.rules.image = function (tokens, index) {
       var token = tokens[index];
       var alternative = md.utils.escapeHtml(token.content || "");
+      var source = token.attrGet("src") || "";
+      var resource = resourceForLogicalName(source);
+      if (resource && typeof resource.data_uri === "string") {
+        return '<img class="arc-markdown-image" src="' +
+          md.utils.escapeHtml(resource.data_uri) + '" alt="' + alternative +
+          '" loading="lazy" decoding="async">';
+      }
       var text = md.utils.escapeHtml(labels().imageOmitted);
       return '<span class="arc-markdown-image" role="note">[' + text +
         (alternative ? ": " + alternative : "") + "]</span>";
@@ -1126,6 +1133,12 @@
   function resourceForDigest(digest) {
     return (state.payload.resources || []).find(function (item) {
       return item.artifact_digest === digest || item.digest === digest;
+    });
+  }
+
+  function resourceForLogicalName(logicalName) {
+    return (state.payload.resources || []).find(function (item) {
+      return item.logical_name === logicalName;
     });
   }
 
