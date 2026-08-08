@@ -46,6 +46,9 @@ from .workspace import RenderWorkspaceError, read_layer, read_publication
 
 HTML_RENDER_RECIPE = "arc.render.standalone_html.v1"
 READER_PAYLOAD_SCHEMA = "arc.render.reader_payload.v1"
+READER_PAYLOAD_V2_SCHEMA = "arc.render.reader_payload.v2"
+READER_CHUNK_SCHEMA = "arc.render.reader_chunk.v1"
+READER_RESOURCE_SCHEMA = "arc.render.reader_resource.v1"
 AssetLoader = Callable[[str], bytes | None]
 _CITATION_PATTERN = re.compile(r"\[@([A-Za-z0-9][A-Za-z0-9._:-]*)\]")
 _CSS_URL_PATTERN = re.compile(
@@ -788,6 +791,189 @@ def _extract_reader_payload(text: str) -> Mapping[str, Any]:
         raise HTMLRenderError("standalone HTML reader payload is invalid") from exc
     if not isinstance(value, Mapping):
         raise HTMLRenderError("standalone HTML reader payload must be an object")
+    if value.get("schema_version") == READER_PAYLOAD_V2_SCHEMA:
+        return _expand_reader_payload_v2(text, value)
+    return value
+
+
+def _expand_reader_payload_v2(
+    text: str, boot: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    chunks = boot.get("reader_chunks")
+    manifest = boot.get("block_manifest")
+    resources = boot.get("resources")
+    if (
+        not isinstance(chunks, list)
+        or not isinstance(manifest, list)
+        or not isinstance(resources, list)
+    ):
+        raise HTMLRenderError("standalone HTML reader manifest is invalid")
+    expanded = json.loads(json.dumps(boot, ensure_ascii=False))
+    publication = expanded.get("publication")
+    source = publication.get("source_document") if isinstance(publication, dict) else None
+    if not isinstance(source, dict):
+        raise HTMLRenderError("standalone HTML reader manifest has no source")
+
+    expected_chunk_ids: set[str] = set()
+    blocks: list[object] = []
+    fingerprints: dict[str, object] = {}
+    positioned_revisions: list[tuple[int, object]] = []
+    chunk_selected_values: list[object] = []
+    cursor = 0
+    for raw in chunks:
+        if not isinstance(raw, Mapping) or set(raw) != {
+            "chunk_id",
+            "payload_id",
+            "block_start",
+            "block_end",
+        }:
+            raise HTMLRenderError("standalone HTML reader chunk manifest is invalid")
+        chunk_id = raw.get("chunk_id")
+        payload_id = raw.get("payload_id")
+        start = raw.get("block_start")
+        end = raw.get("block_end")
+        if (
+            not isinstance(chunk_id, str)
+            or not isinstance(payload_id, str)
+            or payload_id in expected_chunk_ids
+            or isinstance(start, bool)
+            or not isinstance(start, int)
+            or isinstance(end, bool)
+            or not isinstance(end, int)
+            or start != cursor
+            or end < start
+        ):
+            raise HTMLRenderError("standalone HTML reader chunk ranges are invalid")
+        expected_chunk_ids.add(payload_id)
+        chunk = _extract_json_script(text, payload_id)
+        if (
+            chunk.get("schema_version") != READER_CHUNK_SCHEMA
+            or chunk.get("chunk_id") != chunk_id
+            or chunk.get("block_start") != start
+            or chunk.get("block_end") != end
+        ):
+            raise HTMLRenderError("standalone HTML reader chunk identity is invalid")
+        chunk_blocks = chunk.get("blocks")
+        chunk_fingerprints = chunk.get("block_fingerprints")
+        chunk_revisions = chunk.get("revisions")
+        revision_positions = chunk.get("revision_positions")
+        chunk_selected = chunk.get("selected_revision_digests")
+        if (
+            not isinstance(chunk_blocks, list)
+            or len(chunk_blocks) != end - start
+            or not isinstance(chunk_fingerprints, Mapping)
+            or not isinstance(chunk_revisions, list)
+            or not isinstance(revision_positions, list)
+            or len(revision_positions) != len(chunk_revisions)
+            or any(
+                isinstance(item, bool) or not isinstance(item, int)
+                for item in revision_positions
+            )
+            or not isinstance(chunk_selected, list)
+        ):
+            raise HTMLRenderError("standalone HTML reader chunk content is invalid")
+        blocks.extend(chunk_blocks)
+        fingerprints.update(chunk_fingerprints)
+        positioned_revisions.extend(zip(revision_positions, chunk_revisions))
+        chunk_selected_values.extend(chunk_selected)
+        cursor = end
+    if cursor != len(manifest):
+        raise HTMLRenderError("standalone HTML reader chunks are incomplete")
+    positioned_revisions.sort(key=lambda item: item[0])
+    if [item[0] for item in positioned_revisions] != list(
+        range(len(positioned_revisions))
+    ):
+        raise HTMLRenderError(
+            "standalone HTML reader revision order is invalid"
+        )
+    revisions = [item[1] for item in positioned_revisions]
+    selected = boot.get("selected_revision_digests")
+    if (
+        not isinstance(selected, list)
+        or len(selected) != len(set(selected))
+        or set(selected) != set(chunk_selected_values)
+    ):
+        raise HTMLRenderError(
+            "standalone HTML reader selected revisions are inconsistent"
+        )
+    for index, raw in enumerate(blocks):
+        item = manifest[index]
+        if (
+            not isinstance(raw, Mapping)
+            or not isinstance(item, Mapping)
+            or item.get("block_id") != raw.get("block_id")
+            or item.get("kind") != raw.get("kind")
+            or item.get("ordinal") != raw.get("ordinal")
+        ):
+            raise HTMLRenderError("standalone HTML reader block manifest differs")
+
+    expected_resource_ids: set[str] = set()
+    loaded_resources: list[object] = []
+    for raw in resources:
+        if not isinstance(raw, Mapping):
+            raise HTMLRenderError("standalone HTML resource manifest is invalid")
+        payload_id = raw.get("payload_id")
+        if not isinstance(payload_id, str) or payload_id in expected_resource_ids:
+            raise HTMLRenderError("standalone HTML resource payload IDs repeat")
+        expected_resource_ids.add(payload_id)
+        value = _extract_json_script(text, payload_id)
+        loaded = value.get("resource")
+        if (
+            value.get("schema_version") != READER_RESOURCE_SCHEMA
+            or not isinstance(loaded, Mapping)
+            or any(
+                loaded.get(key) != item
+                for key, item in raw.items()
+                if key != "payload_id"
+            )
+        ):
+            raise HTMLRenderError("standalone HTML resource payload is invalid")
+        loaded_resources.append(dict(loaded))
+
+    actual_chunk_ids = set(re.findall(
+        r'<script id="([^"]+)" class="arc-render-reader-chunk"', text
+    ))
+    actual_resource_ids = set(re.findall(
+        r'<script id="([^"]+)" class="arc-render-reader-resource"', text
+    ))
+    if (
+        actual_chunk_ids != expected_chunk_ids
+        or actual_resource_ids != expected_resource_ids
+    ):
+        raise HTMLRenderError("standalone HTML contains orphan reader payloads")
+
+    expanded["schema_version"] = READER_PAYLOAD_SCHEMA
+    expanded.pop("block_manifest", None)
+    expanded.pop("reader_chunks", None)
+    expanded["block_fingerprints"] = fingerprints
+    expanded["revisions"] = revisions
+    expanded["selected_revision_digests"] = selected
+    expanded["resources"] = loaded_resources
+    source["blocks"] = blocks
+    return expanded
+
+
+def _extract_json_script(text: str, identifier: str) -> Mapping[str, Any]:
+    matches = re.findall(
+        r'<script id="' + re.escape(identifier) + r'"[^>]*>'
+        r"(?P<value>.*?)</script>",
+        text,
+        re.DOTALL,
+    )
+    if len(matches) != 1:
+        raise HTMLRenderError(
+            f"standalone HTML reader payload count is invalid: {identifier}"
+        )
+    try:
+        value = json.loads(matches[0].replace(r"<\/script", "</script"))
+    except json.JSONDecodeError as exc:
+        raise HTMLRenderError(
+            f"standalone HTML reader payload is invalid: {identifier}"
+        ) from exc
+    if not isinstance(value, Mapping):
+        raise HTMLRenderError(
+            f"standalone HTML reader payload must be an object: {identifier}"
+        )
     return value
 
 

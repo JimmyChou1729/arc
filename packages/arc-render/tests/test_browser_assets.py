@@ -2265,6 +2265,20 @@ def test_reader_progressively_hydrates_navigation_find_and_print_content() -> No
     assert "content-visibility: visible !important" in stylesheet
 
 
+def test_reader_lazily_loads_v2_payload_and_exports_v1_snapshot() -> None:
+    javascript = _text("reader.js")
+
+    assert '"arc.render.reader_payload.v2"' in javascript
+    assert (
+        "loadPayloadForBlockRange(chunk.block_start, chunk.block_end)"
+        in javascript
+    )
+    assert "state.payloadChunks.forEach(loadPayloadChunk)" in javascript
+    assert "(state.payload.resources || []).forEach(hydrateResource)" in javascript
+    assert 'payload.schema_version = "arc.render.reader_payload.v1"' in javascript
+    assert ".arc-render-reader-chunk, .arc-render-reader-resource" in javascript
+
+
 def test_reader_hydration_waits_for_quiet_idle_budget_and_activity_reset() -> None:
     node = shutil.which("node")
     if node is None:

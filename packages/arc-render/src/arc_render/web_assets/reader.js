@@ -10,6 +10,9 @@
   var STATUS_EXPIRY_MS = 10000;
   var state = {
     payload: null,
+    payloadVersion: "v1",
+    payloadChunks: [],
+    loadedPayloadChunkIds: new Set(),
     md: null,
     revisions: new Map(),
     revisionDigests: new Map(),
@@ -60,6 +63,7 @@
     navigationReady: false,
     printReady: false,
     initialSelectedDigests: new Map(),
+    initialSelectionCaptured: false,
     exportHtmlTemplate: null,
     exportStandaloneSupported: false
   };
@@ -83,13 +87,102 @@
     var node = document.getElementById("arc-render-payload");
     if (!node) throw new Error("ARC render payload is missing");
     var value = JSON.parse(node.textContent || "");
-    if (!value || value.schema_version !== "arc.render.reader_payload.v1") {
+    if (!value || ![
+      "arc.render.reader_payload.v1",
+      "arc.render.reader_payload.v2"
+    ].includes(value.schema_version)) {
       throw new Error("unsupported ARC reader payload");
     }
     if (!value.publication || !value.publication.source_document) {
       throw new Error("ARC reader payload has no source document");
     }
+    state.payloadVersion = value.schema_version.endsWith(".v2") ? "v2" : "v1";
+    state.payloadChunks = [];
+    state.loadedPayloadChunkIds = new Set();
+    if (state.payloadVersion === "v2") {
+      if (!Array.isArray(value.reader_chunks) || !Array.isArray(value.block_manifest)) {
+        throw new Error("ARC reader payload has no chunk manifest");
+      }
+      state.payloadChunks = value.reader_chunks.slice();
+      var blocks = value.publication.source_document.blocks;
+      if (!Array.isArray(blocks) || blocks.length !== value.block_manifest.length) {
+        throw new Error("ARC reader block manifest is inconsistent");
+      }
+    }
     return value;
+  }
+
+  function loadPayloadChunk(descriptor) {
+    if (!descriptor || state.loadedPayloadChunkIds.has(descriptor.chunk_id)) return;
+    var node = document.getElementById(descriptor.payload_id || "");
+    if (!node) throw new Error("ARC reader chunk is missing: " + descriptor.chunk_id);
+    var chunk = JSON.parse(node.textContent || "");
+    if (
+      !chunk || chunk.schema_version !== "arc.render.reader_chunk.v1" ||
+      chunk.chunk_id !== descriptor.chunk_id ||
+      chunk.block_start !== descriptor.block_start ||
+      chunk.block_end !== descriptor.block_end ||
+      !Array.isArray(chunk.blocks) ||
+      chunk.blocks.length !== chunk.block_end - chunk.block_start ||
+      !Array.isArray(chunk.revisions)
+    ) {
+      throw new Error("ARC reader chunk is invalid: " + descriptor.chunk_id);
+    }
+    var documentBlocks = state.payload.publication.source_document.blocks;
+    chunk.blocks.forEach(function (block, offset) {
+      var index = chunk.block_start + offset;
+      var manifest = state.payload.block_manifest[index];
+      if (!manifest || manifest.block_id !== block.block_id) {
+        throw new Error("ARC reader chunk block order is invalid");
+      }
+      documentBlocks[index] = block;
+      ensureSourceIndexes().blocksById.set(block.block_id, block);
+    });
+    Object.keys(chunk.block_fingerprints || {}).forEach(function (blockId) {
+      state.payload.block_fingerprints[blockId] =
+        chunk.block_fingerprints[blockId];
+    });
+    var fragmentIds = new Set();
+    chunk.revisions.forEach(function (raw) {
+      state.embeddedRevisions.push(raw);
+      var metadata = raw.metadata || raw;
+      if (metadata.fragment_id) {
+        fragmentIds.add(metadata.fragment_id);
+        state.activeFragmentIds.add(metadata.fragment_id);
+      }
+      addRevision(raw);
+    });
+    fragmentIds.forEach(function (fragmentId) {
+      resolveFragmentInState(fragmentId, state.revisions.get(fragmentId) || []);
+      if (state.readerShellReady) {
+        var selected = state.selected.get(fragmentId);
+        if (selected) updateFragmentGroup(fragmentId, selected.anchor);
+      }
+      if (state.initialSelectionCaptured) {
+        var initial = state.selected.get(fragmentId);
+        if (initial) {
+          state.initialSelectedDigests.set(fragmentId, initial.semantic_digest);
+        }
+      }
+    });
+    state.loadedPayloadChunkIds.add(descriptor.chunk_id);
+    rebuildDiagnostics();
+  }
+
+  function loadPayloadForBlockRange(start, end) {
+    if (state.payloadVersion !== "v2") return;
+    state.payloadChunks.forEach(function (descriptor) {
+      if (descriptor.block_end <= start || descriptor.block_start >= end) return;
+      loadPayloadChunk(descriptor);
+    });
+  }
+
+  function loadAllPayload(includeResources) {
+    if (state.payloadVersion !== "v2") return;
+    state.payloadChunks.forEach(loadPayloadChunk);
+    if (includeResources) {
+      (state.payload.resources || []).forEach(hydrateResource);
+    }
   }
 
   function buildSourceIndexes() {
@@ -837,6 +930,9 @@
     var node = state.chunkNodes.get(chunk.chunk_id);
     if (!node) throw new Error("render chunk has no document shell");
     if (state.renderedChunkIds.has(chunk.chunk_id)) return node;
+    if (chunk.kind === "content") {
+      loadPayloadForBlockRange(chunk.block_start, chunk.block_end);
+    }
     if (state.chunkObserver) state.chunkObserver.unobserve(node);
     renderChunkBody(chunk, node);
     node.classList.add("is-rendered");
@@ -976,7 +1072,8 @@
 
   function sourceTitle(documentValue) {
     var first = (documentValue.blocks || []).find(function (block) {
-      return block.kind === "heading" && Number(block.payload.level) === 1;
+      return block.kind === "heading" && block.payload &&
+        Number(block.payload.level) === 1;
     });
     return first ? first.payload.text : "";
   }
@@ -1201,11 +1298,33 @@
   }
 
   function resourceForDigest(digest) {
-    return ensureSourceIndexes().resourcesByDigest.get(digest) || null;
+    return hydrateResource(
+      ensureSourceIndexes().resourcesByDigest.get(digest) || null
+    );
   }
 
   function resourceForLogicalName(logicalName) {
-    return ensureSourceIndexes().resourcesByLogicalName.get(logicalName) || null;
+    return hydrateResource(
+      ensureSourceIndexes().resourcesByLogicalName.get(logicalName) || null
+    );
+  }
+
+  function hydrateResource(resource) {
+    if (!resource || typeof resource.data_uri === "string") return resource;
+    if (!resource.payload_id) return resource;
+    var node = document.getElementById(resource.payload_id);
+    if (!node) throw new Error("ARC reader resource payload is missing");
+    var value = JSON.parse(node.textContent || "");
+    var loaded = value && value.resource;
+    if (
+      !loaded || value.schema_version !== "arc.render.reader_resource.v1" ||
+      loaded.artifact_digest !== resource.artifact_digest ||
+      typeof loaded.data_uri !== "string"
+    ) {
+      throw new Error("ARC reader resource payload is invalid");
+    }
+    Object.assign(resource, loaded);
+    return resource;
   }
 
   function fragmentMetaText(fragment, editing) {
@@ -2030,6 +2149,9 @@
     var readingArea = root.querySelector("#arc-document");
     var header = root.querySelector("#arc-book-header");
     var contents = root.querySelector("#arc-contents-list");
+    root.querySelectorAll(
+      ".arc-render-reader-chunk, .arc-render-reader-resource"
+    ).forEach(function (node) { node.remove(); });
     if (readingArea) readingArea.replaceChildren();
     if (header) header.replaceChildren();
     if (contents) contents.replaceChildren();
@@ -2045,6 +2167,7 @@
     state.selected.forEach(function (revision, fragmentId) {
       state.initialSelectedDigests.set(fragmentId, revision.semantic_digest);
     });
+    state.initialSelectionCaptured = true;
   }
 
   function setupExport() {
@@ -2105,6 +2228,7 @@
     }
     var trigger = document.getElementById("arc-export");
     var panel = document.getElementById("arc-export-panel");
+    loadAllPayload(false);
     panel.hidden = false;
     trigger.setAttribute("aria-expanded", "true");
     if (!state.directory) {
@@ -2205,6 +2329,7 @@
     state.exportInProgress = true;
     renderExportOptions();
     try {
+      loadAllPayload(request.kind === "html");
       if (state.directory) {
         setStatus(labels().exportLoading);
         if (!await loadDirectoryRevisions(state.directory)) {
@@ -2278,7 +2403,8 @@
   function readerTitle() {
     var publication = state.payload.publication;
     var profile = publication.reader_profile || {};
-    return profile.title || publication.labels.document_title ||
+    return profile.title || state.payload.reader_title ||
+      publication.labels.document_title ||
       sourceTitle(publication.source_document) ||
       publication.labels.untitled_document || "Untitled document";
   }
@@ -2354,6 +2480,12 @@
       throw new Error(labels().exportUnavailable);
     }
     var payload = JSON.parse(JSON.stringify(state.payload));
+    payload.schema_version = "arc.render.reader_payload.v1";
+    delete payload.block_manifest;
+    delete payload.reader_chunks;
+    payload.resources.forEach(function (resource) {
+      delete resource.payload_id;
+    });
     var revisionState = exportRevisionState();
     payload.revisions = revisionState.revisions;
     payload.selected_revision_digests = revisionState.selected_revision_digests;
@@ -2362,7 +2494,10 @@
     if (!pattern.test(state.exportHtmlTemplate)) {
       throw new Error(labels().exportUnavailable);
     }
-    return state.exportHtmlTemplate.replace(pattern, function (_match, open, close) {
+    return state.exportHtmlTemplate.replace(
+      /<script[^>]*class=["']arc-render-reader-(?:chunk|resource)["'][^>]*>[\s\S]*?<\/script>/gi,
+      ""
+    ).replace(pattern, function (_match, open, close) {
       return open + encoded + close;
     });
   }

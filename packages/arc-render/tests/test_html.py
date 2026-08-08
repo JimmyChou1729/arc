@@ -34,6 +34,7 @@ from arc_render import (
 )
 from arc_render.html import (
     HTMLRenderError,
+    _extract_reader_payload,
     render_publication_html,
     validate_standalone_html,
 )
@@ -227,6 +228,10 @@ def _workspace(
 
 
 def _payload(html: str) -> dict[str, object]:
+    return dict(_extract_reader_payload(html))
+
+
+def _boot_payload(html: str) -> dict[str, object]:
     match = re.search(
         r'<script id="arc-render-payload" type="application/json">(.*?)</script>',
         html,
@@ -297,6 +302,49 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     revisions = payload["revisions"]
     assert [item["metadata"]["revision"] for item in revisions] == [1, 2]
     assert revisions[-1]["markdown_body"] == "修订后的译文 [@ref-1]。"
+
+
+def test_standalone_reader_v2_defers_blocks_revisions_and_resources(
+    tmp_path: Path,
+) -> None:
+    publication_path, publication, _selected = _workspace(
+        tmp_path,
+        asset_payload=b"\x89PNG\r\n\x1a\nlazy-resource",
+        add_second_revision=True,
+    )
+    output = tmp_path / "reader-v2.html"
+    render_publication_html(publication_path, output)
+    text = output.read_text(encoding="utf-8")
+    boot = _boot_payload(text)
+
+    assert boot["schema_version"] == "arc.render.reader_payload.v2"
+    assert boot["revisions"] == []
+    assert boot["block_fingerprints"] == {}
+    assert all("data_uri" not in item for item in boot["resources"])
+    assert len(boot["block_manifest"]) == 3
+    assert len(boot["reader_chunks"]) == 1
+    assert text.count('class="arc-render-reader-chunk"') == 1
+    assert text.count('class="arc-render-reader-resource"') == 1
+    assert len(_payload(text)["revisions"]) == 2
+    validate_standalone_html(publication, output)
+
+
+def test_standalone_reader_v2_rejects_a_missing_chunk(tmp_path: Path) -> None:
+    publication_path, publication, _selected = _workspace(tmp_path)
+    output = tmp_path / "reader-v2.html"
+    render_publication_html(publication_path, output)
+    text = output.read_text(encoding="utf-8")
+    text = re.sub(
+        r'<script[^>]*class="arc-render-reader-chunk"[^>]*>.*?</script>',
+        "",
+        text,
+        count=1,
+        flags=re.DOTALL,
+    )
+    output.write_text(text, encoding="utf-8")
+
+    with pytest.raises(HTMLRenderError, match="payload count"):
+        validate_standalone_html(publication, output)
 
 
 def test_browser_exported_html_remains_a_valid_latest_reader(
@@ -675,6 +723,13 @@ def test_standalone_validation_detects_payload_tampering(
         lambda match: match.group(1) + encoded + match.group(2),
         text,
         count=1,
+        flags=re.DOTALL,
+    )
+    text = re.sub(
+        r'<script[^>]*class="arc-render-reader-(?:chunk|resource)"[^>]*>'
+        r".*?</script>",
+        "",
+        text,
         flags=re.DOTALL,
     )
     output.write_text(text, encoding="utf-8")

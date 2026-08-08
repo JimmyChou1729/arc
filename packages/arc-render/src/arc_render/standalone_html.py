@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 from html import escape
 from html.parser import HTMLParser
+import json
 import mimetypes
 import os
 from pathlib import Path
@@ -32,6 +34,13 @@ _IMPORT_PATTERN = re.compile(
     r"@import\s+(?:url\(\s*)?(?P<value>'[^']*'|\"[^\"]*\"|[^;\s)]+)\s*\)?\s*;",
     re.IGNORECASE,
 )
+_READER_PAYLOAD_V1 = "arc.render.reader_payload.v1"
+_READER_PAYLOAD_V2 = "arc.render.reader_payload.v2"
+_READER_CHUNK_SCHEMA = "arc.render.reader_chunk.v1"
+_READER_RESOURCE_SCHEMA = "arc.render.reader_resource.v1"
+_READER_BLOCKS_PER_CHUNK = 36
+
+
 class StandaloneHtmlError(ValueError):
     """The source bundle cannot be represented safely as one HTML file."""
 
@@ -50,7 +59,214 @@ def standalone_html_bytes(index: Path) -> bytes:
         raise StandaloneHtmlError("HTML input is unreadable") from exc
     if not index.is_file():
         raise StandaloneHtmlError("HTML input is not a file")
-    return _HtmlInliner(index.parent).inline(source).encode("utf-8")
+    inlined = _HtmlInliner(index.parent).inline(source)
+    return _split_reader_payload(inlined).encode("utf-8")
+
+
+def _split_reader_payload(value: str) -> str:
+    pattern = re.compile(
+        r'(?P<open><script id="arc-render-payload" type="application/json">)'
+        r"(?P<value>.*?)"
+        r"(?P<close></script>)",
+        re.DOTALL,
+    )
+    match = pattern.search(value)
+    if match is None:
+        return value
+    try:
+        payload = json.loads(
+            match.group("value").replace(r"<\/script", "</script")
+        )
+    except json.JSONDecodeError as exc:
+        raise StandaloneHtmlError("ARC reader payload is invalid") from exc
+    if not isinstance(payload, dict):
+        raise StandaloneHtmlError("ARC reader payload must be an object")
+    if payload.get("schema_version") != _READER_PAYLOAD_V1:
+        return value
+
+    publication = payload.get("publication")
+    source = publication.get("source_document") if isinstance(publication, dict) else None
+    blocks = source.get("blocks") if isinstance(source, dict) else None
+    revisions = payload.get("revisions")
+    selected = payload.get("selected_revision_digests")
+    resources = payload.get("resources")
+    fingerprints = payload.get("block_fingerprints")
+    outline = publication.get("outline") if isinstance(publication, dict) else None
+    if (
+        not isinstance(blocks, list)
+        or not isinstance(revisions, list)
+        or not isinstance(selected, list)
+        or not isinstance(resources, list)
+        or not isinstance(fingerprints, dict)
+        or not isinstance(outline, list)
+    ):
+        raise StandaloneHtmlError("ARC reader payload cannot be split")
+
+    block_index: dict[str, int] = {}
+    block_manifest: list[dict[str, object]] = []
+    for index, block in enumerate(blocks):
+        if not isinstance(block, dict) or not isinstance(block.get("block_id"), str):
+            raise StandaloneHtmlError("ARC reader source blocks are invalid")
+        block_id = str(block["block_id"])
+        if block_id in block_index:
+            raise StandaloneHtmlError("ARC reader source block IDs repeat")
+        block_index[block_id] = index
+        block_manifest.append(
+            {
+                "block_id": block_id,
+                "kind": block.get("kind"),
+                "ordinal": block.get("ordinal"),
+            }
+        )
+
+    section_anchors = {
+        str(item["section_id"]): str(item["anchor_block_id"])
+        for item in outline
+        if isinstance(item, dict)
+        and isinstance(item.get("section_id"), str)
+        and isinstance(item.get("anchor_block_id"), str)
+    }
+    chunk_count = max(
+        1,
+        (len(blocks) + _READER_BLOCKS_PER_CHUNK - 1)
+        // _READER_BLOCKS_PER_CHUNK,
+    )
+    revision_buckets: list[list[object]] = [[] for _index in range(chunk_count)]
+    revision_position_buckets: list[list[int]] = [
+        [] for _index in range(chunk_count)
+    ]
+    selected_set = {item for item in selected if isinstance(item, str)}
+    selected_buckets: list[list[str]] = [[] for _index in range(chunk_count)]
+    for position, revision in enumerate(revisions):
+        bucket = _revision_chunk_index(
+            revision, block_index, section_anchors, chunk_count
+        )
+        revision_buckets[bucket].append(revision)
+        revision_position_buckets[bucket].append(position)
+        if isinstance(revision, dict):
+            digest = revision.get("semantic_digest")
+            if isinstance(digest, str) and digest in selected_set:
+                selected_buckets[bucket].append(digest)
+
+    boot = copy.deepcopy(payload)
+    boot["schema_version"] = _READER_PAYLOAD_V2
+    profile = publication.get("reader_profile")
+    labels = publication.get("labels")
+    source_title = next(
+        (
+            str(block.get("payload", {}).get("text"))
+            for block in blocks
+            if isinstance(block, dict)
+            and block.get("kind") == "heading"
+            and block.get("payload", {}).get("level") == 1
+        ),
+        "",
+    )
+    boot["reader_title"] = (
+        (profile.get("title") if isinstance(profile, dict) else None)
+        or (labels.get("document_title") if isinstance(labels, dict) else None)
+        or source_title
+        or (labels.get("untitled_document") if isinstance(labels, dict) else None)
+        or "Untitled document"
+    )
+    boot["block_manifest"] = block_manifest
+    boot["reader_chunks"] = []
+    boot["block_fingerprints"] = {}
+    boot["revisions"] = []
+    boot["resources"] = []
+    boot["publication"]["source_document"]["blocks"] = block_manifest
+    scripts: list[str] = []
+    for chunk_index in range(chunk_count):
+        start = chunk_index * _READER_BLOCKS_PER_CHUNK
+        end = min(len(blocks), start + _READER_BLOCKS_PER_CHUNK)
+        chunk_id = f"payload-chunk-{chunk_index:04d}"
+        script_id = f"arc-render-{chunk_id}"
+        boot["reader_chunks"].append(
+            {
+                "chunk_id": chunk_id,
+                "payload_id": script_id,
+                "block_start": start,
+                "block_end": end,
+            }
+        )
+        chunk = {
+            "schema_version": _READER_CHUNK_SCHEMA,
+            "chunk_id": chunk_id,
+            "block_start": start,
+            "block_end": end,
+            "blocks": blocks[start:end],
+            "block_fingerprints": {
+                str(block["block_id"]): fingerprints.get(str(block["block_id"]))
+                for block in blocks[start:end]
+            },
+            "revisions": revision_buckets[chunk_index],
+            "revision_positions": revision_position_buckets[chunk_index],
+            "selected_revision_digests": selected_buckets[chunk_index],
+        }
+        scripts.append(_json_script(script_id, chunk, "arc-render-reader-chunk"))
+
+    for index, resource in enumerate(resources):
+        if not isinstance(resource, dict):
+            raise StandaloneHtmlError("ARC reader resources are invalid")
+        script_id = f"arc-render-resource-{index:04d}"
+        metadata = {
+            key: item for key, item in resource.items() if key != "data_uri"
+        }
+        metadata["payload_id"] = script_id
+        boot["resources"].append(metadata)
+        scripts.append(
+            _json_script(
+                script_id,
+                {
+                    "schema_version": _READER_RESOURCE_SCHEMA,
+                    "resource": resource,
+                },
+                "arc-render-reader-resource",
+            )
+        )
+
+    encoded_boot = _json_text(boot)
+    replacement = (
+        match.group("open")
+        + encoded_boot
+        + match.group("close")
+        + "".join(scripts)
+    )
+    return value[: match.start()] + replacement + value[match.end() :]
+
+
+def _revision_chunk_index(
+    revision: object,
+    block_index: dict[str, int],
+    section_anchors: dict[str, str],
+    chunk_count: int,
+) -> int:
+    metadata = revision.get("metadata") if isinstance(revision, dict) else None
+    anchor = metadata.get("anchor") if isinstance(metadata, dict) else None
+    target = anchor.get("target_id") if isinstance(anchor, dict) else None
+    if isinstance(anchor, dict) and anchor.get("kind") == "section":
+        target = section_anchors.get(str(target))
+    index = block_index.get(str(target)) if target is not None else None
+    if index is None:
+        return chunk_count - 1
+    return min(chunk_count - 1, index // _READER_BLOCKS_PER_CHUNK)
+
+
+def _json_script(identifier: str, payload: object, class_name: str) -> str:
+    return (
+        f'<script id="{identifier}" class="{class_name}" '
+        f'type="application/json">{_json_text(payload)}</script>'
+    )
+
+
+def _json_text(payload: object) -> str:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).replace("</script", r"<\/script")
 
 
 def write_standalone_html(index: Path, output: Path) -> None:
