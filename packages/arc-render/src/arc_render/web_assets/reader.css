@@ -213,7 +213,7 @@ button { cursor: pointer; }
 }
 .arc-source-card { padding: .3rem .15rem; background: transparent; }
 .arc-fragment[data-role="translation"] {
-  background: transparent;
+  background: #eaf1f8;
 }
 .arc-fragment[data-role="companion"],
 .arc-fragment[data-role="guide"] {

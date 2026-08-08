@@ -12,6 +12,7 @@
     payload: null,
     md: null,
     revisions: new Map(),
+    revisionDigests: new Map(),
     selected: new Map(),
     embeddedRevisions: [],
     activeFragmentIds: new Set(),
@@ -35,6 +36,10 @@
     editorHistorical: null,
     citationNumberCache: null,
     glossarySurfaceCache: {source: null, target: null},
+    indexedPayload: null,
+    sourceIndexes: null,
+    sourceIdentityJson: null,
+    sourceIdentityValidatedPayload: null,
     fragmentGroups: new Map(),
     renderPlan: [],
     renderedChunkIds: new Set(),
@@ -46,7 +51,10 @@
     idleRenderHandle: null,
     idleRenderUsesCallback: false,
     idleRenderGeneration: 0,
+    hydrationQuietTimer: null,
+    hydrationActivityReady: false,
     hydrationOrder: [],
+    hashCalibration: null,
     diagnosticsRoot: null,
     readerShellReady: false,
     navigationReady: false,
@@ -82,6 +90,53 @@
       throw new Error("ARC reader payload has no source document");
     }
     return value;
+  }
+
+  function buildSourceIndexes() {
+    var publication = state.payload.publication;
+    var documentValue = publication.source_document;
+    var blocksById = new Map();
+    (documentValue.blocks || []).forEach(function (block) {
+      blocksById.set(block.block_id, block);
+    });
+    var sectionsById = new Map();
+    var sectionAnchors = new Map();
+    (publication.outline || []).forEach(function (section) {
+      sectionsById.set(section.section_id, section);
+      sectionAnchors.set(section.section_id, section.anchor_block_id);
+    });
+    var resourcesByDigest = new Map();
+    var resourcesByLogicalName = new Map();
+    var resources = state.payload.resources || [];
+    resources.forEach(function (resource) {
+      var digest = resource.artifact_digest || resource.digest;
+      if (digest) resourcesByDigest.set(digest, resource);
+      if (resource.logical_name) {
+        resourcesByLogicalName.set(resource.logical_name, resource);
+      }
+    });
+    state.sourceIndexes = {
+      blocksById: blocksById,
+      sectionsById: sectionsById,
+      sectionAnchors: sectionAnchors,
+      resourcesByDigest: resourcesByDigest,
+      resourcesByLogicalName: resourcesByLogicalName,
+      resourceCount: resources.length
+    };
+    state.sourceIdentityJson = state.payload.source_identity ?
+      stableStringify(state.payload.source_identity) : null;
+    state.indexedPayload = state.payload;
+  }
+
+  function ensureSourceIndexes() {
+    if (
+      state.indexedPayload !== state.payload ||
+      !state.sourceIndexes ||
+      state.sourceIndexes.resourceCount !== (state.payload.resources || []).length
+    ) {
+      buildSourceIndexes();
+    }
+    return state.sourceIndexes;
   }
 
   function labels() {
@@ -391,6 +446,7 @@
   }
 
   function initialRevisions() {
+    ensureSourceIndexes();
     state.embeddedRevisions = (state.payload.revisions || []).slice();
     state.activeFragmentIds = new Set(state.embeddedRevisions.map(function (raw) {
       return raw.metadata ? raw.metadata.fragment_id : raw.fragment_id;
@@ -401,15 +457,18 @@
 
   function resetRevisionState() {
     state.revisions = new Map();
+    state.revisionDigests = new Map();
     state.fileDiagnostics = [];
     state.embeddedRevisions.forEach(addRevision);
   }
 
   function addRevision(raw) {
-    addRevisionTo(raw, state.revisions, state.fileDiagnostics);
+    addRevisionTo(
+      raw, state.revisions, state.fileDiagnostics, state.revisionDigests
+    );
   }
 
-  function addRevisionTo(raw, revisions, fileDiagnostics) {
+  function addRevisionTo(raw, revisions, fileDiagnostics, revisionDigests) {
     var revision = raw.metadata ? Object.assign({}, raw.metadata) : Object.assign({}, raw);
     revision.markdown_body = raw.markdown_body === undefined ?
       revision.markdown_body || "" : raw.markdown_body;
@@ -425,12 +484,16 @@
       return;
     }
     var values = revisions.get(revision.fragment_id) || [];
-    if (!values.some(function (item) {
-      return item.semantic_digest &&
-        item.semantic_digest === revision.semantic_digest;
-    })) {
+    var digests = revisionDigests && (
+      revisionDigests.get(revision.fragment_id) || new Set()
+    );
+    if (!digests || !digests.has(revision.semantic_digest)) {
       values.push(revision);
       revisions.set(revision.fragment_id, values);
+      if (digests) {
+        digests.add(revision.semantic_digest);
+        revisionDigests.set(revision.fragment_id, digests);
+      }
     }
   }
 
@@ -728,6 +791,7 @@
     var target = chunkForTargetId(hashTargetId(window.location.hash));
     if (target) {
       renderChunk(target);
+      armHashCalibration(window.location.hash);
       return target;
     }
     var contentChunks = state.renderPlan.filter(function (chunk) {
@@ -780,6 +844,7 @@
     state.renderedChunkIds.add(chunk.chunk_id);
     setupLaneResponsiveness(node);
     updateRenderComplete();
+    recalibrateHashTarget();
     return node;
   }
 
@@ -802,7 +867,9 @@
         index += 1
       ) {
         var block = documentValue.blocks[index];
-        if (isPdfPageMarkerBlock(block)) continue;
+        if (isPdfPageMarkerBlock(block) || isStandaloneHtmlCommentBlock(block)) {
+          continue;
+        }
         content.appendChild(renderSourceRow(
           block, state.fragmentGroups.get(block.block_id) || []
         ));
@@ -883,10 +950,7 @@
     if (!anchor) return null;
     var target = anchor.target_id;
     if (anchor.kind === "section") {
-      var section = (state.payload.publication.outline || []).find(
-        function (item) { return item.section_id === target; }
-      );
-      target = section ? section.anchor_block_id : null;
+      target = ensureSourceIndexes().sectionAnchors.get(target) || null;
     }
     return target ?
       state.chunkByTargetId.get("block-" + safeToken(target)) || null :
@@ -923,6 +987,15 @@
     return /^<!-- PDF_PAGE: [1-9][0-9]* -->$/.test(text);
   }
 
+  function isStandaloneHtmlCommentBlock(block) {
+    if (!block || block.kind !== "paragraph") return false;
+    var payload = block.payload || {};
+    if (Array.isArray(payload.inline_spans) && payload.inline_spans.length) {
+      return false;
+    }
+    return /^\s*<!--[\s\S]*?-->\s*$/.test(String(payload.text || ""));
+  }
+
   function groupedFragments(documentValue) {
     var groups = new Map();
     state.selected.forEach(function (fragment) {
@@ -945,10 +1018,7 @@
     var anchor = fragment && fragment.anchor;
     var target = anchor && anchor.target_id;
     if (anchor && anchor.kind === "section") {
-      var section = (state.payload.publication.outline || []).find(
-        function (item) { return item.section_id === target; }
-      );
-      target = section ? section.anchor_block_id : null;
+      target = ensureSourceIndexes().sectionAnchors.get(target) || null;
     }
     return target || null;
   }
@@ -1131,15 +1201,11 @@
   }
 
   function resourceForDigest(digest) {
-    return (state.payload.resources || []).find(function (item) {
-      return item.artifact_digest === digest || item.digest === digest;
-    });
+    return ensureSourceIndexes().resourcesByDigest.get(digest) || null;
   }
 
   function resourceForLogicalName(logicalName) {
-    return (state.payload.resources || []).find(function (item) {
-      return item.logical_name === logicalName;
-    });
+    return ensureSourceIndexes().resourcesByLogicalName.get(logicalName) || null;
   }
 
   function fragmentMetaText(fragment, editing) {
@@ -1266,9 +1332,9 @@
     sections.forEach(function (section) {
       var item = element("li");
       item.dataset.level = String(section.level);
-      var link = element("a", "", section.title);
+      var link = element("a");
       link.href = "#block-" + safeToken(section.anchor_block_id);
-      removeVisibleHtmlTags(link);
+      appendTocTitle(link, section.title);
       item.appendChild(link);
       list.appendChild(item);
     });
@@ -1278,6 +1344,31 @@
     if ((state.payload.publication.bibliography || []).length) {
       appendContentsLink(list, strings.references, "#arc-references");
     }
+  }
+
+  function appendTocTitle(parent, value) {
+    var text = String(value || "");
+    var position = 0;
+    while (position < text.length) {
+      var match = /\\\(([^\n]+?)\\\)|\$([^$\n]+?)\$/.exec(
+        text.slice(position)
+      );
+      if (!match) {
+        parent.appendChild(document.createTextNode(text.slice(position)));
+        break;
+      }
+      var start = position + match.index;
+      if (start > position) {
+        parent.appendChild(document.createTextNode(text.slice(position, start)));
+      }
+      var tex = match[1] === undefined ? match[2] : match[1];
+      var math = element("span", "math math-inline", tex);
+      math.dataset.tex = tex;
+      parent.appendChild(math);
+      position = start + match[0].length;
+    }
+    removeVisibleHtmlTags(parent);
+    typeset(parent);
   }
 
   function appendContentsLink(list, text, href) {
@@ -1607,6 +1698,7 @@
 
   function startProgressiveRendering() {
     setupChunkObserver();
+    setupHydrationActivity();
     scheduleIdleHydration();
   }
 
@@ -1634,14 +1726,32 @@
   function scheduleIdleHydration() {
     if (
       state.idleRenderHandle !== null ||
+      state.hydrationQuietTimer !== null ||
+      document.body.dataset.arcRenderComplete === "true"
+    ) {
+      return;
+    }
+    state.hydrationQuietTimer = window.setTimeout(function () {
+      state.hydrationQuietTimer = null;
+      requestIdleHydration();
+    }, 2000);
+  }
+
+  function requestIdleHydration() {
+    if (
+      state.idleRenderHandle !== null ||
       document.body.dataset.arcRenderComplete === "true"
     ) {
       return;
     }
     var generation = state.idleRenderGeneration;
-    var work = function () {
+    var work = function (deadline) {
       state.idleRenderHandle = null;
       if (generation !== state.idleRenderGeneration) return;
+      if (deadline && deadline.timeRemaining() < 12) {
+        requestIdleHydration();
+        return;
+      }
       var chunk = nextHydrationChunk();
       if (!chunk) {
         updateRenderComplete();
@@ -1653,15 +1763,29 @@
         failProgressiveRender(error);
         return;
       }
-      scheduleIdleHydration();
+      requestIdleHydration();
     };
     if (typeof window.requestIdleCallback === "function") {
       state.idleRenderUsesCallback = true;
-      state.idleRenderHandle = window.requestIdleCallback(work, {timeout: 1500});
+      state.idleRenderHandle = window.requestIdleCallback(work);
     } else {
       state.idleRenderUsesCallback = false;
-      state.idleRenderHandle = window.setTimeout(work, 50);
+      state.idleRenderHandle = window.setTimeout(work, 250);
     }
+  }
+
+  function noteHydrationActivity() {
+    if (state.hashCalibration) state.hashCalibration = null;
+    cancelIdleHydration();
+    scheduleIdleHydration();
+  }
+
+  function setupHydrationActivity() {
+    if (state.hydrationActivityReady) return;
+    ["wheel", "touchstart", "keydown", "pointerdown"].forEach(function (name) {
+      window.addEventListener(name, noteHydrationActivity, {passive: true});
+    });
+    state.hydrationActivityReady = true;
   }
 
   function nextHydrationChunk() {
@@ -1679,6 +1803,10 @@
 
   function cancelIdleHydration() {
     state.idleRenderGeneration += 1;
+    if (state.hydrationQuietTimer !== null) {
+      window.clearTimeout(state.hydrationQuietTimer);
+      state.hydrationQuietTimer = null;
+    }
     if (state.idleRenderHandle === null) return;
     if (
       state.idleRenderUsesCallback &&
@@ -1752,6 +1880,7 @@
     var chunk = chunkForTargetId(targetId);
     if (!chunk) return false;
     renderChunk(chunk);
+    armHashCalibration(hash);
     if (updateHistory) {
       if (window.location.hash === hash) {
         window.history.replaceState(null, "", hash);
@@ -1759,6 +1888,24 @@
         window.history.pushState(null, "", hash);
       }
     }
+    scrollToHashTarget(targetId);
+    return true;
+  }
+
+  function armHashCalibration(hash) {
+    var targetId = hashTargetId(hash);
+    if (!targetId || !chunkForTargetId(targetId)) return;
+    state.hashCalibration = {targetId: targetId};
+    recalibrateHashTarget();
+  }
+
+  function recalibrateHashTarget() {
+    var calibration = state.hashCalibration;
+    if (!calibration) return;
+    scrollToHashTarget(calibration.targetId);
+  }
+
+  function scrollToHashTarget(targetId) {
     window.requestAnimationFrame(function () {
       var target = document.getElementById(targetId);
       if (!target) return;
@@ -1768,7 +1915,6 @@
       target.scrollIntoView({block: "start", behavior: "auto"});
       root.style.scrollBehavior = previousBehavior;
     });
-    return true;
   }
 
   function setupPrintRendering() {
@@ -1851,8 +1997,19 @@
       'script[src], link[rel~="stylesheet"][href]'
     );
     if (!state.exportStandaloneSupported) return;
-    state.exportHtmlTemplate = "<!doctype html>\n" +
-      document.documentElement.outerHTML;
+    var root = document.documentElement.cloneNode(true);
+    var body = root.querySelector("body");
+    var readingArea = root.querySelector("#arc-document");
+    var header = root.querySelector("#arc-book-header");
+    var contents = root.querySelector("#arc-contents-list");
+    if (readingArea) readingArea.replaceChildren();
+    if (header) header.replaceChildren();
+    if (contents) contents.replaceChildren();
+    if (body) {
+      delete body.dataset.arcRenderReady;
+      delete body.dataset.arcRenderComplete;
+    }
+    state.exportHtmlTemplate = "<!doctype html>\n" + root.outerHTML;
   }
 
   function captureInitialSelection() {
@@ -2164,6 +2321,7 @@
   }
 
   function buildStandaloneExportHtml() {
+    if (!state.exportHtmlTemplate) captureExportTemplate();
     if (!state.exportStandaloneSupported || !state.exportHtmlTemplate) {
       throw new Error(labels().exportUnavailable);
     }
@@ -2291,9 +2449,10 @@
     var generation = state.directoryLoadGeneration + 1;
     state.directoryLoadGeneration = generation;
     var revisions = new Map();
+    var revisionDigests = new Map();
     var fileDiagnostics = [];
     state.embeddedRevisions.forEach(function (revision) {
-      addRevisionTo(revision, revisions, fileDiagnostics);
+      addRevisionTo(revision, revisions, fileDiagnostics, revisionDigests);
     });
     var previousCache = handle === state.directoryCacheHandle ?
       state.directoryFileCache : new Map();
@@ -2304,7 +2463,7 @@
     } catch (error) {
       if (error.name === "NotFoundError") {
         return commitDirectorySnapshot(
-          handle, revisions, fileDiagnostics, nextCache, generation
+          handle, revisions, revisionDigests, fileDiagnostics, nextCache, generation
         );
       }
       throw error;
@@ -2316,23 +2475,26 @@
     outcomes.forEach(function (outcome) {
       if (!outcome) return;
       if (outcome.revision) {
-        addRevisionTo(outcome.revision, revisions, fileDiagnostics);
+        addRevisionTo(
+          outcome.revision, revisions, fileDiagnostics, revisionDigests
+        );
       } else if (outcome.diagnostic) {
         fileDiagnostics.push(outcome.diagnostic);
       }
     });
     return commitDirectorySnapshot(
-      handle, revisions, fileDiagnostics, nextCache, generation
+      handle, revisions, revisionDigests, fileDiagnostics, nextCache, generation
     );
   }
 
   function commitDirectorySnapshot(
-    handle, revisions, fileDiagnostics, fileCache, generation
+    handle, revisions, revisionDigests, fileDiagnostics, fileCache, generation
   ) {
     if (generation !== state.directoryLoadGeneration) return false;
     var previousSelected = new Map(state.selected);
     state.directory = handle;
     state.revisions = revisions;
+    state.revisionDigests = revisionDigests;
     state.fileDiagnostics = fileDiagnostics;
     state.directoryCacheHandle = handle;
     state.directoryFileCache = fileCache;
@@ -3093,6 +3255,8 @@
   }
 
   function validateRevisionMetadata(metadata) {
+    ensureSourceIndexes();
+    validateCurrentSourceIdentity();
     var fields = [
       "anchor", "citation_ids", "fragment_id", "language",
       "parent_semantic_digest", "priority", "provenance", "revision", "role",
@@ -3121,11 +3285,7 @@
     ) {
       throw new Error("fragment revision parent identity is invalid");
     }
-    validateSourceIdentity(metadata.source);
-    if (
-      stableStringify(metadata.source) !==
-      stableStringify(state.payload.source_identity)
-    ) {
+    if (stableStringify(metadata.source) !== state.sourceIdentityJson) {
       throw new Error("fragment revision binds another rich source");
     }
     validateAnchor(metadata.anchor);
@@ -3142,6 +3302,12 @@
     if (!plainObject(metadata.provenance)) {
       throw new Error("fragment provenance must be an object");
     }
+  }
+
+  function validateCurrentSourceIdentity() {
+    if (state.sourceIdentityValidatedPayload === state.payload) return;
+    validateSourceIdentity(state.payload.source_identity);
+    state.sourceIdentityValidatedPayload = state.payload;
   }
 
   function validateSourceIdentity(source) {
@@ -3174,15 +3340,9 @@
     ) {
       throw new Error("fragment anchor is invalid");
     }
-    var documentValue = state.payload.publication.source_document;
-    var blocks = new Map((documentValue.blocks || []).map(function (block) {
-      return [block.block_id, block];
-    }));
-    var sections = new Set(
-      (state.payload.publication.outline || []).map(function (section) {
-        return section.section_id;
-      })
-    );
+    var indexes = ensureSourceIndexes();
+    var blocks = indexes.blocksById;
+    var sections = indexes.sectionsById;
     if (
       (anchor.kind === "block" && !blocks.has(anchor.target_id)) ||
       (anchor.kind === "section" && !sections.has(anchor.target_id))
@@ -3371,7 +3531,9 @@
 
   async function initialize() {
     try {
-      captureExportTemplate();
+      state.exportStandaloneSupported = !document.querySelector(
+        'script[src], link[rel~="stylesheet"][href]'
+      );
       document.body.dataset.arcRenderReady = "loading";
       document.body.dataset.arcRenderComplete = "false";
       state.payload = readPayload();

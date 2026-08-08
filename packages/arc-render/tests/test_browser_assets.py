@@ -63,6 +63,7 @@ define = undefined;
     setupMarkdown: setupMarkdown,
     buildRenderChunks: buildRenderChunks,
     isPdfPageMarkerBlock: isPdfPageMarkerBlock,
+    isStandaloneHtmlCommentBlock: isStandaloneHtmlCommentBlock,
     katexCandidates: katexCandidates,
     katexTex: katexTex,
     validateIntegerJson: validateIntegerJson,
@@ -95,6 +96,24 @@ if (helpers.isPdfPageMarkerBlock({
   payload: {text: "<!-- note -->"}
 })) {
   throw new Error("ordinary HTML comment was treated as a PDF page marker");
+}
+if (!helpers.isStandaloneHtmlCommentBlock({
+  kind: "paragraph",
+  payload: {text: "  <!-- retained extraction note -->\\n"}
+})) {
+  throw new Error("standalone HTML comment block remained visible");
+}
+if (helpers.isStandaloneHtmlCommentBlock({
+  kind: "paragraph",
+  payload: {text: "<!-- note --> visible text"}
+})) {
+  throw new Error("mixed visible source text was hidden with its comment");
+}
+if (helpers.isStandaloneHtmlCommentBlock({
+  kind: "code",
+  payload: {text: "<!-- code comment -->"}
+})) {
+  throw new Error("code comment was hidden");
 }
 if (
   helpers.katexTex(String.raw`a&=b\\\\&=c`) !==
@@ -2131,7 +2150,10 @@ def test_reader_rebuilds_directory_state_and_guards_revision_lineage() -> None:
 def test_reader_enforces_strict_browser_revision_contract() -> None:
     javascript = _text("reader.js")
 
-    assert "validateSourceIdentity(metadata.source)" in javascript
+    assert "validateCurrentSourceIdentity();" in javascript
+    assert "validateSourceIdentity(state.payload.source_identity)" in javascript
+    assert "state.sourceIndexes = {" in javascript
+    assert "var blocks = indexes.blocksById;" in javascript
     assert "validateAnchor(metadata.anchor)" in javascript
     assert "validateIntegerJson(metadata, \"fragment revision\")" in javascript
     assert "Number.isSafeInteger(value)" in javascript
@@ -2178,6 +2200,14 @@ def test_reader_uses_low_distraction_controls_and_inline_editor() -> None:
     assert "changeSaveLocation" in javascript
     assert "buildStandaloneExportHtml" in javascript
     assert "collectMarkdownFiles" in javascript
+    initialize = javascript[javascript.index("async function initialize()"):]
+    assert "captureExportTemplate();" not in initialize
+    assert "root.outerHTML" in javascript
+    assert "readingArea.replaceChildren();" in javascript
+    assert "header.replaceChildren();" in javascript
+    assert "contents.replaceChildren();" in javascript
+    assert 'background: #eaf1f8;' in stylesheet
+    assert ".arc-source-card { padding: .3rem .15rem; background: transparent; }" in stylesheet
 
 
 def test_reader_progressively_hydrates_navigation_find_and_print_content() -> None:
@@ -2187,7 +2217,13 @@ def test_reader_progressively_hydrates_navigation_find_and_print_content() -> No
     assert "MAX_BLOCKS_PER_RENDER_CHUNK = 36" in javascript
     assert "buildRenderChunks(" in javascript
     assert "new IntersectionObserver" in javascript
-    assert "window.requestIdleCallback" in javascript
+    assert "window.requestIdleCallback(work)" in javascript
+    assert "}, 2000);" in javascript
+    assert "deadline.timeRemaining() < 12" in javascript
+    assert "window.setTimeout(work, 250)" in javascript
+    assert '"wheel", "touchstart", "keydown", "pointerdown"' in javascript
+    assert "armHashCalibration(window.location.hash);" in javascript
+    assert "recalibrateHashTarget();" in javascript
     assert 'window.addEventListener("beforeprint", renderAllChunks)' in javascript
     assert "activateHashTarget(href, true)" in javascript
     assert "refreshChangedSelections(previousSelected);" in javascript
@@ -2199,6 +2235,61 @@ def test_reader_progressively_hydrates_navigation_find_and_print_content() -> No
     assert ".arc-render-chunk:not(.is-rendered)" in stylesheet
     assert "content-visibility: auto" in stylesheet
     assert "content-visibility: visible !important" in stylesheet
+
+
+def test_reader_hydration_waits_for_quiet_idle_budget_and_activity_reset() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        "globalThis.window = globalThis;\n"
+        + javascript[:startup]
+        + """
+  globalThis.__arcReaderTest = {
+    state: state,
+    scheduleIdleHydration: scheduleIdleHydration,
+    noteHydrationActivity: noteHydrationActivity
+  };
+}());
+var helpers = globalThis.__arcReaderTest;
+var timers = [];
+var idle = [];
+var cancelled = [];
+globalThis.document = {body: {dataset: {arcRenderComplete: "false"}}};
+window.setTimeout = function (callback, delay) {
+  timers.push({callback: callback, delay: delay});
+  return timers.length;
+};
+window.clearTimeout = function (handle) { cancelled.push(handle); };
+window.requestIdleCallback = function (callback) {
+  idle.push(callback);
+  return 91;
+};
+window.cancelIdleCallback = function (handle) { cancelled.push(handle); };
+helpers.scheduleIdleHydration();
+if (timers.length !== 1 || timers[0].delay !== 2000 || idle.length !== 0) {
+  throw new Error("hydration did not wait for two seconds of quiet");
+}
+timers[0].callback();
+if (idle.length !== 1) throw new Error("quiet hydration did not request idle work");
+idle[0]({timeRemaining: function () { return 11; }});
+if (idle.length !== 2) throw new Error("short idle budget rendered a chunk");
+helpers.state.hashCalibration = {targetId: "block-1"};
+helpers.noteHydrationActivity();
+if (helpers.state.hashCalibration !== null) {
+  throw new Error("reader activity did not release hash calibration");
+}
+if (timers.length !== 2 || timers[1].delay !== 2000 || !cancelled.length) {
+  throw new Error("reader activity did not pause and restart quiet hydration");
+}
+"""
+    )
+    subprocess.run(
+        [node, "-"], input=instrumented, check=True, capture_output=True, text=True
+    )
 
 
 def test_reader_preserves_source_text_and_glossary_rendering_contracts() -> None:
@@ -2220,6 +2311,10 @@ def test_reader_uses_explicit_outline_for_navigation_and_section_anchors() -> No
         "renderContents(contents, publication.outline || [], strings)"
         in javascript
     )
-    assert "state.payload.publication.outline || []" in javascript
-    assert 'target = section ? section.anchor_block_id : null' in javascript
+    assert "sectionAnchors: sectionAnchors" in javascript
+    assert "sectionAnchors.get(target)" in javascript
+    assert "appendTocTitle(link, section.title);" in javascript
+    assert "function appendTocTitle(parent, value)" in javascript
+    assert "parent.appendChild(document.createTextNode" in javascript
+    assert "typeset(parent);" in javascript
     assert 'safeToken(section.anchor_block_id)' in javascript
