@@ -32,6 +32,15 @@ def test_reader_javascript_passes_node_syntax_check() -> None:
     )
 
 
+def test_reader_exposes_lightweight_supplement_coverage_download() -> None:
+    javascript = _text("reader.js")
+
+    assert "appendSupplementCoverage(list)" in javascript
+    assert "coverage.report_logical_name" in javascript
+    assert 'link.download = coverage.report_filename ||' in javascript
+    assert "Download complete report" in javascript
+
+
 def test_reader_contract_helpers_execute_under_node() -> None:
     node = shutil.which("node")
     if node is None:

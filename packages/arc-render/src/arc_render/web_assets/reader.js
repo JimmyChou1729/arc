@@ -1344,6 +1344,24 @@
     if ((state.payload.publication.bibliography || []).length) {
       appendContentsLink(list, strings.references, "#arc-references");
     }
+    appendSupplementCoverage(list);
+  }
+
+  function appendSupplementCoverage(list) {
+    var profile = state.payload.publication.reader_profile || {};
+    var coverage = profile.supplement_coverage;
+    if (!coverage || typeof coverage.summary !== "string") return;
+    var item = element("li", "arc-supplement-coverage");
+    item.appendChild(element("span", "", coverage.summary));
+    var resource = resourceForLogicalName(coverage.report_logical_name);
+    if (resource && typeof resource.data_uri === "string") {
+      item.appendChild(document.createTextNode(" "));
+      var link = element("a", "", "Download complete report");
+      link.href = resource.data_uri;
+      link.download = coverage.report_filename || "supplement-coverage.json";
+      item.appendChild(link);
+    }
+    list.appendChild(item);
   }
 
   function appendTocTitle(parent, value) {
