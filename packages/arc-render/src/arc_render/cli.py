@@ -18,6 +18,7 @@ from arc_paper import (
 )
 
 from .contracts import Publication, source_identity_from_rich_document
+from .browser_validation import validate_reader_in_browser
 from .html import (
     HTMLRenderError,
     render_publication_html,
@@ -118,6 +119,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     validate.add_argument("--publication", type=Path, required=True)
     validate.add_argument("--html", type=Path)
+    validate.add_argument(
+        "--browser",
+        action="store_true",
+        help="run optional local Chromium reader checks (requires --html)",
+    )
+    validate.add_argument(
+        "--browser-executable",
+        help="local Chromium-family executable for --browser",
+    )
+    validate.add_argument(
+        "--browser-timeout",
+        type=int,
+        default=60,
+        help="browser validation timeout in seconds (default: 60)",
+    )
 
     standalone = subparsers.add_parser(
         "standalone-html",
@@ -221,6 +237,18 @@ def _validate(args: argparse.Namespace) -> dict[str, Any]:
     if args.html is not None:
         validate_standalone_html(publication, args.html)
         result["html"] = str(args.html.resolve())
+    if args.browser:
+        if args.html is None:
+            raise ValueError("--browser requires --html")
+        browser = validate_reader_in_browser(
+            args.html,
+            browser_executable=args.browser_executable,
+            timeout_seconds=args.browser_timeout,
+        )
+        result["browser"] = {
+            "executable": browser.executable,
+            "timeout_seconds": browser.timeout_seconds,
+        }
     return result
 
 

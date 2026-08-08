@@ -14,6 +14,8 @@ from arc_paper import (
     rich_document_to_document,
 )
 
+from arc_render import BrowserValidation
+from arc_render import cli
 from arc_render.cli import main
 
 
@@ -81,5 +83,53 @@ def test_cli_has_no_pdf_generation_option(
             "--html", str(tmp_path / "reader.html"),
             "--pdf", str(tmp_path / "reader.pdf"),
         ])
+
+    assert error.value.code == 2
+
+
+def test_validate_browser_option_runs_only_when_requested(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source(tmp_path / "source.json")
+    publication = tmp_path / "publication.json"
+    html = tmp_path / "reader.html"
+    assert main(["compose", "--source", str(source), "--output", str(publication)]) == 0
+    capsys.readouterr()
+    assert main(["render", "--publication", str(publication), "--html", str(html)]) == 0
+    capsys.readouterr()
+    calls: list[tuple[Path, str | None, int]] = []
+
+    def validate_browser(
+        path: Path, *, browser_executable: str | None, timeout_seconds: int
+    ) -> BrowserValidation:
+        calls.append((path, browser_executable, timeout_seconds))
+        return BrowserValidation("/usr/bin/chromium", timeout_seconds)
+
+    monkeypatch.setattr(cli, "validate_reader_in_browser", validate_browser)
+
+    assert main([
+        "validate",
+        "--publication", str(publication),
+        "--html", str(html),
+        "--browser",
+        "--browser-executable", "custom-chromium",
+        "--browser-timeout", "9",
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert calls == [(html, "custom-chromium", 9)]
+    assert result["browser"] == {
+        "executable": "/usr/bin/chromium",
+        "timeout_seconds": 9,
+    }
+
+
+def test_validate_browser_requires_html(tmp_path: Path) -> None:
+    publication = tmp_path / "publication.json"
+
+    with pytest.raises(SystemExit) as error:
+        main(["validate", "--publication", str(publication), "--browser"])
 
     assert error.value.code == 2

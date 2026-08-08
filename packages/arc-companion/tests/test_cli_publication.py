@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from arc_jobs import CommandResult, CommandStatus, RunStatus
-from arc_render import HTMLRenderError
+from arc_render import BrowserValidation, HTMLRenderError
 
 from arc_companion import cli
 from arc_companion.project import CompanionProjectPaths
@@ -103,6 +103,46 @@ def test_validate_requires_standalone_html(
         HTMLRenderError, match="no standalone HTML release"
     ):
         cli._validate(SimpleNamespace(project_dir=str(paths.root)))
+
+
+def test_validate_forwards_optional_browser_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = CompanionProjectPaths.open(tmp_path / "project")
+    paths.select_run("run")
+    publication = SimpleNamespace(publication_digest="a" * 64)
+    service = _Service(paths.jobs_root, publication)
+    publication_path = paths.publication_workspace("run") / "publication.json"
+    publication_path.parent.mkdir(parents=True)
+    publication_path.write_text("{}", encoding="utf-8")
+    paths.delivery_html.write_text("reader", encoding="utf-8")
+    calls: list[tuple[Path, str | None, int]] = []
+
+    monkeypatch.setattr(cli.CompanionProjectPaths, "load", lambda _value: paths)
+    monkeypatch.setattr(cli, "CompanionService", lambda _root: service)
+    monkeypatch.setattr(cli, "validate_publication_workspace", lambda _path: ())
+    monkeypatch.setattr(cli, "validate_standalone_html", lambda *_args: None)
+
+    def validate_browser(
+        path: Path, *, browser_executable: str | None, timeout_seconds: int
+    ) -> BrowserValidation:
+        calls.append((path, browser_executable, timeout_seconds))
+        return BrowserValidation("/usr/bin/chromium", timeout_seconds)
+
+    monkeypatch.setattr(cli, "validate_reader_in_browser", validate_browser)
+
+    result = cli._validate(SimpleNamespace(
+        project_dir=str(paths.root),
+        browser=True,
+        browser_executable="custom-chromium",
+        browser_timeout=11,
+    ))
+
+    assert calls == [(paths.delivery_html, "custom-chromium", 11)]
+    assert result.data["browser"] == {
+        "executable": "/usr/bin/chromium",
+        "timeout_seconds": 11,
+    }
 
 
 @pytest.mark.parametrize(

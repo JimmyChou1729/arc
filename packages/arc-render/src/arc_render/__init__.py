@@ -37,6 +37,7 @@ from .contracts import (
     source_identity_from_rich_document,
     source_identity_to_document,
 )
+from .browser_validation import BrowserValidation, validate_reader_in_browser
 from .markdown import (
     FRONT_MATTER_BEGIN,
     FRONT_MATTER_END,
@@ -92,6 +93,7 @@ __all__ = [
     "PUBLICATION_SCHEMA",
     "AnchorBlock",
     "AnchorKind",
+    "BrowserValidation",
     "FragmentAnchor",
     "FragmentRevision",
     "FragmentRevisionRef",
@@ -147,6 +149,7 @@ __all__ = [
     "StandaloneHtmlError",
     "standalone_html_bytes",
     "validate_publication_workspace",
+    "validate_reader_in_browser",
     "validate_standalone_html",
     "write_fragment_revision",
     "write_layer",

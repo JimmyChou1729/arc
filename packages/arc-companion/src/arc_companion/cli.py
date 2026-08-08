@@ -37,6 +37,7 @@ from arc_render import (
     RenderWorkspaceError,
     read_publication,
     render_publication_html,
+    validate_reader_in_browser,
     validate_publication_workspace,
     validate_standalone_html,
 )
@@ -176,6 +177,21 @@ def _parser() -> _Parser:
         description="Validate the publication workspace and standalone HTML.",
     )
     validate.add_argument("--project-dir", required=True, help="Companion project directory")
+    validate.add_argument(
+        "--browser",
+        action="store_true",
+        help="run optional local Chromium reader checks",
+    )
+    validate.add_argument(
+        "--browser-executable",
+        help="local Chromium-family executable for --browser",
+    )
+    validate.add_argument(
+        "--browser-timeout",
+        type=int,
+        default=60,
+        help="browser validation timeout in seconds (default: 60)",
+    )
     return parser
 
 
@@ -567,10 +583,21 @@ def _render(args: argparse.Namespace) -> CommandResult:
 def _validate(args: argparse.Namespace) -> CommandResult:
     paths = CompanionProjectPaths.load(args.project_dir)
     with file_lease(paths.delivery_lease, blocking=True):
-        return _validate_locked(paths)
+        return _validate_locked(
+            paths,
+            browser=bool(getattr(args, "browser", False)),
+            browser_executable=getattr(args, "browser_executable", None),
+            browser_timeout=getattr(args, "browser_timeout", 60),
+        )
 
 
-def _validate_locked(paths: CompanionProjectPaths) -> CommandResult:
+def _validate_locked(
+    paths: CompanionProjectPaths,
+    *,
+    browser: bool = False,
+    browser_executable: str | None = None,
+    browser_timeout: int = 60,
+) -> CommandResult:
     run_id = _current_run(paths)
     service = CompanionService(paths.jobs_root)
     publication_path = service.materialize_publication(
@@ -583,11 +610,25 @@ def _validate_locked(paths: CompanionProjectPaths) -> CommandResult:
             "the selected publication has no standalone HTML release"
         )
     validate_standalone_html(publication, paths.delivery_html)
+    browser_data: dict[str, Any] = {}
+    if browser:
+        checked = validate_reader_in_browser(
+            paths.delivery_html,
+            browser_executable=browser_executable,
+            timeout_seconds=browser_timeout,
+        )
+        browser_data = {
+            "browser": {
+                "executable": checked.executable,
+                "timeout_seconds": checked.timeout_seconds,
+            }
+        }
     return CommandResult(
         CommandStatus.COMPLETED,
         data={
             "publication_digest": publication.publication_digest,
             "valid": True,
+            **browser_data,
         },
         artifacts=(
             CommandArtifact("publication", run_id, str(publication_path)),
