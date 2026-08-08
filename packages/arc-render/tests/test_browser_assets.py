@@ -158,6 +158,25 @@ if (
 ) {
   throw new Error("cross-row scalable delimiter fallback is missing");
 }
+var repeatedScriptCandidates = helpers.katexCandidates(
+  String.raw`A^{*}^{\\mathrm{T}} + \\omega_A^*^\\dagger + \\chi_n^\\dagger'`
+);
+if (
+  !repeatedScriptCandidates.some(function (candidate) {
+    return candidate.includes(String.raw`{A^{*}}^{\\mathrm{T}}`) &&
+      candidate.includes(String.raw`{\\omega_A^*}^\\dagger`) &&
+      candidate.includes(String.raw`{\\chi_n^\\dagger}'`);
+  })
+) {
+  throw new Error("repeated TeX superscripts were not grouped for KaTeX");
+}
+if (
+  !helpers.katexCandidates("x+\frac{a}{b}").some(function (candidate) {
+    return candidate === String.raw`x+\\frac{a}{b}`;
+  })
+) {
+  throw new Error("legacy form-feed frac escape was not repaired for KaTeX");
+}
 if (helpers.stableStringify({b: 2, a: 1}) !== '{"a":1,"b":2}') {
   throw new Error("canonical JSON ordering changed");
 }

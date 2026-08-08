@@ -1627,13 +1627,23 @@
     return tex;
   }
 
+  function repairRepeatedSuperscripts(value) {
+    var tex = String(value || "");
+    var repeated = /((?:\\[A-Za-z]+|[A-Za-z0-9])(?:_(?:\{[^{}]*\}|\\[A-Za-z]+|.))?)(\^(?:\{[^{}]*\}|\\[A-Za-z]+|.))(\^(?:\{[^{}]*\}|\\[A-Za-z]+|.)|')/g;
+    return tex.replace(repeated, function (_match, base, first, second) {
+      return "{" + base + first + "}" + second;
+    });
+  }
+
   function katexCandidates(value) {
     var primary = katexTex(value);
     var repaired = repairMatrixShorthand(primary);
-    var fixedSizeDelimiters = repaired
+    var repairedScripts = repairRepeatedSuperscripts(repaired)
+      .replace(/\u000crac/g, "\\frac");
+    var fixedSizeDelimiters = repairedScripts
       .replace(/\\left\b/g, "\\bigl")
       .replace(/\\right\b/g, "\\bigr");
-    return [primary, repaired, fixedSizeDelimiters].filter(function (
+    return [primary, repaired, repairedScripts, fixedSizeDelimiters].filter(function (
       candidate, index, values
     ) {
       return values.indexOf(candidate) === index;
