@@ -681,3 +681,42 @@ def test_standalone_validation_detects_payload_tampering(
 
     with pytest.raises(HTMLRenderError, match="fragment identity|resource"):
         validate_standalone_html(publication, output)
+
+
+def test_publication_owned_resource_is_embedded_and_validated(
+    tmp_path: Path,
+) -> None:
+    publication_path, publication, _selected = _workspace(tmp_path)
+    payload = b'{"schema_version":"arc.test.coverage.v1"}\n'
+    digest = hashlib.sha256(payload).hexdigest()
+    resource_path = tmp_path / "resources" / "coverage.json"
+    resource_path.parent.mkdir()
+    resource_path.write_bytes(payload)
+    publication = Publication(
+        source_document=publication.source_document,
+        layers=publication.layers,
+        glossary=publication.glossary,
+        bibliography=publication.bibliography,
+        labels=publication.labels,
+        resources=(
+            {
+                "artifact_digest": digest,
+                "media_type": "application/json",
+                "logical_name": "supplement-coverage.json",
+                "size": len(payload),
+                "path": "resources/coverage.json",
+            },
+        ),
+        reader_profile=publication.reader_profile,
+        outline=publication.outline,
+    )
+    write_publication(publication_path, publication)
+    output = tmp_path / "owned-resource.html"
+
+    render_publication_html(publication_path, output)
+
+    embedded = _payload(output.read_text(encoding="utf-8"))["resources"]
+    assert [item["logical_name"] for item in embedded] == [
+        "supplement-coverage.json"
+    ]
+    validate_standalone_html(publication, output)

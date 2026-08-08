@@ -444,52 +444,119 @@ def _embedded_resources(
     root: Path,
     asset_loader: AssetLoader | None,
 ) -> tuple[dict[str, Any], ...]:
-    declarations: dict[str, Mapping[str, Any]] = {}
-    for item in publication.resources:
-        digest = item.get("artifact_digest") or item.get("digest")
-        if isinstance(digest, str):
-            declarations[digest.casefold()] = item
     values: list[dict[str, Any]] = []
-    for asset in publication.source_document.assets:
+    for declaration in _resource_declarations(publication):
+        digest = str(declaration["artifact_digest"])
+        media_type = str(declaration["media_type"])
+        logical_name = str(declaration["logical_name"])
+        size = int(declaration["size"])
         payload: bytes | None = None
         if asset_loader is not None:
-            payload = asset_loader(asset.artifact_digest)
+            payload = asset_loader(digest)
         if payload is None:
-            declaration = declarations.get(asset.artifact_digest)
-            if declaration is not None:
-                relative = declaration.get("path")
-                if not isinstance(relative, str):
-                    raise HTMLRenderError(
-                        f"resource path is missing: {asset.artifact_digest}"
-                    )
-                path = _project_path(root, relative, "resource")
-                try:
-                    payload = path.read_bytes()
-                except OSError as exc:
-                    raise HTMLRenderError(
-                        f"resource is unreadable: {relative}"
-                    ) from exc
+            relative = declaration.get("path")
+            if not isinstance(relative, str):
+                raise HTMLRenderError(f"resource path is missing: {digest}")
+            path = _project_path(root, relative, "resource")
+            try:
+                payload = path.read_bytes()
+            except OSError as exc:
+                raise HTMLRenderError(
+                    f"resource is unreadable: {relative}"
+                ) from exc
         if payload is None:
-            raise HTMLRenderError(
-                f"source asset is unavailable: {asset.artifact_digest}"
-            )
+            raise HTMLRenderError(f"resource is unavailable: {digest}")
         actual = hashlib.sha256(payload).hexdigest()
-        if actual != asset.artifact_digest or len(payload) != asset.size:
+        if actual != digest or len(payload) != size:
             raise HTMLRenderError(
-                f"source asset bytes do not match metadata: {asset.artifact_digest}"
+                f"resource bytes do not match metadata: {digest}"
             )
+        values.append(
+            {
+                "artifact_digest": digest,
+                "media_type": media_type,
+                "logical_name": logical_name,
+                "size": size,
+                "data_uri": (
+                    f"data:{media_type};base64,"
+                    f"{base64.b64encode(payload).decode('ascii')}"
+                ),
+            }
+        )
+    return tuple(values)
+
+
+def _resource_declarations(
+    publication: Publication,
+) -> tuple[dict[str, Any], ...]:
+    """Return validated source and publication-owned resource metadata."""
+
+    declared: dict[str, Mapping[str, Any]] = {}
+    for item in publication.resources:
+        digest = item.get("artifact_digest") or item.get("digest")
+        if (
+            not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or digest in declared
+        ):
+            raise HTMLRenderError("publication resource identity is invalid")
+        declared[digest] = item
+
+    values: list[dict[str, Any]] = []
+    source_digests: set[str] = set()
+    for asset in publication.source_document.assets:
+        source_digests.add(asset.artifact_digest)
+        raw = declared.get(asset.artifact_digest, {})
+        for field, expected in (
+            ("media_type", asset.media_type),
+            ("logical_name", asset.logical_name),
+            ("size", asset.size),
+        ):
+            if field in raw and raw[field] != expected:
+                raise HTMLRenderError(
+                    "publication source resource metadata differs from the source"
+                )
         values.append(
             {
                 "artifact_digest": asset.artifact_digest,
                 "media_type": asset.media_type,
                 "logical_name": asset.logical_name,
                 "size": asset.size,
-                "data_uri": (
-                    f"data:{asset.media_type};base64,"
-                    f"{base64.b64encode(payload).decode('ascii')}"
-                ),
+                **({"path": raw["path"]} if "path" in raw else {}),
             }
         )
+
+    for digest, raw in declared.items():
+        if digest in source_digests:
+            continue
+        media_type = raw.get("media_type")
+        logical_name = raw.get("logical_name")
+        size = raw.get("size")
+        if (
+            not isinstance(media_type, str)
+            or not media_type
+            or not isinstance(logical_name, str)
+            or not logical_name
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 0
+        ):
+            raise HTMLRenderError(
+                "publication-owned resource metadata is invalid"
+            )
+        values.append(
+            {
+                "artifact_digest": digest,
+                "media_type": media_type,
+                "logical_name": logical_name,
+                "size": size,
+                **({"path": raw["path"]} if "path" in raw else {}),
+            }
+        )
+
+    logical_names = [str(item["logical_name"]) for item in values]
+    if len(logical_names) != len(set(logical_names)):
+        raise HTMLRenderError("publication resource logical names must be unique")
     return tuple(values)
 
 
@@ -746,25 +813,27 @@ def _validate_reader_resources(
         if not isinstance(digest, str) or digest in resources:
             raise HTMLRenderError("standalone HTML resource identity is invalid")
         resources[digest] = raw
-    expected_digests = {
-        item.artifact_digest for item in publication.source_document.assets
-    }
+    declarations = _resource_declarations(publication)
+    expected_digests = {str(item["artifact_digest"]) for item in declarations}
     if set(resources) != expected_digests:
         raise HTMLRenderError(
-            "standalone HTML source resources are incomplete"
+            "standalone HTML resources are incomplete"
         )
-    for asset in publication.source_document.assets:
-        raw = resources[asset.artifact_digest]
+    for declaration in declarations:
+        digest = str(declaration["artifact_digest"])
+        media_type = str(declaration["media_type"])
+        size = int(declaration["size"])
+        raw = resources[digest]
         if (
-            raw.get("media_type") != asset.media_type
-            or raw.get("logical_name") != asset.logical_name
-            or raw.get("size") != asset.size
+            raw.get("media_type") != media_type
+            or raw.get("logical_name") != declaration["logical_name"]
+            or raw.get("size") != size
         ):
             raise HTMLRenderError(
-                "standalone HTML source resource metadata differs from the source"
+                "standalone HTML resource metadata differs from the publication"
             )
         data_uri = raw.get("data_uri")
-        prefix = f"data:{asset.media_type};base64,"
+        prefix = f"data:{media_type};base64,"
         if not isinstance(data_uri, str) or not data_uri.startswith(prefix):
             raise HTMLRenderError(
                 "standalone HTML source resource data URI is invalid"
@@ -779,12 +848,12 @@ def _validate_reader_resources(
                 "standalone HTML source resource base64 is invalid"
             ) from exc
         if (
-            len(resource_bytes) != asset.size
+            len(resource_bytes) != size
             or hashlib.sha256(resource_bytes).hexdigest()
-            != asset.artifact_digest
+            != digest
         ):
             raise HTMLRenderError(
-                "standalone HTML source resource bytes differ from the source"
+                "standalone HTML resource bytes differ from the publication"
             )
 
 
