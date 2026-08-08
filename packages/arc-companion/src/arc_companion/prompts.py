@@ -7,9 +7,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v15"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v16"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v15"
+    "arc.companion.chapter-learning-review-prompt.v16"
 )
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
 
@@ -99,7 +99,7 @@ CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA = _closed(
 
 
 _CHAPTER_GUIDE_INSTRUCTION = """
-Write the Companion for the current real chapter. The program owns chapter,
+Write the Companion for the current source segment. The program owns chapter,
 section, block, learning-unit, and reference identities. Fill only the simple
 semantic template supplied in the loop context: one optional `chapter_guide`
 (an object or `null`), sparse `section_guides` selected by `section_number`,
@@ -116,7 +116,7 @@ themes from different source locations merely to make one longer unit. Split
 them, or put genuinely chapter-wide synthesis in `chapter_guide`. In
 particular, do not move an explanation of an earlier title, quotation, work,
 or concept to a later date merely because the same unit mentions a later
-development. Work only on the current real chapter.
+development. Work only on the current source segment.
 
 Every local companion and section guide must add a concrete increment of
 understanding that the nearby source does not itself supply. Missing context,
@@ -135,14 +135,22 @@ reader's understanding essentially unchanged, omit it. Simple,
 self-contained source material needs no local companion.
 
 A chapter guide has a different role. It may select, organize, and compress
-information already present in the chapter when that creates a useful reading
-map, foregrounds a real through-line, or gives the reader an effective way
-into the chapter. It may also add new background, connections, reading
-strategies, later developments, or any other useful help supported by the
-source and references. Permission to compress is not a default form, a limit,
-or the chapter guide's only purpose. Still, do not merely retell the chapter
-or reproduce its table of contents: any selection and compression must
-provide a concrete reading benefit.
+information already present in the source segment only when doing so gives a
+specific reading action or understanding increment that is not readily
+obtainable from the source itself. It may also add new background,
+connections, reading strategies, later developments, or any other useful help
+supported by the source and references. Permission to compress is not a
+default form, a limit, or the chapter guide's only purpose. Do not merely
+retell the segment or reproduce its navigation: selection and compression
+must provide that concrete additional benefit.
+
+When the current segment primarily contains publication metadata,
+copyright or cataloging material, a navigation list, an index, or another
+paratextual lookup aid, prefer `chapter_guide: null`. Keep a guide only when it
+offers a concrete reading action or understanding increment the segment does
+not readily provide. Judge the actual content, not title keywords: a preface
+or other paratext may still deserve a guide when it supplies a valuable
+cross-segment reading route or substantive orientation.
 
 Return `chapter_guide: null` when the complete chapter is already simple and
 self-contained and no useful orientation, background, connection, reading
@@ -260,7 +268,7 @@ that location first.
 
 _CHAPTER_GUIDE_REVIEW_INSTRUCTION = """
 Review the chapter guide, sparse section guides, sparse post-part companions,
-and references against the actual current chapter. ARC provides context and
+and references against the actual current source segment. ARC provides context and
 recovery, not a prescribed creative form.
 
 Do not criticize merely to demonstrate reviewer activity or present a
@@ -310,15 +318,18 @@ or summarizes information already present nearby, even if it is fluent.
 Require new information, a missing reasoning step, context, or a useful
 connection that the source does not already make locally.
 
-Review the chapter guide by a different standard. It may appropriately
-select, organize, and compress information already in the chapter when that
-creates a useful reading map, foregrounds a real through-line, or gives the
-reader an effective way into the chapter. It may also add new background,
-connections, reading strategies, later developments, or other useful help.
-Compression is permitted, not required and not the chapter guide's only
-purpose. Do not reject it solely for compressing chapter information. Request
-revision when it merely retells the chapter or reproduces its contents
-without a concrete reading benefit.
+Review the chapter guide by a different standard. It may select, organize, and
+compress information already in the source segment only when that yields a
+specific reading action or understanding increment not readily obtainable
+from the source itself. It may also add new background, connections, reading
+strategies, later developments, or other useful help. Compression is
+permitted, not required and not the chapter guide's only purpose. Request
+revision when it merely retells the segment or reproduces its contents without
+that concrete additional benefit. For publication metadata, copyright or
+cataloging material, navigation lists, indexes, and other paratextual lookup
+aids, prefer a null guide unless this test is met. Judge actual content rather
+than title keywords, and retain a genuinely useful preface or cross-segment
+reading route.
 Require plain, accessible language in every title and body. Treat the source
 and translation as material to explain, not style templates. If they are
 difficult, compressed, jargon-heavy, or syntactically dense, the proposal

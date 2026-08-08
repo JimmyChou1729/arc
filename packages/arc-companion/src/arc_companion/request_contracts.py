@@ -28,7 +28,7 @@ from .reader_labels import resolve_reader_labels
 
 
 COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v7"
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v16"
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v17"
 COMPANION_CONTENT_CONTRACT = "arc.companion.source_anchored_textbook.v1"
 NEUTRAL_TEXTBOOK_INTENT = (
     "Explain the source faithfully as a neutral textbook companion for an "
