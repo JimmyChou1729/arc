@@ -634,7 +634,9 @@ def _fragment_from_bytes(payload: bytes) -> FragmentRevision:
 
 def _write_exact(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and path.read_bytes() != payload:
+    if path.exists():
+        if path.read_bytes() == payload:
+            return
         raise CompanionPublicationError(
             f"publication workspace contains conflicting bytes: {path}"
         )

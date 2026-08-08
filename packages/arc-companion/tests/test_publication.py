@@ -28,6 +28,7 @@ from arc_render import (
 )
 from arc_translate import TranslationResult, TranslationRevisionArtifact
 
+import arc_companion.publication as publication_module
 from arc_companion.publication import (
     CompanionPublicationError,
     PublishedCompanion,
@@ -143,6 +144,31 @@ def test_publication_uses_atomic_overlays_and_materializes_directly(
     )
     assert publication_path == workspace / "publication.json"
     assert validate_publication_workspace(publication_path) == ()
+
+    writes: list[Path] = []
+    original_write = publication_module.atomic_write_bytes
+
+    def record_write(path: Path, payload: bytes) -> None:
+        writes.append(path)
+        original_write(path, payload)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(publication_module, "atomic_write_bytes", record_write)
+    try:
+        assert (
+            materialize_published_companion(
+                ImmutableArtifactStore(
+                    repository.run_directory("run"),
+                    repository_root=repository.root,
+                ),
+                published,
+                workspace,
+            )
+            == publication_path
+        )
+    finally:
+        monkeypatch.undo()
+    assert writes == []
 
     incomplete = PublishedCompanion(
         published.publication,
