@@ -1456,13 +1456,31 @@
     }).join("\n\n");
   }
 
+  function katexTex(value) {
+    var tex = String(value || "");
+    if (/\\begin\s*\{[^{}]+\}/.test(tex)) return tex;
+    for (var index = 0; index < tex.length; index += 1) {
+      if (tex.charAt(index) !== "&") continue;
+      var slashCount = 0;
+      var cursor = index - 1;
+      while (cursor >= 0 && tex.charAt(cursor) === "\\") {
+        slashCount += 1;
+        cursor -= 1;
+      }
+      if (slashCount % 2 === 0) {
+        return "\\begin{aligned}" + tex + "\\end{aligned}";
+      }
+    }
+    return tex;
+  }
+
   function typeset(root) {
     if (!window.katex || typeof window.katex.render !== "function") return;
     var scope = root.querySelectorAll ? root : document;
     scope.querySelectorAll(".math[data-tex]").forEach(function (node) {
       if (node.dataset.arcTypeset === "true") return;
       try {
-        window.katex.render(node.dataset.tex || "", node, {
+        window.katex.render(katexTex(node.dataset.tex), node, {
           displayMode: node.classList.contains("math-display"),
           throwOnError: false,
           strict: "warn"

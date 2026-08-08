@@ -63,6 +63,7 @@ define = undefined;
     setupMarkdown: setupMarkdown,
     buildRenderChunks: buildRenderChunks,
     isPdfPageMarkerBlock: isPdfPageMarkerBlock,
+    katexTex: katexTex,
     validateIntegerJson: validateIntegerJson,
     validateRevisionMetadata: validateRevisionMetadata
   };
@@ -93,6 +94,21 @@ if (helpers.isPdfPageMarkerBlock({
   payload: {text: "<!-- note -->"}
 })) {
   throw new Error("ordinary HTML comment was treated as a PDF page marker");
+}
+if (
+  helpers.katexTex(String.raw`a&=b\\\\&=c`) !==
+  String.raw`\\begin{aligned}a&=b\\\\&=c\\end{aligned}`
+) {
+  throw new Error("bare TeX alignment rows were not wrapped for KaTeX");
+}
+if (helpers.katexTex(String.raw`A\\&B`) !== String.raw`A\\&B`) {
+  throw new Error("escaped TeX ampersand was treated as an alignment tab");
+}
+if (
+  helpers.katexTex(String.raw`\\begin{matrix}a&b\\end{matrix}`) !==
+  String.raw`\\begin{matrix}a&b\\end{matrix}`
+) {
+  throw new Error("existing TeX environment was wrapped a second time");
 }
 if (helpers.stableStringify({b: 2, a: 1}) !== '{"a":1,"b":2}') {
   throw new Error("canonical JSON ordering changed");
