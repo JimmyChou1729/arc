@@ -348,19 +348,110 @@ def test_equation_translation_round_trips_through_fragment_markdown(
     )
 
     assert isinstance(result, TranslationResult)
-    prompted_equation = next(
-        block
+    assert all(
+        block["block_id"] != equation["block_id"]
         for window in tasks.translation_blocks
         for block in window
-        if block["block_id"] == equation["block_id"]
     )
-    assert block_text(prompted_equation) == tex
+    assert all(
+        block["block_id"] != equation["block_id"]
+        for window in tasks.review_blocks
+        for block in window
+    )
     revisions = [
         decode_fragment_revision(
             context.artifacts.read_bytes(item.artifact).decode("utf-8"),
             filename=Path(item.revision.path).name,
         )
         for item in result.revision_artifacts
+    ]
+    revision = next(
+        item
+        for item in revisions
+        if item.anchor.target_id == equation["block_id"]
+    )
+    assert revision.markdown_body == f"$$\n{tex}\n$$\n"
+
+
+def test_equation_is_reinjected_after_review_supervision(tmp_path: Path) -> None:
+    tex = r"E = mc^2"
+    markdown = tmp_path / "equation-supervision.md"
+    markdown.write_text(
+        f"# Intro\n\nSource prose.\n\n$$\n{tex}\n$$\n",
+        encoding="utf-8",
+    )
+    paper = ArcPaperService(cache_root=tmp_path / "equation-supervision-cache")
+    source = TranslationSource(
+        RichDocumentParserService(paper.repository).parse_source(
+            paper.import_source(markdown)
+        )
+    )
+    equation = next(
+        block for block in source_blocks(source) if block["kind"] == "equation"
+    )
+    language = LanguageResult(
+        source.document_digest,
+        source.source_digest,
+        "en",
+        "known",
+        1,
+        "fr",
+        "enabled",
+    )
+    glossary = GlossaryResult(
+        source.document_digest,
+        source.source_digest,
+        "fr",
+        1,
+        "d" * 64,
+        (),
+    )
+    context = _context(tmp_path, "equation-supervision")
+    tasks = FakeTasks(invalid_review=True)
+    workflow = TranslationWorkflowService(tasks)
+
+    paused = workflow.translate_blocks(
+        context,
+        source,
+        language=language,
+        glossary=glossary,
+        target_language="fr",
+    )
+
+    assert isinstance(paused, Paused)
+    resumed = workflow.translate_blocks(
+        RunContext(
+            context.repository,
+            context.repository.inspect("equation-supervision").snapshot,
+            resume_input={
+                "schema_version": REVIEW_SUPERVISION_SCHEMA,
+                "resume_key": paused.awaiting.resume_key,
+                "action": "accept_pre_review",
+            },
+        ),
+        source,
+        language=language,
+        glossary=glossary,
+        target_language="fr",
+    )
+
+    assert isinstance(resumed, TranslationResult)
+    assert all(
+        block["block_id"] != equation["block_id"]
+        for window in tasks.translation_blocks
+        for block in window
+    )
+    assert all(
+        block["block_id"] != equation["block_id"]
+        for window in tasks.review_blocks
+        for block in window
+    )
+    revisions = [
+        decode_fragment_revision(
+            context.artifacts.read_bytes(item.artifact).decode("utf-8"),
+            filename=Path(item.revision.path).name,
+        )
+        for item in resumed.revision_artifacts
     ]
     revision = next(
         item

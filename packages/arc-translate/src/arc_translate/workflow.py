@@ -84,6 +84,7 @@ from .source import (
     TranslationSourceError,
     block_text,
     deterministic_language_samples,
+    formula_identity_diagnostics,
     prompt_block,
     same_primary_language,
     source_blocks,
@@ -912,7 +913,7 @@ class TranslationWorkflowService:
             accepted_doc = {"translations": reviewed}
             context.artifacts.publish_json(accepted_id, accepted_doc)
             translations.extend(reviewed)
-        merged_translations = _merge_structural_figure_translations(
+        merged_translations = _merge_programmatic_translations(
             blocks,
             translations,
         )
@@ -939,9 +940,15 @@ class TranslationWorkflowService:
 
 
 class TranslationWorkflowError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        details: Mapping[str, JsonValue] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.details = dict(details or {})
 
 
 @dataclass(frozen=True)
@@ -956,7 +963,7 @@ def _candidate_run_error(
     return RunError(
         error.code,
         f"{error}; editable candidate: {path}",
-        {"candidate_path": str(path)},
+        {**error.details, "candidate_path": str(path)},
     )
 
 
@@ -1123,6 +1130,7 @@ def _output_supervision(
                 "reason": error.code,
                 "message": str(error),
                 "candidate_path": str(candidate_path),
+                "details": error.details,
                 "automatic_retry_exhausted": True,
                 "output_attempts": 2,
             },
@@ -1563,7 +1571,10 @@ def _model_translation_blocks(
     blocks: Sequence[Mapping[str, Any]],
 ) -> tuple[Mapping[str, Any], ...]:
     return tuple(
-        block for block in blocks if not _is_structural_figure(block)
+        block
+        for block in blocks
+        if not _is_structural_figure(block)
+        and str(block.get("kind")) != "equation"
     )
 
 
@@ -1605,7 +1616,7 @@ def _is_nonlinguistic_media_translation(
     return marker in structural_markers
 
 
-def _merge_structural_figure_translations(
+def _merge_programmatic_translations(
     blocks: Sequence[Mapping[str, Any]],
     model_translations: Sequence[Mapping[str, str]],
 ) -> tuple[Mapping[str, str], ...]:
@@ -1620,6 +1631,20 @@ def _merge_structural_figure_translations(
                 {
                     "block_id": block_id,
                     "text": STRUCTURAL_FIGURE_PLACEHOLDER,
+                }
+            )
+            continue
+        if str(block.get("kind")) == "equation":
+            payload = block.get("payload")
+            if not isinstance(payload, Mapping):
+                raise TranslationWorkflowError(
+                    "source_block_invalid",
+                    "equation block payload must be an object",
+                )
+            merged.append(
+                {
+                    "block_id": block_id,
+                    "text": str(payload.get("tex", "")),
                 }
             )
             continue
@@ -1791,11 +1816,15 @@ def _validate_draft_window(
             raise TranslationWorkflowError(
                 "translation_coverage_invalid", "translation text must be a string"
             )
-        try:
-            validate_translation_text(text, block)
-        except TranslationSourceError as exc:
-            raise TranslationWorkflowError(exc.code, str(exc)) from exc
         output.append({"block_id": str(translated["block_id"]), "text": text})
+    _validate_window_formula_identity(blocks, output)
+    for translated, block in zip(output, blocks, strict=True):
+        try:
+            validate_translation_text(translated["text"], block)
+        except TranslationSourceError as exc:
+            raise TranslationWorkflowError(
+                exc.code, str(exc), exc.details
+            ) from exc
     return output
 
 
@@ -1829,12 +1858,32 @@ def _validate_accepted_window(
             raise TranslationWorkflowError(
                 "translation_coverage_invalid", "translation text must be a string"
             )
-        try:
-            validate_translation_text(text, block)
-        except TranslationSourceError as exc:
-            raise TranslationWorkflowError(exc.code, str(exc)) from exc
         output.append({"block_id": str(translated["block_id"]), "text": text})
+    _validate_window_formula_identity(blocks, output)
+    for translated, block in zip(output, blocks, strict=True):
+        try:
+            validate_translation_text(translated["text"], block)
+        except TranslationSourceError as exc:
+            raise TranslationWorkflowError(
+                exc.code, str(exc), exc.details
+            ) from exc
     return output
+
+
+def _validate_window_formula_identity(
+    blocks: Sequence[Mapping[str, Any]],
+    translations: Sequence[Mapping[str, str]],
+) -> None:
+    diagnostics = formula_identity_diagnostics(blocks, translations)
+    if not diagnostics:
+        return
+    first = diagnostics[0]
+    raise TranslationWorkflowError(
+        "translation_source_identity_invalid",
+        "translation changed formula occurrences for "
+        f"{first['source_block_id']}",
+        {"formula_diagnostics": list(diagnostics)},
+    )
 
 
 def _apply_review(
@@ -2072,7 +2121,9 @@ def _validate_translation_result(
                     rich_block_document,
                 )
         except TranslationSourceError as exc:
-            raise TranslationWorkflowError(exc.code, str(exc)) from exc
+            raise TranslationWorkflowError(
+                exc.code, str(exc), exc.details
+            ) from exc
         actual.append(block_id)
     if actual != expected:
         raise TranslationWorkflowError(

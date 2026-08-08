@@ -40,9 +40,15 @@ _LINK_TOKEN_CHARACTER = r"A-Za-z0-9._~:/?#@!$&'*+,;=%-"
 
 
 class TranslationSourceError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.details = dict(details or {})
 
 
 def resolve_translation_source(
@@ -190,6 +196,14 @@ def validate_translation_text(text: str, block: Mapping[str, Any]) -> None:
             "translation_source_identity_invalid",
             "translation changed formula occurrences for "
             f"{block['block_id']}",
+            {
+                "formula_diagnostics": list(
+                    formula_identity_diagnostics(
+                        (block,),
+                        ({"block_id": block.get("block_id"), "text": text},),
+                    )
+                )
+            },
         )
     if str(block.get("kind")) != "equation":
         expected_links = Counter(identity["link_targets"])
@@ -368,6 +382,154 @@ def _formula_occurrences(
     )
 
 
+def formula_identity_diagnostics(
+    source_blocks: Sequence[Mapping[str, Any]],
+    translations: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Describe formula identity differences without altering translations.
+
+    The translation workflow already fixes block order separately.  This helper
+    therefore identifies a matching TeX occurrence that left one block and
+    appeared in another as a move, while retaining distinct missing and added
+    diagnostics for unmatched occurrences.
+    """
+
+    source_by_id = {str(block.get("block_id")): block for block in source_blocks}
+    translation_by_id = {
+        str(item.get("block_id")): item
+        for item in translations
+        if isinstance(item.get("text"), str)
+    }
+    diagnostics: list[dict[str, Any]] = []
+    source_occurrences: dict[str, list[tuple[str, int]]] = {}
+    translation_occurrences: dict[str, list[tuple[str, int]]] = {}
+    source_positions = {
+        str(block.get("block_id")): index
+        for index, block in enumerate(source_blocks)
+    }
+    translation_positions = {
+        str(item.get("block_id")): index
+        for index, item in enumerate(translations)
+    }
+
+    for block_id, block in source_by_id.items():
+        if str(block.get("kind")) == "equation":
+            continue
+        expected = Counter(source_identity(block)["equations"])
+        text = str(translation_by_id.get(block_id, {}).get("text", ""))
+        actual = _formula_occurrences(text, expected)
+        for tex in set(expected) | set(actual):
+            difference = expected[tex] - actual[tex]
+            if difference > 0:
+                source_occurrences.setdefault(tex, []).append((block_id, difference))
+            elif difference < 0:
+                translation_occurrences.setdefault(tex, []).append(
+                    (block_id, -difference)
+                )
+
+    for tex in sorted(set(source_occurrences) | set(translation_occurrences)):
+        missing = list(source_occurrences.get(tex, ()))
+        added = list(translation_occurrences.get(tex, ()))
+        source_index = 0
+        translation_index = 0
+        while source_index < len(missing) and translation_index < len(added):
+            source_block_id, missing_count = missing[source_index]
+            translation_block_id, added_count = added[translation_index]
+            count = min(missing_count, added_count)
+            if source_block_id != translation_block_id:
+                diagnostics.append(
+                    _formula_diagnostic(
+                        "formula_moved",
+                        tex,
+                        count,
+                        source_block_id,
+                        translation_block_id,
+                        source_blocks,
+                        translations,
+                        source_positions,
+                        translation_positions,
+                    )
+                )
+                missing_count -= count
+                added_count -= count
+                if missing_count:
+                    missing[source_index] = (source_block_id, missing_count)
+                else:
+                    source_index += 1
+                if added_count:
+                    added[translation_index] = (translation_block_id, added_count)
+                else:
+                    translation_index += 1
+                continue
+            source_index += 1
+            translation_index += 1
+        for source_block_id, count in missing[source_index:]:
+            diagnostics.append(
+                _formula_diagnostic(
+                    "formula_missing",
+                    tex,
+                    count,
+                    source_block_id,
+                    source_block_id,
+                    source_blocks,
+                    translations,
+                    source_positions,
+                    translation_positions,
+                )
+            )
+        for translation_block_id, count in added[translation_index:]:
+            diagnostics.append(
+                _formula_diagnostic(
+                    "formula_added",
+                    tex,
+                    count,
+                    translation_block_id,
+                    translation_block_id,
+                    source_blocks,
+                    translations,
+                    source_positions,
+                    translation_positions,
+                )
+            )
+    return tuple(diagnostics)
+
+
+def _formula_diagnostic(
+    code: str,
+    tex: str,
+    count: int,
+    source_block_id: str,
+    translation_block_id: str,
+    source_blocks: Sequence[Mapping[str, Any]],
+    translations: Sequence[Mapping[str, Any]],
+    source_positions: Mapping[str, int],
+    translation_positions: Mapping[str, int],
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "tex": tex,
+        "occurrence_count": count,
+        "source_block_id": source_block_id,
+        "translation_block_id": translation_block_id,
+        "source_neighbor_block_ids": _neighbor_block_ids(
+            source_blocks, source_positions[source_block_id]
+        ),
+        "translation_neighbor_block_ids": _neighbor_block_ids(
+            translations, translation_positions[translation_block_id]
+        ),
+    }
+
+
+def _neighbor_block_ids(
+    blocks: Sequence[Mapping[str, Any]], index: int
+) -> list[str]:
+    return [
+        str(blocks[neighbor].get("block_id"))
+        for neighbor in (index - 1, index + 1)
+        if 0 <= neighbor < len(blocks)
+    ]
+
+
 def _link_occurrences(
     text: str,
     expected: Counter[str],
@@ -434,6 +596,7 @@ __all__ = [
     "block_digest",
     "block_text",
     "deterministic_language_samples",
+    "formula_identity_diagnostics",
     "prompt_block",
     "resolve_translation_source",
     "same_primary_language",

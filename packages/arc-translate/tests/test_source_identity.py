@@ -4,6 +4,7 @@ import pytest
 
 from arc_translate.source import (
     TranslationSourceError,
+    formula_identity_diagnostics,
     prompt_block,
     source_identity,
     validate_translation_text,
@@ -107,6 +108,86 @@ def test_changed_formula_multiset_is_rejected(text: str) -> None:
         match="changed formula occurrences",
     ):
         validate_translation_text(text, _paragraph_block())
+
+
+def test_formula_failure_exposes_missing_and_added_tex_diagnostics() -> None:
+    with pytest.raises(TranslationSourceError) as raised:
+        validate_translation_text(
+            r"看 $b$；https://example.test/notes", _paragraph_block()
+        )
+
+    diagnostics = raised.value.details["formula_diagnostics"]
+    assert {item["code"] for item in diagnostics} == {
+        "formula_missing",
+        "formula_added",
+    }
+    assert {item["tex"] for item in diagnostics} == {
+        "a",
+        r"\Psi^\dagger",
+        "b",
+    }
+    assert all(item["source_block_id"] == "block-inline" for item in diagnostics)
+    assert all(
+        item["translation_block_id"] == "block-inline" for item in diagnostics
+    )
+    assert all(item["source_neighbor_block_ids"] == [] for item in diagnostics)
+    assert all(item["translation_neighbor_block_ids"] == [] for item in diagnostics)
+
+
+def test_formula_diagnostics_identify_cross_block_moves_with_neighbors() -> None:
+    source_blocks = (
+        _math_paragraph("first", "a"),
+        _plain_paragraph("middle"),
+        _plain_paragraph("last"),
+    )
+    diagnostics = formula_identity_diagnostics(
+        source_blocks,
+        (
+            {"block_id": "first", "text": "翻译。"},
+            {"block_id": "middle", "text": "翻译 $a$。"},
+            {"block_id": "last", "text": "翻译。"},
+        ),
+    )
+
+    assert diagnostics == (
+        {
+            "code": "formula_moved",
+            "tex": "a",
+            "occurrence_count": 1,
+            "source_block_id": "first",
+            "translation_block_id": "middle",
+            "source_neighbor_block_ids": ["middle"],
+            "translation_neighbor_block_ids": ["first", "last"],
+        },
+    )
+
+
+def _math_paragraph(block_id: str, tex: str) -> dict[str, object]:
+    return {
+        "block_id": block_id,
+        "kind": "paragraph",
+        "payload": {
+            "text": f"${tex}$",
+            "inline_spans": [
+                {
+                    "kind": "math",
+                    "start": 0,
+                    "end": len(tex) + 2,
+                    "text": f"${tex}$",
+                    "tex": tex,
+                    "source": f"${tex}$",
+                }
+            ],
+        },
+    }
+
+
+def _plain_paragraph(block_id: str) -> dict[str, object]:
+    return {
+        "block_id": block_id,
+        "kind": "paragraph",
+        "payload": {"text": "plain", "inline_spans": []},
+    }
 
 
 @pytest.mark.parametrize(
