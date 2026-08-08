@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import time
+
 import pytest
 
 from arc_render import HTMLRenderError, validate_reader_in_browser
@@ -51,6 +54,8 @@ def test_browser_validation_discovers_system_browser_and_forces_reader_checks(
     assert "window.dispatchEvent(new Event(\"beforeprint\"))" in browser_validation._READER_REPORT_EXPRESSION
     assert ".katex-error, .math-error" in browser_validation._READER_REPORT_EXPRESSION
     assert "failedImages" in browser_validation._READER_REPORT_EXPRESSION
+    assert "image.decode()" in browser_validation._READER_REPORT_EXPRESSION
+    assert 'image.loading = "eager"' in browser_validation._READER_REPORT_EXPRESSION
     assert "arc-render-chunk:not(.is-rendered)" in browser_validation._READER_REPORT_EXPRESSION
 
 
@@ -99,3 +104,54 @@ def test_browser_validation_maps_browser_timeout(tmp_path: Path, monkeypatch: py
 
     with pytest.raises(HTMLRenderError, match="timed out after 60s"):
         validate_reader_in_browser(_html(tmp_path / "reader.html"))
+
+
+def test_browser_page_selection_waits_for_requested_reader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            [
+                {
+                    "type": "page",
+                    "url": "chrome://newtab/",
+                    "webSocketDebuggerUrl": "ws://wrong",
+                }
+            ],
+            [
+                {
+                    "type": "page",
+                    "url": "chrome://newtab/",
+                    "webSocketDebuggerUrl": "ws://wrong",
+                },
+                {
+                    "type": "page",
+                    "url": "file:///reader.html",
+                    "webSocketDebuggerUrl": "ws://right",
+                },
+            ],
+        ]
+    )
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(next(responses)).encode("utf-8")
+
+    monkeypatch.setattr(
+        browser_validation,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(),
+    )
+    monkeypatch.setattr(
+        browser_validation.time, "sleep", lambda _seconds: None
+    )
+
+    assert browser_validation._page_websocket_url(
+        9222, time.monotonic() + 1, "file:///reader.html"
+    ) == "ws://right"

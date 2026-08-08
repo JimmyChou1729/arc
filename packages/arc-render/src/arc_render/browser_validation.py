@@ -103,7 +103,9 @@ def _reader_report(
             raise HTMLRenderError("browser validation could not start") from exc
         try:
             port = _wait_for_debug_port(profile / "DevToolsActivePort", deadline)
-            websocket_url = _page_websocket_url(port, deadline)
+            websocket_url = _page_websocket_url(
+                port, deadline, html_path.as_uri()
+            )
             with _CdpSocket(websocket_url, deadline) as cdp:
                 cdp.call("Runtime.enable", {})
                 response = cdp.call(
@@ -145,14 +147,20 @@ def _wait_for_debug_port(path: Path, deadline: float) -> int:
     raise TimeoutError("DevTools port was not ready")
 
 
-def _page_websocket_url(port: int, deadline: float) -> str:
+def _page_websocket_url(
+    port: int, deadline: float, expected_url: str
+) -> str:
     endpoint = f"http://127.0.0.1:{port}/json/list"
     while time.monotonic() < deadline:
         try:
             with urlopen(endpoint, timeout=_remaining(deadline)) as response:
                 pages = json.loads(response.read().decode("utf-8"))
             for page in pages:
-                if page.get("type") == "page" and page.get("webSocketDebuggerUrl"):
+                if (
+                    page.get("type") == "page"
+                    and page.get("url") == expected_url
+                    and page.get("webSocketDebuggerUrl")
+                ):
                     return str(page["webSocketDebuggerUrl"])
         except (OSError, ValueError, TimeoutError):
             pass
@@ -328,6 +336,18 @@ _READER_REPORT_EXPRESSION: Final = """(async () => {
   if (ready === "true") {
     window.dispatchEvent(new Event("beforeprint"));
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await Promise.all(Array.from(document.images).map(async image => {
+      image.loading = "eager";
+      if (typeof image.decode !== "function") return;
+      try {
+        await Promise.race([
+          image.decode(),
+          new Promise(resolve => setTimeout(resolve, 5000))
+        ]);
+      } catch (_error) {
+        // The failedImages check below reports decode failures.
+      }
+    }));
   }
   return {
     ready,
