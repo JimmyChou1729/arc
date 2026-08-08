@@ -532,7 +532,12 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
             CHAPTER_GUIDE_PROMPT_VERSION,
             CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
         }:
-            assert "companion-translation-index" in input_ids, contract
+            translation_inputs = [
+                item
+                for item in input_ids
+                if item.startswith("companion-translation-index-")
+            ]
+            assert len(translation_inputs) == 1, contract
     guide_payloads = [
         _request_payload(prompt)[1]
         for contract, _task_id, prompt in tasks.requests
@@ -613,36 +618,54 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     assert source_index["cached_document"]["source_sha256"] == (
         document.source.artifact_digest
     )
-    translation_index_ref = run_store.find("translation/model-index")
-    assert translation_index_ref is not None
-    translation_index = json.loads(
-        run_store.read_bytes(translation_index_ref)
-    )
-    assert translation_index["source_document_sha256"] == (
-        document.document_digest
-    )
-    assert translation_index["target_language"] == "zh-CN"
-    assert "translated paragraph" not in json.dumps(
-        translation_index, ensure_ascii=False
-    )
-    translation_view_ref = run_store.find("translation/model-view")
-    assert translation_view_ref is not None
-    assert "translated paragraph" in run_store.read_bytes(
-        translation_view_ref
-    ).decode("utf-8")
-    first_part = translation_index["chapters"][0]["parts"][0]
+    planned_chapters = plan_source_chapters(document)
+    translation_indexes = []
+    for chapter in planned_chapters:
+        artifact_root = f"translation/chapters/{chapter.chapter_id}"
+        translation_index_ref = run_store.find(
+            f"{artifact_root}/model-index"
+        )
+        assert translation_index_ref is not None
+        translation_index = json.loads(
+            run_store.read_bytes(translation_index_ref)
+        )
+        assert translation_index["source_document_sha256"] == (
+            document.document_digest
+        )
+        assert translation_index["target_language"] == "zh-CN"
+        assert [
+            item["chapter_id"] for item in translation_index["chapters"]
+        ] == [chapter.chapter_id]
+        assert "translated paragraph" not in json.dumps(
+            translation_index, ensure_ascii=False
+        )
+        translation_view_ref = run_store.find(
+            f"{artifact_root}/model-view"
+        )
+        assert translation_view_ref is not None
+        assert "translated paragraph" in run_store.read_bytes(
+            translation_view_ref
+        ).decode("utf-8")
+        translation_indexes.append(translation_index)
+    assert len(
+        {
+            item["translation_view_sha256"]
+            for item in translation_indexes
+        }
+    ) == len(planned_chapters)
+    first_index = translation_indexes[0]
+    first_part = first_index["chapters"][0]["parts"][0]
     translated_range = ArcPaperService(
         cache_root=tmp_path / "paper"
     ).read_cached_source_range(
         cached_document_ref_from_document(
-            translation_index["cached_document"]
+            first_index["cached_document"]
         ),
         first_part["line_start"],
         first_part["line_end"],
         text_only=True,
     )
     assert translated_range.text.startswith("# translated ")
-    planned_chapters = plan_source_chapters(document)
     assert not (
         service.repository.run_directory(completed.run_id)
         / "working/candidates/chapters"

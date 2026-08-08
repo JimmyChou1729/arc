@@ -147,8 +147,7 @@ _DIAGNOSTICS_ARTIFACT = "diagnostics/build"
 _EFFECTIVE_SOURCE_ARTIFACT = "source/effective"
 _MODEL_SOURCE_VIEW_ARTIFACT = "source/model-view"
 _MODEL_SOURCE_INDEX_ARTIFACT = "source/model-index"
-_MODEL_TRANSLATION_VIEW_ARTIFACT = "translation/model-view"
-_MODEL_TRANSLATION_INDEX_ARTIFACT = "translation/model-index"
+_MODEL_TRANSLATION_ROOT = "translation/chapters"
 _ORIGINAL_SOURCE_ARTIFACT = "source/original"
 _AUTHOR_IDENTITY_ARTIFACT = "identity/authors"
 _RESULT_ARTIFACT = "result"
@@ -459,8 +458,11 @@ class CompanionBuildHandler:
         source: RichDocument,
         chapters: Sequence[SourceChapter],
         translations: Mapping[str, Mapping[str, Any]],
-    ) -> tuple[tuple[LLMInputArtifact, ...], Mapping[str, Any]]:
-        """Freeze and cache the accepted translation before guide work."""
+    ) -> tuple[
+        tuple[LLMInputArtifact, ...],
+        Mapping[str, Mapping[str, Any]],
+    ]:
+        """Freeze one independently reusable accepted view per chapter."""
 
         by_chapter = {
             chapter.chapter_id: load_translation_selection(
@@ -472,81 +474,86 @@ class CompanionBuildHandler:
             ).view_records
             for chapter in chapters
         }
-        view, access = model_translation_view(chapters, by_chapter)
-        payload = view.encode("utf-8")
-        view_ref = context.artifacts.find(
-            _MODEL_TRANSLATION_VIEW_ARTIFACT
-        )
-        if view_ref is None:
-            view_ref = context.artifacts.publish_bytes(
-                _MODEL_TRANSLATION_VIEW_ARTIFACT,
-                payload,
-                media_type="text/markdown",
-            )
-        elif context.artifacts.read_bytes(view_ref) != payload:
-            raise CompanionContentError(
-                "model_translation_view_mismatch",
-                "Frozen model translation differs from completed translations.",
-            )
-
         paper = ArcPaperService(
             cache_root=self.execution.paper_cache_root
         )
-        cached_source = paper.repository.store_bytes(
-            payload,
-            source_format=SourceFormat.MARKDOWN,
-            origin=SourceOrigin(
-                SourceOriginKind.REPOSITORY,
-                locator=(
-                    f"arc-companion:{context.run_id}:"
-                    f"{_MODEL_TRANSLATION_VIEW_ARTIFACT}"
+        inputs: list[LLMInputArtifact] = []
+        indexes: dict[str, Mapping[str, Any]] = {}
+        for chapter in chapters:
+            chapter_set = (chapter,)
+            view, access = model_translation_view(
+                chapter_set,
+                {chapter.chapter_id: by_chapter[chapter.chapter_id]},
+            )
+            payload = view.encode("utf-8")
+            artifact_root = (
+                f"{_MODEL_TRANSLATION_ROOT}/{chapter.chapter_id}"
+            )
+            view_artifact = f"{artifact_root}/model-view"
+            view_ref = context.artifacts.find(view_artifact)
+            if view_ref is None:
+                view_ref = context.artifacts.publish_bytes(
+                    view_artifact,
+                    payload,
+                    media_type="text/markdown",
+                )
+            elif context.artifacts.read_bytes(view_ref) != payload:
+                raise CompanionContentError(
+                    "model_translation_view_mismatch",
+                    "Frozen chapter translation differs from completed translations.",
+                )
+            cached_source = paper.repository.store_bytes(
+                payload,
+                source_format=SourceFormat.MARKDOWN,
+                origin=SourceOrigin(
+                    SourceOriginKind.REPOSITORY,
+                    locator=(
+                        f"arc-companion:{context.run_id}:{view_artifact}"
+                    ),
                 ),
-            ),
-        )
-        cached_document = cached_document_ref_to_document(
-            paper.cache_document(cached_source)
-        )
-        index = model_translation_index(
-            view,
-            chapters,
-            access,
-            source_document_sha256=source.document_digest,
-            target_language=self.request.target_language,
-            cached_document=cached_document,
-        )
-        index_ref = context.artifacts.find(
-            _MODEL_TRANSLATION_INDEX_ARTIFACT
-        )
-        if index_ref is None:
-            index_ref = context.artifacts.publish_json(
-                _MODEL_TRANSLATION_INDEX_ARTIFACT, index
             )
-        else:
-            frozen = read_json(
-                context, index_ref, "model translation index"
+            cached_document = cached_document_ref_to_document(
+                paper.cache_document(cached_source)
             )
-            validate_model_translation_index(
-                frozen,
+            index = model_translation_index(
                 view=view,
-                chapters=chapters,
+                chapters=chapter_set,
+                access_by_chapter=access,
                 source_document_sha256=source.document_digest,
                 target_language=self.request.target_language,
+                cached_document=cached_document,
             )
-            if frozen != index:
-                raise CompanionContentError(
-                    "model_translation_index_mismatch",
-                    "Frozen translation index differs from current cache identity.",
+            index_artifact = f"{artifact_root}/model-index"
+            index_ref = context.artifacts.find(index_artifact)
+            if index_ref is None:
+                index_ref = context.artifacts.publish_json(
+                    index_artifact, index
                 )
-        return (
-            (
+            else:
+                frozen = read_json(
+                    context, index_ref, "chapter model translation index"
+                )
+                validate_model_translation_index(
+                    frozen,
+                    view=view,
+                    chapters=chapter_set,
+                    source_document_sha256=source.document_digest,
+                    target_language=self.request.target_language,
+                )
+                if frozen != index:
+                    raise CompanionContentError(
+                        "model_translation_index_mismatch",
+                        "Frozen chapter translation index differs from current cache identity.",
+                    )
+            inputs.append(
                 _llm_input(
                     context,
-                    "companion-translation-index",
+                    _chapter_translation_input_id(chapter.chapter_id),
                     index_ref,
-                ),
-            ),
-            index,
-        )
+                )
+            )
+            indexes[chapter.chapter_id] = index
+        return tuple(inputs), indexes
 
     def _authors(
         self,
@@ -851,7 +858,9 @@ class CompanionBuildHandler:
         ).hexdigest()
         completed_results: dict[str, Mapping[str, Any]] = {}
         guide_model_inputs = model_inputs
-        translation_index: Mapping[str, Any] | None = None
+        translation_indexes: Mapping[
+            str, Mapping[str, Any]
+        ] | None = None
         if translation_required:
             translation_units = tuple(
                 WorkUnit(
@@ -944,7 +953,7 @@ class CompanionBuildHandler:
             )
             (
                 translation_inputs,
-                translation_index,
+                translation_indexes,
             ) = self._model_translation_inputs(
                 context,
                 source,
@@ -1021,7 +1030,11 @@ class CompanionBuildHandler:
                 chapter,
                 language_identity=language_identity,
                 glossary=chapter_entries[chapter.chapter_id],
-                translation_index=translation_index,
+                translation_index=(
+                    None
+                    if translation_indexes is None
+                    else translation_indexes[chapter.chapter_id]
+                ),
             )
             guide_contexts[chapter.chapter_id] = guide_context
             guide_loops.append(
@@ -1052,6 +1065,17 @@ class CompanionBuildHandler:
                     ),
                     revision_context_mode=(
                         RevisionContextMode.FULL_REVIEW_ENVELOPE
+                    ),
+                    input_ids=tuple(
+                        item.input_id for item in model_inputs
+                    ) + (
+                        ()
+                        if translation_indexes is None
+                        else (
+                            _chapter_translation_input_id(
+                                chapter.chapter_id
+                            ),
+                        )
                     ),
                 )
             )
@@ -2044,6 +2068,10 @@ def _llm_input(
         ArtifactSourceRef(context.run_id, ref.artifact_id, ref.digest),
         ref.media_type,
     )
+
+
+def _chapter_translation_input_id(chapter_id: str) -> str:
+    return f"companion-translation-index-{chapter_id}"
 
 
 def _companion_llm_options(

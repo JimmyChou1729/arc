@@ -25,7 +25,7 @@ from arc_companion.model_source import (
     validate_model_source_index,
     validate_model_translation_index,
 )
-from arc_companion.source_planning import plan_source_chapters
+from arc_companion.source_planning import SourceChapter, plan_source_chapters
 
 
 def _document() -> RichDocument:
@@ -245,3 +245,42 @@ def test_model_translation_view_aligns_parts_without_body_in_index() -> None:
     encoded = json.dumps(index, ensure_ascii=False)
     assert "徐先生" not in encoded
     assert index["cached_document"] == cached
+
+
+def test_single_chapter_translation_views_isolate_changed_content() -> None:
+    chapter_a = SourceChapter(
+        "chapter-a", "A", ("heading", "paragraph"), "heading"
+    )
+    chapter_b = SourceChapter(
+        "chapter-b", "B", ("equation", "figure"), "equation"
+    )
+    translations = {
+        "chapter-a": [
+            {"block_id": "heading", "text": "# 标题"},
+            {"block_id": "paragraph", "text": "第一章。"},
+        ],
+        "chapter-b": [
+            {"block_id": "equation", "text": "$$x=1$$"},
+            {"block_id": "figure", "text": "第二章图。"},
+        ],
+    }
+
+    view_a, _ = model_translation_view(
+        (chapter_a,), {"chapter-a": translations["chapter-a"]}
+    )
+    view_b, _ = model_translation_view(
+        (chapter_b,), {"chapter-b": translations["chapter-b"]}
+    )
+    changed_a = [dict(item) for item in translations["chapter-a"]]
+    changed_a[1]["text"] = "修改后的第一章。"
+    changed_view_a, _ = model_translation_view(
+        (chapter_a,), {"chapter-a": changed_a}
+    )
+    replayed_view_b, _ = model_translation_view(
+        (chapter_b,), {"chapter-b": translations["chapter-b"]}
+    )
+
+    assert hashlib.sha256(view_a.encode()).digest() != hashlib.sha256(
+        changed_view_a.encode()
+    ).digest()
+    assert replayed_view_b == view_b
