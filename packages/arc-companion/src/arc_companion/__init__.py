@@ -5,6 +5,7 @@ from typing import Any
 from .project import CompanionProjectError, CompanionProjectPaths
 from .publication import (
     BUILD_RESULT_SCHEMA,
+    SUPPLEMENT_COVERAGE_SCHEMA,
     CompanionPublicationError,
     PublishedCompanion,
     materialize_published_companion,
@@ -46,6 +47,22 @@ def __getattr__(name: str) -> Any:
         from .translation_adapter import CompanionTranslationRuntimeError
 
         return CompanionTranslationRuntimeError
+    if name in {
+        "REVIEWED_COMPANION_SUPPLEMENT_SCHEMA",
+        "ReviewedCompanionSupplement",
+        "ReviewedOwnedResource",
+        "ReviewedSourceDraft",
+        "ReviewedSourceUnit",
+        "ReviewedSupplementEntry",
+        "decode_reviewed_companion_supplement",
+        "encode_reviewed_companion_supplement",
+        "reviewed_anchor_fingerprint",
+        "reviewed_source_inventory_digest",
+        "validate_reviewed_companion_supplement",
+    }:
+        from . import reviewed_supplements
+
+        return getattr(reviewed_supplements, name)
     raise AttributeError(name)
 
 
@@ -66,6 +83,18 @@ __all__ = [
     "CompanionServiceError",
     "CompanionTranslationRuntimeError",
     "PublishedCompanion",
+    "REVIEWED_COMPANION_SUPPLEMENT_SCHEMA",
+    "SUPPLEMENT_COVERAGE_SCHEMA",
+    "ReviewedCompanionSupplement",
+    "ReviewedOwnedResource",
+    "ReviewedSourceDraft",
+    "ReviewedSourceUnit",
+    "ReviewedSupplementEntry",
     "companion_run_id",
+    "decode_reviewed_companion_supplement",
+    "encode_reviewed_companion_supplement",
     "materialize_published_companion",
+    "reviewed_anchor_fingerprint",
+    "reviewed_source_inventory_digest",
+    "validate_reviewed_companion_supplement",
 ]

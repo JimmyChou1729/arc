@@ -57,12 +57,30 @@ def test_current_request_and_recipe_round_trip_only(tmp_path: Path) -> None:
     recipe = CompanionGenerationRecipe()
     recipe_document = encode_generation_recipe(recipe)
     assert request_document["schema_version"] == COMPANION_BUILD_REQUEST_SCHEMA
+    assert request_document["reviewed_supplements"] == []
     assert recipe_document["schema_version"] == COMPANION_GENERATION_RECIPE_SCHEMA
     decoded_request = decode_build_request(request_document)
     assert decoded_request.source.document_digest == request.source.document_digest
     assert decoded_request.authors == request.authors
     assert decoded_request.target_language == request.target_language
     assert decode_generation_recipe(recipe_document) == recipe
+
+
+def test_v7_request_decodes_without_reviewed_supplements(
+    tmp_path: Path,
+) -> None:
+    request = encode_build_request(
+        CompanionBuildRequest(_document(tmp_path, "# Source\n\nBody.\n"))
+    )
+    request["schema_version"] = "arc.companion.build_request.v7"
+    del request["reviewed_supplements"]
+
+    decoded = decode_build_request(request)
+
+    assert decoded.reviewed_supplements == ()
+    assert encode_build_request(decoded)["schema_version"] == (
+        COMPANION_BUILD_REQUEST_SCHEMA
+    )
 
 
 def test_old_request_and_recipe_schemas_are_rejected(tmp_path: Path) -> None:

@@ -25,9 +25,18 @@ from .prompts import (
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
 )
 from .reader_labels import resolve_reader_labels
+from .reviewed_supplements import (
+    ReviewedCompanionSupplement,
+    decode_reviewed_companion_supplement,
+    encode_reviewed_companion_supplement,
+    validate_reviewed_companion_supplement,
+)
 
 
-COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v7"
+COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v8"
+LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V7 = (
+    "arc.companion.build_request.v7"
+)
 COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v17"
 COMPANION_CONTENT_CONTRACT = "arc.companion.source_anchored_textbook.v1"
 NEUTRAL_TEXTBOOK_INTENT = (
@@ -50,6 +59,7 @@ class CompanionBuildRequest:
     reader_labels: Mapping[str, str] | None = None
     structure_ref: CachedDocumentStructureRef | None = None
     companion_section_ids: tuple[str, ...] | None = None
+    reviewed_supplements: tuple[ReviewedCompanionSupplement, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, RichDocument):
@@ -157,6 +167,20 @@ class CompanionBuildRequest:
                 "companion_section_ids must be unique non-empty strings or null"
             )
         object.__setattr__(self, "companion_section_ids", section_ids)
+        supplements = tuple(self.reviewed_supplements)
+        if any(
+            not isinstance(item, ReviewedCompanionSupplement)
+            for item in supplements
+        ):
+            raise ValueError(
+                "reviewed_supplements must contain ReviewedCompanionSupplement values"
+            )
+        supplement_ids = [item.supplement_id for item in supplements]
+        if len(supplement_ids) != len(set(supplement_ids)):
+            raise ValueError("reviewed_supplements contains duplicate IDs")
+        for supplement in supplements:
+            validate_reviewed_companion_supplement(supplement, self.source)
+        object.__setattr__(self, "reviewed_supplements", supplements)
 
     @property
     def effective_intent(self) -> str:
@@ -266,6 +290,10 @@ def encode_build_request(
             if request.companion_section_ids is not None
             else None
         ),
+        "reviewed_supplements": [
+            encode_reviewed_companion_supplement(item)
+            for item in request.reviewed_supplements
+        ],
     }
 
 
@@ -320,9 +348,12 @@ def decode_build_request(
         "structure_ref",
         "companion_section_ids",
     }
-    request = _exact(document, fields, "build request")
-    if request["schema_version"] != COMPANION_BUILD_REQUEST_SCHEMA:
+    schema_version = document.get("schema_version")
+    if schema_version == COMPANION_BUILD_REQUEST_SCHEMA:
+        fields.add("reviewed_supplements")
+    elif schema_version != LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V7:
         raise ValueError("unsupported Companion build-request schema")
+    request = _exact(document, fields, "build request")
     source = _mapping(request["source"], "rich source")
     validators = request["validator_digests"]
     if not isinstance(validators, list) or any(
@@ -360,6 +391,13 @@ def decode_build_request(
             ))
             if request["companion_section_ids"] is not None
             else None
+        ),
+        reviewed_supplements=tuple(
+            decode_reviewed_companion_supplement(item)
+            for item in _mapping_sequence(
+                request.get("reviewed_supplements", []),
+                "reviewed_supplements",
+            )
         ),
     )
 
@@ -449,6 +487,16 @@ def _mapping(value: Any, description: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{description} must be an object")
     return value
+
+
+def _mapping_sequence(
+    value: Any, description: str
+) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, Mapping) for item in value
+    ):
+        raise ValueError(f"{description} must be an array of objects")
+    return tuple(value)
 
 
 def _string(value: Mapping[str, Any], key: str) -> str:

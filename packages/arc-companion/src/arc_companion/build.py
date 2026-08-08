@@ -334,6 +334,7 @@ class CompanionBuildHandler:
                 chapters=chapters_outcome,
                 glossary=glossary_contracts,
                 bibliography=bibliography,
+                reviewed_supplements=self.request.reviewed_supplements,
                 paper_cache_root=self.execution.paper_cache_root,
             )
             result_ref = context.artifacts.publish_json(

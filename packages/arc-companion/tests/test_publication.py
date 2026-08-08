@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,15 @@ from arc_companion.publication import (
     build_result_document,
     materialize_published_companion,
     publish_companion,
+)
+from arc_companion.reviewed_supplements import (
+    ReviewedCompanionSupplement,
+    ReviewedOwnedResource,
+    ReviewedSourceDraft,
+    ReviewedSourceUnit,
+    ReviewedSupplementEntry,
+    reviewed_anchor_fingerprint,
+    reviewed_source_inventory_digest,
 )
 from arc_companion.generation_validation import validate_chapter_guide
 from arc_companion.source_planning import plan_source_chapters
@@ -232,6 +242,162 @@ def test_materialization_validates_resource_size_bytes(tmp_path: Path) -> None:
         ),
         published,
         tmp_path / "publication-with-resource",
+    )
+    assert validate_publication_workspace(publication_path) == ()
+
+
+def test_reviewed_supplement_publishes_provenance_resource_and_coverage(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    anchor = source.blocks[1]
+    image_payload = b"\x89PNG\r\n\x1a\nreviewed"
+    image = SourceRepository(tmp_path / "paper").store_asset_bytes(
+        image_payload,
+        media_type="image/png",
+    )
+    coverage = (
+        ReviewedSourceUnit(
+            "unit-1",
+            "text",
+            "notes.md:L1",
+            "a" * 64,
+            "published",
+            "Adds a derivation.",
+            ("entry-1",),
+        ),
+        ReviewedSourceUnit(
+            "unit-2",
+            "text",
+            "notes.md:L2",
+            "b" * 64,
+            "excluded",
+            "Restates the source.",
+        ),
+    )
+    supplement = ReviewedCompanionSupplement(
+        supplement_id="reviewed-notes",
+        summary="Reviewed notes with exhaustive dispositions.",
+        source_unit_count=len(coverage),
+        source_inventory_digest=reviewed_source_inventory_digest(
+            coverage
+        ),
+        entries=(
+            ReviewedSupplementEntry(
+                entry_id="entry-1",
+                anchor_block_id=anchor.block_id,
+                anchor_fingerprint=reviewed_anchor_fingerprint(anchor),
+                title="Reviewed note",
+                markdown="Explanation.\n\n![Diagram](notes/diagram.png)",
+                source_draft_ids=("draft-1",),
+                source_unit_ids=("unit-1",),
+            ),
+        ),
+        coverage=coverage,
+        drafts=(
+            ReviewedSourceDraft(
+                "draft-1",
+                "published",
+                "Integrated after review.",
+                ("unit-1",),
+                ("entry-1",),
+            ),
+            ReviewedSourceDraft(
+                "draft-2",
+                "excluded",
+                "Rejected after review.",
+                ("unit-2",),
+            ),
+        ),
+        resources=(
+            ReviewedOwnedResource(
+                image.artifact_digest,
+                "notes/diagram.png",
+                image.media_type,
+                image.size,
+            ),
+        ),
+    )
+    chapter = plan_source_chapters(source)[0]
+    chapters = [
+        {
+            "chapter_id": chapter.chapter_id,
+            "title": chapter.title,
+            "block_ids": list(chapter.block_ids),
+            "display_anchor_block_id": chapter.display_anchor_block_id,
+            "section_block_ids": list(chapter.section_block_ids),
+            "section_titles": list(chapter.section_titles),
+            "section_levels": list(chapter.section_levels),
+            "translation_result": None,
+            "learning_units": [],
+        }
+    ]
+    repository = RunRepository(tmp_path / "jobs")
+    snapshot = repository.create(
+        RunSpec("supplement-run", "handler", {"input": "test"})
+    )
+    context = RunContext(repository, snapshot, resume_input=None)
+
+    published = publish_companion(
+        context,
+        source=source,
+        title="Source",
+        authors=(),
+        source_language="en",
+        target_language="en",
+        translation_mode="skipped",
+        reader_labels={"source": "Source"},
+        chapters=chapters,
+        glossary=(),
+        bibliography=(),
+        reviewed_supplements=(supplement,),
+        paper_cache_root=tmp_path / "paper",
+    )
+
+    assert published.publication.source_document.assets == ()
+    assert len(published.fragment_refs) == 1
+    revision = decode_fragment_revision(
+        context.artifacts.read_bytes(published.fragment_refs[0]).decode()
+    )
+    assert revision.provenance["supplement_id"] == "reviewed-notes"
+    assert revision.provenance["entry_id"] == "entry-1"
+    assert revision.provenance["source_draft_ids"] == ("draft-1",)
+    assert revision.provenance["source_unit_ids"] == ("unit-1",)
+    assert len(published.resource_refs) == 2
+    report_ref = next(
+        item
+        for item in published.resource_refs
+        if item.media_type == "application/json"
+    )
+    report = json.loads(context.artifacts.read_bytes(report_ref))
+    assert report["schema_version"] == (
+        "arc.companion.supplement_coverage.v1"
+    )
+    assert report["totals"] == {
+        "supplements": 1,
+        "source_units": 2,
+        "published_units": 1,
+        "excluded_units": 1,
+        "text_units": 2,
+        "published_text_units": 1,
+        "excluded_text_units": 1,
+        "image_units": 0,
+        "published_image_units": 0,
+        "excluded_image_units": 0,
+        "drafts": 2,
+        "published_drafts": 1,
+        "excluded_drafts": 1,
+        "entries": 1,
+        "resources": 1,
+    }
+    workspace = tmp_path / "supplement-publication"
+    publication_path = materialize_published_companion(
+        ImmutableArtifactStore(
+            repository.run_directory("supplement-run"),
+            repository_root=repository.root,
+        ),
+        published,
+        workspace,
     )
     assert validate_publication_workspace(publication_path) == ()
 

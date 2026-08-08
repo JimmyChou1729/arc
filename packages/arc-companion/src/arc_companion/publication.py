@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -45,12 +46,24 @@ from .translation_results import (
     CompanionTranslationResultError,
     load_translation_selection,
 )
+from .reviewed_supplements import (
+    ReviewedCompanionSupplement,
+    encode_reviewed_companion_supplement,
+    validate_reviewed_companion_supplement,
+)
 
 
 BUILD_RESULT_SCHEMA = "arc.companion.build_result.v2"
 PUBLICATION_ARTIFACT = "publication/publication.json"
 TRANSLATION_LAYER_ARTIFACT = "publication/layers/translation.json"
 COMPANION_LAYER_ARTIFACT = "publication/layers/companion.json"
+SUPPLEMENT_COVERAGE_SCHEMA = "arc.companion.supplement_coverage.v1"
+SUPPLEMENT_COVERAGE_ARTIFACT = (
+    "publication/reports/supplement-coverage.json"
+)
+SUPPLEMENT_COVERAGE_LOGICAL_NAME = (
+    "arc-companion-supplement-coverage.json"
+)
 
 
 class CompanionPublicationError(ValueError):
@@ -79,6 +92,7 @@ def publish_companion(
     chapters: Sequence[Mapping[str, Any]],
     glossary: Sequence[Mapping[str, Any]],
     bibliography: Sequence[Mapping[str, Any]],
+    reviewed_supplements: Sequence[ReviewedCompanionSupplement] = (),
     paper_cache_root: str | Path | None = None,
 ) -> PublishedCompanion:
     """Publish immutable overlay revisions, their layers, and one publication."""
@@ -87,6 +101,15 @@ def publish_companion(
     source_identity = Publication(source).source
     translation_revisions: list[FragmentRevision] = []
     companion_revisions: list[FragmentRevision] = []
+    supplements = tuple(reviewed_supplements)
+    supplement_ids: set[str] = set()
+    for supplement in supplements:
+        validate_reviewed_companion_supplement(supplement, source)
+        if supplement.supplement_id in supplement_ids:
+            raise CompanionPublicationError(
+                "reviewed supplements repeat a supplement ID"
+            )
+        supplement_ids.add(supplement.supplement_id)
     for chapter in chapters:
         chapter_id = _string(chapter, "chapter_id")
         raw_translation = chapter.get("translation_result")
@@ -164,6 +187,53 @@ def publish_companion(
                 )
             )
 
+    for supplement in supplements:
+        for entry in supplement.entries:
+            block = _block(blocks, entry.anchor_block_id)
+            fragment_identity = json.dumps(
+                {
+                    "source": source_identity.rich_document_digest,
+                    "supplement_id": supplement.supplement_id,
+                    "entry_id": entry.entry_id,
+                    "anchor_block_id": entry.anchor_block_id,
+                    "anchor_fingerprint": entry.anchor_fingerprint,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            companion_revisions.append(
+                FragmentRevision(
+                    source=source_identity,
+                    fragment_id=_fragment_id(
+                        "reviewed-supplement", fragment_identity
+                    ),
+                    revision=1,
+                    parent_semantic_digest=None,
+                    anchor=FragmentAnchor(
+                        AnchorKind.BLOCK,
+                        entry.anchor_block_id,
+                        (anchor_block_from_rich_block(block),),
+                    ),
+                    priority=25,
+                    role="companion",
+                    language=target_language,
+                    title=entry.title,
+                    citation_ids=(),
+                    provenance={
+                        "producer": "arc-companion",
+                        "supplement_id": supplement.supplement_id,
+                        "entry_id": entry.entry_id,
+                        "source_draft_ids": list(
+                            entry.source_draft_ids
+                        ),
+                        "source_unit_ids": list(entry.source_unit_ids),
+                        "anchor_fingerprint": entry.anchor_fingerprint,
+                    },
+                    markdown_body=entry.markdown,
+                )
+            )
+
     fragment_artifacts: list[ArtifactRef] = []
     layers: list[tuple[str, Layer, ArtifactRef]] = []
     for producer, artifact_id, revisions in (
@@ -218,6 +288,108 @@ def publish_companion(
             }
         )
 
+    resource_digests = {
+        str(item["artifact_digest"]) for item in resources
+    }
+    resource_names = {str(item["logical_name"]) for item in resources}
+    for supplement in supplements:
+        for resource in supplement.resources:
+            if (
+                resource.artifact_digest in resource_digests
+                or resource.logical_name in resource_names
+            ):
+                raise CompanionPublicationError(
+                    "reviewed supplement resources repeat a publication resource"
+                )
+            try:
+                cached = paper.repository.get_asset(
+                    resource.artifact_digest
+                )
+                payload = paper.repository.read_asset_bytes(cached)
+            except (OSError, SourceRepositoryError) as exc:
+                raise CompanionPublicationError(
+                    "reviewed supplement resource is unavailable: "
+                    f"{resource.artifact_digest}"
+                ) from exc
+            if (
+                len(payload) != resource.size
+                or hashlib.sha256(payload).hexdigest()
+                != resource.artifact_digest
+            ):
+                raise CompanionPublicationError(
+                    "reviewed supplement resource bytes differ from metadata"
+                )
+            relative = f"resources/{resource.artifact_digest}"
+            resource_artifacts.append(
+                context.artifacts.publish_bytes(
+                    f"publication/{relative}",
+                    payload,
+                    media_type=resource.media_type,
+                )
+            )
+            resources.append(
+                {
+                    "artifact_digest": resource.artifact_digest,
+                    "media_type": resource.media_type,
+                    "logical_name": resource.logical_name,
+                    "size": resource.size,
+                    "path": relative,
+                }
+            )
+            resource_digests.add(resource.artifact_digest)
+            resource_names.add(resource.logical_name)
+
+    coverage_summary: dict[str, Any] | None = None
+    if supplements:
+        coverage = _supplement_coverage_document(
+            supplements,
+            source_digest=source.document_digest,
+        )
+        coverage_payload = (
+            json.dumps(
+                coverage,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
+        )
+        coverage_ref = context.artifacts.publish_bytes(
+            SUPPLEMENT_COVERAGE_ARTIFACT,
+            coverage_payload,
+            media_type="application/json",
+        )
+        if (
+            coverage_ref.digest.value in resource_digests
+            or SUPPLEMENT_COVERAGE_LOGICAL_NAME in resource_names
+        ):
+            raise CompanionPublicationError(
+                "supplement coverage report conflicts with a publication resource"
+            )
+        resource_artifacts.append(coverage_ref)
+        coverage_relative = "reports/supplement-coverage.json"
+        resources.append(
+            {
+                "artifact_digest": coverage_ref.digest.value,
+                "media_type": "application/json",
+                "logical_name": SUPPLEMENT_COVERAGE_LOGICAL_NAME,
+                "size": coverage_ref.digest.size_bytes,
+                "path": coverage_relative,
+            }
+        )
+        totals = _mapping(coverage["totals"], "coverage totals")
+        coverage_summary = {
+            "summary": (
+                f"Reviewed supplements: {totals['published_text_units']} of "
+                f"{totals['text_units']} text units published in "
+                f"{totals['entries']} entries; "
+                f"{totals['excluded_text_units']} excluded with reasons."
+            ),
+            "report_logical_name": SUPPLEMENT_COVERAGE_LOGICAL_NAME,
+            "report_filename": "supplement-coverage.json",
+            **dict(totals),
+        }
+
     publication = Publication(
         source_document=source,
         layers=tuple(
@@ -235,6 +407,11 @@ def publish_companion(
             "source_language": source_language,
             "target_language": target_language,
             "translation_mode": translation_mode,
+            **(
+                {"supplement_coverage": coverage_summary}
+                if coverage_summary is not None
+                else {}
+            ),
         },
     )
     publication_ref = context.artifacts.publish_json(
@@ -247,6 +424,70 @@ def publish_companion(
         tuple(fragment_artifacts),
         tuple(resource_artifacts),
     )
+
+
+def _supplement_coverage_document(
+    supplements: Sequence[ReviewedCompanionSupplement],
+    *,
+    source_digest: str,
+) -> dict[str, Any]:
+    source_units = sum(len(item.coverage) for item in supplements)
+    published_units = sum(
+        item.disposition == "published"
+        for supplement in supplements
+        for item in supplement.coverage
+    )
+    published_drafts = sum(
+        item.disposition == "published"
+        for supplement in supplements
+        for item in supplement.drafts
+    )
+    text_units = sum(
+        item.kind == "text"
+        for supplement in supplements
+        for item in supplement.coverage
+    )
+    published_text_units = sum(
+        item.kind == "text" and item.disposition == "published"
+        for supplement in supplements
+        for item in supplement.coverage
+    )
+    image_units = source_units - text_units
+    published_image_units = sum(
+        item.kind == "image" and item.disposition == "published"
+        for supplement in supplements
+        for item in supplement.coverage
+    )
+    return {
+        "schema_version": SUPPLEMENT_COVERAGE_SCHEMA,
+        "source_document_sha256": source_digest,
+        "totals": {
+            "supplements": len(supplements),
+            "source_units": source_units,
+            "published_units": published_units,
+            "excluded_units": source_units - published_units,
+            "text_units": text_units,
+            "published_text_units": published_text_units,
+            "excluded_text_units": text_units - published_text_units,
+            "image_units": image_units,
+            "published_image_units": published_image_units,
+            "excluded_image_units": image_units - published_image_units,
+            "drafts": sum(len(item.drafts) for item in supplements),
+            "published_drafts": published_drafts,
+            "excluded_drafts": (
+                sum(len(item.drafts) for item in supplements)
+                - published_drafts
+            ),
+            "entries": sum(len(item.entries) for item in supplements),
+            "resources": sum(
+                len(item.resources) for item in supplements
+            ),
+        },
+        "supplements": [
+            encode_reviewed_companion_supplement(item)
+            for item in supplements
+        ],
+    }
 
 
 def _publication_outline(
@@ -707,6 +948,9 @@ __all__ = [
     "BUILD_RESULT_SCHEMA",
     "COMPANION_LAYER_ARTIFACT",
     "PUBLICATION_ARTIFACT",
+    "SUPPLEMENT_COVERAGE_ARTIFACT",
+    "SUPPLEMENT_COVERAGE_LOGICAL_NAME",
+    "SUPPLEMENT_COVERAGE_SCHEMA",
     "TRANSLATION_LAYER_ARTIFACT",
     "CompanionPublicationError",
     "PublishedCompanion",
