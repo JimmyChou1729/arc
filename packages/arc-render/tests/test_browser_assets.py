@@ -63,6 +63,7 @@ define = undefined;
     setupMarkdown: setupMarkdown,
     buildRenderChunks: buildRenderChunks,
     isPdfPageMarkerBlock: isPdfPageMarkerBlock,
+    katexCandidates: katexCandidates,
     katexTex: katexTex,
     validateIntegerJson: validateIntegerJson,
     validateRevisionMetadata: validateRevisionMetadata
@@ -109,6 +110,25 @@ if (
   String.raw`\\begin{matrix}a&b\\end{matrix}`
 ) {
   throw new Error("existing TeX environment was wrapped a second time");
+}
+var matrixCandidates = helpers.katexCandidates(
+  String.raw`\\left[{cc}a&b\\\\c&d\\right]`
+);
+if (
+  !matrixCandidates.some(function (candidate) {
+    return candidate.includes(String.raw`\\begin{array}{cc}`) &&
+      candidate.includes(String.raw`\\end{array}\\right]`);
+  })
+) {
+  throw new Error("OCR matrix shorthand was not repaired for KaTeX");
+}
+if (
+  !matrixCandidates.some(function (candidate) {
+    return candidate.includes(String.raw`\\bigl[`) &&
+      candidate.includes(String.raw`\\bigr]`);
+  })
+) {
+  throw new Error("cross-row scalable delimiter fallback is missing");
 }
 if (helpers.stableStringify({b: 2, a: 1}) !== '{"a":1,"b":2}') {
   throw new Error("canonical JSON ordering changed");

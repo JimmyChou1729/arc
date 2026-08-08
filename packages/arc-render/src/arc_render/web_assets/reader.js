@@ -1474,17 +1474,88 @@
     return tex;
   }
 
+  function repairMatrixShorthand(value) {
+    var tex = String(value || "");
+    var opening = /\\left\s*(\[|\()\s*\{\s*([clr](?:\s*[clr])*)\s*\}/g;
+    var edits = [];
+    var match;
+    while ((match = opening.exec(tex))) {
+      var depth = 1;
+      var closingIndex = -1;
+      var token = /\\(?:left|right)\b/g;
+      token.lastIndex = opening.lastIndex;
+      var delimiter;
+      while ((delimiter = token.exec(tex))) {
+        if (delimiter[0] === "\\left") {
+          depth += 1;
+        } else {
+          depth -= 1;
+          if (depth === 0) {
+            closingIndex = delimiter.index;
+            break;
+          }
+        }
+      }
+      if (closingIndex < 0) continue;
+      edits.push({
+        start: match.index,
+        end: opening.lastIndex,
+        value: "\\left" + match[1] + "\\begin{array}{" +
+          match[2].replace(/\s+/g, "") + "}"
+      });
+      edits.push({
+        start: closingIndex,
+        end: closingIndex,
+        value: "\\end{array}"
+      });
+    }
+    edits.sort(function (left, right) {
+      return right.start - left.start || right.end - left.end;
+    });
+    edits.forEach(function (edit) {
+      tex = tex.slice(0, edit.start) + edit.value + tex.slice(edit.end);
+    });
+    return tex;
+  }
+
+  function katexCandidates(value) {
+    var primary = katexTex(value);
+    var repaired = repairMatrixShorthand(primary);
+    var fixedSizeDelimiters = repaired
+      .replace(/\\left\b/g, "\\bigl")
+      .replace(/\\right\b/g, "\\bigr");
+    return [primary, repaired, fixedSizeDelimiters].filter(function (
+      candidate, index, values
+    ) {
+      return values.indexOf(candidate) === index;
+    });
+  }
+
   function typeset(root) {
     if (!window.katex || typeof window.katex.render !== "function") return;
     var scope = root.querySelectorAll ? root : document;
     scope.querySelectorAll(".math[data-tex]").forEach(function (node) {
       if (node.dataset.arcTypeset === "true") return;
       try {
-        window.katex.render(katexTex(node.dataset.tex), node, {
+        var settings = {
           displayMode: node.classList.contains("math-display"),
-          throwOnError: false,
+          throwOnError: true,
           strict: "warn"
+        };
+        var candidates = katexCandidates(node.dataset.tex);
+        var rendered = candidates.some(function (candidate) {
+          try {
+            window.katex.render(candidate, node, settings);
+            return true;
+          } catch (_candidateError) {
+            return false;
+          }
         });
+        if (!rendered) {
+          settings.throwOnError = false;
+          window.katex.render(candidates[0] || "", node, settings);
+          node.classList.add("math-error");
+        }
         node.dataset.arcTypeset = "true";
       } catch (_error) {
         node.textContent = node.dataset.tex || "";
