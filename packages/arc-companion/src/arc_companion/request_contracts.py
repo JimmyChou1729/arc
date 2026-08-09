@@ -475,6 +475,15 @@ def decode_handler_semantic_input(
     )
 
 
+def normalize_handler_semantic_input(
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Upgrade a valid durable handler binding to its current encoding."""
+
+    request, recipe = decode_handler_semantic_input(document)
+    return encode_handler_semantic_input(request, recipe)
+
+
 def _exact(
     value: Mapping[str, Any], fields: set[str], description: str
 ) -> dict[str, Any]:
@@ -562,4 +571,5 @@ __all__ = [
     "encode_build_request",
     "encode_generation_recipe",
     "encode_handler_semantic_input",
+    "normalize_handler_semantic_input",
 ]

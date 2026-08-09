@@ -19,8 +19,11 @@ from arc_companion.request_contracts import (
     CompanionGenerationRecipe,
     decode_build_request,
     decode_generation_recipe,
+    decode_handler_semantic_input,
     encode_build_request,
     encode_generation_recipe,
+    encode_handler_semantic_input,
+    normalize_handler_semantic_input,
 )
 from arc_companion.source_identity import resolve_document_identity
 
@@ -80,6 +83,19 @@ def test_v7_request_decodes_without_reviewed_supplements(
     assert decoded.reviewed_supplements == ()
     assert encode_build_request(decoded)["schema_version"] == (
         COMPANION_BUILD_REQUEST_SCHEMA
+    )
+
+    recipe = CompanionGenerationRecipe()
+    legacy_binding = {
+        "request": request,
+        "generation_recipe": encode_generation_recipe(recipe),
+    }
+    normalized = normalize_handler_semantic_input(legacy_binding)
+    normalized_request, normalized_recipe = decode_handler_semantic_input(
+        normalized
+    )
+    assert normalized == encode_handler_semantic_input(
+        normalized_request, normalized_recipe
     )
 
 

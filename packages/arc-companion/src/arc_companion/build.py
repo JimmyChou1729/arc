@@ -124,6 +124,7 @@ from .request_contracts import (
     CompanionExecutionOptions,
     CompanionGenerationRecipe,
     encode_handler_semantic_input,
+    normalize_handler_semantic_input,
 )
 from .source_planning import (
     SourceChapter,
@@ -182,7 +183,13 @@ class CompanionBuildHandler:
         return encode_handler_semantic_input(self.request, self.recipe)
 
     def execute(self, context: RunContext):
-        if dict(context.semantic_input) != self.semantic_input():
+        try:
+            durable_semantic_input = normalize_handler_semantic_input(
+                context.semantic_input
+            )
+        except (TypeError, ValueError):
+            durable_semantic_input = None
+        if durable_semantic_input != self.semantic_input():
             return Failed(
                 RunError(
                     "companion_build_binding_mismatch",

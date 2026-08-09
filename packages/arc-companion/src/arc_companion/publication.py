@@ -228,6 +228,8 @@ def publish_companion(
                             entry.source_draft_ids
                         ),
                         "source_unit_ids": list(entry.source_unit_ids),
+                        "source_basis": entry.source_basis,
+                        "source_basis_reason": entry.source_basis_reason,
                         "anchor_fingerprint": entry.anchor_fingerprint,
                     },
                     markdown_body=entry.markdown,
@@ -381,8 +383,11 @@ def publish_companion(
         coverage_summary = {
             "summary": (
                 f"Reviewed supplements: {totals['published_text_units']} of "
-                f"{totals['text_units']} text units published in "
-                f"{totals['entries']} entries; "
+                f"{totals['text_units']} text units published; "
+                f"{totals['entries']} entries, including "
+                f"{totals['supplement_draft_entries']} linked via reviewed "
+                "drafts and "
+                f"{totals['primary_source_entries']} primary-source additions; "
                 f"{totals['excluded_text_units']} excluded with reasons."
             ),
             "report_logical_name": SUPPLEMENT_COVERAGE_LOGICAL_NAME,
@@ -479,6 +484,21 @@ def _supplement_coverage_document(
                 - published_drafts
             ),
             "entries": sum(len(item.entries) for item in supplements),
+            "supplement_unit_entries": sum(
+                entry.source_basis == "supplement_units"
+                for supplement in supplements
+                for entry in supplement.entries
+            ),
+            "supplement_draft_entries": sum(
+                entry.source_basis == "supplement_drafts"
+                for supplement in supplements
+                for entry in supplement.entries
+            ),
+            "primary_source_entries": sum(
+                entry.source_basis == "primary_source"
+                for supplement in supplements
+                for entry in supplement.entries
+            ),
             "resources": sum(
                 len(item.resources) for item in supplements
             ),

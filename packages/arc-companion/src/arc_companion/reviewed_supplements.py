@@ -18,6 +18,9 @@ from .rich_text import parse_markdown
 
 
 REVIEWED_COMPANION_SUPPLEMENT_SCHEMA = (
+    "arc.companion.reviewed_supplement.v2"
+)
+LEGACY_REVIEWED_COMPANION_SUPPLEMENT_SCHEMA_V1 = (
     "arc.companion.reviewed_supplement.v1"
 )
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
@@ -112,6 +115,12 @@ class ReviewedSupplementEntry:
     markdown: str
     source_draft_ids: tuple[str, ...]
     source_unit_ids: tuple[str, ...]
+    source_basis: Literal[
+        "supplement_units", "supplement_drafts", "primary_source"
+    ] = (
+        "supplement_units"
+    )
+    source_basis_reason: str = ""
 
     def __post_init__(self) -> None:
         _identifier(self.entry_id, "entry_id")
@@ -129,8 +138,39 @@ class ReviewedSupplementEntry:
         object.__setattr__(self, "markdown", markdown)
         drafts = _identifiers(self.source_draft_ids, "entry source_draft_ids")
         units = _identifiers(self.source_unit_ids, "entry source_unit_ids")
+        if self.source_basis not in {
+            "supplement_units",
+            "supplement_drafts",
+            "primary_source",
+        }:
+            raise ValueError(
+                "entry source_basis must be supplement_units, "
+                "supplement_drafts, or primary_source"
+            )
+        if self.source_basis == "supplement_units" and not units:
+            raise ValueError("entry source_unit_ids must not be empty")
+        if self.source_basis == "supplement_drafts" and (
+            units or not drafts
+        ):
+            raise ValueError(
+                "supplement-draft entry requires drafts and no direct units"
+            )
+        if units and self.source_basis not in {"supplement_units"}:
+            raise ValueError(
+                "entry with source units must use the supplement_units basis"
+            )
+        if self.source_basis == "primary_source" and drafts:
+            raise ValueError(
+                "primary-source entry must not refer to supplement drafts"
+            )
+        reason = self.source_basis_reason.strip()
+        if self.source_basis == "primary_source" and not reason:
+            raise ValueError(
+                "primary-source entry must explain its source basis"
+            )
         object.__setattr__(self, "source_draft_ids", drafts)
         object.__setattr__(self, "source_unit_ids", units)
+        object.__setattr__(self, "source_basis_reason", reason)
 
 
 @dataclass(frozen=True)
@@ -346,6 +386,13 @@ def decode_reviewed_companion_supplement(
         },
         "reviewed supplement",
     )
+    schema_version = _required_string(document, "schema_version")
+    if schema_version not in {
+        REVIEWED_COMPANION_SUPPLEMENT_SCHEMA,
+        LEGACY_REVIEWED_COMPANION_SUPPLEMENT_SCHEMA_V1,
+    }:
+        raise ValueError("unsupported reviewed Companion supplement schema")
+    legacy = schema_version == LEGACY_REVIEWED_COMPANION_SUPPLEMENT_SCHEMA_V1
     return ReviewedCompanionSupplement(
         supplement_id=_required_string(document, "supplement_id"),
         summary=_required_string(document, "summary"),
@@ -356,7 +403,7 @@ def decode_reviewed_companion_supplement(
             document, "source_inventory_digest"
         ),
         entries=tuple(
-            _decode_entry(item)
+            _decode_entry(item, legacy=legacy)
             for item in _object_sequence(document["entries"], "entries")
         ),
         coverage=tuple(
@@ -371,7 +418,7 @@ def decode_reviewed_companion_supplement(
             _decode_resource(item)
             for item in _object_sequence(document["resources"], "resources")
         ),
-        schema_version=_required_string(document, "schema_version"),
+        schema_version=REVIEWED_COMPANION_SUPPLEMENT_SCHEMA,
     )
 
 
@@ -384,6 +431,8 @@ def _encode_entry(item: ReviewedSupplementEntry) -> dict[str, Any]:
         "markdown": item.markdown,
         "source_draft_ids": list(item.source_draft_ids),
         "source_unit_ids": list(item.source_unit_ids),
+        "source_basis": item.source_basis,
+        "source_basis_reason": item.source_basis_reason,
     }
 
 
@@ -418,19 +467,32 @@ def _encode_resource(item: ReviewedOwnedResource) -> dict[str, Any]:
     }
 
 
-def _decode_entry(value: Mapping[str, Any]) -> ReviewedSupplementEntry:
-    item = _exact(
-        value,
-        {
-            "entry_id",
-            "anchor_block_id",
-            "anchor_fingerprint",
-            "title",
-            "markdown",
-            "source_draft_ids",
-            "source_unit_ids",
-        },
-        "reviewed entry",
+def _decode_entry(
+    value: Mapping[str, Any], *, legacy: bool
+) -> ReviewedSupplementEntry:
+    legacy_fields = {
+        "entry_id",
+        "anchor_block_id",
+        "anchor_fingerprint",
+        "title",
+        "markdown",
+        "source_draft_ids",
+        "source_unit_ids",
+    }
+    expected_fields = (
+        legacy_fields
+        if legacy
+        else legacy_fields | {"source_basis", "source_basis_reason"}
+    )
+    if not isinstance(value, Mapping) or set(value) != expected_fields:
+        raise ValueError("reviewed entry has invalid fields")
+    item = value
+    units = _string_tuple(item["source_unit_ids"], "source_unit_ids")
+    drafts = _string_tuple(item["source_draft_ids"], "source_draft_ids")
+    legacy_basis = (
+        "supplement_units"
+        if units
+        else "supplement_drafts" if drafts else "primary_source"
     )
     return ReviewedSupplementEntry(
         entry_id=_required_string(item, "entry_id"),
@@ -438,8 +500,22 @@ def _decode_entry(value: Mapping[str, Any]) -> ReviewedSupplementEntry:
         anchor_fingerprint=_required_string(item, "anchor_fingerprint"),
         title=_required_string(item, "title"),
         markdown=_required_string(item, "markdown"),
-        source_draft_ids=_string_tuple(item["source_draft_ids"], "source_draft_ids"),
-        source_unit_ids=_string_tuple(item["source_unit_ids"], "source_unit_ids"),
+        source_draft_ids=drafts,
+        source_unit_ids=units,
+        source_basis=(
+            _required_string(item, "source_basis")
+            if "source_basis" in item
+            else legacy_basis
+        ),  # type: ignore[arg-type]
+        source_basis_reason=(
+            _required_string(item, "source_basis_reason")
+            if "source_basis_reason" in item
+            else (
+                "Imported legacy entry without supplemental unit provenance."
+                if legacy and legacy_basis == "primary_source"
+                else ""
+            )
+        ),
     )
 
 
@@ -509,7 +585,9 @@ def _local_image_names(markdown: str) -> tuple[str, ...]:
             target = child.attrGet("src") or ""
             parsed = urlsplit(target)
             if parsed.scheme or parsed.netloc:
-                continue
+                raise ValueError(
+                    "entry Markdown images must use a source or owned resource"
+                )
             names.append(target)
     return tuple(names)
 
@@ -628,6 +706,7 @@ def _required_integer(value: Mapping[str, Any], key: str) -> int:
 
 
 __all__ = [
+    "LEGACY_REVIEWED_COMPANION_SUPPLEMENT_SCHEMA_V1",
     "REVIEWED_COMPANION_SUPPLEMENT_SCHEMA",
     "ReviewedCompanionSupplement",
     "ReviewedOwnedResource",

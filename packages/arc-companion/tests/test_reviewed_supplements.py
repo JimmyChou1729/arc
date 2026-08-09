@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 from pathlib import Path
 
@@ -24,6 +25,12 @@ from arc_companion.reviewed_supplements import (
     reviewed_anchor_fingerprint,
     reviewed_source_inventory_digest,
     validate_reviewed_companion_supplement,
+)
+from arc_companion.request_contracts import (
+    CompanionBuildRequest,
+    CompanionGenerationRecipe,
+    encode_handler_semantic_input,
+    normalize_handler_semantic_input,
 )
 
 
@@ -119,6 +126,51 @@ def test_reviewed_supplement_validates_and_round_trips(tmp_path: Path) -> None:
         decode_reviewed_companion_supplement({**encoded, "extra": True})
 
 
+def test_legacy_supplement_entries_upgrade_direct_and_draft_provenance(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    encoded = encode_reviewed_companion_supplement(_supplement(source))
+    encoded["schema_version"] = "arc.companion.reviewed_supplement.v1"
+    for entry in encoded["entries"]:
+        del entry["source_basis"]
+        del entry["source_basis_reason"]
+
+    direct = decode_reviewed_companion_supplement(encoded)
+    assert direct.schema_version == "arc.companion.reviewed_supplement.v2"
+    assert direct.entries[0].source_basis == "supplement_units"
+
+    encoded["entries"][0]["source_unit_ids"] = []
+    encoded["coverage"][0]["disposition"] = "excluded"
+    encoded["coverage"][0]["entry_ids"] = []
+    encoded["source_inventory_digest"] = reviewed_source_inventory_digest(
+        direct.coverage
+    )
+    via_draft = decode_reviewed_companion_supplement(encoded)
+    assert via_draft.entries[0].source_basis == "supplement_drafts"
+    validate_reviewed_companion_supplement(via_draft, source)
+
+
+def test_legacy_nested_supplement_binding_normalizes_for_durable_resume(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    request = CompanionBuildRequest(
+        source, reviewed_supplements=(_supplement(source),)
+    )
+    current = encode_handler_semantic_input(
+        request, CompanionGenerationRecipe()
+    )
+    legacy = copy.deepcopy(current)
+    nested = legacy["request"]["reviewed_supplements"][0]
+    nested["schema_version"] = "arc.companion.reviewed_supplement.v1"
+    for entry in nested["entries"]:
+        del entry["source_basis"]
+        del entry["source_basis_reason"]
+
+    assert normalize_handler_semantic_input(legacy) == current
+
+
 @pytest.mark.parametrize("collection", ("entries", "coverage", "drafts"))
 def test_reviewed_supplement_rejects_duplicate_ids(
     tmp_path: Path, collection: str
@@ -165,6 +217,39 @@ def test_reviewed_supplement_rejects_missing_or_unknown_mappings(
     with pytest.raises(ValueError, match="excluded coverage"):
         replace(supplement.coverage[1], entry_ids=("entry-1",))
 
+    with pytest.raises(ValueError, match="source_unit_ids must not be empty"):
+        replace(entry, source_unit_ids=())
+
+    primary = replace(
+        entry,
+        source_draft_ids=(),
+        source_unit_ids=(),
+        source_basis="primary_source",
+        source_basis_reason="The reviewer added a derivation from the anchored source.",
+    )
+    primary_coverage = tuple(
+        replace(item, disposition="excluded", entry_ids=())
+        for item in supplement.coverage
+    )
+    primary_drafts = tuple(
+        replace(item, disposition="excluded", entry_ids=())
+        for item in supplement.drafts
+    )
+    validate_reviewed_companion_supplement(
+        replace(
+            supplement,
+            entries=(primary,),
+            coverage=primary_coverage,
+            drafts=primary_drafts,
+            source_inventory_digest=reviewed_source_inventory_digest(
+                primary_coverage
+            ),
+        ),
+        source,
+    )
+    with pytest.raises(ValueError, match="must explain"):
+        replace(primary, source_basis_reason="")
+
 
 def test_reviewed_supplement_rejects_unknown_anchor_or_fingerprint(
     tmp_path: Path,
@@ -204,6 +289,15 @@ def test_reviewed_supplement_rejects_invalid_or_unresolved_resources(
     missing = replace(supplement, resources=())
     with pytest.raises(ValueError, match="has no source or owned resource"):
         validate_reviewed_companion_supplement(missing, source)
+
+    remote = replace(
+        supplement.entries[0],
+        markdown="![Remote diagram](https://example.test/diagram.png)",
+    )
+    with pytest.raises(ValueError, match="must use a source or owned resource"):
+        validate_reviewed_companion_supplement(
+            replace(supplement, entries=(remote,)), source
+        )
 
 
 def test_reviewed_supplement_rejects_duplicate_resource_identity(

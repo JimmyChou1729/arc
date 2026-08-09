@@ -363,6 +363,7 @@ def test_reviewed_supplement_publishes_provenance_resource_and_coverage(
     assert revision.provenance["entry_id"] == "entry-1"
     assert revision.provenance["source_draft_ids"] == ("draft-1",)
     assert revision.provenance["source_unit_ids"] == ("unit-1",)
+    assert revision.provenance["source_basis"] == "supplement_units"
     assert len(published.resource_refs) == 2
     report_ref = next(
         item
@@ -388,6 +389,9 @@ def test_reviewed_supplement_publishes_provenance_resource_and_coverage(
         "published_drafts": 1,
         "excluded_drafts": 1,
         "entries": 1,
+        "supplement_unit_entries": 1,
+        "supplement_draft_entries": 0,
+        "primary_source_entries": 0,
         "resources": 1,
     }
     workspace = tmp_path / "supplement-publication"
