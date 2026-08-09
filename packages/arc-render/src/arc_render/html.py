@@ -815,6 +815,11 @@ def _expand_reader_payload_v2(
         raise HTMLRenderError("standalone HTML reader manifest has no source")
 
     expected_chunk_ids: set[str] = set()
+    manifest_chunk_names = {
+        raw.get("chunk_id")
+        for raw in chunks
+        if isinstance(raw, Mapping) and isinstance(raw.get("chunk_id"), str)
+    }
     blocks: list[object] = []
     fingerprints: dict[str, object] = {}
     positioned_revisions: list[tuple[int, object]] = []
@@ -858,6 +863,7 @@ def _expand_reader_payload_v2(
         chunk_revisions = chunk.get("revisions")
         revision_positions = chunk.get("revision_positions")
         chunk_selected = chunk.get("selected_revision_digests")
+        required_chunk_ids = chunk.get("required_chunk_ids", [])
         if (
             not isinstance(chunk_blocks, list)
             or len(chunk_blocks) != end - start
@@ -870,6 +876,11 @@ def _expand_reader_payload_v2(
                 for item in revision_positions
             )
             or not isinstance(chunk_selected, list)
+            or not isinstance(required_chunk_ids, list)
+            or any(not isinstance(item, str) for item in required_chunk_ids)
+            or len(required_chunk_ids) != len(set(required_chunk_ids))
+            or chunk_id in required_chunk_ids
+            or not set(required_chunk_ids).issubset(manifest_chunk_names)
         ):
             raise HTMLRenderError("standalone HTML reader chunk content is invalid")
         blocks.extend(chunk_blocks)

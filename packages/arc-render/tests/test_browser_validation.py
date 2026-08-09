@@ -21,6 +21,7 @@ def _report(**overrides: object) -> dict[str, object]:
         "errors": [],
         "omitted": 0,
         "mathErrors": 0,
+        "missingFragments": 0,
         "failedImages": 0,
     }
     values.update(overrides)
@@ -54,9 +55,12 @@ def test_browser_validation_discovers_system_browser_and_forces_reader_checks(
     assert "window.dispatchEvent(new Event(\"beforeprint\"))" in browser_validation._READER_REPORT_EXPRESSION
     assert ".katex-error, .math-error" in browser_validation._READER_REPORT_EXPRESSION
     assert "failedImages" in browser_validation._READER_REPORT_EXPRESSION
+    assert "arcSelectedRevisionCount" in browser_validation._READER_REPORT_EXPRESSION
     assert "image.decode()" in browser_validation._READER_REPORT_EXPRESSION
     assert 'image.loading = "eager"' in browser_validation._READER_REPORT_EXPRESSION
     assert "arc-render-chunk:not(.is-rendered)" in browser_validation._READER_REPORT_EXPRESSION
+    assert "Date.now() + 120000" in browser_validation._reader_report_expression(120)
+    assert "55000" not in browser_validation._reader_report_expression(120)
 
 
 @pytest.mark.parametrize(
@@ -67,6 +71,7 @@ def test_browser_validation_discovers_system_browser_and_forces_reader_checks(
         (_report(omitted=2), "2 unhydrated reader chunks"),
         (_report(mathErrors=3), "3 math rendering errors"),
         (_report(failedImages=1), "1 failed reader images"),
+        (_report(missingFragments=2), "2 missing selected fragments"),
     ),
 )
 def test_browser_validation_reports_reader_runtime_failures(

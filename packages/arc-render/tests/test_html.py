@@ -34,6 +34,7 @@ from arc_render import (
 )
 from arc_render.html import (
     HTMLRenderError,
+    _extract_json_script,
     _extract_reader_payload,
     render_publication_html,
     validate_standalone_html,
@@ -345,6 +346,125 @@ def test_standalone_reader_v2_rejects_a_missing_chunk(tmp_path: Path) -> None:
 
     with pytest.raises(HTMLRenderError, match="payload count"):
         validate_standalone_html(publication, output)
+
+
+def test_standalone_reader_v2_declares_cross_chunk_anchor_dependencies(
+    tmp_path: Path,
+) -> None:
+    source_payload = b"cross chunk source"
+    source = SourceArtifact(
+        SourceFormat.MARKDOWN,
+        hashlib.sha256(source_payload).hexdigest(),
+        len(source_payload),
+        "text/markdown",
+        SourceOrigin(SourceOriginKind.REPOSITORY),
+    )
+    blocks = tuple(
+        RichBlock(
+            f"block-{index:02d}",
+            index,
+            RichBlockKind.PARAGRAPH,
+            ("section-cross",),
+            SourceLocator(SourceFormat.MARKDOWN, index + 1, 1, index + 1, 8),
+            {
+                "text": f"Block {index}.",
+                "inline_spans": [
+                    {
+                        "kind": "text",
+                        "start": 0,
+                        "end": len(f"Block {index}."),
+                        "text": f"Block {index}.",
+                    }
+                ],
+            },
+        )
+        for index in range(40)
+    )
+    document = RichDocument(
+        source,
+        blocks,
+        (
+            RichSection(
+                "section-cross",
+                "Cross chunk",
+                1,
+                0,
+                ("section-cross",),
+                0,
+                len(blocks),
+            ),
+        ),
+        (),
+    )
+    revision = FragmentRevision(
+        source=source_identity_from_rich_document(document),
+        fragment_id="companion-cross-chunk",
+        revision=1,
+        parent_semantic_digest=None,
+        anchor=FragmentAnchor(
+            "block",
+            blocks[0].block_id,
+            (
+                anchor_block_from_rich_block(blocks[0]),
+                anchor_block_from_rich_block(blocks[-1]),
+            ),
+        ),
+        priority=20,
+        role="companion",
+        language="en",
+        title="Cross chunk",
+        citation_ids=(),
+        provenance={"producer": "arc-companion"},
+        markdown_body="Cross-chunk companion.",
+    )
+    revision_path = write_fragment_revision(tmp_path, revision)
+    layer = Layer(
+        revision.source,
+        "arc-companion",
+        (
+            fragment_revision_ref(
+                relative_fragment_path(tmp_path, revision_path), revision
+            ),
+        ),
+    )
+    layer_path = tmp_path / "layers" / "companion.json"
+    write_layer(layer_path, layer)
+    publication = Publication(
+        source_document=document,
+        layers=(layer.reference("layers/companion.json"),),
+        labels={"document_title": "Cross chunk"},
+        reader_profile={"title": "Cross chunk"},
+    )
+    publication_path = tmp_path / "publication.json"
+    write_publication(publication_path, publication)
+    output = tmp_path / "cross-chunk.html"
+    render_publication_html(publication_path, output)
+    text = output.read_text(encoding="utf-8")
+    boot = _boot_payload(text)
+    first = boot["reader_chunks"][0]
+    chunk = _extract_json_script(text, first["payload_id"])
+
+    assert chunk["required_chunk_ids"] == ["payload-chunk-0001"]
+    validate_standalone_html(publication, output)
+
+    legacy_chunk = dict(chunk)
+    del legacy_chunk["required_chunk_ids"]
+    encoded = json.dumps(
+        legacy_chunk,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).replace("</script", r"<\/script")
+    text = re.sub(
+        rf'(<script id="{re.escape(first["payload_id"])}"[^>]*>)'
+        r".*?(</script>)",
+        lambda match: match.group(1) + encoded + match.group(2),
+        text,
+        count=1,
+        flags=re.DOTALL,
+    )
+    output.write_text(text, encoding="utf-8")
+    validate_standalone_html(publication, output)
 
 
 def test_browser_exported_html_remains_a_valid_latest_reader(

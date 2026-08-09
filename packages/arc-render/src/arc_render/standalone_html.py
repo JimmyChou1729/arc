@@ -135,6 +135,9 @@ def _split_reader_payload(value: str) -> str:
     revision_position_buckets: list[list[int]] = [
         [] for _index in range(chunk_count)
     ]
+    dependency_buckets: list[set[int]] = [
+        set() for _index in range(chunk_count)
+    ]
     selected_set = {item for item in selected if isinstance(item, str)}
     selected_buckets: list[list[str]] = [[] for _index in range(chunk_count)]
     for position, revision in enumerate(revisions):
@@ -143,6 +146,12 @@ def _split_reader_payload(value: str) -> str:
         )
         revision_buckets[bucket].append(revision)
         revision_position_buckets[bucket].append(position)
+        dependency_buckets[bucket].update(
+            _revision_dependency_chunk_indexes(
+                revision, block_index, section_anchors, chunk_count
+            )
+            - {bucket}
+        )
         if isinstance(revision, dict):
             digest = revision.get("semantic_digest")
             if isinstance(digest, str) and digest in selected_set:
@@ -194,6 +203,10 @@ def _split_reader_payload(value: str) -> str:
             "chunk_id": chunk_id,
             "block_start": start,
             "block_end": end,
+            "required_chunk_ids": [
+                f"payload-chunk-{item:04d}"
+                for item in sorted(dependency_buckets[chunk_index])
+            ],
             "blocks": blocks[start:end],
             "block_fingerprints": {
                 str(block["block_id"]): fingerprints.get(str(block["block_id"]))
@@ -250,6 +263,36 @@ def _revision_chunk_index(
     if index is None:
         return chunk_count - 1
     return min(chunk_count - 1, index // _READER_BLOCKS_PER_CHUNK)
+
+
+def _revision_dependency_chunk_indexes(
+    revision: object,
+    block_index: dict[str, int],
+    section_anchors: dict[str, str],
+    chunk_count: int,
+) -> set[int]:
+    metadata = revision.get("metadata") if isinstance(revision, dict) else None
+    anchor = metadata.get("anchor") if isinstance(metadata, dict) else None
+    if not isinstance(anchor, dict):
+        return set()
+    block_ids: set[str] = set()
+    target = anchor.get("target_id")
+    if anchor.get("kind") == "section":
+        target = section_anchors.get(str(target))
+    if isinstance(target, str):
+        block_ids.add(target)
+    related = anchor.get("related_blocks")
+    if isinstance(related, list):
+        block_ids.update(
+            str(item["block_id"])
+            for item in related
+            if isinstance(item, dict) and isinstance(item.get("block_id"), str)
+        )
+    return {
+        min(chunk_count - 1, block_index[block_id] // _READER_BLOCKS_PER_CHUNK)
+        for block_id in block_ids
+        if block_id in block_index
+    }
 
 
 def _json_script(identifier: str, payload: object, class_name: str) -> str:

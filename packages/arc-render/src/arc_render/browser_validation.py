@@ -111,7 +111,9 @@ def _reader_report(
                 response = cdp.call(
                     "Runtime.evaluate",
                     {
-                        "expression": _READER_REPORT_EXPRESSION,
+                        "expression": _reader_report_expression(
+                            _remaining(deadline)
+                        ),
                         "awaitPromise": True,
                         "returnByValue": True,
                     },
@@ -305,6 +307,7 @@ def _raise_for_report(
     omitted = report.get("omitted")
     math_errors = report.get("mathErrors")
     failed_images = report.get("failedImages")
+    missing_fragments = report.get("missingFragments")
     if ready != "true":
         raise HTMLRenderError(f"browser reader initialization did not complete: {ready}")
     if exceptions:
@@ -315,6 +318,7 @@ def _raise_for_report(
         (omitted, "unhydrated reader chunks"),
         (math_errors, "math rendering errors"),
         (failed_images, "failed reader images"),
+        (missing_fragments, "missing selected fragments"),
     ):
         if not isinstance(count, int):
             raise HTMLRenderError("browser validation report is malformed")
@@ -324,7 +328,7 @@ def _raise_for_report(
 
 _READER_REPORT_EXPRESSION: Final = """(async () => {
   const errors = [];
-  const deadline = Date.now() + 55000;
+  const deadline = Date.now() + __ARC_BROWSER_TIMEOUT_MS__;
   while (
     (!document.body || !document.body.dataset.arcRenderReady ||
       document.body.dataset.arcRenderReady === "loading") &&
@@ -356,11 +360,30 @@ _READER_REPORT_EXPRESSION: Final = """(async () => {
       ".arc-render-chunk:not(.is-rendered), .arc-render-chunk[aria-busy=\\"true\\"]"
     ).length,
     mathErrors: document.querySelectorAll(".katex-error, .math-error").length,
+    missingFragments: (() => {
+      try {
+        const payload = JSON.parse(
+          document.getElementById("arc-render-payload").textContent || "{}"
+        );
+        const expected = new Set(payload.selected_revision_digests || []);
+        const loaded = Number(document.body.dataset.arcSelectedRevisionCount);
+        return Number.isInteger(loaded) ? Math.max(0, expected.size - loaded) : -1;
+      } catch (_error) {
+        return -1;
+      }
+    })(),
     failedImages: Array.from(document.images).filter(
       image => !image.complete || image.naturalWidth === 0
     ).length
   };
 })()"""
+
+
+def _reader_report_expression(timeout_seconds: float) -> str:
+    timeout_ms = max(1, int(timeout_seconds * 1000))
+    return _READER_REPORT_EXPRESSION.replace(
+        "__ARC_BROWSER_TIMEOUT_MS__", str(timeout_ms)
+    )
 
 
 __all__ = ["BrowserValidation", "validate_reader_in_browser"]

@@ -12,7 +12,10 @@
     payload: null,
     payloadVersion: "v1",
     payloadChunks: [],
+    payloadChunksById: new Map(),
+    payloadChunkByBlockId: new Map(),
     loadedPayloadChunkIds: new Set(),
+    loadingPayloadChunkIds: new Set(),
     md: null,
     revisions: new Map(),
     revisionDigests: new Map(),
@@ -98,12 +101,26 @@
     }
     state.payloadVersion = value.schema_version.endsWith(".v2") ? "v2" : "v1";
     state.payloadChunks = [];
+    state.payloadChunksById = new Map();
+    state.payloadChunkByBlockId = new Map();
     state.loadedPayloadChunkIds = new Set();
+    state.loadingPayloadChunkIds = new Set();
     if (state.payloadVersion === "v2") {
       if (!Array.isArray(value.reader_chunks) || !Array.isArray(value.block_manifest)) {
         throw new Error("ARC reader payload has no chunk manifest");
       }
       state.payloadChunks = value.reader_chunks.slice();
+      state.payloadChunksById = new Map(state.payloadChunks.map(function (item) {
+        return [item.chunk_id, item];
+      }));
+      state.payloadChunks.forEach(function (descriptor) {
+        for (var index = descriptor.block_start; index < descriptor.block_end; index += 1) {
+          var block = value.block_manifest[index];
+          if (block && block.block_id) {
+            state.payloadChunkByBlockId.set(block.block_id, descriptor);
+          }
+        }
+      });
       var blocks = value.publication.source_document.blocks;
       if (!Array.isArray(blocks) || blocks.length !== value.block_manifest.length) {
         throw new Error("ARC reader block manifest is inconsistent");
@@ -113,7 +130,10 @@
   }
 
   function loadPayloadChunk(descriptor) {
-    if (!descriptor || state.loadedPayloadChunkIds.has(descriptor.chunk_id)) return;
+    if (
+      !descriptor || state.loadedPayloadChunkIds.has(descriptor.chunk_id) ||
+      state.loadingPayloadChunkIds.has(descriptor.chunk_id)
+    ) return;
     var node = document.getElementById(descriptor.payload_id || "");
     if (!node) throw new Error("ARC reader chunk is missing: " + descriptor.chunk_id);
     var chunk = JSON.parse(node.textContent || "");
@@ -124,7 +144,9 @@
       chunk.block_end !== descriptor.block_end ||
       !Array.isArray(chunk.blocks) ||
       chunk.blocks.length !== chunk.block_end - chunk.block_start ||
-      !Array.isArray(chunk.revisions)
+      !Array.isArray(chunk.revisions) ||
+      (chunk.required_chunk_ids !== undefined &&
+        !Array.isArray(chunk.required_chunk_ids))
     ) {
       throw new Error("ARC reader chunk is invalid: " + descriptor.chunk_id);
     }
@@ -142,31 +164,72 @@
       state.payload.block_fingerprints[blockId] =
         chunk.block_fingerprints[blockId];
     });
-    var fragmentIds = new Set();
-    chunk.revisions.forEach(function (raw) {
-      state.embeddedRevisions.push(raw);
-      var metadata = raw.metadata || raw;
-      if (metadata.fragment_id) {
-        fragmentIds.add(metadata.fragment_id);
-        state.activeFragmentIds.add(metadata.fragment_id);
-      }
-      addRevision(raw);
-    });
-    fragmentIds.forEach(function (fragmentId) {
-      resolveFragmentInState(fragmentId, state.revisions.get(fragmentId) || []);
-      if (state.readerShellReady) {
-        var selected = state.selected.get(fragmentId);
-        if (selected) updateFragmentGroup(fragmentId, selected.anchor);
-      }
-      if (state.initialSelectionCaptured) {
-        var initial = state.selected.get(fragmentId);
-        if (initial) {
-          state.initialSelectedDigests.set(fragmentId, initial.semantic_digest);
+    state.loadingPayloadChunkIds.add(descriptor.chunk_id);
+    try {
+      payloadChunkDependencies(chunk, descriptor).forEach(function (chunkId) {
+        var dependency = state.payloadChunksById.get(chunkId);
+        if (!dependency || dependency === descriptor) {
+          throw new Error("ARC reader chunk dependency is invalid");
         }
+        loadPayloadChunk(dependency);
+      });
+      var fragmentIds = new Set();
+      chunk.revisions.forEach(function (raw) {
+        state.embeddedRevisions.push(raw);
+        var metadata = raw.metadata || raw;
+        if (metadata.fragment_id) {
+          fragmentIds.add(metadata.fragment_id);
+          state.activeFragmentIds.add(metadata.fragment_id);
+        }
+        addRevision(raw);
+      });
+      fragmentIds.forEach(function (fragmentId) {
+        resolveFragmentInState(fragmentId, state.revisions.get(fragmentId) || []);
+        if (state.readerShellReady) {
+          var selected = state.selected.get(fragmentId);
+          if (selected) updateFragmentGroup(fragmentId, selected.anchor);
+        }
+        if (state.initialSelectionCaptured) {
+          var initial = state.selected.get(fragmentId);
+          if (initial) {
+            state.initialSelectedDigests.set(fragmentId, initial.semantic_digest);
+          }
+        }
+      });
+      state.loadedPayloadChunkIds.add(descriptor.chunk_id);
+      publishSelectedRevisionCount();
+      rebuildDiagnostics();
+    } finally {
+      state.loadingPayloadChunkIds.delete(descriptor.chunk_id);
+    }
+  }
+
+  function payloadChunkDependencies(chunk, descriptor) {
+    var declared = chunk.required_chunk_ids || [];
+    var dependencies = new Set();
+    declared.forEach(function (chunkId) {
+      if (!normalizedNonblank(chunkId) || dependencies.has(chunkId)) {
+        throw new Error("ARC reader chunk dependency is invalid");
       }
+      dependencies.add(chunkId);
     });
-    state.loadedPayloadChunkIds.add(descriptor.chunk_id);
-    rebuildDiagnostics();
+    chunk.revisions.forEach(function (raw) {
+      var metadata = raw.metadata || raw;
+      var anchor = metadata.anchor || {};
+      (anchor.related_blocks || []).forEach(function (frozen) {
+        var dependency = state.payloadChunkByBlockId.get(frozen.block_id);
+        if (dependency && dependency.chunk_id !== descriptor.chunk_id) {
+          dependencies.add(dependency.chunk_id);
+        }
+      });
+    });
+    return Array.from(dependencies);
+  }
+
+  function publishSelectedRevisionCount() {
+    if (typeof document !== "undefined" && document.body) {
+      document.body.dataset.arcSelectedRevisionCount = String(state.selected.size);
+    }
   }
 
   function loadPayloadForBlockRange(start, end) {
@@ -2168,6 +2231,7 @@
       state.initialSelectedDigests.set(fragmentId, revision.semantic_digest);
     });
     state.initialSelectionCaptured = true;
+    publishSelectedRevisionCount();
   }
 
   function setupExport() {
