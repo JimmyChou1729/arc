@@ -84,6 +84,7 @@ from .providers import (
     ArxivHtmlProvider,
     ArxivPdfProvider,
     InspireProvider,
+    describe_inspire_citer_request,
 )
 from .providers.base import ProviderError
 from .reference_acquisition import ReferenceAcquisitionService
@@ -348,18 +349,18 @@ class ArcPaperService:
             metadata = self.inspire.get_metadata(required, refresh=False)
             recid = str(metadata.get("inspire_recid") or "")
             if recid:
-                request_key = json.dumps(
-                    {"recid": recid, "sort": sort, "limit": limit},
-                    sort_keys=True,
-                    separators=(",", ":"),
+                request = describe_inspire_citer_request(
+                    recid,
+                    sort=sort,
+                    limit=limit,
                 )
                 self._record_remote_component(
                     required,
-                    f"inspire-citers:{sort}:{limit}",
+                    request.admin_component,
                     cache=getattr(self.inspire, "cache", None),
                     kind="json",
                     namespace="inspire-citers",
-                    request_key=request_key,
+                    request_key=request.request_key,
                 )
         except Exception:
             # The citer result remains valid even if optional admin indexing fails.

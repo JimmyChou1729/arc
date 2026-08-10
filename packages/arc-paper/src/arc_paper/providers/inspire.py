@@ -4,6 +4,7 @@ import html
 import json
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -12,7 +13,7 @@ import httpx
 
 from ..ids import arxiv_path_id, doi_value, inspire_recid, normalize_paper_id
 from .base import ProviderError
-from .remote_cache import RemoteRequestCache
+from .remote_cache import RemoteCacheError, RemoteRequestCache
 
 
 BASE_URL = "https://inspirehep.net/api"
@@ -35,6 +36,41 @@ SUMMARY_FIELDS = ",".join(
         "abstracts",
     ]
 )
+INSPIRE_CITERS_RAW_PAYLOAD_CONTRACT = "arc.paper.inspire_citers.raw.v1"
+
+
+@dataclass(frozen=True)
+class InspireCiterRequest:
+    sort: str
+    limit: int
+    request_key: str
+    admin_component: str
+
+
+def describe_inspire_citer_request(
+    recid: str,
+    *,
+    sort: str = "mostrecent",
+    limit: int = MAX_PAGE_SIZE,
+) -> InspireCiterRequest:
+    canonical_sort = _normalize_sort(sort)
+    canonical_limit = _clamp_limit(limit)
+    request_key = json.dumps(
+        {
+            "contract": INSPIRE_CITERS_RAW_PAYLOAD_CONTRACT,
+            "limit": canonical_limit,
+            "recid": str(recid),
+            "sort": canonical_sort,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return InspireCiterRequest(
+        sort=canonical_sort,
+        limit=canonical_limit,
+        request_key=request_key,
+        admin_component=f"inspire-citers:{canonical_sort}:{canonical_limit}",
+    )
 
 
 class InspireProvider:
@@ -127,44 +163,50 @@ class InspireProvider:
         limit: int = MAX_PAGE_SIZE,
         sort: str = "mostrecent",
     ) -> list[dict[str, Any]]:
-        limit = _clamp_limit(limit)
-        sort = _normalize_sort(sort)
+        canonical_sort = _normalize_sort(sort)
+        canonical_limit = _clamp_limit(limit)
         metadata = self.get_metadata(paper_id, refresh=refresh)
         recid = metadata.get("inspire_recid")
         if not recid:
             return []
+        request = describe_inspire_citer_request(
+            str(recid), sort=canonical_sort, limit=canonical_limit
+        )
 
         params = {
             "q": f"refersto:recid:{recid}",
-            "size": str(limit),
-            "sort": sort,
+            "size": str(request.limit),
+            "sort": request.sort,
             "fields": SUMMARY_FIELDS,
             "format": "json",
         }
 
-        def fetch() -> list[dict[str, Any]]:
-            data = self._request_json(
+        def fetch() -> Any:
+            return self._request_json(
                 f"{BASE_URL}/literature",
                 params=params,
                 error_code="inspire_citers_fetch_failed",
             )
-            return [_normalize_record(hit) for hit in data.get("hits", {}).get("hits", [])]
 
-        value = self.cache.fetch_json(
-            "inspire-citers",
-            json.dumps(
-                {"recid": str(recid), "sort": sort, "limit": limit},
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
-            fetch=fetch,
-            refresh=refresh,
-        )
-        if not isinstance(value, list):
-            raise ProviderError(
-                "inspire_response_invalid", "INSPIRE citer response cache is not a list"
+        try:
+            value = self.cache.fetch_json(
+                "inspire-citers",
+                request.request_key,
+                fetch=fetch,
+                refresh=refresh,
+                payload_validator=_is_inspire_citers_raw_payload,
             )
-        return value[:limit]
+        except RemoteCacheError as exc:
+            if exc.code != "remote_cache_payload_contract_invalid":
+                raise
+            raise ProviderError(
+                "inspire_response_invalid",
+                "INSPIRE citer response does not satisfy the raw payload contract",
+            ) from exc
+        return [
+            _normalize_record(hit)
+            for hit in value["hits"]["hits"][: request.limit]
+        ]
 
     def get_citer_count(self, paper_id: str, *, refresh: bool = False) -> int:
         return int(self.get_metadata(paper_id, refresh=refresh).get("citation_count") or 0)
@@ -329,6 +371,18 @@ def _normalize_sort(sort: str) -> str:
     if normalized not in {"mostrecent", "mostcited"}:
         raise ProviderError("unsupported_citer_sort", f"Unsupported INSPIRE citer sort: {sort}")
     return normalized
+
+
+def _is_inspire_citers_raw_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    hits = value.get("hits")
+    if not isinstance(hits, dict):
+        return False
+    records = hits.get("hits")
+    return isinstance(records, list) and all(
+        isinstance(record, dict) for record in records
+    )
 
 
 def _normalize_reference(item: dict[str, Any]) -> dict[str, Any]:

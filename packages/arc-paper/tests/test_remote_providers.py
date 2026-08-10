@@ -18,6 +18,7 @@ from arc_paper.providers import (
     InspireProvider,
     RemoteCacheError,
     RemoteRequestCache,
+    describe_inspire_citer_request,
 )
 from arc_paper.providers.ar5iv import MAX_HTML_BYTES
 from arc_paper.providers._request_gate import HostRequestGate
@@ -958,6 +959,203 @@ def test_inspire_citers_use_recid_query_and_request_specific_cache(
     replay = provider.get_citers("0911.3380", limit=limit, sort=sort)
     assert replay == values
     assert len(calls) == calls_before_replay
+
+    refreshed = provider.get_citers(
+        "0911.3380", limit=limit, sort=sort, refresh=True
+    )
+    assert refreshed == values
+    assert len(calls) == calls_before_replay + 2
+
+
+def test_inspire_citers_ignore_legacy_normalized_cache_and_store_raw_hits(tmp_path):
+    cache = RemoteRequestCache(tmp_path)
+    record = {
+        "id": "123",
+        "metadata": {
+            "control_number": 123,
+            "titles": [{"title": "Origin"}],
+            "arxiv_eprints": [{"value": "0911.3380"}],
+        },
+    }
+    cache.fetch_json(
+        "inspire-record",
+        "arXiv:0911.3380",
+        fetch=lambda: record,
+    )
+    legacy_key = json.dumps(
+        {"recid": "123", "sort": "mostrecent", "limit": 1000},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    cache.fetch_json(
+        "inspire-citers",
+        legacy_key,
+        fetch=lambda: [{"paper_id": "inspire:456", "title": "Legacy"}],
+    )
+    raw_citer = {
+        "id": "456",
+        "metadata": {
+            "control_number": 456,
+            "titles": [{"title": "Current"}],
+            "dois": [{"value": "10.1000/current"}],
+        },
+    }
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _response(
+            request,
+            content=json.dumps({"hits": {"hits": [raw_citer]}}).encode(),
+            media_type="application/json",
+        )
+
+    provider = InspireProvider(
+        request_cache=cache,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    assert provider.get_citers("0911.3380")[0]["dois"] == [
+        "10.1000/current"
+    ]
+    assert calls == 1
+
+    request = describe_inspire_citer_request("123")
+    cached = cache.get_json("inspire-citers", request.request_key)
+    assert cached == {"hits": {"hits": [raw_citer]}}
+    assert "metadata" in cached["hits"]["hits"][0]
+    assert "paper_id" not in cached["hits"]["hits"][0]
+
+    offline = InspireProvider(
+        request_cache=RemoteRequestCache(tmp_path),
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: (_ for _ in ()).throw(
+                    AssertionError("raw citer cache replay must be offline")
+                )
+            )
+        ),
+    )
+    assert offline.get_citers("0911.3380")[0]["doi"] == "10.1000/current"
+
+
+def test_inspire_citers_repair_malformed_current_cache_once_under_concurrency(
+    tmp_path,
+):
+    cache = RemoteRequestCache(tmp_path)
+    cache.fetch_json(
+        "inspire-record",
+        "arXiv:0911.3380",
+        fetch=lambda: {
+            "id": "123",
+            "metadata": {
+                "control_number": 123,
+                "arxiv_eprints": [{"value": "0911.3380"}],
+            },
+        },
+    )
+    request = describe_inspire_citer_request("123")
+    cache.fetch_json(
+        "inspire-citers",
+        request.request_key,
+        fetch=lambda: {"hits": {"hits": ["not-an-object"]}},
+    )
+    call_count = 0
+    call_guard = threading.Lock()
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        with call_guard:
+            call_count += 1
+        return _response(
+            http_request,
+            content=json.dumps(
+                {
+                    "hits": {
+                        "hits": [
+                            {
+                                "id": "456",
+                                "metadata": {
+                                    "control_number": 456,
+                                    "titles": [{"title": "Repaired"}],
+                                },
+                            }
+                        ]
+                    }
+                }
+            ).encode(),
+            media_type="application/json",
+        )
+
+    provider = InspireProvider(
+        request_cache=cache,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        values = list(
+            executor.map(lambda _: provider.get_citers("0911.3380"), range(8))
+        )
+
+    assert call_count == 1
+    assert {items[0]["title"] for items in values} == {"Repaired"}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, [], {}, {"hits": []}, {"hits": {}}, {"hits": {"hits": {}}}],
+)
+def test_inspire_citers_reject_malformed_new_payload_without_caching(
+    tmp_path, payload
+):
+    cache = RemoteRequestCache(tmp_path)
+    cache.fetch_json(
+        "inspire-record",
+        "arXiv:0911.3380",
+        fetch=lambda: {
+            "id": "123",
+            "metadata": {
+                "control_number": 123,
+                "arxiv_eprints": [{"value": "0911.3380"}],
+            },
+        },
+    )
+    provider = InspireProvider(
+        request_cache=cache,
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: _response(
+                    request,
+                    content=json.dumps(payload).encode(),
+                    media_type="application/json",
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        provider.get_citers("0911.3380")
+
+    assert getattr(exc_info.value, "code", "") == "inspire_response_invalid"
+    request = describe_inspire_citer_request("123")
+    assert cache.admin_entry("json", "inspire-citers", request.request_key) is None
+
+
+def test_inspire_citers_reject_invalid_sort_before_metadata_lookup(tmp_path):
+    provider = InspireProvider(
+        cache_root=tmp_path,
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: (_ for _ in ()).throw(
+                    AssertionError("invalid sort must fail before metadata lookup")
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        provider.get_citers("0911.3380", sort="oldest")
+
+    assert getattr(exc_info.value, "code", "") == "unsupported_citer_sort"
 
 
 def test_search_citers_reuses_existing_inspire_record_and_citer_cache(tmp_path):

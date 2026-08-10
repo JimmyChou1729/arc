@@ -12,6 +12,7 @@ from arc_paper._cache_admin import CacheAdministrator, PaperCacheIndex
 from arc_paper.cli import main
 from arc_paper.providers.arxiv_html import ARXIV_HTML_AVAILABILITY_NAMESPACE
 from arc_paper.providers.remote_cache import RemoteCacheError, RemoteRequestCache
+from arc_paper.providers.inspire import describe_inspire_citer_request
 from arc_paper.source_repository import SourceRepositoryError
 from arc_paper.sources import SourceFormat, SourceOrigin, SourceOriginKind
 
@@ -398,6 +399,44 @@ def test_update_runs_all_fixed_components_and_collects_failure(
         ("arxiv-auto", True),
         ("pdf", True),
     ]
+
+
+def test_citer_admin_component_uses_provider_canonical_request(tmp_path: Path) -> None:
+    service = ArcPaperService(cache_root=tmp_path)
+    request = describe_inspire_citer_request(
+        "123", sort="MostRecent", limit=1001
+    )
+    service.inspire.cache.fetch_json(
+        "inspire-record",
+        "arXiv:0911.3380",
+        fetch=lambda: {
+            "id": "123",
+            "metadata": {
+                "control_number": 123,
+                "arxiv_eprints": [{"value": "0911.3380"}],
+            },
+        },
+    )
+    service.inspire.cache.fetch_json(
+        "inspire-citers",
+        request.request_key,
+        fetch=lambda: {"hits": {"hits": []}},
+    )
+
+    assert service.get_citers(
+        "0911.3380", sort="MostRecent", limit=1001
+    ) == []
+    entry = service.list_cache(paper_ids=("0911.3380",)).entries[0]
+    component = next(
+        item
+        for item in entry.components
+        if item.name == "inspire-citers:mostrecent:1000"
+    )
+    remote = service.inspire.cache.admin_entry(
+        "json", "inspire-citers", request.request_key
+    )
+    assert remote is not None
+    assert component.storage_entry_ids == (remote.entry_id,)
 
 
 def test_cache_registry_effects_are_excluded_from_safe_projection() -> None:

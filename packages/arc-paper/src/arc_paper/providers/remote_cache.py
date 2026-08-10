@@ -291,6 +291,7 @@ class RemoteRequestCache:
         *,
         fetch: Callable[[], Any],
         refresh: bool = False,
+        payload_validator: Callable[[Any], bool] | None = None,
     ) -> Any:
         digest = _request_digest(namespace, request_key)
         with self._request_lock("json", namespace, digest):
@@ -306,8 +307,18 @@ class RemoteRequestCache:
                     )
                     cached = None
                 if cached is not None:
-                    return cached
+                    if _payload_is_valid(cached, payload_validator):
+                        return cached
+                    self._remove_entry_dir(
+                        "json",
+                        self._entry_dir("json", namespace, digest),
+                    )
             value = fetch()
+            if not _payload_is_valid(value, payload_validator):
+                raise RemoteCacheError(
+                    "remote_cache_payload_contract_invalid",
+                    "remote JSON response does not satisfy its payload contract",
+                )
             payload = _canonical_json_bytes(value)
             artifact_digest = hashlib.sha256(payload).hexdigest()
             entry_dir = self._entry_dir("json", namespace, digest)
@@ -636,6 +647,18 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 def _payload_matches(path: Path, digest: str, size: int) -> bool:
     return payload_matches(path, digest, size)
+
+
+def _payload_is_valid(
+    value: Any,
+    validator: Callable[[Any], bool] | None,
+) -> bool:
+    if validator is None:
+        return True
+    try:
+        return validator(value) is True
+    except Exception:
+        return False
 
 
 def _utc_now() -> str:
