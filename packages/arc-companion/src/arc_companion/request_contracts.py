@@ -40,6 +40,15 @@ LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V7 = (
     "arc.companion.build_request.v7"
 )
 COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v17"
+EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA = (
+    "arc.companion.generation_recipe.v18"
+)
+EDITORIAL_PROPOSER_PROMPT_VERSION = (
+    "arc.companion.cross-chapter-editorial-proposer-prompt.v1"
+)
+EDITORIAL_REVIEWER_PROMPT_VERSION = (
+    "arc.companion.cross-chapter-editorial-reviewer-prompt.v1"
+)
 COMPANION_CONTENT_CONTRACT = "arc.companion.source_anchored_textbook.v1"
 NEUTRAL_TEXTBOOK_INTENT = (
     "Explain the source faithfully as a neutral textbook companion for an "
@@ -205,6 +214,9 @@ class CompanionGenerationRecipe:
     equation_label_visual_prompt: str = (
         EQUATION_LABEL_VISUAL_PROMPT_VERSION
     )
+    cross_chapter_editorial_review: bool = False
+    editorial_proposer_prompt: str = EDITORIAL_PROPOSER_PROMPT_VERSION
+    editorial_reviewer_prompt: str = EDITORIAL_REVIEWER_PROMPT_VERSION
 
     def __post_init__(self) -> None:
         if not isinstance(self.model, ModelSelection):
@@ -228,6 +240,10 @@ class CompanionGenerationRecipe:
             raise ValueError(
                 "chapter_guide_review_final_round must be false"
             )
+        if type(self.cross_chapter_editorial_review) is not bool:
+            raise ValueError(
+                "cross_chapter_editorial_review must be a boolean"
+            )
         supported = {
             "author_identity_prompt": {AUTHOR_IDENTITY_PROMPT_VERSION},
             "chapter_guide_prompt": {
@@ -240,6 +256,12 @@ class CompanionGenerationRecipe:
             },
             "equation_label_visual_prompt": {
                 EQUATION_LABEL_VISUAL_PROMPT_VERSION
+            },
+            "editorial_proposer_prompt": {
+                EDITORIAL_PROPOSER_PROMPT_VERSION
+            },
+            "editorial_reviewer_prompt": {
+                EDITORIAL_REVIEWER_PROMPT_VERSION
             },
         }
         for name, values in supported.items():
@@ -306,7 +328,7 @@ def encode_build_request(
 def encode_generation_recipe(
     recipe: CompanionGenerationRecipe,
 ) -> dict[str, Any]:
-    return {
+    document = {
         "schema_version": COMPANION_GENERATION_RECIPE_SCHEMA,
         "model": {
             "provider": recipe.model.provider,
@@ -327,6 +349,22 @@ def encode_generation_recipe(
             recipe.equation_label_visual_prompt
         ),
     }
+    if recipe.cross_chapter_editorial_review:
+        document.update(
+            {
+                "schema_version": (
+                    EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA
+                ),
+                "cross_chapter_editorial_review": True,
+                "editorial_proposer_prompt": (
+                    recipe.editorial_proposer_prompt
+                ),
+                "editorial_reviewer_prompt": (
+                    recipe.editorial_reviewer_prompt
+                ),
+            }
+        )
+    return document
 
 
 def encode_handler_semantic_input(
@@ -422,9 +460,25 @@ def decode_generation_recipe(
         "chapter_guide_max_rounds",
         "chapter_guide_review_final_round",
     }
-    raw_recipe = _exact(document, fields, "generation recipe")
-    if raw_recipe["schema_version"] != COMPANION_GENERATION_RECIPE_SCHEMA:
+    schema_version = document.get("schema_version")
+    editorial = schema_version == EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA
+    if editorial:
+        fields.update(
+            {
+                "cross_chapter_editorial_review",
+                "editorial_proposer_prompt",
+                "editorial_reviewer_prompt",
+            }
+        )
+    elif schema_version != COMPANION_GENERATION_RECIPE_SCHEMA:
         raise ValueError("unsupported Companion generation-recipe schema")
+    raw_recipe = _exact(document, fields, "generation recipe")
+    if editorial and not _strict_bool(
+        raw_recipe, "cross_chapter_editorial_review"
+    ):
+        raise ValueError(
+            "v18 generation recipe requires cross_chapter_editorial_review"
+        )
     model = _exact(
         _mapping(raw_recipe["model"], "model"),
         {"provider", "model", "tier"},
@@ -439,6 +493,7 @@ def decode_generation_recipe(
         "approx_term_count",
         "chapter_guide_max_rounds",
         "chapter_guide_review_final_round",
+        "cross_chapter_editorial_review",
     }:
         _string(raw_recipe, key)
     return CompanionGenerationRecipe(
@@ -461,6 +516,17 @@ def decode_generation_recipe(
         ),
         equation_label_visual_prompt=_string(
             raw_recipe, "equation_label_visual_prompt"
+        ),
+        cross_chapter_editorial_review=editorial,
+        editorial_proposer_prompt=(
+            _string(raw_recipe, "editorial_proposer_prompt")
+            if editorial
+            else EDITORIAL_PROPOSER_PROMPT_VERSION
+        ),
+        editorial_reviewer_prompt=(
+            _string(raw_recipe, "editorial_reviewer_prompt")
+            if editorial
+            else EDITORIAL_REVIEWER_PROMPT_VERSION
         ),
     )
 
@@ -567,6 +633,9 @@ __all__ = [
     "COMPANION_BUILD_REQUEST_SCHEMA",
     "COMPANION_CONTENT_CONTRACT",
     "COMPANION_GENERATION_RECIPE_SCHEMA",
+    "EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA",
+    "EDITORIAL_PROPOSER_PROMPT_VERSION",
+    "EDITORIAL_REVIEWER_PROMPT_VERSION",
     "NEUTRAL_TEXTBOOK_INTENT",
     "CompanionBuildRequest",
     "CompanionExecutionOptions",

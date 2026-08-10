@@ -15,6 +15,9 @@ from arc_paper import (
 from arc_companion.request_contracts import (
     COMPANION_BUILD_REQUEST_SCHEMA,
     COMPANION_GENERATION_RECIPE_SCHEMA,
+    EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA,
+    EDITORIAL_PROPOSER_PROMPT_VERSION,
+    EDITORIAL_REVIEWER_PROMPT_VERSION,
     CompanionBuildRequest,
     CompanionGenerationRecipe,
     decode_build_request,
@@ -62,11 +65,65 @@ def test_current_request_and_recipe_round_trip_only(tmp_path: Path) -> None:
     assert request_document["schema_version"] == COMPANION_BUILD_REQUEST_SCHEMA
     assert request_document["reviewed_supplements"] == []
     assert recipe_document["schema_version"] == COMPANION_GENERATION_RECIPE_SCHEMA
+    assert recipe_document == {
+        "schema_version": "arc.companion.generation_recipe.v17",
+        "model": {"provider": "auto", "model": None, "tier": "medium"},
+        "approx_term_count": 50,
+        "author_identity_prompt": "arc.companion.author-identity-prompt.v3",
+        "chapter_guide_prompt": "arc.companion.chapter-learning-prompt.v17",
+        "chapter_guide_review_prompt": (
+            "arc.companion.chapter-learning-review-prompt.v17"
+        ),
+        "chapter_guide_max_rounds": 3,
+        "chapter_guide_review_final_round": False,
+        "equation_label_visual_prompt": (
+            "arc.paper.equation_label_visual_prompt.v1"
+        ),
+    }
     decoded_request = decode_build_request(request_document)
     assert decoded_request.source.document_digest == request.source.document_digest
     assert decoded_request.authors == request.authors
     assert decoded_request.target_language == request.target_language
     assert decode_generation_recipe(recipe_document) == recipe
+
+
+def test_editorial_recipe_uses_v18_only_when_enabled() -> None:
+    recipe = CompanionGenerationRecipe(cross_chapter_editorial_review=True)
+
+    document = encode_generation_recipe(recipe)
+
+    assert document["schema_version"] == (
+        EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA
+    )
+    assert document["cross_chapter_editorial_review"] is True
+    assert document["editorial_proposer_prompt"] == (
+        EDITORIAL_PROPOSER_PROMPT_VERSION
+    )
+    assert document["editorial_reviewer_prompt"] == (
+        EDITORIAL_REVIEWER_PROMPT_VERSION
+    )
+    assert decode_generation_recipe(document) == recipe
+
+
+def test_v17_recipe_normalizes_without_editorial_fields() -> None:
+    document = encode_generation_recipe(CompanionGenerationRecipe())
+
+    decoded = decode_generation_recipe(document)
+
+    assert decoded.cross_chapter_editorial_review is False
+    assert decoded.editorial_proposer_prompt == EDITORIAL_PROPOSER_PROMPT_VERSION
+    assert decoded.editorial_reviewer_prompt == EDITORIAL_REVIEWER_PROMPT_VERSION
+    assert encode_generation_recipe(decoded) == document
+
+
+def test_v18_recipe_cannot_encode_a_disabled_editorial_review() -> None:
+    document = encode_generation_recipe(
+        CompanionGenerationRecipe(cross_chapter_editorial_review=True)
+    )
+    document["cross_chapter_editorial_review"] = False
+
+    with pytest.raises(ValueError, match="v18 generation recipe requires"):
+        decode_generation_recipe(document)
 
 
 def test_v7_request_decodes_without_reviewed_supplements(
