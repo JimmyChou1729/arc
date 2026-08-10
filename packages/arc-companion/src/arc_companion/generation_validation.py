@@ -555,15 +555,14 @@ def _positive_integer_ids(
             isinstance(item, bool)
             or not isinstance(item, int)
             or item < 1
-            or item > maximum
             for item in value
         )
     ):
         raise CompanionContentError(
             "chapter_guide_review_audit_invalid",
-            f"{description} must be locations in the current chapter",
+            f"{description} must be positive integer locations",
         )
-    return sorted(set(value))
+    return sorted({item for item in value if item <= maximum})
 
 
 def _string_ids(

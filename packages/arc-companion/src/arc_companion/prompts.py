@@ -7,9 +7,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v16"
+CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v17"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "arc.companion.chapter-learning-review-prompt.v16"
+    "arc.companion.chapter-learning-review-prompt.v17"
 )
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
 
@@ -105,6 +105,10 @@ semantic template supplied in the loop context: one optional `chapter_guide`
 (an object or `null`), sparse `section_guides` selected by `section_number`,
 sparse local `companions` selected by `after_part`, and `references`
 containing only `title` and `source`.
+
+Use only the exact local `section_number` values listed in the supplied
+`sections` context. If that list is empty, `section_guides` must be empty. A
+numeral printed in the source heading is content, not a local section number.
 
 The chapter guide appears before the body and helps the reader enter the
 chapter as a whole. A section guide appears after that section's translated
@@ -286,6 +290,11 @@ in `checked_part_numbers` and `checked_section_numbers`, and include locations
 inspected for constructive additions as well as locations already used by the
 proposal. Never copy a reference body or invent a source, DOI, arXiv
 identifier, or URL.
+
+Reject a proposal that uses a `section_number` absent from the supplied local
+`sections` context. When that context is empty, both the proposal's
+`section_guides` and the review payload's `checked_section_numbers` must be
+empty; source-heading numerals do not count as local section numbers.
 
 Actively consider and, when it could materially improve the Companion, inspect
 a reference the proposer missed. Both roles may introduce useful new source

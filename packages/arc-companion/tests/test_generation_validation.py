@@ -61,3 +61,21 @@ def test_review_audit_normalizes_repeated_valid_locations() -> None:
         "checked_part_numbers": [1, 3],
         "checked_section_numbers": [2],
     }
+
+
+def test_review_audit_ignores_unneeded_out_of_range_locations() -> None:
+    audit = validate_chapter_guide_review_audit(
+        {
+            "payload": {
+                "checked_complete_chapter": True,
+                "checked_part_numbers": [1, 99],
+                "checked_section_numbers": [3],
+            }
+        },
+        proposal={"companions": [], "section_guides": []},
+        part_count=2,
+        section_count=0,
+    )
+
+    assert audit["checked_part_numbers"] == [1]
+    assert audit["checked_section_numbers"] == []

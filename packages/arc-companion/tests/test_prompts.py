@@ -24,3 +24,13 @@ def test_guide_prompts_treat_paratext_as_model_judgment() -> None:
         assert "preface" in prompt
         assert "cross-segment reading route" in prompt
         assert "specific reading action or understanding increment" in prompt
+
+
+def test_guide_prompts_bind_local_section_numbers() -> None:
+    proposer = chapter_guide_proposer_instructions()
+    reviewer = chapter_guide_reviewer_instructions()
+
+    for prompt in (proposer, reviewer):
+        assert "section_number" in prompt
+        assert "source heading" in prompt or "source-heading" in prompt
+        assert "sections" in prompt
