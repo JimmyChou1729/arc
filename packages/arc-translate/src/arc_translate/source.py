@@ -222,7 +222,28 @@ def validate_translation_text(text: str, block: Mapping[str, Any]) -> None:
 
 
 def prompt_block(block: Mapping[str, Any]) -> dict[str, Any]:
-    if str(block.get("kind")) != "figure":
+    kind = str(block.get("kind"))
+    if kind == "list":
+        payload = block.get("payload")
+        if not isinstance(payload, Mapping):
+            raise TranslationSourceError(
+                "source_block_invalid", "source block payload must be an object"
+            )
+        return {
+            "block_id": block.get("block_id"),
+            "ordinal": block.get("ordinal"),
+            "kind": "list",
+            "section_path": block.get("section_path"),
+            "payload": {
+                "ordered": bool(payload.get("ordered", False)),
+                "items": [
+                    {"text": str(item.get("text", ""))}
+                    for item in _mapping_items(payload.get("items"))
+                ],
+            },
+            "source_identity": source_identity(block),
+        }
+    if kind != "figure":
         return {**dict(block), "source_identity": source_identity(block)}
     payload = block.get("payload")
     if not isinstance(payload, Mapping):

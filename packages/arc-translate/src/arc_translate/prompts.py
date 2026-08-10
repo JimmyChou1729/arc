@@ -9,8 +9,8 @@ from typing import Any
 
 LANGUAGE_PROMPT_VERSION = "arc.translate.language_prompt.v1"
 GLOSSARY_PROMPT_VERSION = "arc.translate.glossary_prompt.v2"
-TRANSLATION_PROMPT_VERSION = "arc.translate.blocks_prompt.v3"
-REVIEW_PROMPT_VERSION = "arc.translate.review_prompt.v2"
+TRANSLATION_PROMPT_VERSION = "arc.translate.blocks_prompt.v4"
+REVIEW_PROMPT_VERSION = "arc.translate.review_prompt.v3"
 
 
 def _closed(

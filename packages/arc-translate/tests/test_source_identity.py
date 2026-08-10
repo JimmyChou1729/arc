@@ -309,6 +309,13 @@ def test_list_identity_uses_each_items_inline_spans() -> None:
     assert source_identity(block)["link_targets"] == ["appendix.html"]
     validate_translation_text("$x$ appendix.html", block)
 
+    prompted = prompt_block(block)
+    assert prompted["payload"] == {
+        "ordered": False,
+        "items": [{"text": "$x$"}, {"text": "reference"}],
+    }
+    assert "inline_spans" not in str(prompted["payload"])
+
 
 def test_heading_identity_extracts_markdown_math_without_inline_spans() -> None:
     link_shaped_tex = r"\left[V\right](p)"
@@ -352,7 +359,6 @@ def test_table_identity_extracts_markdown_math_and_links() -> None:
         r"$H$ | [哈密顿量](operators.html)",
         block,
     )
-
 
 def test_figure_identity_uses_caption_without_exposing_asset_target() -> None:
     block = {
