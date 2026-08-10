@@ -1817,17 +1817,31 @@
     });
   }
 
+  function repairGroupedSizeDelimiters(value) {
+    var grouped = /\\(big|Big|bigg|Bigg)(l|r)?\s*\{(\\[A-Za-z]+|\(|\)|\[|\]|\||\.|\/)\}/g;
+    return String(value || "").replace(grouped, function (
+      _match, size, side, delimiter
+    ) {
+      return "\\" + size + (side || "") + delimiter;
+    });
+  }
+
   function katexCandidates(value) {
     var primary = katexTex(value);
     var repaired = repairMatrixShorthand(primary);
     var repairedScripts = repairRepeatedSuperscripts(repaired)
       .replace(/\u000crac/g, "\\frac");
-    var fixedSizeDelimiters = repairedScripts
+    var repairedDelimiters = repairGroupedSizeDelimiters(repairedScripts);
+    var fixedSizeDelimiters = repairedDelimiters
       .replace(/\\left\b/g, "\\bigl")
       .replace(/\\right\b/g, "\\bigr");
-    return [primary, repaired, repairedScripts, fixedSizeDelimiters].filter(function (
-      candidate, index, values
-    ) {
+    return [
+      primary,
+      repaired,
+      repairedScripts,
+      repairedDelimiters,
+      fixedSizeDelimiters
+    ].filter(function (candidate, index, values) {
       return values.indexOf(candidate) === index;
     });
   }

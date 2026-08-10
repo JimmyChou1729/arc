@@ -170,6 +170,17 @@ if (
 ) {
   throw new Error("repeated TeX superscripts were not grouped for KaTeX");
 }
+var groupedDelimiterCandidates = helpers.katexCandidates(
+  String.raw`\\Big{|}x\\Big{|}^{2}+\\vphantom{\\Biggl{(}}`
+);
+if (
+  !groupedDelimiterCandidates.some(function (candidate) {
+    return candidate.includes(String.raw`\\Big|x\\Big|^{2}`) &&
+      candidate.includes(String.raw`\\vphantom{\\Biggl(}`);
+  })
+) {
+  throw new Error("grouped TeX size delimiters were not repaired for KaTeX");
+}
 if (
   !helpers.katexCandidates("x+\frac{a}{b}").some(function (candidate) {
     return candidate === String.raw`x+\\frac{a}{b}`;
