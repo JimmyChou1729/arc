@@ -367,19 +367,32 @@ def _formula_occurrences(
     delimited = Counter(_markdown_math_occurrences(text))
     if delimited:
         return delimited
-    return Counter(
-        {
-            token: count
-            for token in expected
-            if (
-                count := _literal_occurrence_count(
-                    text,
-                    token,
-                    edge_characters=r"A-Za-z0-9\\^_{}[\]",
-                )
+    edge_characters = r"A-Za-z0-9\\^_{}[\]"
+    occupied: list[tuple[int, int]] = []
+    occurrences: Counter[str] = Counter()
+    # Undelimited TeX can contain another expected formula verbatim: for
+    # example ``{\cal O}(H)`` contains ``H``. Treat the longest source
+    # identities as atomic before counting shorter identities so the nested
+    # text is not mistaken for an additional formula occurrence.
+    for token in sorted(expected, key=lambda value: (-len(value), value)):
+        if not token:
+            continue
+        pattern = re.compile(
+            rf"(?<![{edge_characters}]){re.escape(token)}"
+            rf"(?![{edge_characters}])"
+        )
+        matches = [
+            match.span()
+            for match in pattern.finditer(text)
+            if not any(
+                match.start() < end and start < match.end()
+                for start, end in occupied
             )
-        }
-    )
+        ]
+        if matches:
+            occurrences[token] = len(matches)
+            occupied.extend(matches)
+    return occurrences
 
 
 def formula_identity_diagnostics(

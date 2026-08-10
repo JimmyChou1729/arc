@@ -85,6 +85,32 @@ def test_formula_occurrences_and_links_can_be_reordered_exactly() -> None:
     )
 
 
+def test_undelimited_nested_formula_text_is_not_double_counted() -> None:
+    block = {
+        "block_id": "block-nested-html-math",
+        "kind": "paragraph",
+        "payload": {
+            "text": r"H, {\cal O}(H), H",
+            "inline_spans": [
+                {"kind": "math", "tex": "H"},
+                {"kind": "text", "text": ", "},
+                {"kind": "math", "tex": r"{\cal O}(H)"},
+                {"kind": "text", "text": ", "},
+                {"kind": "math", "tex": "H"},
+            ],
+        },
+    }
+
+    validate_translation_text(r"质量为 H、远大于 {\cal O}(H)，或约为 H。", block)
+    with pytest.raises(
+        TranslationSourceError,
+        match="changed formula occurrences",
+    ):
+        validate_translation_text(
+            r"质量为 H、远大于 {\cal O}(H)，约为 H，另有 H。", block
+        )
+
+
 @pytest.mark.parametrize(
     "text",
     [
