@@ -63,6 +63,21 @@ def __getattr__(name: str) -> Any:
         from . import reviewed_supplements
 
         return getattr(reviewed_supplements, name)
+    if name in {
+        "PUBLICATION_REVISION_BUNDLE_SCHEMA",
+        "PUBLICATION_REVISION_REQUEST_SCHEMA",
+        "PUBLICATION_REVISION_RESULT_SCHEMA",
+        "CompanionFragmentReplacement",
+        "CompanionPublicationRevisionError",
+        "CompanionPublicationRevisionRequest",
+        "CompanionPublicationRevisionResult",
+        "decode_publication_revision_request",
+        "encode_publication_revision_request",
+        "encode_publication_revision_result",
+    }:
+        from . import publication_revisions
+
+        return getattr(publication_revisions, name)
     raise AttributeError(name)
 
 
@@ -76,13 +91,20 @@ __all__ = [
     "CompanionBuildRequest",
     "CompanionExecutionOptions",
     "CompanionGenerationRecipe",
+    "CompanionFragmentReplacement",
     "CompanionProjectError",
     "CompanionProjectPaths",
     "CompanionPublicationError",
+    "CompanionPublicationRevisionError",
+    "CompanionPublicationRevisionRequest",
+    "CompanionPublicationRevisionResult",
     "CompanionService",
     "CompanionServiceError",
     "CompanionTranslationRuntimeError",
     "PublishedCompanion",
+    "PUBLICATION_REVISION_BUNDLE_SCHEMA",
+    "PUBLICATION_REVISION_REQUEST_SCHEMA",
+    "PUBLICATION_REVISION_RESULT_SCHEMA",
     "REVIEWED_COMPANION_SUPPLEMENT_SCHEMA",
     "SUPPLEMENT_COVERAGE_SCHEMA",
     "ReviewedCompanionSupplement",
@@ -92,6 +114,9 @@ __all__ = [
     "ReviewedSupplementEntry",
     "companion_run_id",
     "decode_reviewed_companion_supplement",
+    "decode_publication_revision_request",
+    "encode_publication_revision_request",
+    "encode_publication_revision_result",
     "encode_reviewed_companion_supplement",
     "materialize_published_companion",
     "reviewed_anchor_fingerprint",

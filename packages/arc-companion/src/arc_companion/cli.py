@@ -1,4 +1,4 @@
-"""Six-command protocol CLI for source-anchored Companion builds."""
+"""Protocol CLI for source-anchored Companion builds and revisions."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from arc_paper import (
 from arc_render import (
     HTMLRenderError,
     RenderWorkspaceError,
-    read_publication,
+    read_publication_workspace_state,
     render_publication_html,
     validate_reader_in_browser,
     validate_publication_workspace,
@@ -43,6 +43,13 @@ from arc_render import (
 )
 
 from .project import CompanionProjectError, CompanionProjectPaths
+from .publication_revisions import (
+    CompanionPublicationRevisionError,
+    commit_publication_revision,
+    committed_publication_review_ids,
+    decode_publication_revision_request,
+    encode_publication_revision_result,
+)
 from .reader_labels import ReaderLabelError, resolve_reader_labels
 from .request_contracts import (
     CompanionBuildRequest,
@@ -171,6 +178,29 @@ def _parser() -> _Parser:
     )
     render.add_argument("--project-dir", required=True, help="Companion project directory")
 
+    revise = commands.add_parser(
+        "revise",
+        help="apply an audited publication revision",
+        description="Commit and deliver a recoverable post-publication revision.",
+    )
+    revise.add_argument("--project-dir", required=True, help="Companion project directory")
+    revise.add_argument("--request", required=True, help="revision request JSON file")
+    revise.add_argument(
+        "--browser",
+        action="store_true",
+        help="run optional local Chromium reader checks",
+    )
+    revise.add_argument(
+        "--browser-executable",
+        help="local Chromium-family executable for --browser",
+    )
+    revise.add_argument(
+        "--browser-timeout",
+        type=int,
+        default=60,
+        help="browser validation timeout in seconds (default: 60)",
+    )
+
     validate = commands.add_parser(
         "validate",
         help="validate the selected Companion publication",
@@ -199,7 +229,8 @@ def _help_command(arguments: list[str]) -> str:
     command = (
         arguments[0]
         if arguments
-        and arguments[0] in {"build", "status", "resume", "stop", "render", "validate"}
+        and arguments[0]
+        in {"build", "status", "resume", "stop", "render", "revise", "validate"}
         else None
     )
     return " ".join(
@@ -250,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     except (
         ArcJobsError,
         CompanionProjectError,
+        CompanionPublicationRevisionError,
         CompanionServiceError,
         CompanionTranslationRuntimeError,
         RichDocumentValidationError,
@@ -300,6 +332,8 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
         return _stop(args)
     if args.command == "render":
         return _render(args)
+    if args.command == "revise":
+        return _revise(args)
     if args.command == "validate":
         return _validate(args)
     raise _UsageError(f"unsupported command: {args.command}")
@@ -431,69 +465,69 @@ def _status_locked(paths: CompanionProjectPaths) -> CommandResult:
     artifacts: tuple[CommandArtifact, ...] = ()
     publication_warnings: list[CommandWarning] = []
     if view.snapshot.status is RunStatus.SUCCEEDED:
-        publication = CompanionService(paths.jobs_root).publication(run_id)
+        service = CompanionService(paths.jobs_root)
+        publication = service.publication(run_id)
         data["publication_digest"] = publication.publication_digest
         workspace = paths.publication_workspace(run_id)
-        publication_path = workspace / "publication.json"
         validated_artifacts: list[CommandArtifact] = []
-        if publication_path.is_file():
-            try:
-                diagnostics = validate_publication_workspace(
-                    publication_path
+        try:
+            publication_path = service.materialize_publication(
+                run_id, workspace, project_paths=paths
+            )
+            diagnostics = validate_publication_workspace(publication_path)
+            state = read_publication_workspace_state(publication_path)
+            if state.publication_digest != publication.publication_digest:
+                raise HTMLRenderError(
+                    "materialized publication belongs to another run"
                 )
-                materialized = read_publication(publication_path)
-                if (
-                    materialized.publication_digest
-                    != publication.publication_digest
-                ):
-                    raise HTMLRenderError(
-                        "materialized publication belongs to another run"
-                    )
-                data["publication"] = str(publication_path)
-                validated_artifacts.append(
-                    CommandArtifact(
-                        "publication", run_id, str(publication_path)
-                    )
-                )
-                publication_warnings.extend(
-                    CommandWarning(
-                        "fragment_revision_diagnostic", item
-                    )
-                    for item in diagnostics
-                )
-            except (
-                HTMLRenderError,
-                RenderWorkspaceError,
-                OSError,
-            ) as exc:
-                publication_warnings.append(
-                    CommandWarning(
-                        "publication_workspace_invalid", str(exc)
-                    )
-                )
-        else:
+            review_ids = committed_publication_review_ids(paths, run_id)
+            data.update(_edition_data(state, review_ids))
+            data["publication"] = str(publication_path)
+            validated_artifacts.append(
+                CommandArtifact("publication", run_id, str(publication_path))
+            )
+            publication_warnings.extend(
+                CommandWarning("fragment_revision_diagnostic", item)
+                for item in diagnostics
+            )
+        except (
+            CompanionPublicationRevisionError,
+            HTMLRenderError,
+            RenderWorkspaceError,
+            OSError,
+        ) as exc:
             publication_warnings.append(
                 CommandWarning(
-                    "publication_workspace_missing",
-                    "the selected run has not been materialized",
+                    "publication_workspace_invalid", str(exc)
                 )
             )
-        if paths.delivery_html.is_file():
+            state = None
+        if state is not None and paths.delivery_html.is_file():
             try:
                 validate_standalone_html(
-                    publication, paths.delivery_html
+                    publication,
+                    paths.delivery_html,
+                    expected_selected_revision_digests=(
+                        None
+                        if state is None
+                        else state.selected_revision_digests
+                    ),
                 )
+                data["workspace_html_consistent"] = True
                 validated_artifacts.append(
                     CommandArtifact(
                         "web", run_id, str(paths.delivery_html)
                     )
                 )
             except HTMLRenderError as exc:
+                data["workspace_html_consistent"] = False
                 publication_warnings.append(
                     CommandWarning(
                         "standalone_html_stale", str(exc)
                     )
                 )
+        else:
+            data["workspace_html_consistent"] = False
         artifacts = tuple(validated_artifacts)
     return CommandResult(
         base.status,
@@ -531,15 +565,27 @@ def _stop(args: argparse.Namespace) -> CommandResult:
 
 def _render(args: argparse.Namespace) -> CommandResult:
     paths = CompanionProjectPaths.load(args.project_dir)
-    run_id = _current_run(paths)
-    service = CompanionService(paths.jobs_root)
-    snapshot = service.inspect(run_id).snapshot
-    if snapshot.status is not RunStatus.SUCCEEDED:
-        return command_result_from_snapshot(snapshot)
+    with file_lease(paths.delivery_lease, blocking=True):
+        run_id = _current_run(paths)
+        service = CompanionService(paths.jobs_root)
+        snapshot = service.inspect(run_id).snapshot
+        if snapshot.status is not RunStatus.SUCCEEDED:
+            return command_result_from_snapshot(snapshot)
+        return _render_locked(paths, run_id, service)
+
+
+def _render_locked(
+    paths: CompanionProjectPaths,
+    run_id: str,
+    service: CompanionService,
+) -> CommandResult:
     publication_path = service.materialize_publication(
-        run_id, paths.publication_workspace(run_id)
+        run_id,
+        paths.publication_workspace(run_id),
+        project_paths=paths,
     )
-    publication = service.publication(run_id)
+    state = read_publication_workspace_state(publication_path)
+    publication = state.publication
     warnings: list[CommandWarning] = []
     artifacts = [
         CommandArtifact("publication", run_id, str(publication_path))
@@ -548,7 +594,12 @@ def _render(args: argparse.Namespace) -> CommandResult:
         publication_path,
         paths.publication_html(run_id),
     )
-    promoted = paths.promote_publication_html(run_id)
+    validate_standalone_html(
+        publication,
+        paths.publication_html(run_id),
+        expected_selected_revision_digests=state.selected_revision_digests,
+    )
+    promoted = paths._promote_publication_html_locked(run_id)
     if promoted:
         artifacts.append(
             CommandArtifact("web", run_id, str(paths.delivery_html))
@@ -569,6 +620,10 @@ def _render(args: argparse.Namespace) -> CommandResult:
         CommandStatus.COMPLETED,
         data={
             "publication_digest": publication.publication_digest,
+            **_edition_data(
+                state, committed_publication_review_ids(paths, run_id)
+            ),
+            "workspace_html_consistent": promoted,
             "delivery": (
                 {"html": str(paths.delivery_html)}
                 if promoted
@@ -578,6 +633,90 @@ def _render(args: argparse.Namespace) -> CommandResult:
         artifacts=tuple(artifacts),
         warnings=tuple(warnings),
     )
+
+
+def _revise(args: argparse.Namespace) -> CommandResult:
+    request_path = Path(args.request)
+    if not request_path.is_file():
+        raise _UsageError("--request must be an existing JSON file")
+    try:
+        request_value = json.loads(request_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise _UsageError(f"--request must contain valid JSON: {exc}") from exc
+    if not isinstance(request_value, Mapping):
+        raise _UsageError("--request must contain a JSON object")
+    request = decode_publication_revision_request(request_value)
+    paths = CompanionProjectPaths.load(args.project_dir)
+    with file_lease(paths.delivery_lease, blocking=True):
+        if _current_run(paths) != request.run_id:
+            raise CompanionPublicationRevisionError(
+                "publication_revision_run_mismatch",
+                "revision request does not target the selected run",
+            )
+        service = CompanionService(paths.jobs_root)
+        snapshot = service.inspect(request.run_id).snapshot
+        if snapshot.status is not RunStatus.SUCCEEDED:
+            return command_result_from_snapshot(snapshot)
+        publication_path = service.materialize_publication(
+            request.run_id,
+            paths.publication_workspace(request.run_id),
+            project_paths=paths,
+        )
+        result = commit_publication_revision(
+            paths, request, publication_path
+        )
+        diagnostics = validate_publication_workspace(publication_path)
+        state = read_publication_workspace_state(publication_path)
+        rendered = render_publication_html(
+            publication_path,
+            paths.publication_html(request.run_id),
+        )
+        validate_standalone_html(
+            state.publication,
+            paths.publication_html(request.run_id),
+            expected_selected_revision_digests=state.selected_revision_digests,
+        )
+        browser_data: dict[str, Any] = {}
+        if bool(getattr(args, "browser", False)):
+            checked = validate_reader_in_browser(
+                paths.publication_html(request.run_id),
+                browser_executable=getattr(args, "browser_executable", None),
+                timeout_seconds=getattr(args, "browser_timeout", 60),
+            )
+            browser_data = {
+                "browser": {
+                    "executable": checked.executable,
+                    "timeout_seconds": checked.timeout_seconds,
+                }
+            }
+        if not paths._promote_publication_html_locked(request.run_id):
+            raise CompanionPublicationRevisionError(
+                "publication_revision_run_mismatch",
+                "selected run changed before revision promotion",
+            )
+        return CommandResult(
+            CommandStatus.COMPLETED,
+            data={
+                **encode_publication_revision_result(result),
+                **_edition_data(
+                    state,
+                    committed_publication_review_ids(paths, request.run_id),
+                ),
+                "workspace_html_consistent": True,
+                "delivery": {"html": str(paths.delivery_html)},
+                **browser_data,
+            },
+            artifacts=(
+                CommandArtifact(
+                    "publication", request.run_id, str(publication_path)
+                ),
+                CommandArtifact("web", request.run_id, str(paths.delivery_html)),
+            ),
+            warnings=tuple(
+                CommandWarning("fragment_revision_diagnostic", item)
+                for item in (*diagnostics, *rendered.warnings)
+            ),
+        )
 
 
 def _validate(args: argparse.Namespace) -> CommandResult:
@@ -601,15 +740,22 @@ def _validate_locked(
     run_id = _current_run(paths)
     service = CompanionService(paths.jobs_root)
     publication_path = service.materialize_publication(
-        run_id, paths.publication_workspace(run_id)
+        run_id,
+        paths.publication_workspace(run_id),
+        project_paths=paths,
     )
     warnings = validate_publication_workspace(publication_path)
-    publication = service.publication(run_id)
+    state = read_publication_workspace_state(publication_path)
+    publication = state.publication
     if not paths.delivery_html.is_file():
         raise HTMLRenderError(
             "the selected publication has no standalone HTML release"
         )
-    validate_standalone_html(publication, paths.delivery_html)
+    validate_standalone_html(
+        publication,
+        paths.delivery_html,
+        expected_selected_revision_digests=state.selected_revision_digests,
+    )
     browser_data: dict[str, Any] = {}
     if browser:
         checked = validate_reader_in_browser(
@@ -627,6 +773,10 @@ def _validate_locked(
         CommandStatus.COMPLETED,
         data={
             "publication_digest": publication.publication_digest,
+            **_edition_data(
+                state, committed_publication_review_ids(paths, run_id)
+            ),
+            "workspace_html_consistent": True,
             "valid": True,
             **browser_data,
         },
@@ -668,87 +818,41 @@ def _snapshot_result(
             error=base.error,
             resume=base.resume,
         )
-    service = CompanionService(paths.jobs_root)
-    try:
-        publication_path = service.materialize_publication(
-            snapshot.run_id,
-            paths.publication_workspace(snapshot.run_id),
-        )
-        rendered = render_publication_html(
-            publication_path,
-            paths.publication_html(snapshot.run_id),
-        )
-        publication = service.publication(snapshot.run_id)
-    except (HTMLRenderError, OSError) as exc:
-        return CommandResult(
-            CommandStatus.COMPLETED,
-            run=base.run,
-            data={
-                "run": snapshot_data(snapshot),
-                "published": False,
-                "delivery": {},
-            },
-            artifacts=(),
-            warnings=(
-                *command_warnings,
-                CommandWarning("web_render_failed", str(exc)),
-            ),
-        )
-    try:
-        promoted = paths.promote_publication_html(snapshot.run_id)
-        promotion_warnings = (
-            ()
-            if promoted
-            else (
-                CommandWarning(
-                    "publication_not_selected",
-                    "standalone HTML was rendered for the run but not promoted "
-                    "because another run is selected",
+    with file_lease(paths.delivery_lease, blocking=True):
+        try:
+            delivered = _render_locked(
+                paths,
+                snapshot.run_id,
+                CompanionService(paths.jobs_root),
+            )
+        except (
+            CompanionProjectError,
+            CompanionPublicationRevisionError,
+            HTMLRenderError,
+            OSError,
+        ) as exc:
+            return CommandResult(
+                CommandStatus.COMPLETED,
+                run=base.run,
+                data={
+                    "run": snapshot_data(snapshot),
+                    "published": False,
+                    "delivery": {},
+                },
+                artifacts=(),
+                warnings=(
+                    *command_warnings,
+                    CommandWarning("web_render_failed", str(exc)),
                 ),
             )
-        )
-    except (CompanionProjectError, OSError) as exc:
-        promoted = False
-        promotion_warnings = (
-            CommandWarning(
-                "web_render_failed",
-                f"standalone HTML could not be promoted: {exc}",
-            ),
-        )
     return CommandResult(
-        CommandStatus.COMPLETED,
+        delivered.status,
         run=base.run,
-        data={
-            "run": snapshot_data(snapshot),
-            "publication_digest": publication.publication_digest,
-            "delivery": (
-                {"html": str(paths.delivery_html)}
-                if promoted
-                else {}
-            ),
-        },
-        artifacts=(
-            CommandArtifact("publication", snapshot.run_id, str(publication_path)),
-            *(
-                (
-                    CommandArtifact(
-                        "web",
-                        snapshot.run_id,
-                        str(paths.delivery_html),
-                    ),
-                )
-                if promoted
-                else ()
-            ),
-        ),
-        warnings=(
-            *command_warnings,
-            *(
-                CommandWarning("fragment_revision_diagnostic", item)
-                for item in rendered.warnings
-            ),
-            *promotion_warnings,
-        ),
+        data={"run": snapshot_data(snapshot), **dict(delivered.data)},
+        artifacts=delivered.artifacts,
+        warnings=(*command_warnings, *delivered.warnings),
+        error=delivered.error,
+        resume=delivered.resume,
     )
 
 
@@ -848,6 +952,18 @@ def _current_run(paths: CompanionProjectPaths) -> str:
             "run_not_found", "project has no selected build run"
         )
     return value
+
+
+def _edition_data(state: Any, review_ids: tuple[str, ...]) -> dict[str, Any]:
+    return {
+        "edition_digest": state.edition_digest,
+        "selected_revision_digests": list(
+            state.selected_revision_digests
+        ),
+        "committed_review_ids": list(review_ids),
+        "review_count": len(review_ids),
+        "revision_count": len(state.revisions),
+    }
 
 
 def _source_warnings(

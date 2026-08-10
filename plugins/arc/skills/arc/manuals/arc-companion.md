@@ -1,8 +1,7 @@
 # ARC Companion Quick Start
 
-`arc-companion` builds a source-anchored reading companion as a run-owned
-`arc-render` publication and a standalone HTML reader. Build and resume require
-public `arc-translate`, proposer-reviewer, paper, LLM, jobs, and render
+`arc-companion` builds a source-anchored, run-owned `arc-render` publication
+and standalone HTML reader. Build and resume require ARC's public package
 dependencies; incomplete runtimes return `runtime_dependency_missing`.
 
 ## Build from a Local Rich Source
@@ -50,10 +49,9 @@ generation. Instead, each chapter proposer and reviewer may research for a
 concrete need and add useful references, with no minimum or maximum reference
 count. Agents prefer cached `arc-paper` resources, admit newly acquired DOI,
 arXiv, URL, local-file, book, and other resources when possible, and may use
-currently available, authorized host research or download tools without
-requiring new installation, connection, or authorization. Model JSON carries
-handles and semantic results, while bodies remain in the cache or text-only
-workspace. Only English Wikipedia is accepted; translated notes and excerpts
+currently available, authorized host research or download tools without new authorization.
+Model JSON carries handles and semantic results; bodies stay in the cache or
+text-only workspace. Only English Wikipedia is accepted; notes and excerpts
 retain the English page title and URL.
 
 Paragraph-local and cross-paragraph units have equal status and no quota.
@@ -88,6 +86,8 @@ arc-companion resume --project-dir <project-dir> --input <resume-input.json> \
 arc-companion stop --project-dir <project-dir> --reason "<reason>"
 arc-companion validate --project-dir <project-dir>
 arc-companion render --project-dir <project-dir>
+arc-companion revise --project-dir <project-dir> \
+  --request <revision-request.json>
 ```
 
 Omit `--input` when the current pause descriptor does not require it. Resume
@@ -103,10 +103,13 @@ to the root standalone `<project-dir>/companion.html`.
 `render` is model-free: it rematerializes the selected publication and rewrites
 the standalone HTML after a renderer, style, font, or validator change.
 
-ARC does not create or publish Companion PDFs. A person can open
-`companion.html` in Chrome and use Print / Save as PDF. That PDF is a
-user-side derivative, not an ARC release artifact: ARC does not validate,
-reproduce, automatically publish, or make durability guarantees for it.
+`revise` commits model-free immutable child revisions. Requests bind the run,
+publication, review ID, reason, and current fragment heads; replacements change
+only complete titles and Markdown and use the existing bibliography. ARC
+replays them before delivery. Exact requests are idempotent; stale bases and
+conflicting review IDs fail.
+
+Browser-printed PDFs are user derivatives without ARC validation or durability.
 
 ## Help
 

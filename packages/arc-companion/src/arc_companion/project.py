@@ -93,6 +93,15 @@ class CompanionProjectPaths:
         return self.operator_inputs_root / _validate_run_id(run_id)
 
     @property
+    def operator_revisions_root(self) -> Path:
+        """Committed publication reviews, grouped by immutable build run."""
+
+        return self.runtime_root / "operator-revisions"
+
+    def operator_revisions_run_path(self, run_id: str) -> Path:
+        return self.operator_revisions_root / _validate_run_id(run_id)
+
+    @property
     def delivery_html(self) -> Path:
         return self.root / "companion.html"
 
@@ -121,17 +130,23 @@ class CompanionProjectPaths:
 
         source = self.publication_html(run_id)
         with file_lease(self.delivery_lease, blocking=True):
-            if self.current_run_id != run_id:
-                return False
-            try:
-                payload = source.read_bytes()
-            except OSError as exc:
-                raise CompanionProjectError(
-                    "publication_html_unavailable",
-                    "run-specific standalone HTML is unreadable",
-                ) from exc
-            atomic_write_bytes(self.delivery_html, payload)
-            return True
+            return self._promote_publication_html_locked(run_id)
+
+    def _promote_publication_html_locked(self, run_id: str) -> bool:
+        """Promote while the caller holds ``delivery_lease``."""
+
+        source = self.publication_html(run_id)
+        if self.current_run_id != run_id:
+            return False
+        try:
+            payload = source.read_bytes()
+        except OSError as exc:
+            raise CompanionProjectError(
+                "publication_html_unavailable",
+                "run-specific standalone HTML is unreadable",
+            ) from exc
+        atomic_write_bytes(self.delivery_html, payload)
+        return True
 
     def write_source_diagnostics(
         self, run_id: str, warnings: tuple[str, ...]

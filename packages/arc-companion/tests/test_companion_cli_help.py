@@ -16,6 +16,7 @@ from arc_companion.cli import main
         ["resume", "--help"],
         ["stop", "--help"],
         ["render", "--help"],
+        ["revise", "--help"],
         ["validate", "--help"],
     ],
 )
@@ -44,7 +45,7 @@ def test_only_paper_access_commands_accept_a_paper_cache_root(
     for command in ("build", "resume"):
         assert main([command, "--help"]) == 0
         assert "--paper-cache-root" in capsys.readouterr().out
-    for command in ("render", "validate"):
+    for command in ("render", "revise", "validate"):
         assert main([command, "--help"]) == 0
         assert "--paper-cache-root" not in capsys.readouterr().out
 

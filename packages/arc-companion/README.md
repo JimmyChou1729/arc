@@ -35,6 +35,25 @@ arc-companion render --project-dir local/example
 arc-companion validate --project-dir local/example
 ```
 
+Post-publication corrections use a canonical request and create immutable
+child revisions without changing the run-owned publication:
+
+```bash
+arc-companion revise \
+  --project-dir local/example \
+  --request revision-request.json
+```
+
+The request binds the selected run and publication digest. Each replacement
+binds the current fragment semantic digest and supplies the complete new title
+and Markdown body. Citations must already exist in the publication
+bibliography; source identity, anchors, language, role, and priority are
+inherited. Committed reviews live below
+`.arc/companion/operator-revisions/<run-id>/` and are replayed by status,
+render, revise, and validate. The immutable `publication_digest` identifies
+the base publication; `edition_digest` identifies that publication plus its
+ordered current fragment heads.
+
 Use `arc-companion --help` and each subcommand's `--help` for the complete
 durable-control and publication options.
 

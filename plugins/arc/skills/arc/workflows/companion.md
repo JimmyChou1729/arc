@@ -227,6 +227,19 @@ run events, never in reader content.
 root standalone HTML together. A missing or invalid `companion.html` is a
 delivery failure, not a substitute for publication validation.
 
+For a bounded correction to already published fragment text, create a formal
+revision request and run:
+
+```bash
+arc-companion revise --project-dir <project-dir> \
+  --request <revision-request.json>
+```
+
+Use the current selected fragment semantic digests reported by `status`.
+Revisions replace complete titles and Markdown bodies while preserving source
+identity, anchors, language, role, and priority. They cannot add bibliography
+entries, resources, or anchors; rebuild the Companion for those changes.
+
 ARC has no Companion PDF release artifact or automated PDF pipeline. A person
 may open the standalone HTML in Chrome and use Print / Save as PDF, but that
 file is a user-side derivative: ARC does not validate it, reproduce it,

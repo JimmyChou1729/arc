@@ -19,7 +19,11 @@ from arc_jobs import (
     canonical_json_bytes,
 )
 from arc_llm import LLMTaskService
-from arc_render import Publication
+from arc_render import (
+    Publication,
+    PublicationWorkspaceState,
+    read_publication_workspace_state,
+)
 
 from .build import (
     COMPANION_BUILD_HANDLER,
@@ -33,6 +37,8 @@ from .publication import (
     load_published_companion,
     materialize_published_companion,
 )
+from .project import CompanionProjectPaths
+from .publication_revisions import materialize_operator_revisions
 from .request_contracts import (
     CompanionBuildRequest,
     CompanionExecutionOptions,
@@ -236,7 +242,11 @@ class CompanionService:
         return self.published_companion(run_id).publication
 
     def materialize_publication(
-        self, run_id: str, workspace: str | Path
+        self,
+        run_id: str,
+        workspace: str | Path,
+        *,
+        project_paths: CompanionProjectPaths | None = None,
     ) -> Path:
         published = self.published_companion(run_id)
         artifacts = ImmutableArtifactStore(
@@ -244,14 +254,33 @@ class CompanionService:
             repository_root=self.repository.root,
         )
         try:
-            return materialize_published_companion(
+            publication_path = materialize_published_companion(
                 artifacts, published, workspace
             )
+            if project_paths is not None:
+                materialize_operator_revisions(
+                    project_paths, run_id, Path(workspace)
+                )
+            return publication_path
         except CompanionPublicationError as exc:
             raise CompanionServiceError(
                 "publication_invalid",
                 "run publication cannot be materialized",
             ) from exc
+
+    def publication_workspace_state(
+        self,
+        run_id: str,
+        workspace: str | Path,
+        *,
+        project_paths: CompanionProjectPaths | None = None,
+    ) -> PublicationWorkspaceState:
+        publication_path = self.materialize_publication(
+            run_id,
+            workspace,
+            project_paths=project_paths,
+        )
+        return read_publication_workspace_state(publication_path)
 
 
 def companion_run_id(

@@ -96,13 +96,20 @@ def publication_edition_digest(
 ) -> str:
     """Return the identity of a publication plus ordered selected revisions."""
 
-    if not isinstance(publication_digest, str) or not publication_digest:
-        raise ValueError("publication_digest must be a non-empty string")
+    if (
+        not isinstance(publication_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", publication_digest) is None
+    ):
+        raise ValueError("publication_digest must be a SHA-256 digest")
     if isinstance(selected_revision_digests, (str, bytes, bytearray)):
         raise TypeError("selected revision digests must be a sequence")
     digests = tuple(selected_revision_digests)
-    if any(not isinstance(item, str) or not item for item in digests):
-        raise ValueError("selected revision digests must be non-empty strings")
+    if any(
+        not isinstance(item, str)
+        or re.fullmatch(r"[0-9a-f]{64}", item) is None
+        for item in digests
+    ):
+        raise ValueError("selected revision digests must be SHA-256 digests")
     material = {
         "schema_version": EDITION_DIGEST_SCHEMA,
         "publication_digest": publication_digest,

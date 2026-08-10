@@ -28,9 +28,20 @@ class _Service:
         return self._publication
 
     def materialize_publication(
-        self, _run_id: str, workspace: Path
+        self, _run_id: str, workspace: Path, **_kwargs: object
     ) -> Path:
         return workspace / "publication.json"
+
+
+def _state(publication: object) -> object:
+    return SimpleNamespace(
+        publication=publication,
+        publication_digest=publication.publication_digest,
+        edition_digest="b" * 64,
+        revisions=(),
+        selected_revisions=(),
+        selected_revision_digests=(),
+    )
 
 
 def test_status_does_not_advertise_stale_html(
@@ -59,14 +70,12 @@ def test_status_does_not_advertise_stale_html(
         cli, "validate_publication_workspace", lambda _path: ()
     )
     monkeypatch.setattr(
-        cli,
-        "read_publication",
-        lambda _path: SimpleNamespace(publication_digest="a" * 64),
+        cli, "read_publication_workspace_state", lambda _path: _state(publication)
     )
     monkeypatch.setattr(
         cli,
         "validate_standalone_html",
-        lambda *_args: (_ for _ in ()).throw(
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
             HTMLRenderError("wrong publication")
         ),
     )
@@ -78,6 +87,45 @@ def test_status_does_not_advertise_stale_html(
         item.code == "standalone_html_stale"
         for item in result.warnings
     )
+
+
+def test_status_never_advertises_html_when_workspace_state_is_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = CompanionProjectPaths.open(tmp_path / "project")
+    paths.select_run("run")
+    publication_path = paths.publication_workspace("run") / "publication.json"
+    publication_path.parent.mkdir(parents=True)
+    publication_path.write_text("{}", encoding="utf-8")
+    paths.delivery_html.write_text("reader", encoding="utf-8")
+    publication = SimpleNamespace(publication_digest="a" * 64)
+    service = _Service(paths.jobs_root, publication)
+    monkeypatch.setattr(cli.CompanionProjectPaths, "load", lambda _value: paths)
+    monkeypatch.setattr(cli, "CompanionService", lambda _root: service)
+    monkeypatch.setattr(
+        cli,
+        "command_result_from_snapshot",
+        lambda *_args, **_kwargs: CommandResult(CommandStatus.COMPLETED),
+    )
+    monkeypatch.setattr(cli, "snapshot_data", lambda _snapshot: {})
+    monkeypatch.setattr(cli, "validate_publication_workspace", lambda _path: ())
+    monkeypatch.setattr(
+        cli,
+        "read_publication_workspace_state",
+        lambda _path: (_ for _ in ()).throw(HTMLRenderError("bad workspace")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_standalone_html",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("HTML must not validate without workspace state")
+        ),
+    )
+
+    result = cli._status(SimpleNamespace(project_dir=str(paths.root)))
+
+    assert result.artifacts == ()
+    assert result.data["workspace_html_consistent"] is False
 
 
 def test_validate_requires_standalone_html(
@@ -97,6 +145,9 @@ def test_validate_requires_standalone_html(
     monkeypatch.setattr(cli, "CompanionService", lambda _root: service)
     monkeypatch.setattr(
         cli, "validate_publication_workspace", lambda _path: ()
+    )
+    monkeypatch.setattr(
+        cli, "read_publication_workspace_state", lambda _path: _state(publication)
     )
 
     with pytest.raises(
@@ -121,7 +172,12 @@ def test_validate_forwards_optional_browser_check(
     monkeypatch.setattr(cli.CompanionProjectPaths, "load", lambda _value: paths)
     monkeypatch.setattr(cli, "CompanionService", lambda _root: service)
     monkeypatch.setattr(cli, "validate_publication_workspace", lambda _path: ())
-    monkeypatch.setattr(cli, "validate_standalone_html", lambda *_args: None)
+    monkeypatch.setattr(
+        cli, "read_publication_workspace_state", lambda _path: _state(publication)
+    )
+    monkeypatch.setattr(
+        cli, "validate_standalone_html", lambda *_args, **_kwargs: None
+    )
 
     def validate_browser(
         path: Path, *, browser_executable: str | None, timeout_seconds: int
@@ -174,8 +230,14 @@ def test_render_advertises_only_the_promoted_root_html(
         ),
     )
     monkeypatch.setattr(
+        cli, "read_publication_workspace_state", lambda _path: _state(publication)
+    )
+    monkeypatch.setattr(
+        cli, "validate_standalone_html", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
         CompanionProjectPaths,
-        "promote_publication_html",
+        "_promote_publication_html_locked",
         lambda _self, _run_id: promoted,
     )
 
