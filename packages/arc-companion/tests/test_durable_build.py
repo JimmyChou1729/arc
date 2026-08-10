@@ -56,6 +56,7 @@ from arc_companion.build import (
     COMPANION_BUILD_HANDLER,
     CompanionBuildHandler,
     _attach_cached_reference_materials,
+    _canonicalize_references,
     _verify_cached_reference_materials,
 )
 from arc_companion.generation_validation import CompanionContentError
@@ -1000,6 +1001,116 @@ def test_program_names_and_publishes_only_cited_chapter_references(
     assert str(reference["evidence_id"]).startswith("reference-")
     assert reference["dois"] == ("10.1000/fixture",)
     assert reference["arxiv_ids"] == ("2401.00001",)
+
+
+def test_chapter_reference_aliases_are_canonicalized_across_fragments() -> None:
+    chapters = (
+        {
+            "chapter_id": "chapter-1",
+            "learning_units": [
+                {
+                    "content_markdown": "First [@local-a][@local-b].",
+                    "citations": ["local-a", "local-b"],
+                }
+            ],
+        },
+        {
+            "chapter_id": "chapter-2",
+            "learning_units": [
+                {
+                    "content_markdown": "Second [@local-b].",
+                    "citations": ["local-b"],
+                }
+            ],
+        },
+    )
+    bibliography = (
+        {
+            "evidence_id": "local-a",
+            "title": "The Paper",
+            "source": "https://arxiv.org/abs/2401.00001v1",
+            "arxiv_ids": ["2401.00001"],
+            "dois": [],
+        },
+        {
+            "evidence_id": "local-b",
+            "title": "论文",
+            "source": "https://arxiv.org/pdf/2401.00001v2",
+            "arxiv_ids": ["2401.00001"],
+            "dois": [],
+        },
+    )
+
+    rewritten, unique = _canonicalize_references(chapters, bibliography)
+
+    assert len(unique) == 1
+    canonical = unique[0]["evidence_id"]
+    assert canonical.startswith("reference-")
+    assert rewritten[0]["learning_units"][0]["citations"] == [canonical]
+    assert rewritten[0]["learning_units"][0]["content_markdown"] == (
+        f"First [@{canonical}]."
+    )
+    assert rewritten[1]["learning_units"][0]["citations"] == [canonical]
+
+
+def test_reference_canonicalization_does_not_merge_titles_without_identity() -> None:
+    chapters = (
+        {
+            "learning_units": [
+                {
+                    "content_markdown": "A [@first], B [@second].",
+                    "citations": ["first", "second"],
+                }
+            ]
+        },
+    )
+    bibliography = tuple(
+        {
+            "evidence_id": evidence_id,
+            "title": "Shared title",
+            "source": f"https://arxiv.org/abs/{arxiv_id}",
+            "arxiv_ids": [arxiv_id],
+            "dois": [],
+        }
+        for evidence_id, arxiv_id in (
+            ("first", "2401.00001"),
+            ("second", "2401.00002"),
+        )
+    )
+
+    rewritten, unique = _canonicalize_references(chapters, bibliography)
+
+    assert len(unique) == 2
+    assert len(rewritten[0]["learning_units"][0]["citations"]) == 2
+
+
+def test_reference_canonicalization_rejects_conflicting_strong_identity() -> None:
+    chapters = (
+        {
+            "learning_units": [
+                {
+                    "content_markdown": "A [@first], B [@second].",
+                    "citations": ["first", "second"],
+                }
+            ]
+        },
+    )
+    bibliography = tuple(
+        {
+            "evidence_id": evidence_id,
+            "title": evidence_id,
+            "source": f"https://arxiv.org/abs/{arxiv_id}",
+            "arxiv_ids": [arxiv_id],
+            "dois": ["10.1000/shared"],
+        }
+        for evidence_id, arxiv_id in (
+            ("first", "2401.00001"),
+            ("second", "2401.00002"),
+        )
+    )
+
+    with pytest.raises(CompanionContentError, match="conflicting arXiv"):
+        _canonicalize_references(chapters, bibliography)
 
 
 def test_minimal_reference_contract_does_not_accept_model_cache_handles(

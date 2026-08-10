@@ -327,6 +327,10 @@ class CompanionBuildHandler:
                 chapters,
                 cited_ids=cited_ids,
             )
+            chapters_outcome, bibliography = _canonicalize_references(
+                chapters_outcome,
+                bibliography,
+            )
             published = publish_companion(
                 context,
                 source=source,
@@ -1939,6 +1943,144 @@ def _chapter_reference_contracts(
             f"cited chapter references are missing metadata: {missing}",
         )
     return tuple(by_id[reference_id] for reference_id in cited_ids)
+
+
+_CITATION_MARKER = re.compile(r"\[@([A-Za-z0-9][A-Za-z0-9._:-]*)\]")
+
+
+def _canonicalize_references(
+    chapters: Sequence[Mapping[str, Any]],
+    bibliography: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
+    """Merge chapter-local aliases that carry the same strong paper identity."""
+
+    entries = [dict(item) for item in bibliography]
+    parents = list(range(len(entries)))
+
+    def root(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root = root(left)
+        right_root = root(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    owners: dict[tuple[str, str], int] = {}
+    tokens_by_index: list[tuple[tuple[str, str], ...]] = []
+    for index, entry in enumerate(entries):
+        tokens = _reference_identity_tokens(entry)
+        tokens_by_index.append(tokens)
+        for token in tokens:
+            previous = owners.setdefault(token, index)
+            union(index, previous)
+
+    groups: dict[int, list[int]] = {}
+    for index in range(len(entries)):
+        groups.setdefault(root(index), []).append(index)
+
+    aliases: dict[str, str] = {}
+    canonical_entries: list[dict[str, Any]] = []
+    for indexes in sorted(groups.values(), key=min):
+        tokens = {
+            token for index in indexes for token in tokens_by_index[index]
+        }
+        arxiv_ids = sorted(value for kind, value in tokens if kind == "arxiv")
+        dois = sorted(value for kind, value in tokens if kind == "doi")
+        if len(arxiv_ids) > 1 or len(dois) > 1:
+            raise CompanionContentError(
+                "chapter_reference_identity_collision",
+                "one reference identity binds conflicting arXiv IDs or DOIs",
+            )
+        identity = min(
+            tokens,
+            key=lambda item: (
+                {"arxiv": 0, "doi": 1, "url": 2, "legacy": 3}[item[0]],
+                item[1],
+            ),
+        )
+        canonical_id = "reference-" + hashlib.sha256(
+            canonical_json_bytes({"kind": identity[0], "value": identity[1]})
+        ).hexdigest()[:20]
+        chosen = dict(entries[indexes[0]])
+        chosen["evidence_id"] = canonical_id
+        chosen["arxiv_ids"] = arxiv_ids
+        chosen["dois"] = dois
+        for index in indexes:
+            aliases[str(entries[index]["evidence_id"])] = canonical_id
+        canonical_entries.append(chosen)
+
+    rewritten_chapters: list[dict[str, Any]] = []
+    for chapter in chapters:
+        value = dict(chapter)
+        units = []
+        for raw_unit in mapping_list(
+            chapter.get("learning_units"), "learning units"
+        ):
+            unit = dict(raw_unit)
+            citations = [
+                aliases.get(item, item)
+                for item in _string_list(
+                    unit.get("citations"), "learning citations"
+                )
+            ]
+            unit["citations"] = list(dict.fromkeys(citations))
+            markdown = str(unit.get("content_markdown") or "")
+            markdown = _CITATION_MARKER.sub(
+                lambda match: f"[@{aliases.get(match.group(1), match.group(1))}]",
+                markdown,
+            )
+            for citation in unit["citations"]:
+                marker = re.escape(f"[@{citation}]")
+                markdown = re.sub(
+                    rf"({marker})(?:\s*{marker})+",
+                    rf"\1",
+                    markdown,
+                )
+            unit["content_markdown"] = markdown
+            units.append(unit)
+        value["learning_units"] = units
+        rewritten_chapters.append(value)
+    return tuple(rewritten_chapters), tuple(canonical_entries)
+
+
+def _reference_identity_tokens(
+    entry: Mapping[str, Any],
+) -> tuple[tuple[str, str], ...]:
+    tokens: set[tuple[str, str]] = set()
+    tokens.update(
+        ("arxiv", str(value).casefold().removeprefix("arxiv:"))
+        for value in entry.get("arxiv_ids", ())
+        if str(value).strip()
+    )
+    tokens.update(
+        (
+            "doi",
+            re.sub(
+                r"(?i)^https?://doi[.]org/",
+                "",
+                str(value).strip(),
+            ).casefold(),
+        )
+        for value in entry.get("dois", ())
+        if str(value).strip()
+    )
+    tokens.update(
+        ("url", value.casefold().rstrip("/"))
+        for value in _reference_urls(str(entry.get("source") or ""))
+    )
+    if not tokens:
+        legacy = canonical_json_bytes(
+            {
+                "title": str(entry.get("title") or "").strip(),
+                "source": str(entry.get("source") or "").strip(),
+            }
+        ).decode("utf-8")
+        tokens.add(("legacy", legacy))
+    return tuple(sorted(tokens))
 
 
 def _empty_glossary(source: Any) -> dict[str, Any]:

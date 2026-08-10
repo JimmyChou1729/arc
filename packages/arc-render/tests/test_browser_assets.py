@@ -63,6 +63,7 @@ define = undefined;
   globalThis.__arcReaderTest = {
     state: state,
     browserCreatedHistory: browserCreatedHistory,
+    bibliographyIndex: bibliographyIndex,
     effectiveEquationLabel: effectiveEquationLabel,
     fragmentsDirectory: fragmentsDirectory,
     labels: labels,
@@ -254,6 +255,36 @@ if (
 }
 helpers.state.payload.publication.reader_profile.target_language = "zh-CN";
 helpers.state.payload.publication.labels = {};
+helpers.state.payload.publication.bibliography = [
+  {
+    evidence_id: "ref-english",
+    title: "Paper",
+    source: "https://arxiv.org/abs/1811.00024",
+    arxiv_ids: ["1811.00024"]
+  },
+  {
+    evidence_id: "ref-translated",
+    title: "论文",
+    source: "https://arxiv.org/abs/1811.00024/",
+    arxiv_ids: ["arXiv:1811.00024"]
+  },
+  {
+    evidence_id: "ref-other",
+    title: "Other",
+    source: "https://example.test/other"
+  }
+];
+helpers.state.bibliographyIndexCache = null;
+var bibliography = helpers.bibliographyIndex();
+if (
+  bibliography.groups.length !== 2 ||
+  bibliography.numbers["ref-english"] !== 1 ||
+  bibliography.numbers["ref-translated"] !== 1 ||
+  bibliography.targets["ref-translated"] !== "ref-english" ||
+  bibliography.numbers["ref-other"] !== 2
+) {
+  throw new Error("duplicate bibliography identities were not consolidated");
+}
 var connectControl = {textContent: ""};
 var statusControl = {textContent: "", dataset: {}, hidden: true};
 globalThis.document = {
@@ -2268,7 +2299,7 @@ def test_reader_progressively_hydrates_navigation_find_and_print_content() -> No
     assert "refreshChangedSelections(previousSelected);" in javascript
     assert "refreshChunkForAnchor(revision.anchor);" in javascript
     assert 'document.body.dataset.arcRenderComplete = String(complete)' in javascript
-    assert "state.citationNumberCache" in javascript
+    assert "state.bibliographyIndexCache" in javascript
     assert "state.glossarySurfaceCache[layer]" in javascript
     assert javascript.count("renderReader();") == 1
     assert ".arc-render-chunk:not(.is-rendered)" in stylesheet

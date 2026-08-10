@@ -40,7 +40,7 @@
     editorBase: null,
     editorAnchor: null,
     editorHistorical: null,
-    citationNumberCache: null,
+    bibliographyIndexCache: null,
     glossarySurfaceCache: {source: null, target: null},
     indexedPayload: null,
     sourceIndexes: null,
@@ -529,9 +529,10 @@
     md.renderer.rules.arc_citation = function (tokens, index, _options, env) {
       var citationId = tokens[index].content;
       var number = (env.citationNumbers || {})[citationId];
+      var targetId = (env.citationTargets || {})[citationId] || citationId;
       var visible = number === undefined ? "?" : String(number);
       return '<a class="arc-citation" href="#reference-' +
-        md.utils.escapeHtml(citationId) + '">[' +
+        md.utils.escapeHtml(targetId) + '">[' +
         md.utils.escapeHtml(visible) + "]</a>";
     };
     md.renderer.rules.image = function (tokens, index) {
@@ -560,21 +561,67 @@
     state.md = md;
   }
 
-  function citationNumbers() {
-    if (state.citationNumberCache) return state.citationNumberCache;
-    var values = {};
-    (state.payload.publication.bibliography || []).forEach(function (item, index) {
-      var id = item.evidence_id || item.citation_id || item.id;
-      if (id) values[id] = index + 1;
+  function bibliographyIdentity(entry) {
+    var arxiv = (entry.arxiv_ids || []).map(function (value) {
+      return String(value).trim().toLowerCase().replace(/^arxiv:/, "");
+    }).filter(Boolean).sort();
+    if (arxiv.length) return "arxiv:" + arxiv[0];
+    var dois = (entry.dois || []).map(function (value) {
+      return String(value).trim().toLowerCase().replace(/^https?:\/\/doi[.]org\//, "");
+    }).filter(Boolean).sort();
+    if (dois.length) return "doi:" + dois[0];
+    var source = String(entry.source || entry.url || "")
+      .trim().toLowerCase().replace(/\/$/, "");
+    var id = entry.evidence_id || entry.citation_id || entry.id || "";
+    return source ? "source:" + source : "id:" + id;
+  }
+
+  function bibliographyIndex() {
+    if (state.bibliographyIndexCache) return state.bibliographyIndexCache;
+    var groups = [];
+    var byIdentity = new Map();
+    var numbers = {};
+    var targets = {};
+    (state.payload.publication.bibliography || []).forEach(function (entry) {
+      var id = entry.evidence_id || entry.citation_id || entry.id || "";
+      var identity = bibliographyIdentity(entry);
+      var group = byIdentity.get(identity);
+      if (!group) {
+        group = {
+          entry: entry,
+          targetId: id,
+          number: groups.length + 1
+        };
+        byIdentity.set(identity, group);
+        groups.push(group);
+      }
+      if (id) {
+        numbers[id] = group.number;
+        targets[id] = group.targetId || id;
+        if (!group.targetId) group.targetId = id;
+      }
     });
-    state.citationNumberCache = values;
-    return state.citationNumberCache;
+    state.bibliographyIndexCache = {
+      groups: groups,
+      numbers: numbers,
+      targets: targets
+    };
+    return state.bibliographyIndexCache;
+  }
+
+  function citationNumbers() {
+    return bibliographyIndex().numbers;
+  }
+
+  function citationTargets() {
+    return bibliographyIndex().targets;
   }
 
   function renderMarkdown(markdown) {
     var wrapper = element("div", "arc-markdown");
     wrapper.innerHTML = state.md.render(normalizeMarkdown(markdown), {
-      citationNumbers: citationNumbers()
+      citationNumbers: citationNumbers(),
+      citationTargets: citationTargets()
     });
     removeVisibleHtmlTags(wrapper);
     decorateGlossary(wrapper, "target");
@@ -780,7 +827,7 @@
 
   function renderReader() {
     stopProgressiveRendering();
-    state.citationNumberCache = null;
+    state.bibliographyIndexCache = null;
     state.glossarySurfaceCache = {source: null, target: null};
     var publication = state.payload.publication;
     var documentValue = publication.source_document;
@@ -1608,9 +1655,10 @@
     section.id = "arc-references";
     section.appendChild(element("h2", "", strings.references));
     var list = element("ol", "arc-reference-list");
-    bibliography.forEach(function (entry) {
+    bibliographyIndex().groups.forEach(function (group) {
+      var entry = group.entry;
       var item = element("li");
-      var id = entry.evidence_id || entry.citation_id || entry.id || "";
+      var id = group.targetId;
       if (id) item.id = "reference-" + id;
       var title = entry.title || entry.source || id;
       var source = entry.source || entry.url || "";
