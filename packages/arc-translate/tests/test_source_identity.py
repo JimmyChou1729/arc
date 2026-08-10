@@ -312,7 +312,10 @@ def test_list_identity_uses_each_items_inline_spans() -> None:
     prompted = prompt_block(block)
     assert prompted["payload"] == {
         "ordered": False,
-        "items": [{"text": "$x$"}, {"text": "reference"}],
+        "items": [
+            {"text": "$x$"},
+            {"text": "[reference](appendix.html)"},
+        ],
     }
     assert "inline_spans" not in str(prompted["payload"])
 

@@ -237,7 +237,7 @@ def prompt_block(block: Mapping[str, Any]) -> dict[str, Any]:
             "payload": {
                 "ordered": bool(payload.get("ordered", False)),
                 "items": [
-                    {"text": str(item.get("text", ""))}
+                    {"text": _compact_list_item_text(item)}
                     for item in _mapping_items(payload.get("items"))
                 ],
             },
@@ -266,6 +266,22 @@ def prompt_block(block: Mapping[str, Any]) -> dict[str, Any]:
             "link_targets": identity["link_targets"],
         },
     }
+
+
+def _compact_list_item_text(item: Mapping[str, Any]) -> str:
+    spans = _mapping_items(item.get("inline_spans"))
+    if not spans:
+        return str(item.get("text", ""))
+    rendered: list[str] = []
+    for span in spans:
+        kind = str(span.get("kind"))
+        if kind == "math" and "tex" in span:
+            rendered.append(f"${span['tex']}$")
+        elif kind == "link" and "target" in span:
+            rendered.append(f"[{span.get('text', '')}]({span['target']})")
+        else:
+            rendered.append(str(span.get("text", "")))
+    return "".join(rendered)
 
 
 def block_text(block: Mapping[str, Any]) -> str:
