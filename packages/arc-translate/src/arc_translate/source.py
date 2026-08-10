@@ -223,6 +223,20 @@ def validate_translation_text(text: str, block: Mapping[str, Any]) -> None:
 
 def prompt_block(block: Mapping[str, Any]) -> dict[str, Any]:
     kind = str(block.get("kind"))
+    if kind == "paragraph":
+        payload = block.get("payload")
+        if not isinstance(payload, Mapping):
+            raise TranslationSourceError(
+                "source_block_invalid", "source block payload must be an object"
+            )
+        return {
+            "block_id": block.get("block_id"),
+            "ordinal": block.get("ordinal"),
+            "kind": "paragraph",
+            "section_path": block.get("section_path"),
+            "payload": {"text": _compact_inline_text(payload)},
+            "source_identity": source_identity(block),
+        }
     if kind == "list":
         payload = block.get("payload")
         if not isinstance(payload, Mapping):
@@ -237,7 +251,7 @@ def prompt_block(block: Mapping[str, Any]) -> dict[str, Any]:
             "payload": {
                 "ordered": bool(payload.get("ordered", False)),
                 "items": [
-                    {"text": _compact_list_item_text(item)}
+                    {"text": _compact_inline_text(item)}
                     for item in _mapping_items(payload.get("items"))
                 ],
             },
@@ -268,10 +282,10 @@ def prompt_block(block: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _compact_list_item_text(item: Mapping[str, Any]) -> str:
-    spans = _mapping_items(item.get("inline_spans"))
+def _compact_inline_text(value: Mapping[str, Any]) -> str:
+    spans = _mapping_items(value.get("inline_spans"))
     if not spans:
-        return str(item.get("text", ""))
+        return str(value.get("text", ""))
     rendered: list[str] = []
     for span in spans:
         kind = str(span.get("kind"))

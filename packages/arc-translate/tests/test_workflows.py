@@ -1166,7 +1166,7 @@ def test_failed_review_can_accept_validated_pre_review_translation(tmp_path):
 
 def test_oversized_single_block_review_requests_supervision(tmp_path):
     markdown = tmp_path / "long.md"
-    markdown.write_text("# Long\n\n" + ("source prose " * 100), encoding="utf-8")
+    markdown.write_text("# Long\n\n" + ("source prose " * 180), encoding="utf-8")
     paper = ArcPaperService(cache_root=tmp_path / "long-cache")
     artifact = paper.import_source(markdown)
     source = TranslationSource(
@@ -1353,8 +1353,8 @@ def test_translation_windows_reserve_space_for_review(tmp_path):
     )
 
     assert isinstance(result, TranslationResult)
-    assert tasks.calls.count(TRANSLATION_PROMPT_VERSION) == 4
-    assert tasks.calls.count(REVIEW_PROMPT_VERSION) == 4
+    assert tasks.calls.count(TRANSLATION_PROMPT_VERSION) == 3
+    assert tasks.calls.count(REVIEW_PROMPT_VERSION) == 3
 
 
 def test_actual_translation_expansion_splits_review_windows(tmp_path):

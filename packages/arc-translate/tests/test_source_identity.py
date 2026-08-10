@@ -76,6 +76,13 @@ def test_source_identity_uses_current_inline_spans() -> None:
     assert identity["equations"] == ["a", r"\Psi^\dagger"]
     assert identity["link_targets"] == ["https://example.test/notes"]
 
+    prompted = prompt_block(_paragraph_block())
+    assert prompted["payload"] == {
+        "text": r"Use $a$ before $\Psi^\dagger$ and read "
+        "[notes](https://example.test/notes)."
+    }
+    assert "inline_spans" not in str(prompted["payload"])
+
 
 def test_formula_occurrences_and_links_can_be_reordered_exactly() -> None:
     validate_translation_text(
