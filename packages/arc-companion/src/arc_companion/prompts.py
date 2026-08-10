@@ -11,6 +11,12 @@ CHAPTER_GUIDE_PROMPT_VERSION = "arc.companion.chapter-learning-prompt.v17"
 CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
     "arc.companion.chapter-learning-review-prompt.v17"
 )
+LEGACY_CHAPTER_GUIDE_PROMPT_VERSION_V16 = (
+    "arc.companion.chapter-learning-prompt.v16"
+)
+LEGACY_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V16 = (
+    "arc.companion.chapter-learning-review-prompt.v16"
+)
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
 
 
@@ -383,17 +389,50 @@ chapter is enough. Never open image or media assets.
 """
 
 
-def chapter_guide_proposer_instructions() -> str:
+_CHAPTER_GUIDE_INSTRUCTION_V16 = _CHAPTER_GUIDE_INSTRUCTION.replace(
+    "Use only the exact local `section_number` values listed in the supplied\n"
+    "`sections` context. If that list is empty, `section_guides` must be empty. A\n"
+    "numeral printed in the source heading is content, not a local section number.\n\n",
+    "",
+)
+_CHAPTER_GUIDE_REVIEW_INSTRUCTION_V16 = (
+    _CHAPTER_GUIDE_REVIEW_INSTRUCTION.replace(
+        "Reject a proposal that uses a `section_number` absent from the supplied local\n"
+        "`sections` context. When that context is empty, both the proposal's\n"
+        "`section_guides` and the review payload's `checked_section_numbers` must be\n"
+        "empty; source-heading numerals do not count as local section numbers.\n\n",
+        "",
+    )
+)
+
+
+def chapter_guide_proposer_instructions(
+    version: str = CHAPTER_GUIDE_PROMPT_VERSION,
+) -> str:
+    if version == CHAPTER_GUIDE_PROMPT_VERSION:
+        instruction = _CHAPTER_GUIDE_INSTRUCTION
+    elif version == LEGACY_CHAPTER_GUIDE_PROMPT_VERSION_V16:
+        instruction = _CHAPTER_GUIDE_INSTRUCTION_V16
+    else:
+        raise ValueError("unsupported chapter guide prompt contract")
     return _instruction_contract(
-        CHAPTER_GUIDE_PROMPT_VERSION,
-        _CHAPTER_GUIDE_INSTRUCTION,
+        version,
+        instruction,
     )
 
 
-def chapter_guide_reviewer_instructions() -> str:
+def chapter_guide_reviewer_instructions(
+    version: str = CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
+) -> str:
+    if version == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION:
+        instruction = _CHAPTER_GUIDE_REVIEW_INSTRUCTION
+    elif version == LEGACY_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V16:
+        instruction = _CHAPTER_GUIDE_REVIEW_INSTRUCTION_V16
+    else:
+        raise ValueError("unsupported chapter guide review prompt contract")
     return _instruction_contract(
-        CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
-        _CHAPTER_GUIDE_REVIEW_INSTRUCTION,
+        version,
+        instruction,
     )
 
 
@@ -495,6 +534,8 @@ __all__ = [
     "CHAPTER_GUIDE_PROPOSAL_SCHEMA",
     "CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA",
     "CHAPTER_GUIDE_REVIEW_PROMPT_VERSION",
+    "LEGACY_CHAPTER_GUIDE_PROMPT_VERSION_V16",
+    "LEGACY_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V16",
     "author_identity_prompt",
     "chapter_guide_proposer_instructions",
     "chapter_guide_reviewer_instructions",

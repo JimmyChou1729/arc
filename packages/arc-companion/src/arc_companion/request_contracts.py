@@ -23,6 +23,8 @@ from .prompts import (
     AUTHOR_IDENTITY_PROMPT_VERSION,
     CHAPTER_GUIDE_PROMPT_VERSION,
     CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
+    LEGACY_CHAPTER_GUIDE_PROMPT_VERSION_V16,
+    LEGACY_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V16,
 )
 from .reader_labels import resolve_reader_labels
 from .reviewed_supplements import (
@@ -226,18 +228,22 @@ class CompanionGenerationRecipe:
             raise ValueError(
                 "chapter_guide_review_final_round must be false"
             )
-        expected = {
-            "author_identity_prompt": AUTHOR_IDENTITY_PROMPT_VERSION,
-            "chapter_guide_prompt": CHAPTER_GUIDE_PROMPT_VERSION,
-            "chapter_guide_review_prompt": (
-                CHAPTER_GUIDE_REVIEW_PROMPT_VERSION
-            ),
-            "equation_label_visual_prompt": (
+        supported = {
+            "author_identity_prompt": {AUTHOR_IDENTITY_PROMPT_VERSION},
+            "chapter_guide_prompt": {
+                CHAPTER_GUIDE_PROMPT_VERSION,
+                LEGACY_CHAPTER_GUIDE_PROMPT_VERSION_V16,
+            },
+            "chapter_guide_review_prompt": {
+                CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
+                LEGACY_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V16,
+            },
+            "equation_label_visual_prompt": {
                 EQUATION_LABEL_VISUAL_PROMPT_VERSION
-            ),
+            },
         }
-        for name, value in expected.items():
-            if getattr(self, name) != value:
+        for name, values in supported.items():
+            if getattr(self, name) not in values:
                 raise ValueError(f"unsupported {name} contract")
 
 

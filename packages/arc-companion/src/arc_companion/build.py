@@ -1052,14 +1052,18 @@ class CompanionBuildHandler:
                     proposers=(
                         WorkerSpec(
                             "guide-proposer",
-                            chapter_guide_proposer_instructions(),
+                            chapter_guide_proposer_instructions(
+                                self.recipe.chapter_guide_prompt
+                            ),
                             CHAPTER_GUIDE_PROPOSAL_SCHEMA,
                             self.recipe.model,
                         ),
                     ),
                     reviewer=WorkerSpec(
                         "guide-reviewer",
-                        chapter_guide_reviewer_instructions(),
+                        chapter_guide_reviewer_instructions(
+                            self.recipe.chapter_guide_review_prompt
+                        ),
                         CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA,
                         self.recipe.model,
                     ),
