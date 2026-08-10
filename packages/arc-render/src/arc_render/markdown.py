@@ -25,6 +25,7 @@ FRONT_MATTER_END = "<!-- ARC:FRAGMENT-JSON:END -->"
 _FILENAME_RE = re.compile(
     r"revision-(?P<revision>[0-9]{6,})-(?P<digest>[0-9a-f]{64})[.]md"
 )
+_CITATION_RE = re.compile(r"\[@([A-Za-z0-9][A-Za-z0-9._:-]*)\]")
 
 
 def normalize_markdown(markdown: str) -> str:
@@ -37,6 +38,19 @@ def normalize_markdown(markdown: str) -> str:
     return unicodedata.normalize(
         "NFC", markdown.replace("\r\n", "\n").replace("\r", "\n")
     )
+
+
+def extract_markdown_citation_ids(markdown: str) -> tuple[str, ...]:
+    """Return ordered, unique ARC citation IDs declared in Markdown.
+
+    ARC citations use the literal ``[@citation-id]`` form.  This deliberately
+    extracts syntax rather than interpreting Markdown so producers, reviewers,
+    and render validation share one stable citation contract without adding a
+    Markdown parser dependency.
+    """
+
+    normalized = normalize_markdown(markdown)
+    return tuple(dict.fromkeys(_CITATION_RE.findall(normalized)))
 
 
 def block_text_to_markdown(block: RichBlock, text: str) -> str:
@@ -202,6 +216,7 @@ __all__ = [
     "FRONT_MATTER_END",
     "decode_fragment_revision",
     "encode_fragment_revision",
+    "extract_markdown_citation_ids",
     "block_text_to_markdown",
     "fragment_revision_filename",
     "fragment_revision_ref",

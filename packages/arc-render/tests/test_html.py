@@ -30,6 +30,8 @@ from arc_render import (
     anchor_block_from_rich_block,
     fragment_revision_filename,
     fragment_revision_ref,
+    publication_edition_digest,
+    read_publication_workspace_state,
     source_identity_from_rich_document,
 )
 from arc_render.html import (
@@ -303,6 +305,49 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     revisions = payload["revisions"]
     assert [item["metadata"]["revision"] for item in revisions] == [1, 2]
     assert revisions[-1]["markdown_body"] == "修订后的译文 [@ref-1]。"
+
+
+def test_workspace_state_exposes_current_heads_and_edition_identity(
+    tmp_path: Path,
+) -> None:
+    publication_path, publication, selected = _workspace(
+        tmp_path, add_second_revision=True
+    )
+
+    state = read_publication_workspace_state(publication_path)
+
+    assert state.publication == publication
+    assert state.selected_revisions == (selected,)
+    assert state.selected_revision_digests == (selected.semantic_digest,)
+    assert state.diagnostics == ()
+    assert state.edition_digest == publication_edition_digest(
+        publication.publication_digest,
+        state.selected_revision_digests,
+    )
+
+
+def test_standalone_validation_detects_a_stale_selected_revision_head(
+    tmp_path: Path,
+) -> None:
+    publication_path, publication, first = _workspace(tmp_path)
+    output = tmp_path / "reader.html"
+    render_publication_html(publication_path, output)
+
+    second = _revision(
+        _rich_document(),
+        body="新的当前版本 [@ref-1]。",
+        revision=2,
+        parent=first.semantic_digest,
+    )
+    write_fragment_revision(tmp_path, second)
+    state = read_publication_workspace_state(publication_path)
+
+    with pytest.raises(HTMLRenderError, match="differ from expected workspace"):
+        validate_standalone_html(
+            publication,
+            output,
+            expected_selected_revision_digests=state.selected_revision_digests,
+        )
 
 
 def test_standalone_reader_v2_defers_blocks_revisions_and_resources(

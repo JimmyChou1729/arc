@@ -30,7 +30,7 @@ from .contracts import (
     publication_to_document,
     source_identity_to_document,
 )
-from .markdown import read_fragment_revision
+from .markdown import extract_markdown_citation_ids, read_fragment_revision
 from .resolver import (
     RevisionDiagnostic,
     resolve_fragment_revision_files,
@@ -50,7 +50,6 @@ READER_PAYLOAD_V2_SCHEMA = "arc.render.reader_payload.v2"
 READER_CHUNK_SCHEMA = "arc.render.reader_chunk.v1"
 READER_RESOURCE_SCHEMA = "arc.render.reader_resource.v1"
 AssetLoader = Callable[[str], bytes | None]
-_CITATION_PATTERN = re.compile(r"\[@([A-Za-z0-9][A-Za-z0-9._:-]*)\]")
 _CSS_URL_PATTERN = re.compile(
     r"url\(\s*(?:'(?P<single>[^']*)'|\"(?P<double>[^\"]*)\"|"
     r"(?P<plain>[^)]*))\s*\)",
@@ -71,6 +70,54 @@ class RenderedHTML:
     renderer_recipe: str = HTML_RENDER_RECIPE
 
 
+EDITION_DIGEST_SCHEMA = "arc.render.edition.v1"
+
+
+@dataclass(frozen=True)
+class PublicationWorkspaceState:
+    """Resolved current state of one publication workspace.
+
+    The publication digest identifies immutable publication metadata, while
+    the edition digest also binds the ordered current fragment revision heads.
+    """
+
+    publication: Publication
+    revisions: tuple[FragmentRevision, ...]
+    selected_revisions: tuple[FragmentRevision, ...]
+    selected_revision_digests: tuple[str, ...]
+    diagnostics: tuple[RevisionDiagnostic, ...]
+    publication_digest: str
+    edition_digest: str
+
+
+def publication_edition_digest(
+    publication_digest: str,
+    selected_revision_digests: Sequence[str],
+) -> str:
+    """Return the identity of a publication plus ordered selected revisions."""
+
+    if not isinstance(publication_digest, str) or not publication_digest:
+        raise ValueError("publication_digest must be a non-empty string")
+    if isinstance(selected_revision_digests, (str, bytes, bytearray)):
+        raise TypeError("selected revision digests must be a sequence")
+    digests = tuple(selected_revision_digests)
+    if any(not isinstance(item, str) or not item for item in digests):
+        raise ValueError("selected revision digests must be non-empty strings")
+    material = {
+        "schema_version": EDITION_DIGEST_SCHEMA,
+        "publication_digest": publication_digest,
+        "selected_revision_digests": digests,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            material,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def render_publication_html(
     publication_path: str | Path,
     output_path: str | Path,
@@ -89,6 +136,34 @@ def render_publication_html(
         output_path,
         project_root=source_path.parent,
         asset_loader=asset_loader,
+    )
+
+
+def read_publication_workspace_state(
+    publication_path: str | Path,
+) -> PublicationWorkspaceState:
+    """Resolve current revision heads and diagnostics for one workspace."""
+
+    source_path = Path(publication_path).resolve()
+    try:
+        publication = read_publication(source_path)
+    except RenderWorkspaceError as exc:
+        raise HTMLRenderError(str(exc)) from exc
+    revisions, selected, diagnostics = _load_revisions(
+        publication, source_path.parent
+    )
+    _validate_selected(publication, selected)
+    selected_digests = tuple(item.semantic_digest for item in selected)
+    return PublicationWorkspaceState(
+        publication=publication,
+        revisions=revisions,
+        selected_revisions=selected,
+        selected_revision_digests=selected_digests,
+        diagnostics=diagnostics,
+        publication_digest=publication.publication_digest,
+        edition_digest=publication_edition_digest(
+            publication.publication_digest, selected_digests
+        ),
     )
 
 
@@ -156,28 +231,31 @@ def validate_publication_workspace(
 ) -> tuple[str, ...]:
     """Validate one publication, its layers, revisions, and declared assets."""
 
-    source_path = Path(publication_path).resolve()
-    try:
-        publication = read_publication(source_path)
-    except RenderWorkspaceError as exc:
-        raise HTMLRenderError(str(exc)) from exc
-    _revisions, selected, diagnostics = _load_revisions(
-        publication, source_path.parent
-    )
-    _validate_selected(publication, selected)
+    state = read_publication_workspace_state(publication_path)
     _embedded_resources(
-        publication,
-        root=source_path.parent,
+        state.publication,
+        root=Path(publication_path).resolve().parent,
         asset_loader=asset_loader,
     )
-    return tuple(_diagnostic_text(item) for item in diagnostics)
+    return tuple(_diagnostic_text(item) for item in state.diagnostics)
 
 
 def validate_standalone_html(
     publication: Publication,
     html_path: str | Path,
+    *,
+    expected_selected_revision_digests: Sequence[str] | None = None,
 ) -> None:
-    """Validate identity, source coverage, and automatic-resource portability."""
+    """Validate identity, source coverage, and automatic-resource portability.
+
+    ``expected_selected_revision_digests`` binds the delivered reader to a
+    caller-resolved current workspace head, detecting a stale HTML delivery
+    without changing the immutable publication identity.
+    """
+
+    expected_selected = _expected_selected_revision_digests(
+        expected_selected_revision_digests
+    )
 
     path = Path(html_path).resolve()
     try:
@@ -220,7 +298,12 @@ def validate_standalone_html(
     if actual != expected:
         raise HTMLRenderError("standalone HTML source block order is invalid")
     _validate_reader_resources(publication, payload)
-    _validate_reader_revisions(publication, payload)
+    selected = _validate_reader_revisions(publication, payload)
+    actual_selected = tuple(item.semantic_digest for item in selected)
+    if expected_selected is not None and actual_selected != expected_selected:
+        raise HTMLRenderError(
+            "standalone HTML selected revisions differ from expected workspace"
+        )
     portability = _PortabilityValidator()
     portability.feed(text)
     portability.close()
@@ -431,9 +514,7 @@ def _validate_selected(
             raise HTMLRenderError(
                 f"fragment citation is absent from the bibliography: {unknown}"
             )
-        visible_citations = tuple(
-            dict.fromkeys(_CITATION_PATTERN.findall(revision.markdown_body))
-        )
+        visible_citations = extract_markdown_citation_ids(revision.markdown_body)
         if visible_citations != revision.citation_ids:
             raise HTMLRenderError(
                 "fragment Markdown citations do not match citation_ids: "
@@ -1057,7 +1138,7 @@ def _validate_reader_resources(
 def _validate_reader_revisions(
     publication: Publication,
     payload: Mapping[str, Any],
-) -> None:
+) -> tuple[FragmentRevision, ...]:
     raw_revisions = payload.get("revisions")
     if not isinstance(raw_revisions, list):
         raise HTMLRenderError("standalone HTML revisions are invalid")
@@ -1132,6 +1213,22 @@ def _validate_reader_revisions(
         raise HTMLRenderError(
             "standalone HTML selected revisions are inconsistent"
         )
+    return tuple(selected)
+
+
+def _expected_selected_revision_digests(
+    value: Sequence[str] | None,
+) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, (str, bytes, bytearray)):
+        raise TypeError("expected selected revision digests must be a sequence")
+    result = tuple(value)
+    if any(not isinstance(item, str) or not item for item in result):
+        raise ValueError(
+            "expected selected revision digests must be non-empty strings"
+        )
+    return result
 
 
 def _diagnostic_text(item: RevisionDiagnostic) -> str:
@@ -1233,10 +1330,14 @@ class _PortabilityValidator(HTMLParser):
 
 __all__ = [
     "AssetLoader",
+    "EDITION_DIGEST_SCHEMA",
     "HTML_RENDER_RECIPE",
     "HTMLRenderError",
+    "PublicationWorkspaceState",
     "READER_PAYLOAD_SCHEMA",
     "RenderedHTML",
+    "publication_edition_digest",
+    "read_publication_workspace_state",
     "render_html",
     "render_publication_html",
     "validate_publication_workspace",

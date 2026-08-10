@@ -18,6 +18,7 @@ from arc_render import (
     FragmentRevision,
     decode_fragment_revision,
     encode_fragment_revision,
+    extract_markdown_citation_ids,
     fragment_revision_filename,
     fragment_revision_to_document,
     source_identity_from_rich_document,
@@ -138,3 +139,13 @@ def test_filename_binds_revision_number_and_semantic_digest() -> None:
             encode_fragment_revision(revision),
             filename=f"revision-000001-{'0' * 64}.md",
         )
+
+
+def test_markdown_citation_extractor_is_ordered_unique_and_literal() -> None:
+    markdown = "[@first] [@first] [@second:part] [@ignored space] [@third]"
+
+    assert extract_markdown_citation_ids(markdown) == (
+        "first",
+        "second:part",
+        "third",
+    )
