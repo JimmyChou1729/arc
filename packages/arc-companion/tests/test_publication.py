@@ -122,11 +122,51 @@ def test_publication_uses_atomic_overlays_and_materializes_directly(
         chapters=chapters,
         glossary=(),
         bibliography=(),
+        editorial_review={
+            "schema_version": "arc.companion.editorial_review.v1",
+            "status": "no_changes",
+            "inventory_digest": "a" * 64,
+            "proposal_digest": "d" * 64,
+            "proposer_artifact_digest": "b" * 64,
+            "reviewer_artifact_digest": "c" * 64,
+            "reason": "The audit binding was incomplete.",
+            "warnings": ["The final audit did not bind the proposal."],
+            "counts": {
+                "reviewed_units": 2,
+                "findings": 1,
+                "proposed_edits": 2,
+                "revised_units": 0,
+                "omitted_units": 0,
+                "rejected_edits": 2,
+            },
+            "findings": [],
+            "changes": [],
+        },
         paper_cache_root=tmp_path / "paper",
     )
     result = build_result_document(published)
     assert result["schema_version"] == "arc.companion.build_result.v2"
     assert len(published.publication.layers) == 2
+    editorial = published.publication.reader_profile["editorial_review"]
+    assert editorial["status"] == "no_changes"
+    assert editorial["revised_units"] == 0
+    assert editorial["warning"] == (
+        "The final audit did not bind the proposal."
+    )
+    assert "Warning:" in editorial["summary"]
+    report_resource = next(
+        item
+        for item in published.publication.resources
+        if item["logical_name"] == "arc-companion-editorial-review.json"
+    )
+    report_ref = next(
+        item
+        for item in published.resource_refs
+        if item.digest.value == report_resource["artifact_digest"]
+    )
+    assert json.loads(context.artifacts.read_bytes(report_ref))[
+        "schema_version"
+    ] == "arc.companion.editorial_review.v1"
     published_revisions = tuple(
         decode_fragment_revision(
             context.artifacts.read_bytes(ref).decode("utf-8")

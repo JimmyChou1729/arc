@@ -60,6 +60,15 @@ arc-companion build <source-path-or-paper-id> \
   --workers <workers>
 ```
 
+Add `--cross-chapter-editorial-review` only when the user wants an additional
+global redundancy audit after all chapter-local guides complete. It runs a
+separate single-worker proposer-reviewer scope for at most three rounds. Only
+edits explicitly approved by the final reviewer are used in the resolved
+publication; original accepted guide artifacts remain unchanged. The
+publication exposes a short status plus a downloadable complete editorial
+review report. Without the flag, the build keeps its existing recipe identity
+and model-call count.
+
 Choose `<host-authority>` once: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
 identical value when resuming this run. Under `restricted` or `unknown`, follow

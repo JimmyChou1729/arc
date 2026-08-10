@@ -134,6 +134,13 @@ def _parser() -> _Parser:
         "--approx-term-count", type=int, default=50, help="target glossary size (default: 50)"
     )
     build.add_argument("--refresh", action="store_true", help="refresh cached source data")
+    build.add_argument(
+        "--cross-chapter-editorial-review",
+        action="store_true",
+        help=(
+            "run the optional proposer-reviewer audit across generated chapters"
+        ),
+    )
     _host_authority_argument(build)
     _paper_cache_argument(build)
 
@@ -398,6 +405,9 @@ def _build(args: argparse.Namespace) -> CommandResult:
             tier="medium",
         ),
         approx_term_count=args.approx_term_count,
+        cross_chapter_editorial_review=(
+            args.cross_chapter_editorial_review
+        ),
     )
     execution = _execution_options(args)
     service = CompanionService(paths.jobs_root)

@@ -123,6 +123,9 @@ EDITORIAL_REVIEW_AUDIT_SCHEMA = _closed(
             "type": "string",
             "pattern": "^[0-9a-f]{64}$",
         },
+        "checked_source_anchors": {"const": True},
+        "checked_user_intent": {"const": True},
+        "checked_frozen_references": {"const": True},
         "approved_edit_ids": _STRING_IDS,
         "rejected_edits": {
             "type": "array",
@@ -135,6 +138,9 @@ EDITORIAL_REVIEW_AUDIT_SCHEMA = _closed(
     (
         "inventory_digest",
         "proposal_digest",
+        "checked_source_anchors",
+        "checked_user_intent",
+        "checked_frozen_references",
         "approved_edit_ids",
         "rejected_edits",
     ),
@@ -354,12 +360,14 @@ def freeze_editorial_inventory(
 
 
 def editorial_proposal_digest(proposal: Mapping[str, Any]) -> str:
-    """Return the exact canonical digest a final reviewer must acknowledge."""
+    """Return the exact JSON artifact digest a final reviewer must acknowledge."""
 
     if not isinstance(proposal, Mapping):
         raise EditorialReviewError("editorial proposal must be an object")
     try:
-        return hashlib.sha256(canonical_json_bytes(dict(proposal))).hexdigest()
+        return hashlib.sha256(
+            canonical_json_bytes(dict(proposal)) + b"\n"
+        ).hexdigest()
     except (TypeError, ValueError) as exc:
         raise EditorialReviewError("editorial proposal is not canonical JSON") from exc
 
@@ -482,6 +490,7 @@ def resolve_editorial_review(
                 "action": edit.action,
                 "approved": edit.edit_id in approved,
                 "applied": applied,
+                "review_artifact_digest": reviewer_digest,
                 "rejection_reason": reason,
                 "original": original,
                 "final": final,
@@ -779,6 +788,9 @@ def _decode_final_audit(
     if not isinstance(payload, Mapping) or set(payload) != {
         "inventory_digest",
         "proposal_digest",
+        "checked_source_anchors",
+        "checked_user_intent",
+        "checked_frozen_references",
         "approved_edit_ids",
         "rejected_edits",
     }:
@@ -787,6 +799,15 @@ def _decode_final_audit(
         return None, "final editorial review binds the wrong inventory digest"
     if proposal_digest is None or payload.get("proposal_digest") != proposal_digest:
         return None, "final editorial review binds the wrong proposal digest"
+    if any(
+        payload.get(name) is not True
+        for name in (
+            "checked_source_anchors",
+            "checked_user_intent",
+            "checked_frozen_references",
+        )
+    ):
+        return None, "final editorial review did not complete required checks"
     approved = payload.get("approved_edit_ids")
     rejected = payload.get("rejected_edits")
     if not isinstance(approved, list) or any(

@@ -18,6 +18,12 @@ LEGACY_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V16 = (
     "arc.companion.chapter-learning-review-prompt.v16"
 )
 AUTHOR_IDENTITY_PROMPT_VERSION = "arc.companion.author-identity-prompt.v3"
+EDITORIAL_PROPOSER_PROMPT_VERSION = (
+    "arc.companion.cross-chapter-editorial-proposer-prompt.v1"
+)
+EDITORIAL_REVIEWER_PROMPT_VERSION = (
+    "arc.companion.cross-chapter-editorial-reviewer-prompt.v1"
+)
 
 
 def _closed(
@@ -405,6 +411,50 @@ _CHAPTER_GUIDE_REVIEW_INSTRUCTION_V16 = (
     )
 )
 
+_EDITORIAL_PROPOSER_INSTRUCTION = """
+Review the complete frozen editorial inventory and full-text view across all
+generated chapter guides, section guides, and local companions. Report only
+genuine cross-chapter redundancy. Repeated terminology, keywords, or related
+topics are not by themselves redundant. Preserve repetition that supports
+local understanding, distinct derivations, different experimental links, or
+different later developments.
+
+Prefer revising a repeated unit into a chapter-specific increment of
+understanding. Propose omission only when the unit contributes no distinct
+local value. Do not impose a deletion count, coverage target, style quota, or
+closed taxonomy. Do not add scientific claims, references, or source anchors.
+Every finding must bind at least two units from different chapters. Every edit
+must use the exact unit ID and base content digest from the frozen inventory.
+A replacement must remain faithful to the unit's source anchors; use the
+verified source-evidence inputs named in the caller input_manifest to inspect
+those locations before proposing it.
+A revise edit returns the complete replacement title and Markdown body; an
+omit edit removes the unit only from the resolved publication view. Reference
+markers must use only the frozen reference_ids. Stable finding and edit IDs
+must continue to identify the same issue across rounds.
+"""
+
+_EDITORIAL_REVIEWER_INSTRUCTION = """
+Independently audit the complete frozen inventory, full-text view, user intent,
+and every proposed cross-chapter edit. A final stop decision must bind the
+exact inventory_digest and the exact current proposer artifact digest shown in
+round_task.proposal_digests for `editorial-proposer`. Cover every proposed edit
+ID exactly once by approving it or rejecting it with a non-empty reason.
+Set each required `checked_*` audit field to true only after checking source
+anchors, user intent, and the frozen reference set for every replacement.
+
+Approve only edits that preserve the unit's source anchors, remain useful for
+the user intent, use only frozen reference IDs, and do not introduce a new
+scientific claim. Do not treat terminology, keyword, or thematic similarity as
+sufficient redundancy. Preserve locally necessary definitions, distinct
+derivations, different experimental connections, and different later
+developments. There is no deletion quota. Use continue only with actionable
+feedback when a further round can repair the proposal; otherwise stop and
+explicitly reject every unsafe or unnecessary edit.
+Use the verified source-evidence inputs named in the caller input_manifest to
+inspect each edited unit's exact source anchors before completing the audit.
+"""
+
 
 def chapter_guide_proposer_instructions(
     version: str = CHAPTER_GUIDE_PROMPT_VERSION,
@@ -434,6 +484,22 @@ def chapter_guide_reviewer_instructions(
         version,
         instruction,
     )
+
+
+def editorial_proposer_instructions(
+    version: str = EDITORIAL_PROPOSER_PROMPT_VERSION,
+) -> str:
+    if version != EDITORIAL_PROPOSER_PROMPT_VERSION:
+        raise ValueError("unsupported editorial proposer prompt contract")
+    return _instruction_contract(version, _EDITORIAL_PROPOSER_INSTRUCTION)
+
+
+def editorial_reviewer_instructions(
+    version: str = EDITORIAL_REVIEWER_PROMPT_VERSION,
+) -> str:
+    if version != EDITORIAL_REVIEWER_PROMPT_VERSION:
+        raise ValueError("unsupported editorial reviewer prompt contract")
+    return _instruction_contract(version, _EDITORIAL_REVIEWER_INSTRUCTION)
 
 
 def author_identity_prompt(
@@ -534,9 +600,13 @@ __all__ = [
     "CHAPTER_GUIDE_PROPOSAL_SCHEMA",
     "CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA",
     "CHAPTER_GUIDE_REVIEW_PROMPT_VERSION",
+    "EDITORIAL_PROPOSER_PROMPT_VERSION",
+    "EDITORIAL_REVIEWER_PROMPT_VERSION",
     "LEGACY_CHAPTER_GUIDE_PROMPT_VERSION_V16",
     "LEGACY_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V16",
     "author_identity_prompt",
     "chapter_guide_proposer_instructions",
     "chapter_guide_reviewer_instructions",
+    "editorial_proposer_instructions",
+    "editorial_reviewer_instructions",
 ]

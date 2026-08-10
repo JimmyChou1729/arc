@@ -1574,6 +1574,7 @@
       appendContentsLink(list, strings.references, "#arc-references");
     }
     appendSupplementCoverage(list);
+    appendEditorialReview(list);
   }
 
   function appendSupplementCoverage(list) {
@@ -1588,6 +1589,23 @@
       var link = element("a", "", "Download complete report");
       link.href = resource.data_uri;
       link.download = coverage.report_filename || "supplement-coverage.json";
+      item.appendChild(link);
+    }
+    list.appendChild(item);
+  }
+
+  function appendEditorialReview(list) {
+    var profile = state.payload.publication.reader_profile || {};
+    var review = profile.editorial_review;
+    if (!review || typeof review.summary !== "string") return;
+    var item = element("li", "arc-editorial-review");
+    item.appendChild(element("span", "", review.summary));
+    var resource = resourceForLogicalName(review.report_logical_name);
+    if (resource && typeof resource.data_uri === "string") {
+      item.appendChild(document.createTextNode(" "));
+      var link = element("a", "", "Download editorial review");
+      link.href = resource.data_uri;
+      link.download = review.report_filename || "editorial-review.json";
       item.appendChild(link);
     }
     list.appendChild(item);

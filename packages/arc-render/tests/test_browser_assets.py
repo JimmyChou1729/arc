@@ -41,6 +41,15 @@ def test_reader_exposes_lightweight_supplement_coverage_download() -> None:
     assert "Download complete report" in javascript
 
 
+def test_reader_exposes_lightweight_editorial_review_download() -> None:
+    javascript = _text("reader.js")
+
+    assert "appendEditorialReview(list)" in javascript
+    assert "review.report_logical_name" in javascript
+    assert 'link.download = review.report_filename ||' in javascript
+    assert "Download editorial review" in javascript
+
+
 def test_reader_contract_helpers_execute_under_node() -> None:
     node = shutil.which("node")
     if node is None:

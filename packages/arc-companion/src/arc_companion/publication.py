@@ -42,6 +42,7 @@ from arc_render import (
 )
 
 from ._build_support import ref_document
+from .editorial_review import EditorialReviewError, validate_editorial_report
 from .translation_results import (
     CompanionTranslationResultError,
     load_translation_selection,
@@ -64,6 +65,9 @@ SUPPLEMENT_COVERAGE_ARTIFACT = (
 SUPPLEMENT_COVERAGE_LOGICAL_NAME = (
     "arc-companion-supplement-coverage.json"
 )
+EDITORIAL_REVIEW_SCHEMA = "arc.companion.editorial_review.v1"
+EDITORIAL_REVIEW_ARTIFACT = "publication/reports/editorial-review.json"
+EDITORIAL_REVIEW_LOGICAL_NAME = "arc-companion-editorial-review.json"
 
 
 class CompanionPublicationError(ValueError):
@@ -93,6 +97,7 @@ def publish_companion(
     glossary: Sequence[Mapping[str, Any]],
     bibliography: Sequence[Mapping[str, Any]],
     reviewed_supplements: Sequence[ReviewedCompanionSupplement] = (),
+    editorial_review: Mapping[str, Any] | None = None,
     paper_cache_root: str | Path | None = None,
 ) -> PublishedCompanion:
     """Publish immutable overlay revisions, their layers, and one publication."""
@@ -395,6 +400,69 @@ def publish_companion(
             **dict(totals),
         }
 
+    editorial_summary: dict[str, Any] | None = None
+    if editorial_review is not None:
+        report = _editorial_review_document(editorial_review)
+        report_payload = (
+            json.dumps(
+                report,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
+        )
+        report_ref = context.artifacts.publish_bytes(
+            EDITORIAL_REVIEW_ARTIFACT,
+            report_payload,
+            media_type="application/json",
+        )
+        if (
+            report_ref.digest.value in resource_digests
+            or EDITORIAL_REVIEW_LOGICAL_NAME in resource_names
+        ):
+            raise CompanionPublicationError(
+                "editorial review report conflicts with a publication resource"
+            )
+        resource_artifacts.append(report_ref)
+        resources.append(
+            {
+                "artifact_digest": report_ref.digest.value,
+                "media_type": "application/json",
+                "logical_name": EDITORIAL_REVIEW_LOGICAL_NAME,
+                "size": report_ref.digest.size_bytes,
+                "path": "reports/editorial-review.json",
+            }
+        )
+        counts = _mapping(report["counts"], "editorial review counts")
+        editorial_summary_text = (
+            f"Cross-chapter editorial review: {report['status']}; "
+            f"{counts['reviewed_units']} units reviewed, "
+            f"{counts['revised_units']} revised, "
+            f"{counts['omitted_units']} omitted, "
+            f"{counts['rejected_edits']} edits rejected."
+        )
+        report_warnings = report.get("warnings")
+        visible_warning = (
+            str(report_warnings[0])
+            if isinstance(report_warnings, list) and report_warnings
+            else None
+        )
+        if visible_warning is not None:
+            editorial_summary_text += f" Warning: {visible_warning}"
+        editorial_summary = {
+            "summary": editorial_summary_text,
+            "report_logical_name": EDITORIAL_REVIEW_LOGICAL_NAME,
+            "report_filename": "editorial-review.json",
+            "status": report["status"],
+            **(
+                {"warning": visible_warning}
+                if visible_warning is not None
+                else {}
+            ),
+            **dict(counts),
+        }
+
     publication = Publication(
         source_document=source,
         layers=tuple(
@@ -417,6 +485,11 @@ def publish_companion(
                 if coverage_summary is not None
                 else {}
             ),
+            **(
+                {"editorial_review": editorial_summary}
+                if editorial_summary is not None
+                else {}
+            ),
         },
     )
     publication_ref = context.artifacts.publish_json(
@@ -429,6 +502,45 @@ def publish_companion(
         tuple(fragment_artifacts),
         tuple(resource_artifacts),
     )
+
+
+def _editorial_review_document(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    report = dict(value)
+    try:
+        validate_editorial_report(report)
+    except EditorialReviewError as exc:
+        raise CompanionPublicationError(str(exc)) from exc
+    if report.get("schema_version") != EDITORIAL_REVIEW_SCHEMA:
+        raise CompanionPublicationError(
+            f"editorial review must use {EDITORIAL_REVIEW_SCHEMA}"
+        )
+    if report.get("status") not in {
+        "not_applicable",
+        "no_changes",
+        "applied",
+        "unavailable",
+    }:
+        raise CompanionPublicationError("editorial review status is invalid")
+    counts = _mapping(report.get("counts"), "editorial review counts")
+    expected_counts = {
+        "reviewed_units",
+        "findings",
+        "proposed_edits",
+        "revised_units",
+        "omitted_units",
+        "rejected_edits",
+    }
+    if set(counts) != expected_counts or any(
+        type(counts[name]) is not int or counts[name] < 0
+        for name in expected_counts
+    ):
+        raise CompanionPublicationError(
+            "editorial review counts must contain the complete non-negative "
+            "audit counters"
+        )
+    return report
 
 
 def _supplement_coverage_document(

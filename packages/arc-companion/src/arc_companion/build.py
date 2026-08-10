@@ -85,6 +85,14 @@ from .generation_validation import (
     validate_chapter_guide,
     validate_chapter_guide_review_audit,
 )
+from .editorial_review import (
+    EDITORIAL_PROPOSAL_SCHEMA,
+    EDITORIAL_REVIEW_AUDIT_SCHEMA,
+    EditorialReviewError,
+    freeze_editorial_inventory,
+    resolve_editorial_review,
+    unavailable_editorial_review,
+)
 from .llm_runtime import (
     CompanionLLMError,
     SemanticTaskCompleted,
@@ -111,6 +119,8 @@ from .prompts import (
     author_identity_prompt,
     chapter_guide_proposer_instructions,
     chapter_guide_reviewer_instructions,
+    editorial_proposer_instructions,
+    editorial_reviewer_instructions,
 )
 from .reader_labels import ReaderLabelError, resolve_reader_labels
 from .rich_text import RichTextError
@@ -153,6 +163,11 @@ _ORIGINAL_SOURCE_ARTIFACT = "source/original"
 _AUTHOR_IDENTITY_ARTIFACT = "identity/authors"
 _RESULT_ARTIFACT = "result"
 _TRANSLATION_LANE_CONTRACT = "arc.companion.translation_lane.v1"
+_EDITORIAL_INDEX_ARTIFACT = "editorial/index"
+_EDITORIAL_VIEW_ARTIFACT = "editorial/full-text"
+_EDITORIAL_RESOLVED_ARTIFACT = "editorial/resolved-guides"
+_EDITORIAL_REPORT_ARTIFACT = "editorial/report"
+_EDITORIAL_SCOPE = "companion-editorial"
 
 
 class CompanionBuildHandler:
@@ -316,6 +331,18 @@ class CompanionBuildHandler:
             if isinstance(chapters_outcome, (Paused, Failed)):
                 return chapters_outcome
 
+            editorial_report = None
+            if self.recipe.cross_chapter_editorial_review:
+                editorial_outcome = self._cross_chapter_editorial_review(
+                    context,
+                    chapters,
+                    chapters_outcome,
+                    source_inputs=document_inputs,
+                )
+                if isinstance(editorial_outcome, (Paused, Failed)):
+                    return editorial_outcome
+                chapters_outcome, editorial_report = editorial_outcome
+
             glossary_contracts = (
                 _glossary_contracts(glossary, source)
                 if translation_required
@@ -346,6 +373,7 @@ class CompanionBuildHandler:
                 glossary=glossary_contracts,
                 bibliography=bibliography,
                 reviewed_supplements=self.request.reviewed_supplements,
+                editorial_review=editorial_report,
                 paper_cache_root=self.execution.paper_cache_root,
             )
             result_ref = context.artifacts.publish_json(
@@ -356,6 +384,8 @@ class CompanionBuildHandler:
             return Failed(RunError(exc.code, str(exc)))
         except CompanionPublicationError as exc:
             return Failed(RunError("companion_publication_invalid", str(exc)))
+        except EditorialReviewError as exc:
+            return Failed(RunError("companion_editorial_review_invalid", str(exc)))
         except CachedDocumentError as exc:
             return Failed(
                 RunError(
@@ -1263,6 +1293,161 @@ class CompanionBuildHandler:
             )
         return joined
 
+    def _cross_chapter_editorial_review(
+        self,
+        context: RunContext,
+        chapters: Sequence[SourceChapter],
+        accepted_chapters: Sequence[Mapping[str, Any]],
+        *,
+        source_inputs: Sequence[LLMInputArtifact],
+    ):
+        """Run the optional single-worker global audit over frozen guides."""
+
+        reference_ids = _all_chapter_reference_ids(context, chapters)
+        inventory = freeze_editorial_inventory(
+            accepted_chapters,
+            frozen_reference_ids=reference_ids,
+        )
+        index_payload = dict(inventory.document)
+        index_ref = context.artifacts.find(_EDITORIAL_INDEX_ARTIFACT)
+        if index_ref is None:
+            index_ref = context.artifacts.publish_json(
+                _EDITORIAL_INDEX_ARTIFACT, index_payload
+            )
+        elif context.artifacts.read_bytes(index_ref) != (
+            canonical_json_bytes(index_payload) + b"\n"
+        ):
+            raise EditorialReviewError(
+                "frozen editorial index differs from the current guides"
+            )
+        view_payload = inventory.full_text.encode("utf-8")
+        view_ref = context.artifacts.find(_EDITORIAL_VIEW_ARTIFACT)
+        if view_ref is None:
+            view_ref = context.artifacts.publish_bytes(
+                _EDITORIAL_VIEW_ARTIFACT,
+                view_payload,
+                media_type="text/markdown",
+            )
+        elif context.artifacts.read_bytes(view_ref) != view_payload:
+            raise EditorialReviewError(
+                "frozen editorial full-text view differs from the current guides"
+            )
+
+        if not inventory.applicable:
+            resolution = resolve_editorial_review(
+                accepted_chapters, inventory, None, None
+            )
+            _publish_editorial_resolution(context, resolution)
+            return resolution.chapters, resolution.report
+
+        model_inputs = tuple(source_inputs) + (
+            _llm_input(context, "companion-editorial-index", index_ref),
+            _llm_input(context, "companion-editorial-full-text", view_ref),
+        )
+        loop = LoopSpec(
+            loop_id="cross-chapter-editorial",
+            context={
+                "inventory_digest": inventory.inventory_digest,
+                "reference_ids": list(reference_ids),
+                "user_intent": self.request.user_intent,
+                "chapter_count": inventory.document["chapter_count"],
+                "unit_count": inventory.document["unit_count"],
+                "input_manifest": {
+                    "source_evidence": [
+                        item.input_id for item in source_inputs
+                    ],
+                    "index": "companion-editorial-index",
+                    "complete_full_text": "companion-editorial-full-text",
+                },
+            },
+            proposers=(
+                WorkerSpec(
+                    "editorial-proposer",
+                    editorial_proposer_instructions(
+                        self.recipe.editorial_proposer_prompt
+                    ),
+                    EDITORIAL_PROPOSAL_SCHEMA,
+                    self.recipe.model,
+                ),
+            ),
+            reviewer=WorkerSpec(
+                "editorial-reviewer",
+                editorial_reviewer_instructions(
+                    self.recipe.editorial_reviewer_prompt
+                ),
+                EDITORIAL_REVIEW_AUDIT_SCHEMA,
+                self.recipe.model,
+            ),
+            max_rounds=3,
+            allow_early_stop=True,
+            on_proposer_failure=ProposerFailurePolicy.FAIL_LOOP,
+            review_final_round=True,
+            revision_context_mode=RevisionContextMode.FULL_REVIEW_ENVELOPE,
+            input_ids=tuple(item.input_id for item in model_inputs),
+        )
+        outcome = ProposerReviewerService(self.task_service).execute(
+            context,
+            BatchRequest(
+                BATCH_SCHEMA_VERSION,
+                "companion-cross-chapter-editorial",
+                (loop,),
+                BatchFailurePolicy.FAIL_FAST,
+                model_inputs,
+            ),
+            options=ProposerReviewerExecutionOptions(
+                max_concurrent_loops=1,
+                max_concurrent_workers=1,
+                llm=self.llm_options,
+            ),
+            execution_scope=_EDITORIAL_SCOPE,
+        )
+        if isinstance(outcome, (Paused, Failed)):
+            return outcome
+        batch = decode_batch_result(
+            read_json(context, outcome.result_ref, "editorial review result")
+        )
+        if len(batch.loops) != 1:
+            raise EditorialReviewError(
+                "editorial proposer-reviewer result must contain one loop"
+            )
+        loop_result = batch.loops[0]
+        proposal_value = loop_result.final_proposals.get(
+            "editorial-proposer"
+        )
+        proposal = (
+            dict(proposal_value)
+            if isinstance(proposal_value, Mapping)
+            else None
+        )
+        review = (
+            dict(loop_result.final_review)
+            if isinstance(loop_result.final_review, Mapping)
+            else None
+        )
+        proposer_digest = _editorial_value_digest(proposal)
+        reviewer_digest = _editorial_value_digest(review)
+        if loop_result.error is not None:
+            resolution = unavailable_editorial_review(
+                accepted_chapters,
+                inventory,
+                reason=(
+                    f"{loop_result.error.code}: {loop_result.error.message}"
+                ),
+                proposer_artifact_digest=proposer_digest,
+                reviewer_artifact_digest=reviewer_digest,
+            )
+        else:
+            resolution = resolve_editorial_review(
+                accepted_chapters,
+                inventory,
+                proposal,
+                review,
+                proposer_artifact_digest=proposer_digest,
+                reviewer_artifact_digest=reviewer_digest,
+            )
+        _publish_editorial_resolution(context, resolution)
+        return resolution.chapters, resolution.report
+
     def _augment_chapter_candidate(
         self,
         chapter: SourceChapter,
@@ -1883,6 +2068,54 @@ def _reference_urls(source: str) -> list[str]:
         item.rstrip(".,;)")
         for item in re.findall(r"https?://[^\s<>()\]]+", source)
     ]
+
+
+def _all_chapter_reference_ids(
+    context: RunContext,
+    chapters: Sequence[SourceChapter],
+) -> tuple[str, ...]:
+    values: list[str] = []
+    for chapter in chapters:
+        ref = context.artifacts.find(
+            f"chapters/{chapter.chapter_id}/guide-accepted"
+        )
+        if ref is None:
+            raise CompanionContentError(
+                "chapter_reference_missing",
+                f"accepted guide is missing for {chapter.chapter_id}",
+            )
+        guide = read_json(context, ref, "accepted chapter guide")
+        values.extend(
+            str(item["reference_id"])
+            for item in mapping_list(
+                guide.get("references"), "chapter references"
+            )
+        )
+    return tuple(dict.fromkeys(values))
+
+
+def _editorial_value_digest(value: Mapping[str, Any] | None) -> str | None:
+    if value is None:
+        return None
+    return hashlib.sha256(
+        canonical_json_bytes(dict(value)) + b"\n"
+    ).hexdigest()
+
+
+def _publish_editorial_resolution(context: RunContext, resolution: Any) -> None:
+    for artifact_id, value in (
+        (_EDITORIAL_RESOLVED_ARTIFACT, list(resolution.chapters)),
+        (_EDITORIAL_REPORT_ARTIFACT, dict(resolution.report)),
+    ):
+        existing = context.artifacts.find(artifact_id)
+        if existing is None:
+            context.artifacts.publish_json(artifact_id, value)
+        elif context.artifacts.read_bytes(existing) != (
+            canonical_json_bytes(value) + b"\n"
+        ):
+            raise EditorialReviewError(
+                f"frozen {artifact_id} differs from the current editorial result"
+            )
 
 
 def _chapter_reference_contracts(

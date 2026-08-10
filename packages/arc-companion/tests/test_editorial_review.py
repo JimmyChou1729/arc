@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 
 import pytest
+from arc_jobs import RunContext, RunRepository, RunSpec
 
 from arc_companion.editorial_review import (
     EDITORIAL_INVENTORY_SCHEMA,
@@ -126,6 +127,9 @@ def _review(proposal: dict, inventory_digest: str) -> dict:
         "payload": {
             "inventory_digest": inventory_digest,
             "proposal_digest": editorial_proposal_digest(proposal),
+            "checked_source_anchors": True,
+            "checked_user_intent": True,
+            "checked_frozen_references": True,
             "approved_edit_ids": ["edit-revise-a", "edit-omit-b"],
             "rejected_edits": [
                 {"edit_id": "edit-omit-c", "reason": "Keep its local framing."}
@@ -168,6 +172,19 @@ def test_freeze_inventory_is_deterministic_complete_and_guide_only() -> None:
         "Shared context [@ref-a]."
     )
     assert text_range["line_end"] == text_range["markdown_line_end"]
+
+
+def test_proposal_digest_matches_published_json_artifact(tmp_path) -> None:
+    repository = RunRepository(tmp_path / "jobs")
+    snapshot = repository.create(
+        RunSpec("digest-run", "handler", {"input": "fixture"})
+    )
+    context = RunContext(repository, snapshot, resume_input=None)
+    proposal = {"inventory_digest": "a" * 64, "findings": []}
+
+    ref = context.artifacts.publish_json("proposal", proposal)
+
+    assert editorial_proposal_digest(proposal) == ref.digest.value
 
 
 def test_inventory_freezes_complete_reference_union_and_checks_citations() -> None:
@@ -253,6 +270,7 @@ def test_final_closed_audit_applies_only_exact_approved_revise_and_omit() -> Non
     )
     assert omitted["original"]["markdown_body"].startswith("Shared context")
     assert omitted["final"] is None
+    assert omitted["review_artifact_digest"] == "b" * 64
     assert rejected["final"] == rejected["original"]
     assert rejected["rejection_reason"] == "Keep its local framing."
     assert report["findings"][0]["approval_status"] == "approved"
@@ -300,6 +318,9 @@ def test_invalid_approved_edits_are_preserved_and_reported_rejected() -> None:
         "payload": {
             "inventory_digest": inventory.inventory_digest,
             "proposal_digest": editorial_proposal_digest(proposal),
+            "checked_source_anchors": True,
+            "checked_user_intent": True,
+            "checked_frozen_references": True,
             "approved_edit_ids": ["valid-edit", "stale-edit", "citation-edit"],
             "rejected_edits": [],
         },
@@ -366,6 +387,9 @@ def test_unknown_unit_raw_html_and_duplicate_target_are_never_applied() -> None:
         "payload": {
             "inventory_digest": inventory.inventory_digest,
             "proposal_digest": editorial_proposal_digest(proposal),
+            "checked_source_anchors": True,
+            "checked_user_intent": True,
+            "checked_frozen_references": True,
             "approved_edit_ids": [
                 "edit-one",
                 "edit-two",
@@ -391,6 +415,9 @@ def test_unknown_unit_raw_html_and_duplicate_target_are_never_applied() -> None:
     [
         lambda review: review.update(action="continue"),
         lambda review: review["payload"].update(proposal_digest="0" * 64),
+        lambda review: review["payload"].update(
+            checked_source_anchors=False
+        ),
         lambda review: review["payload"]["approved_edit_ids"].pop(),
         lambda review: review["payload"]["approved_edit_ids"].append("unknown-edit"),
     ],

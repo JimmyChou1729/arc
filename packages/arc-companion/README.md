@@ -35,6 +35,14 @@ arc-companion render --project-dir local/example
 arc-companion validate --project-dir local/example
 ```
 
+Add `--cross-chapter-editorial-review` to `build` to run one optional,
+single-worker proposer-reviewer pass after all chapter-local guides finish.
+The pass may revise or omit a guide only when the final reviewer explicitly
+approves the exact digest-bound edit. Original accepted guides remain as the
+audit baseline. The resolved publication includes a lightweight summary and a
+downloadable `arc.companion.editorial_review.v1` JSON report. Builds without
+the flag retain the v17 recipe identity and make no editorial model calls.
+
 Post-publication corrections use a canonical request and create immutable
 child revisions without changing the run-owned publication:
 

@@ -58,6 +58,13 @@ def test_build_and_resume_expose_explicit_host_authority(
         assert "--host-authority" in capsys.readouterr().out
 
 
+def test_build_exposes_optional_cross_chapter_editorial_review(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["build", "--help"]) == 0
+    assert "--cross-chapter-editorial-review" in capsys.readouterr().out
+
+
 def test_usage_error_points_to_contextual_help(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
