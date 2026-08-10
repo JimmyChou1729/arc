@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from arc_companion.generation_validation import validate_chapter_guide
+from arc_companion.generation_validation import (
+    validate_chapter_guide,
+    validate_chapter_guide_review_audit,
+)
 from arc_companion.rich_text import parse_markdown
 
 
@@ -34,3 +37,27 @@ def test_rich_text_parser_does_not_decode_literal_backslash_n() -> None:
         for token in tokens
         for child in token.children or ()
     )
+
+
+def test_review_audit_normalizes_repeated_valid_locations() -> None:
+    audit = validate_chapter_guide_review_audit(
+        {
+            "payload": {
+                "checked_complete_chapter": True,
+                "checked_part_numbers": [3, 1, 3],
+                "checked_section_numbers": [2, 2],
+            }
+        },
+        proposal={
+            "companions": [{"after_part": 3}],
+            "section_guides": [{"section_number": 2}],
+        },
+        part_count=3,
+        section_count=2,
+    )
+
+    assert audit == {
+        "checked_complete_chapter": True,
+        "checked_part_numbers": [1, 3],
+        "checked_section_numbers": [2],
+    }

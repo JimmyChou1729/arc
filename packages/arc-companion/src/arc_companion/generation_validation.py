@@ -558,13 +558,12 @@ def _positive_integer_ids(
             or item > maximum
             for item in value
         )
-        or len(value) != len(set(value))
     ):
         raise CompanionContentError(
             "chapter_guide_review_audit_invalid",
-            f"{description} must be unique locations in the current chapter",
+            f"{description} must be locations in the current chapter",
         )
-    return sorted(value)
+    return sorted(set(value))
 
 
 def _string_ids(
