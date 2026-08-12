@@ -5,12 +5,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping
 
 from arc_jobs import (
     ArcJobsError,
+    ArtifactRef,
+    CommandArtifact,
     CommandError,
     CommandResult,
     CommandRun,
@@ -160,6 +165,27 @@ def _parser() -> _Parser:
         command = commands.add_parser(name, help=summary, description=summary.capitalize() + ".")
         command.add_argument("--domain-id", required=True, help="published domain identifier")
         add_project_dir(command)
+
+    materialize = commands.add_parser(
+        "materialize-export",
+        help="copy one verified active export to an explicit path",
+        description="Materialize one verified export from an active published domain.",
+    )
+    materialize.add_argument(
+        "--domain-id", required=True, help="published domain identifier"
+    )
+    materialize.add_argument(
+        "--name",
+        required=True,
+        choices=("summary", "graph", "network", "evidence-pack", "paper-pack"),
+        help="public export to materialize",
+    )
+    materialize.add_argument(
+        "--output",
+        required=True,
+        help="new output file; an existing path is never overwritten",
+    )
+    add_project_dir(materialize)
 
     stop = commands.add_parser(
         "stop",
@@ -426,7 +452,9 @@ def _status(args: argparse.Namespace) -> CommandResult:
     )
 
 
-def _active_export(paths: DomainPaths, domain_id: str, filename: str) -> tuple[str, Any]:
+def _active_export_bytes(
+    paths: DomainPaths, domain_id: str, filename: str
+) -> tuple[str, bytes, ArtifactRef]:
     catalog = read_domain_catalog(paths, domain_id=domain_id)
     if catalog is None or catalog.active is None:
         raise DomainPublicationError(
@@ -453,11 +481,22 @@ def _active_export(paths: DomainPaths, domain_id: str, filename: str) -> tuple[s
             or hashlib.sha256(content).hexdigest() != artifact.digest.value
         ):
             raise ValueError("active export does not match its manifest digest")
-        return catalog.active, json.loads(content.decode("utf-8"))
+        return catalog.active, content, artifact
     except (ArcJobsError, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise DomainPublicationError(
             f"active {filename} export is unavailable for domain {domain_id!r}"
         ) from exc
+
+
+def _active_export(paths: DomainPaths, domain_id: str, filename: str) -> tuple[str, Any]:
+    run_id, content, _artifact = _active_export_bytes(paths, domain_id, filename)
+    try:
+        document = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DomainPublicationError(
+            f"active {filename} export is unavailable for domain {domain_id!r}"
+        ) from exc
+    return run_id, document
 
 
 def _get(args: argparse.Namespace, *, filename: str, data_name: str) -> CommandResult:
@@ -466,6 +505,61 @@ def _get(args: argparse.Namespace, *, filename: str, data_name: str) -> CommandR
     return CommandResult(
         CommandStatus.COMPLETED,
         data={"domain": {"id": args.domain_id, "active": run_id}, data_name: document},
+    )
+
+
+_MATERIALIZED_EXPORT_FILENAMES = {
+    "summary": "summary.md",
+    "graph": "graph.json",
+    "network": "network.html",
+    "evidence-pack": "evidence-pack.json",
+    "paper-pack": "paper-pack.json",
+}
+
+
+def _write_new_file(path: Path, content: bytes) -> Path:
+    output = path.expanduser().resolve(strict=False)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{output.name}.", dir=output.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, output)
+        except FileExistsError as exc:
+            raise DomainPublicationError(
+                f"export output already exists: {output}"
+            ) from exc
+        return output
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _materialize_export(args: argparse.Namespace) -> CommandResult:
+    filename = _MATERIALIZED_EXPORT_FILENAMES[args.name]
+    run_id, content, artifact = _active_export_bytes(
+        _paths(args.project_dir), args.domain_id, filename
+    )
+    output = _write_new_file(Path(args.output), content)
+    return CommandResult(
+        CommandStatus.COMPLETED,
+        data={
+            "domain": {"id": args.domain_id, "active": run_id},
+            "export": {
+                "name": args.name,
+                "source_run_id": run_id,
+                "output": str(output),
+                "digest": artifact.digest.value,
+                "size_bytes": artifact.digest.size_bytes,
+            },
+        },
+        artifacts=(CommandArtifact("export", args.name, str(output)),),
     )
 
 
@@ -509,6 +603,8 @@ def _dispatch(args: argparse.Namespace) -> tuple[CommandResult, int] | int:
         return _get(args, filename="summary.json", data_name="summary"), 0
     if args.command == "get-graph":
         return _get(args, filename="graph.json", data_name="graph"), 0
+    if args.command == "materialize-export":
+        return _materialize_export(args), 0
     if args.command in {"stop", "validate"}:
         return _run_control(args, command=args.command)
     raise AssertionError(args.command)
@@ -521,6 +617,7 @@ def _help_command(arguments: list[str]) -> str:
         "status",
         "get-summary",
         "get-graph",
+        "materialize-export",
         "stop",
         "validate",
     }

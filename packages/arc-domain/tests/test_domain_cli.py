@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -506,6 +507,158 @@ def test_get_rejects_an_active_export_with_a_corrupt_digest(
     assert cli.main(["get-graph", "--domain-id", "domain-cli", "--project-dir", str(tmp_path)]) == 1
     envelope = _envelope(capsys)
     assert envelope["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("name", "filename"),
+    [
+        ("summary", "summary.md"),
+        ("graph", "graph.json"),
+        ("network", "network.html"),
+        ("evidence-pack", "evidence-pack.json"),
+        ("paper-pack", "paper-pack.json"),
+    ],
+)
+def test_materialize_export_writes_each_verified_public_export(
+    name: str, filename: str, tmp_path: Path, capsys
+) -> None:
+    repository = _repository_for_project(tmp_path)
+    snapshot = _succeeded_snapshot(repository, run_id="published")
+    paths = _paths_for_project(tmp_path)
+    publish_domain_result(
+        repository,
+        paths,
+        run_id=snapshot.run_id,
+        result=_result(repository, snapshot.run_id),
+    )
+    output = tmp_path / "delivery" / filename
+
+    assert (
+        cli.main(
+            [
+                "materialize-export",
+                "--project-dir",
+                str(tmp_path),
+                "--domain-id",
+                "domain-cli",
+                "--name",
+                name,
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    envelope = _envelope(capsys)
+    content = output.read_bytes()
+    expected = (
+        paths.export_generation("domain-cli", "published") / filename
+    ).read_bytes()
+
+    assert content == expected
+    assert envelope["data"]["domain"] == {"id": "domain-cli", "active": "published"}
+    assert envelope["data"]["export"] == {
+        "name": name,
+        "source_run_id": "published",
+        "output": str(output.resolve()),
+        "digest": hashlib.sha256(content).hexdigest(),
+        "size_bytes": len(content),
+    }
+    assert envelope["artifacts"] == [
+        {
+            "role": "export",
+            "id": name,
+            "path": str(output.resolve()),
+        }
+    ]
+    assert ".arc/domain" not in json.dumps(envelope)
+
+
+def test_materialize_export_rejects_tampered_source_before_writing(
+    tmp_path: Path, capsys
+) -> None:
+    repository = _repository_for_project(tmp_path)
+    snapshot = _succeeded_snapshot(repository, run_id="published")
+    paths = _paths_for_project(tmp_path)
+    publish_domain_result(
+        repository,
+        paths,
+        run_id=snapshot.run_id,
+        result=_result(repository, snapshot.run_id),
+    )
+    (paths.export_generation("domain-cli", "published") / "network.html").write_bytes(
+        b"tampered"
+    )
+    output = tmp_path / "network.html"
+
+    assert (
+        cli.main(
+            [
+                "materialize-export",
+                "--project-dir",
+                str(tmp_path),
+                "--domain-id",
+                "domain-cli",
+                "--name",
+                "network",
+                "--output",
+                str(output),
+            ]
+        )
+        == 1
+    )
+    envelope = _envelope(capsys)
+
+    assert envelope["error"]["code"] == "domain_command_failed"
+    assert not output.exists()
+
+
+def test_materialize_export_never_overwrites_existing_output(
+    tmp_path: Path, capsys
+) -> None:
+    repository = _repository_for_project(tmp_path)
+    snapshot = _succeeded_snapshot(repository, run_id="published")
+    paths = _paths_for_project(tmp_path)
+    publish_domain_result(
+        repository,
+        paths,
+        run_id=snapshot.run_id,
+        result=_result(repository, snapshot.run_id),
+    )
+    output = tmp_path / "graph.json"
+    output.write_bytes(b"keep me")
+
+    assert (
+        cli.main(
+            [
+                "materialize-export",
+                "--project-dir",
+                str(tmp_path),
+                "--domain-id",
+                "domain-cli",
+                "--name",
+                "graph",
+                "--output",
+                str(output),
+            ]
+        )
+        == 1
+    )
+    envelope = _envelope(capsys)
+
+    assert envelope["error"]["code"] == "domain_command_failed"
+    assert "already exists" in envelope["error"]["message"]
+    assert output.read_bytes() == b"keep me"
+
+
+def test_materialize_export_help_lists_names_and_required_paths(capsys) -> None:
+    assert cli.main(["materialize-export", "--help"]) == 0
+    help_text = capsys.readouterr().out
+
+    assert "{summary,graph,network,evidence-pack,paper-pack}" in help_text
+    assert "--project-dir" in help_text
+    assert "--domain-id" in help_text
+    assert "--output" in help_text
 
 
 def test_stop_and_validate_delegate_to_root_run_control(
