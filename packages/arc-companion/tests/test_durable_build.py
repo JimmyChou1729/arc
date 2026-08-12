@@ -573,11 +573,11 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
         assert search_examples["availability"] == "exact"
         assert (
             search_examples["single_term"]["argv"][1]
-            == "search-cached-document"
+            == "search-full-text"
         )
         assert len(search_examples["alternative_terms"]) == 2
         assert all(
-            item["argv"][1] == "search-cached-document"
+            item["argv"][1] == "search-full-text"
             for item in search_examples["alternative_terms"]
         )
         assert {

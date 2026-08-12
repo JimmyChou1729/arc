@@ -49,7 +49,7 @@ from an independently cached PDF outline:
 arc-paper reconstruct-cached-structure \
   --document-ref '<Markdown CachedDocumentRef JSON>' \
   --outline-document-ref '<PDF CachedDocumentRef JSON>'
-arc-paper get-cached-section \
+arc-paper get-section \
   --document-ref '<Markdown CachedDocumentRef JSON>' \
   --structure-ref '<CachedDocumentStructureRef JSON>' \
   '<section id or exact title>'

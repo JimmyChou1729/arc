@@ -99,11 +99,11 @@ def model_source_index(
         "cache_operations": (
             {
                 "table_of_contents": (
-                    "arc-paper get-cached-table-of-contents"
+                    "arc-paper get-table-of-contents"
                 ),
-                "section": "arc-paper get-cached-section",
+                "section": "arc-paper get-section",
                 "source_range": "arc-paper read-cached-source-range",
-                "search": "arc-paper search-cached-document",
+                "search": "arc-paper search-full-text",
             }
             if cache_document is not None
             else {}

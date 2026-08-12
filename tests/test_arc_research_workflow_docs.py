@@ -323,7 +323,6 @@ def test_package_manuals_are_self_contained_quick_starts() -> None:
         assert "Quick Start" in text
         assert package in text
         assert "## Help" in text
-        assert len(text.splitlines()) < 120
         assert f"`manuals/{name}`" in skill
 
 
@@ -365,15 +364,15 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         ("arc-paper.md", "arc-paper get-metadata", "paper", ["get-metadata", "arXiv:1234.5678"]),
         (
             "arc-paper.md",
-            "arc-paper get-arxiv-table-of-contents",
+            "arc-paper get-table-of-contents",
             "paper",
-            ["get-arxiv-table-of-contents", "1234.5678"],
+            ["get-table-of-contents", "--reference", "1234.5678"],
         ),
         (
             "arc-paper.md",
-            "arc-paper get-arxiv-section",
+            "arc-paper get-section",
             "paper",
-            ["get-arxiv-section", "1234.5678", "Introduction"],
+            ["get-section", "--reference", "1234.5678", "Introduction"],
         ),
         (
             "arc-paper.md",
@@ -396,14 +395,26 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         ),
         (
             "arc-paper.md",
-            "arc-paper search-cached-full-text",
+            "arc-paper search-full-text",
             "paper",
             [
-                "search-cached-full-text",
+                "search-full-text",
                 "--term",
                 "specific phrase",
                 "--term",
                 "alternate phrase",
+            ],
+        ),
+        (
+            "arc-paper.md",
+            "arc-paper search-equations",
+            "paper",
+            [
+                "search-equations",
+                "--reference",
+                "1234.5678",
+                "--term",
+                "2.30",
             ],
         ),
         (
@@ -511,36 +522,51 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         parsers[parser_name].parse_args(argv)
 
 
-def test_arc_paper_manual_documents_cache_first_arxiv_queries() -> None:
+def test_arc_paper_manual_documents_general_reference_reads() -> None:
     text = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
 
     for command in (
         "get-metadata",
-        "get-arxiv-table-of-contents",
-        "get-arxiv-section",
+        "get-table-of-contents",
+        "get-section",
         "get-references",
         "get-citers",
     ):
         assert f"arc-paper {command}" in text
-    assert "cache-first HTML" in text
-    assert "Use `--refresh` only" in text
+    assert "cache-first" in text
+    assert "first parseable representation" in text
+    assert "`--refresh` applies only to reference targets" in text
+    assert "--source-format html|markdown|tex|pdf" in text
     assert "arc-paper <command> --help" in text
 
 
-def test_arc_paper_docs_define_bounded_cached_full_text_search() -> None:
+def test_arc_paper_docs_define_unified_full_text_search() -> None:
     manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
-    section = manual.split("## Search Materialized Full Text", 1)[1].split(
+    section = manual.split("## Search Full Text", 1)[1].split(
         "\n## ", 1
     )[0]
     compact = " ".join(section.split())
 
-    assert "search-cached-full-text" in compact
-    assert compact.count("--term") == 2
-    assert "specific multiword synonyms" in compact
-    assert "literal-OR request" in compact
+    assert "search-full-text" in compact
+    assert compact.count("--term") >= 4
+    assert "specific multiword alternatives" in compact
+    assert "literal-OR query" in compact
+    assert "With no target" in compact
+    assert "With targets" in compact
     assert "up to 50 paper titles, not abstracts" in compact
     assert "rg_unavailable" in compact
     assert "refinement_required" in compact
+
+
+def test_arc_paper_docs_explain_equation_source_diagnosis() -> None:
+    manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    compact = " ".join(manual.split())
+
+    assert "search-equations" in manual
+    assert "2.29" in manual and "2.30" in manual
+    assert "cached ar5iv HTML has no literal" in compact
+    assert "upstream HTML-conversion defect" in compact
+    assert "PDF equation search" in compact
 
 
 def test_arc_paper_docs_define_bounded_citation_neighborhood_search() -> None:

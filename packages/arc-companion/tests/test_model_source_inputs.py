@@ -151,6 +151,12 @@ def test_model_source_index_has_identity_and_no_body_or_asset_metadata() -> None
     assert "chapters" not in index
     assert index["chapter_count"] == len(chapters)
     assert index["block_count"] == len(document.blocks)
+    assert index["cache_operations"] == {
+        "table_of_contents": "arc-paper get-table-of-contents",
+        "section": "arc-paper get-section",
+        "source_range": "arc-paper read-cached-source-range",
+        "search": "arc-paper search-full-text",
+    }
     equation = next(
         item
         for item in model_chapter_block_index(document, chapters[0])

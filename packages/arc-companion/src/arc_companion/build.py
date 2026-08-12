@@ -1719,7 +1719,7 @@ def _chapter_arc_commands(
         )
     toc_argv = [
         "arc-paper",
-        "get-cached-table-of-contents",
+        "get-table-of-contents",
         "--document-ref",
         document_json,
         "--cache-root",
@@ -1737,11 +1737,12 @@ def _chapter_arc_commands(
                 "search-current-title",
                 [
                     "arc-paper",
-                    "search-cached-document",
+                    "search-full-text",
                     "--document-ref",
                     document_json,
                     "--cache-root",
                     str(paper.cache_root),
+                    "--term",
                     chapter.title,
                 ],
             ),
@@ -1753,11 +1754,12 @@ def _chapter_arc_commands(
             command_id,
             [
                 "arc-paper",
-                "search-cached-document",
+                "search-full-text",
                 "--document-ref",
                 document_json,
                 "--cache-root",
                 str(paper.cache_root),
+                "--term",
                 query,
             ],
         )
