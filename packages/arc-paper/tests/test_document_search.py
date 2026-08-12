@@ -276,6 +276,15 @@ def test_equation_term_search_ranks_labels_and_returns_pdf_layout_evidence() -> 
                 normalized_tex="x+y+z",
                 source_label="2.30",
             ),
+            MathSpan(
+                span_id="math-unlabeled-equation",
+                kind=MathSpanKind.DISPLAY,
+                source_line_start=3,
+                source_column_start=1,
+                source_line_end=3,
+                source_column_end=10,
+                normalized_tex="unlabeled_math",
+            ),
         ),
     )
 
@@ -288,6 +297,10 @@ def test_equation_term_search_ranks_labels_and_returns_pdf_layout_evidence() -> 
 
     short = search_equation_terms(document, ("30",), context_lines=0)
     assert [item.source_label for item in short.matches] == ["2.30"]
+
+    unlabeled = search_equation_terms(document, ("unlabeled_math",))
+    assert unlabeled.matches[0].page_candidates == ()
+    assert unlabeled.matches[0].source_excerpt == ""
 
 
 def test_equation_search_does_not_substring_match_opaque_span_ids() -> None:

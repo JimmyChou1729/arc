@@ -425,21 +425,21 @@ def _validate_terms(terms: Sequence[str]) -> tuple[str, ...]:
 
 
 def _pdf_equation_evidence(document, span, *, context_lines: int):
-    if document.source.source_format.value != "pdf" or span.source_line_start is None:
+    if (
+        document.source.source_format.value != "pdf"
+        or span.source_line_start is None
+        or not span.source_label
+    ):
         return (), ""
     candidates: list[tuple[int, str]] = []
-    label_pattern = (
-        re.compile(rf"\(\s*{re.escape(span.source_label)}\s*\)")
-        if span.source_label
-        else None
-    )
+    label_pattern = re.compile(rf"\(\s*{re.escape(span.source_label)}\s*\)")
     for page in document.pages:
         lines = page.text.splitlines()
         index = span.source_line_start - 1
         if not 0 <= index < len(lines):
             continue
         line = " ".join(lines[index].split())
-        if label_pattern is not None and label_pattern.search(line) is None:
+        if label_pattern.search(line) is None:
             continue
         first = max(0, index - context_lines)
         last = min(len(lines), index + context_lines + 1)
