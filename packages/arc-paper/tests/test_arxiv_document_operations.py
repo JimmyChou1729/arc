@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from arc_paper import (
     ArcPaperService,
+    DocumentTarget,
     PaperInputError,
+    ReferenceAcquisitionError,
     SourceFormat,
     SourceOrigin,
     SourceOriginKind,
@@ -40,6 +43,7 @@ class FakeHtmlProvider:
         missing: bool = False,
     ):
         self.repository = repository
+        self.cache = SimpleNamespace(source_repository=repository)
         self.provider = provider
         self.payloads = payloads
         self.missing = missing
@@ -71,6 +75,15 @@ class ForbiddenPDF:
         raise AssertionError("deep arXiv document operations must not fetch PDF")
 
 
+class FakeInspire:
+    def get_metadata(self, paper_id: str, *, refresh: bool = False):
+        return {}
+
+
+def _target(reference: str) -> DocumentTarget:
+    return DocumentTarget("reference", reference=reference)
+
+
 def _service(
     tmp_path: Path,
     *,
@@ -93,6 +106,7 @@ def _service(
     return (
         ArcPaperService(
             repository=repository,
+            inspire=FakeInspire(),  # type: ignore[arg-type]
             arxiv_html=official,  # type: ignore[arg-type]
             ar5iv=ar5iv,
             arxiv_pdf=ForbiddenPDF(),
@@ -116,13 +130,15 @@ def test_arxiv_toc_normalizes_ids_and_returns_path_free_provenance(
 ) -> None:
     service, official, ar5iv = _service(tmp_path)
 
-    result = service.get_arxiv_table_of_contents(identifier)
+    result = service.get_table_of_contents(
+        _target(identifier), source_format=SourceFormat.HTML
+    )
 
-    assert result.provenance.canonical_arxiv_id == "arXiv:0911.3380"
-    assert result.provenance.provider == "arxiv-html"
-    assert result.provenance.source_format == "html"
-    assert len(result.provenance.source_digest) == 64
-    assert len(result.provenance.document_digest) == 64
+    assert result.source.identity is not None
+    assert result.source.identity.arxiv_id == "0911.3380"
+    assert result.source.document.source_format is SourceFormat.HTML
+    assert len(result.source.document.source_sha256) == 64
+    assert len(result.source.document.parsed_document_sha256) == 64
     assert [item.title for item in result.entries] == ["Introduction", "Dynamics"]
     assert official.calls == [("arXiv:0911.3380", False)]
     assert ar5iv.calls == []
@@ -132,21 +148,29 @@ def test_arxiv_toc_normalizes_ids_and_returns_path_free_provenance(
 def test_arxiv_section_and_search_return_locations_and_digests(tmp_path: Path) -> None:
     service, _, _ = _service(tmp_path)
 
-    section = service.get_arxiv_section("0911.3380", "dynamics")
-    text = service.search_arxiv_full_text(
-        "0911.3380", "Hamiltonian constraint", context_lines=0
+    target = _target("0911.3380")
+    section = service.get_section(
+        target, "dynamics", source_format=SourceFormat.HTML
     )
-    equations = service.search_arxiv_equations("0911.3380", r"8\pi G")
+    text = service.search_full_text_targets(
+        ("Hamiltonian constraint",),
+        targets=(target,),
+        source_format=SourceFormat.HTML,
+        context_lines=0,
+    )
+    equations = service.search_equation_targets(
+        (target,), (r"8\pi G",), source_format=SourceFormat.HTML
+    )
 
     assert section.title == "Dynamics"
     assert section.ordinal == 1
     assert "Friedmann" in section.text
-    assert text.matches[0].title == "Introduction"
-    assert text.matches[0].location_id
-    assert text.matches[0].source_digest == text.provenance.source_digest
-    assert text.matches[0].document_digest == text.provenance.document_digest
+    assert text.occurrences[0].title == "Introduction"
+    assert text.occurrences[0].location_id
+    assert text.occurrences[0].source_digest == text.documents[0].source.document.source_sha256
+    assert text.occurrences[0].document_digest == text.documents[0].source.document.parsed_document_sha256
     assert equations.matches[0].span_id
-    assert equations.matches[0].source_digest == equations.provenance.source_digest
+    assert equations.matches[0].source_digest == equations.documents[0].source.document.source_sha256
 
 
 def test_arxiv_document_operations_reuse_service_memo_and_refresh_by_content(
@@ -157,14 +181,17 @@ def test_arxiv_document_operations_reuse_service_memo_and_refresh_by_content(
         tmp_path, official_payloads=(HTML, HTML, changed)
     )
 
-    first = service.get_arxiv_table_of_contents("0911.3380")
-    same = service.get_arxiv_table_of_contents("0911.3380", refresh=True)
-    changed_result = service.get_arxiv_table_of_contents(
-        "0911.3380", refresh=True
+    target = _target("0911.3380")
+    first = service.get_table_of_contents(target, source_format="html")
+    same = service.get_table_of_contents(
+        target, source_format="html", refresh=True
+    )
+    changed_result = service.get_table_of_contents(
+        target, source_format="html", refresh=True
     )
 
-    assert first.provenance.document_digest == same.provenance.document_digest
-    assert first.provenance.document_digest != changed_result.provenance.document_digest
+    assert first.source.document.parsed_document_sha256 == same.source.document.parsed_document_sha256
+    assert first.source.document.parsed_document_sha256 != changed_result.source.document.parsed_document_sha256
     assert official.calls == [
         ("arXiv:0911.3380", False),
         ("arXiv:0911.3380", True),
@@ -178,9 +205,11 @@ def test_arxiv_document_operations_fall_back_only_after_official_not_found(
 ) -> None:
     service, official, ar5iv = _service(tmp_path, official_missing=True)
 
-    result = service.get_arxiv_table_of_contents("0911.3380")
+    result = service.get_table_of_contents(
+        _target("0911.3380"), source_format="html"
+    )
 
-    assert result.provenance.provider == "ar5iv"
+    assert result.source.document.source_format is SourceFormat.HTML
     assert official.calls == [("arXiv:0911.3380", False)]
     assert ar5iv.calls == [("arXiv:0911.3380", False)]
 
@@ -208,20 +237,20 @@ def test_arxiv_document_operations_do_not_fall_back_after_official_failure(
     )
 
     with pytest.raises(ProviderError) as error:
-        service.get_arxiv_table_of_contents("0911.3380")
+        service.get_table_of_contents(_target("0911.3380"), source_format="html")
 
     assert error.value.code == "arxiv_html_fetch_failed"
     assert official.calls == [("arXiv:0911.3380", False)]
     assert fallback.calls == []
 
 
-def test_arxiv_document_errors_are_typed_and_never_fall_back_to_pdf(
+def test_reference_document_errors_are_typed_and_never_fall_back_to_pdf(
     tmp_path: Path,
 ) -> None:
     service, _, _ = _service(tmp_path)
-    with pytest.raises(PaperInputError) as invalid:
-        service.get_arxiv_table_of_contents("doi:10.1000/example")
-    assert invalid.value.code == "not_arxiv_id"
+    with pytest.raises(ReferenceAcquisitionError) as invalid:
+        service.get_table_of_contents(_target("not an exact reference"))
+    assert invalid.value.code == "reference_acquisition_unavailable"
 
     repository = SourceRepository(tmp_path / "missing")
     missing_html = FakeHtmlProvider(
@@ -230,10 +259,16 @@ def test_arxiv_document_errors_are_typed_and_never_fall_back_to_pdf(
     missing_ar5iv = FakeHtmlProvider(repository, provider="ar5iv", missing=True)
     missing = ArcPaperService(
         repository=repository,
+        inspire=FakeInspire(),  # type: ignore[arg-type]
         arxiv_html=missing_html,  # type: ignore[arg-type]
         ar5iv=missing_ar5iv,  # type: ignore[arg-type]
         arxiv_pdf=ForbiddenPDF(),
     )
-    with pytest.raises(ProviderError) as error:
-        missing.search_arxiv_full_text("0911.3380", "query")
-    assert error.value.code == "ar5iv_not_found"
+    with pytest.raises(PaperInputError) as error:
+        missing.search_full_text_targets(
+            ("query",),
+            targets=(_target("0911.3380"),),
+            source_format="html",
+        )
+    assert error.value.code == "no_document_target_resolved"
+    assert "ar5iv_not_found" in str(error.value)

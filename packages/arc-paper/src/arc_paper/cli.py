@@ -152,24 +152,25 @@ def _parser() -> _Parser:
     search.add_argument("query", nargs="+", help="metadata search query")
     search.add_argument("--limit", type=int, default=20, help="maximum results (default: 20)")
 
-    cached_full_text = commands.add_parser(
-        "search-cached-full-text",
-        help="search all locally cached full text",
+    full_text = commands.add_parser(
+        "search-full-text",
+        help="search cached corpus or selected papers",
         description=(
-            "Search every cached parsed document. Repeat --term with specific "
-            "multi-word synonyms or alternate spellings for better coverage."
+            "Search cached corpus when no target is supplied, or repeat mixed "
+            "reference and document targets for a focused search."
         ),
     )
-    cached_full_text.add_argument(
+    _search_document_target_arguments(full_text)
+    full_text.add_argument(
         "--term", action="append", required=True, help="search phrase; repeat for alternatives"
     )
-    cached_full_text.add_argument(
+    full_text.add_argument(
         "--limit", type=int, default=100, help="maximum matches (default: 100)"
     )
-    cached_full_text.add_argument(
+    full_text.add_argument(
         "--context-lines", type=int, default=0, help="context lines around each match"
     )
-    cached_full_text.add_argument(
+    full_text.add_argument(
         "--case-sensitive", action="store_true", help="match letter case exactly"
     )
 
@@ -229,29 +230,6 @@ def _parser() -> _Parser:
         ),
     )
 
-    cached_search = commands.add_parser(
-        "search-cached-document",
-        help="search one verified cached document",
-        description=(
-            "Search only the document named by --document-ref; no other cache "
-            "entry or provider is consulted."
-        ),
-    )
-    _cached_document_arguments(cached_search)
-    cached_search.add_argument("query", nargs="+", help="full-text search query")
-    cached_search.add_argument(
-        "--limit", type=int, default=20, help="maximum matches (default: 20)"
-    )
-    cached_search.add_argument(
-        "--context-lines",
-        type=int,
-        default=1,
-        help="context lines around each match",
-    )
-    cached_search.add_argument(
-        "--case-sensitive", action="store_true", help="match letter case exactly"
-    )
-
     lookup_reference = commands.add_parser(
         "lookup-reference",
         help="look up one exact reference identity in the shared cache",
@@ -307,29 +285,19 @@ def _parser() -> _Parser:
         "--cache-root", help="override the paper cache directory"
     )
 
-    full_text = commands.add_parser(
-        "search-arxiv-full-text",
-        help="search one arXiv paper's full text",
-        description="Search the parsed full text of one arXiv paper.",
-    )
-    _arxiv_arguments(full_text)
-    full_text.add_argument("query", nargs="+", help="full-text search query")
-    full_text.add_argument("--limit", type=int, default=20, help="maximum matches (default: 20)")
-    full_text.add_argument(
-        "--context-lines", type=int, default=1, help="context lines around each match"
-    )
-    full_text.add_argument(
-        "--case-sensitive", action="store_true", help="match letter case exactly"
-    )
-
     equations = commands.add_parser(
-        "search-arxiv-equations",
-        help="search equations in one arXiv paper",
-        description="Search extracted equations and nearby text in one arXiv paper.",
+        "search-equations",
+        help="search equations in selected papers",
+        description="Search equation labels, math, and nearby text across mixed targets.",
     )
-    _arxiv_arguments(equations)
-    equations.add_argument("query", nargs="+", help="equation or surrounding-text query")
+    _search_document_target_arguments(equations)
+    equations.add_argument(
+        "--term", action="append", required=True, help="label, math, or context phrase; repeat for OR"
+    )
     equations.add_argument("--limit", type=int, default=20, help="maximum matches (default: 20)")
+    equations.add_argument(
+        "--context-lines", type=int, default=8, help="PDF layout lines around each match"
+    )
     equations.add_argument(
         "--case-sensitive", action="store_true", help="match letter case exactly"
     )
@@ -512,6 +480,11 @@ def _cached_document_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _single_document_target_arguments(parser: argparse.ArgumentParser) -> None:
+    _search_document_target_arguments(parser)
+    _cached_structure_argument(parser)
+
+
+def _search_document_target_arguments(parser: argparse.ArgumentParser) -> None:
     parser.set_defaults(targets=[])
     parser.add_argument(
         "--reference",
@@ -632,18 +605,23 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
         }
     if command == "search-metadata":
         return {"query": " ".join(args.query), "limit": args.limit}
-    if command == "search-cached-full-text":
+    if command == "search-full-text":
         return {
+            "targets": args.targets,
             "terms": args.term,
+            "source_format": args.source_format,
+            "refresh": args.refresh,
             "limit": args.limit,
             "context_lines": args.context_lines,
             "case_sensitive": args.case_sensitive,
+            "cache_root": args.cache_root,
         }
     if command == "get-table-of-contents":
         if len(args.targets) != 1:
             raise _UsageError("get-table-of-contents requires exactly one target")
         return {
             "target": args.targets[0],
+            "structure": args.structure_ref,
             "source_format": args.source_format,
             "refresh": args.refresh,
             "cache_root": args.cache_root,
@@ -659,6 +637,7 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             raise _UsageError("get-section requires exactly one target")
         return {
             "target": args.targets[0],
+            "structure": args.structure_ref,
             "selector": (
                 args.ordinal if args.ordinal is not None else args.selector
             ),
@@ -671,11 +650,12 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "doi": args.doi,
             "arxiv_id": args.arxiv_id,
             "url": args.url,
-            "title": getattr(args, "title", None),
             "cache_root": args.cache_root,
         }
         if command == "acquire-reference":
             values["refresh"] = args.refresh
+        else:
+            values["title"] = args.title
         return values
     if command == "admit-reference":
         return {
@@ -701,31 +681,18 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "text_only": args.text_only,
             "cache_root": args.cache_root,
         }
-    if command == "search-cached-document":
+    if command == "search-equations":
+        if not args.targets:
+            raise _UsageError("search-equations requires at least one target")
         return {
-            "document": args.document_ref,
-            "query": " ".join(args.query),
+            "targets": args.targets,
+            "terms": args.term,
+            "source_format": args.source_format,
+            "refresh": args.refresh,
             "limit": args.limit,
             "context_lines": args.context_lines,
             "case_sensitive": args.case_sensitive,
             "cache_root": args.cache_root,
-        }
-    if command == "search-arxiv-full-text":
-        return {
-            "arxiv_id": args.arxiv_id,
-            "query": " ".join(args.query),
-            "limit": args.limit,
-            "context_lines": args.context_lines,
-            "case_sensitive": args.case_sensitive,
-            "refresh": args.refresh,
-        }
-    if command == "search-arxiv-equations":
-        return {
-            "arxiv_id": args.arxiv_id,
-            "query": " ".join(args.query),
-            "limit": args.limit,
-            "case_sensitive": args.case_sensitive,
-            "refresh": args.refresh,
         }
     if command in {"fetch-arxiv-auto", "fetch-arxiv-pdf"}:
         return {

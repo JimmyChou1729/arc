@@ -720,17 +720,19 @@ def test_current_pdf_falls_back_when_html_catalog_projection_is_stale(
 
 
 def test_registry_contract_is_safe_path_free_and_titles_are_strings_only() -> None:
-    spec = get_operation("search-cached-full-text")
+    spec = get_operation("search-full-text")
     assert spec is not None
-    assert spec.operation_id == "arc-paper.search-cached-full-text.v1"
-    assert spec.effect_flags == frozenset()
+    assert spec.operation_id == "arc-paper.search-full-text.v1"
     assert set(spec.input_codec.schema["properties"]) == {
         "terms",
+        "targets",
+        "source_format",
+        "refresh",
         "limit",
         "context_lines",
         "case_sensitive",
+        "cache_root",
     }
-    assert "cache_root" not in spec.input_codec.schema["properties"]
     assert "path" not in spec.input_codec.schema["properties"]
 
     invalid = {

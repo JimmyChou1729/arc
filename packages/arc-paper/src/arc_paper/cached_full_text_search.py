@@ -19,7 +19,8 @@ from ._full_text_catalog import (
 )
 from ._parsed_document_cache import PARSER_CONTRACT, ParsedDocumentCache
 from ._ripgrep import RipgrepCandidateSelector
-from .parse import ParsedDocument
+from .cached_document import CachedDocumentRef
+from .parse.models import ParsedDocument
 from .source_repository import SourceRepositoryError
 from .sources import SourceFormat
 
@@ -82,6 +83,14 @@ class CachedFullTextSearchResult:
     context_status: CachedFullTextContextStatus
     message: str
     warnings: tuple[str, ...] = ()
+    documents: tuple["CachedFullTextDocument", ...] = ()
+
+
+@dataclass(frozen=True)
+class CachedFullTextDocument:
+    source_kind: str
+    arxiv_ids: tuple[str, ...]
+    document: CachedDocumentRef
 
 
 class CandidateSelector(Protocol):
@@ -198,6 +207,7 @@ class CachedFullTextSearcher:
         warnings = list(selection_warnings)
         located: list[_LocatedOccurrence] = []
         occurrence_counts: dict[tuple[str, ...], int] = {}
+        matched_documents: dict[tuple[str, ...], CachedFullTextDocument] = {}
         display_titles: dict[tuple[str, ...], str] = {}
         total = 0
         retaining_occurrences = True
@@ -225,6 +235,7 @@ class CachedFullTextSearcher:
                     continue
                 identity = selected_document.stable_identity
                 occurrence_counts[identity] = document_occurrence_count
+                matched_documents[identity] = _cached_document(selected_document)
                 display_titles[identity] = _display_title(
                     selected_document, document
                 )
@@ -271,6 +282,9 @@ class CachedFullTextSearcher:
                     "multi-word terms and include synonymous expressions in one request."
                 ),
                 warnings=warnings_tuple,
+                documents=tuple(
+                    matched_documents[identity] for identity in ranked
+                ),
             )
 
         if context_lines == 0:
@@ -311,6 +325,10 @@ class CachedFullTextSearcher:
                 f"{'' if matched_document_count == 1 else 's'}."
             ),
             warnings=warnings_tuple,
+            documents=tuple(
+                matched_documents[identity]
+                for identity in sorted(matched_documents)
+            ),
         )
 
     def _selected_documents(
@@ -432,6 +450,23 @@ def _document_occurrences(
     *,
     case_sensitive: bool,
 ) -> Iterator[_LocatedOccurrence]:
+    yield from _located_document_occurrences(
+        document,
+        terms,
+        source_kind=selected.source_kind,
+        arxiv_ids=selected.arxiv_ids,
+        case_sensitive=case_sensitive,
+    )
+
+
+def _located_document_occurrences(
+    document: ParsedDocument,
+    terms: tuple[str, ...],
+    *,
+    source_kind: str,
+    arxiv_ids: tuple[str, ...],
+    case_sensitive: bool,
+) -> Iterator[_LocatedOccurrence]:
     patterns = tuple(
         re.compile(
             r"\s+".join(re.escape(part) for part in term.split()),
@@ -439,7 +474,6 @@ def _document_occurrences(
         )
         for term in terms
     )
-    representation = selected.representation
     for location in _search_locations(document):
         for start, end, matched_terms in _iter_term_spans(
             location.text, terms, patterns
@@ -449,13 +483,11 @@ def _document_occurrences(
             line, column = _line_and_column(location.text, start)
             yield _LocatedOccurrence(
                 occurrence=CachedFullTextOccurrence(
-                    source_kind=selected.source_kind,
-                    arxiv_ids=selected.arxiv_ids,
-                    source_format=representation.source_format,
-                    source_digest=str(
-                        representation.source_identity["artifact_digest"]
-                    ),
-                    document_digest=representation.document_digest,
+                    source_kind=source_kind,
+                    arxiv_ids=arxiv_ids,
+                    source_format=document.source.source_format.value,
+                    source_digest=document.source.artifact_digest,
+                    document_digest=document.document_digest,
                     location=location.kind,
                     location_id=location.location_id,
                     title=location.title,
@@ -468,6 +500,46 @@ def _document_occurrences(
                 start=start,
                 end=end,
             )
+
+
+def search_document_occurrences(
+    document: ParsedDocument,
+    terms: Sequence[str],
+    *,
+    context_lines: int = 0,
+    case_sensitive: bool = False,
+) -> tuple[CachedFullTextOccurrence, ...]:
+    """Return occurrence-level literal-OR matches for one parsed document."""
+
+    normalized = _validate_request(
+        terms,
+        limit=1,
+        context_lines=context_lines,
+        case_sensitive=case_sensitive,
+    )
+    located = _located_document_occurrences(
+        document,
+        normalized,
+        source_kind="target",
+        arxiv_ids=(),
+        case_sensitive=case_sensitive,
+    )
+    return tuple(
+        replace(
+            item.occurrence,
+            context=(
+                _context(
+                    item.text,
+                    item.start,
+                    item.end,
+                    context_lines=context_lines,
+                )
+                if context_lines
+                else ""
+            ),
+        )
+        for item in located
+    )
 
 
 def _search_locations(document: ParsedDocument) -> tuple[_SearchLocation, ...]:
@@ -777,6 +849,22 @@ def _display_title(
     )
 
 
+def _cached_document(selected: _SelectedDocument) -> CachedFullTextDocument:
+    identity = selected.representation.source_identity
+    return CachedFullTextDocument(
+        source_kind=selected.source_kind,
+        arxiv_ids=selected.arxiv_ids,
+        document=CachedDocumentRef(
+            source_format=identity["source_format"],
+            source_sha256=identity["artifact_digest"],
+            source_size=identity["size"],
+            media_type=identity["media_type"],
+            parser_contract=selected.representation.parser_contract,
+            parsed_document_sha256=selected.representation.document_digest,
+        ),
+    )
+
+
 def _zero_result(
     terms: tuple[str, ...],
     *,
@@ -805,11 +893,13 @@ def _zero_result(
             "abbreviated, or alternative multi-word terms in one request."
         ),
         warnings=warnings,
+        documents=(),
     )
 
 
 __all__ = [
     "CachedFullTextContextStatus",
+    "CachedFullTextDocument",
     "CachedFullTextLocation",
     "CachedFullTextOccurrence",
     "CachedFullTextSearchError",
@@ -817,4 +907,5 @@ __all__ = [
     "CachedFullTextSearchResult",
     "CachedFullTextSearcher",
     "CandidateSelector",
+    "search_document_occurrences",
 ]

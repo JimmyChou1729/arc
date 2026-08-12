@@ -54,3 +54,41 @@ def test_reference_cache_supports_exact_inspire_identity(tmp_path: Path) -> None
     found = cache.lookup(inspire_recid="12345")
     assert found is not None
     assert found.identity.inspire_recid == "12345"
+
+
+def test_full_text_search_supports_literal_or_dedup_and_partial_failures(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "paper.md"
+    source.write_text("# Body\nAlpha here. Omega there.\n")
+    service = ArcPaperService(cache_root=tmp_path / "cache")
+    artifact = service.import_source(source)
+    reference = service.cache_document(artifact)
+    exact = DocumentTarget(kind="document", document=reference)
+
+    result = service.search_full_text_targets(
+        ("Alpha", "Omega"),
+        targets=(exact, DocumentTarget(kind="reference", reference="Missing"), exact),
+    )
+
+    assert result.scope == "targets"
+    assert result.terms == ("Alpha", "Omega")
+    assert {item.matched_terms for item in result.occurrences} == {
+        ("Alpha",),
+        ("Omega",),
+    }
+    assert result.documents[0].target_indices == (0, 2)
+    assert result.failures[0].target_index == 1
+    assert result.failures[0].code == "reference_acquisition_unavailable"
+
+
+def test_equation_target_search_fails_only_when_no_target_resolves(
+    tmp_path: Path,
+) -> None:
+    service = ArcPaperService(cache_root=tmp_path / "cache")
+    with pytest.raises(PaperInputError) as error:
+        service.search_equation_targets(
+            (DocumentTarget(kind="reference", reference="Missing"),),
+            ("2.30",),
+        )
+    assert error.value.code == "no_document_target_resolved"

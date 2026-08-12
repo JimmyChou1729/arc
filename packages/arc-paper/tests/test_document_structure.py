@@ -8,6 +8,7 @@ import pytest
 from arc_paper import (
     ArcPaperService,
     CachedDocumentStructureRef,
+    DocumentTarget,
     DocumentStructureError,
     PDFTextLayer,
     cached_document_structure_ref_from_document,
@@ -111,8 +112,9 @@ def test_structure_overlay_rebuilds_hierarchy_without_changing_document(
     assert isinstance(structure, CachedDocumentStructureRef)
     assert structure.document == document
 
-    toc = service.get_cached_table_of_contents(
-        document, structure=structure
+    target = DocumentTarget(kind="document", document=document)
+    toc = service.get_table_of_contents(
+        target, structure=structure
     )
     assert [(item.level, item.title) for item in toc.entries] == [
         (1, "Contents"),
@@ -121,8 +123,8 @@ def test_structure_overlay_rebuilds_hierarchy_without_changing_document(
         (3, "INNER TOPIC"),
         (2, "Closing"),
     ]
-    opening = service.get_cached_section(
-        document, "Opening", structure=structure
+    opening = service.get_section(
+        target, "Opening", structure=structure
     )
     assert opening.text.startswith("# Opening")
     assert "# INNER TOPIC" in opening.text
@@ -163,8 +165,8 @@ def test_corrupt_structure_object_is_rebuilt(
     object_path.write_text("corrupt", encoding="utf-8")
 
     assert service.reconstruct_cached_structure(document, outline) == reference
-    assert service.get_cached_table_of_contents(
-        document, structure=reference
+    assert service.get_table_of_contents(
+        DocumentTarget(kind="document", document=document), structure=reference
     ).entries
 
 

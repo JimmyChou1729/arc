@@ -45,28 +45,13 @@ def test_registry_has_one_typed_spec_per_operation_and_safe_default_projection()
     assert {
         "arc-paper.get-table-of-contents.v1",
         "arc-paper.get-section.v1",
-        "arc-paper.search-arxiv-full-text.v3",
-        "arc-paper.search-arxiv-equations.v3",
+        "arc-paper.search-full-text.v1",
+        "arc-paper.search-equations.v1",
         "arc-paper.fetch-arxiv-auto.v2",
-        "arc-paper.search-cached-full-text.v1",
         "arc-paper.search-citers.v1",
     } <= set(OPERATION_REGISTRY)
-    for name in ("search-arxiv-full-text", "search-arxiv-equations"):
-        spec = OPERATION_REGISTRY[name]
-        assert spec.version == 3
-        assert spec.input_codec.schema_id == f"arc.paper.{name}.parameters.v3"
-        assert spec.output_codec.schema_id == f"arc.paper.{name}.result.v3"
     assert OPERATION_REGISTRY["fetch-arxiv-auto"].version == 2
     assert OPERATION_REGISTRY["parse-local"].version == 2
-    assert all(
-        "cache_root"
-        not in OPERATION_REGISTRY[name].input_codec.schema["properties"]
-        for name in (
-            "search-arxiv-full-text",
-            "search-arxiv-equations",
-            "search-cached-full-text",
-        )
-    )
     assert registry_document()["schema_version"] == "arc.paper.operation_registry.v1"
 
 
@@ -96,6 +81,33 @@ def test_search_citers_registry_contract_has_bounded_network_cache_effects() -> 
         "matches",
         "control_sample",
     }
+
+
+def test_acquire_reference_cli_omits_unsupported_title_parameter(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed = []
+
+    def dispatch(name, values):
+        observed.append((name, values))
+        return {}
+
+    monkeypatch.setattr("arc_paper.cli.dispatch_operation", dispatch)
+    assert main(["acquire-reference", "--arxiv-id", "0911.3380"]) == 0
+    capsys.readouterr()
+    assert observed == [
+        (
+            "acquire-reference",
+            {
+                "doi": None,
+                "arxiv_id": "0911.3380",
+                "url": None,
+                "cache_root": None,
+                "refresh": False,
+            },
+        )
+    ]
 
 
 def test_registry_dispatch_is_strict_and_python_values_are_typed() -> None:
@@ -209,7 +221,7 @@ def test_cli_stdout_is_exactly_one_command_result(
         ),
         (
             [
-                "search-cached-full-text",
+                "search-full-text",
                 "--term",
                 "heavy field",
                 "--term",
@@ -220,12 +232,16 @@ def test_cli_stdout_is_exactly_one_command_result(
                 "2",
                 "--case-sensitive",
             ],
-            "search-cached-full-text",
+            "search-full-text",
             {
+                "targets": [],
                 "terms": ["heavy field", "massive exchange"],
+                "source_format": None,
+                "refresh": False,
                 "limit": 100,
                 "context_lines": 2,
                 "case_sensitive": True,
+                "cache_root": None,
             },
         ),
         (
@@ -233,6 +249,7 @@ def test_cli_stdout_is_exactly_one_command_result(
             "get-table-of-contents",
             {
                 "target": {"kind": "reference", "reference": "0911.3380"},
+                "structure": None,
                 "source_format": None,
                 "refresh": True,
                 "cache_root": None,
@@ -243,6 +260,7 @@ def test_cli_stdout_is_exactly_one_command_result(
             "get-section",
             {
                 "target": {"kind": "reference", "reference": "0911.3380"},
+                "structure": None,
                 "selector": "Introduction",
                 "source_format": None,
                 "refresh": False,
@@ -254,6 +272,7 @@ def test_cli_stdout_is_exactly_one_command_result(
             "get-section",
             {
                 "target": {"kind": "reference", "reference": "0911.3380"},
+                "structure": None,
                 "selector": "0",
                 "source_format": None,
                 "refresh": False,
@@ -265,6 +284,7 @@ def test_cli_stdout_is_exactly_one_command_result(
             "get-section",
             {
                 "target": {"kind": "reference", "reference": "0911.3380"},
+                "structure": None,
                 "selector": 0,
                 "source_format": None,
                 "refresh": False,
@@ -273,35 +293,41 @@ def test_cli_stdout_is_exactly_one_command_result(
         ),
         (
             [
-                "search-arxiv-full-text",
+                "search-full-text",
+                "--reference",
                 "0911.3380",
-                "Hamiltonian",
-                "constraint",
+                "--term",
+                "Hamiltonian constraint",
                 "--limit",
                 "7",
                 "--context-lines",
                 "2",
                 "--case-sensitive",
             ],
-            "search-arxiv-full-text",
+            "search-full-text",
             {
-                "arxiv_id": "0911.3380",
-                "query": "Hamiltonian constraint",
+                "targets": [{"kind": "reference", "reference": "0911.3380"}],
+                "terms": ["Hamiltonian constraint"],
+                "source_format": None,
+                "refresh": False,
                 "limit": 7,
                 "context_lines": 2,
                 "case_sensitive": True,
-                "refresh": False,
+                "cache_root": None,
             },
         ),
         (
-            ["search-arxiv-equations", "0911.3380", "H^2", "--limit", "3"],
-            "search-arxiv-equations",
+            ["search-equations", "--reference", "0911.3380", "--term", "H^2", "--limit", "3"],
+            "search-equations",
             {
-                "arxiv_id": "0911.3380",
-                "query": "H^2",
-                "limit": 3,
-                "case_sensitive": False,
+                "targets": [{"kind": "reference", "reference": "0911.3380"}],
+                "terms": ["H^2"],
+                "source_format": None,
                 "refresh": False,
+                "limit": 3,
+                "context_lines": 8,
+                "case_sensitive": False,
+                "cache_root": None,
             },
         ),
         (
@@ -490,11 +516,10 @@ def test_cli_preserves_nonfatal_domain_warnings_in_shared_envelope(
         ["get-citers", "--help"],
         ["search-citers", "--help"],
         ["search-metadata", "--help"],
-        ["search-cached-full-text", "--help"],
+        ["search-full-text", "--help"],
         ["get-table-of-contents", "--help"],
         ["get-section", "--help"],
-        ["search-arxiv-full-text", "--help"],
-        ["search-arxiv-equations", "--help"],
+        ["search-equations", "--help"],
         ["fetch-arxiv-auto", "--help"],
         ["fetch-arxiv-pdf", "--help"],
         ["import-source", "--help"],
@@ -523,10 +548,10 @@ def test_cli_root_subcommand_and_nested_cache_help_is_human_readable(
 def test_cached_search_help_guides_specific_multi_term_queries(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert main(["search-cached-full-text", "--help"]) == 0
+    assert main(["search-full-text", "--help"]) == 0
     output = " ".join(capsys.readouterr().out.split())
-    assert "specific multi-word synonyms" in output
-    assert "alternate spellings" in output
+    assert "cached corpus" in output
+    assert "mixed reference and document targets" in output
 
 
 def test_operations_cli_is_removed_but_registry_introspection_remains_public(

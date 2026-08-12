@@ -18,6 +18,7 @@ from .epub import (
 from .ids import arxiv_path_id, doi_value, inspire_recid, normalize_paper_id
 from .providers.arxiv_html import ArxivHtmlProvider
 from .providers.arxiv_pdf import ArxivPdfProvider
+from .providers.ar5iv import Ar5ivProvider
 from .providers.base import ProviderError
 from .providers.crossref import CrossrefProvider
 from .providers.http import HttpResourceProvider
@@ -83,6 +84,7 @@ class ReferenceAcquisitionService:
         inspire: InspireProvider | None = None,
         crossref: CrossrefProvider | None = None,
         arxiv_html: ArxivHtmlProvider | None = None,
+        ar5iv: Ar5ivProvider | None = None,
         arxiv_pdf: ArxivPdfProvider | None = None,
         http: HttpResourceProvider | None = None,
         backends: Sequence[ReferenceAcquisitionBackend] = (),
@@ -96,6 +98,9 @@ class ReferenceAcquisitionService:
             cache_root=self.cache.root, client=shared_client
         )
         self.arxiv_html = arxiv_html or ArxivHtmlProvider(
+            cache_root=self.cache.root, client=shared_client
+        )
+        self.ar5iv = ar5iv or Ar5ivProvider(
             cache_root=self.cache.root, client=shared_client
         )
         self.arxiv_pdf = arxiv_pdf or ArxivPdfProvider(
@@ -151,6 +156,7 @@ class ReferenceAcquisitionService:
         media_type: str,
         source_locator: str = "",
         filename: str = "",
+        _prefer_resource: bool = False,
     ) -> CachedReferenceMaterial:
         resolved_identity = _identity_for_query(identity)
         raw = self.cache.store_resource(
@@ -180,10 +186,23 @@ class ReferenceAcquisitionService:
                     title=derived.title,
                     inspire_recid=resolved_identity.inspire_recid,
                 )
-        return self.cache.store_material(
+        stored = self.cache.store_material(
             resolved_identity,
             tuple(resources),
             readable_resource=readable,
+        )
+        if not _prefer_resource:
+            return stored
+        preferred = tuple(
+            item for item in stored.resources if item.content_identity == raw.content_identity
+        )
+        remaining = tuple(
+            item for item in stored.resources if item.content_identity != raw.content_identity
+        )
+        return CachedReferenceMaterial(
+            identity=stored.identity,
+            resources=(*preferred, *remaining),
+            readable_resource=readable or stored.readable_resource,
         )
 
     def acquire_reference(
@@ -223,6 +242,7 @@ class ReferenceAcquisitionService:
                     media_type=result.media_type,
                     source_locator=result.source_locator,
                     filename=result.filename,
+                    _prefer_resource=refresh,
                 )
 
         if requested.arxiv_id:
@@ -276,40 +296,64 @@ class ReferenceAcquisitionService:
         source_format: SourceFormat | None = None,
     ) -> CachedReferenceMaterial:
         paper_id = f"arXiv:{identity.arxiv_id}"
-        errors: list[ProviderError] = []
-        if source_format is None:
-            providers = (self.arxiv_html, self.arxiv_pdf)
-        elif source_format is SourceFormat.HTML:
-            providers = (self.arxiv_html,)
-        elif source_format is SourceFormat.PDF:
-            providers = (self.arxiv_pdf,)
-        else:
+        if source_format not in (None, SourceFormat.HTML, SourceFormat.PDF):
             raise ReferenceAcquisitionError(
                 "reference_format_unavailable",
                 f"arXiv acquisition does not provide {source_format.value} sources",
             )
+
+        providers: tuple[ArxivHtmlProvider | Ar5ivProvider | ArxivPdfProvider, ...]
+        if source_format is SourceFormat.PDF:
+            providers = (self.arxiv_pdf,)
+        else:
+            try:
+                artifact = self.arxiv_html.fetch(paper_id, refresh=refresh)
+            except ProviderError as exc:
+                if exc.code != "arxiv_html_not_found":
+                    raise
+                providers = (self.ar5iv,)
+            else:
+                providers = ()
+                return self._admit_arxiv_artifact(
+                    artifact, self.arxiv_html, identity, prefer_resource=refresh
+                )
+
+        errors: list[ProviderError] = []
         for provider in providers:
             try:
                 artifact = provider.fetch(paper_id, refresh=refresh)
             except ProviderError as exc:
                 errors.append(exc)
                 continue
-            payload = provider.cache.source_repository.read_bytes(artifact)
-            filename = (
-                f"{identity.arxiv_id}.html"
-                if artifact.media_type == "text/html"
-                else f"{identity.arxiv_id}.pdf"
-            )
-            return self.admit_reference_bytes(
-                payload,
-                identity,
-                media_type=artifact.media_type,
-                source_locator=artifact.origin.locator,
-                filename=filename,
+            return self._admit_arxiv_artifact(
+                artifact, provider, identity, prefer_resource=refresh
             )
         raise ReferenceAcquisitionError(
             "arxiv_acquisition_failed",
             _provider_failures(errors, f"no arXiv representation was available for {paper_id}"),
+        )
+
+    def _admit_arxiv_artifact(
+        self,
+        artifact: Any,
+        provider: ArxivHtmlProvider | Ar5ivProvider | ArxivPdfProvider,
+        identity: ReferenceIdentity,
+        *,
+        prefer_resource: bool,
+    ) -> CachedReferenceMaterial:
+        payload = provider.cache.source_repository.read_bytes(artifact)
+        filename = (
+            f"{identity.arxiv_id}.html"
+            if artifact.media_type == "text/html"
+            else f"{identity.arxiv_id}.pdf"
+        )
+        return self.admit_reference_bytes(
+            payload,
+            identity,
+            media_type=artifact.media_type,
+            source_locator=artifact.origin.locator,
+            filename=filename,
+            _prefer_resource=prefer_resource,
         )
 
     def _acquire_doi(
@@ -406,6 +450,7 @@ class ReferenceAcquisitionService:
             media_type=acquired.media_type,
             source_locator=acquired.resolved_url,
             filename=acquired.filename,
+            _prefer_resource=True,
         )
 
 

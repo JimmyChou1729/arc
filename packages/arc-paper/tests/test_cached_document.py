@@ -10,6 +10,7 @@ from arc_paper import (
     ArcPaperService,
     CachedDocumentError,
     CachedDocumentRef,
+    DocumentTarget,
     PDFTextLayer,
     SourceFormat,
     SourceRepositoryError,
@@ -41,6 +42,10 @@ def _cached(tmp_path: Path) -> tuple[ArcPaperService, CachedDocumentRef]:
     return service, service.cache_document(source)
 
 
+def _target(reference: CachedDocumentRef) -> DocumentTarget:
+    return DocumentTarget(kind="document", document=reference)
+
+
 def test_cached_document_ref_round_trip_and_cache_only_reads(
     tmp_path: Path,
 ) -> None:
@@ -57,16 +62,16 @@ def test_cached_document_ref_round_trip_and_cache_only_reads(
         "parsed_document_sha256": reference.parsed_document_sha256,
     }
 
-    toc = service.get_cached_table_of_contents(reference)
+    toc = service.get_table_of_contents(_target(reference))
     assert [item.title for item in toc.entries] == ["Opening", "Second"]
-    section = service.get_cached_section(reference, "Second")
+    section = service.get_section(_target(reference), "Second")
     assert section.ordinal == 1
     assert section.text.endswith("Beta is explained here.")
     source_range = service.read_cached_source_range(reference, 1, 3)
     assert source_range.total_lines == 7
     assert source_range.text == "# Opening\n\nAlpha appears in the first section."
-    search = service.search_cached_document(reference, "beta")
-    assert [item.location_id for item in search.matches] == [
+    search = service.search_full_text_targets(("beta",), targets=(_target(reference),))
+    assert [item.location_id for item in search.occurrences] == [
         toc.entries[1].section_id
     ]
 
@@ -79,9 +84,11 @@ def test_target_specific_search_does_not_scan_other_cached_documents(
     other.write_text("# Other\n\nUniqueOnlyElsewhere.\n", encoding="utf-8")
     service.import_source(other)
 
-    result = service.search_cached_document(reference, "UniqueOnlyElsewhere")
+    result = service.search_full_text_targets(
+        ("UniqueOnlyElsewhere",), targets=(_target(reference),)
+    )
 
-    assert result.matches == ()
+    assert result.occurrences == ()
 
 
 def test_cached_document_accepts_repeated_identical_math_on_one_line(
@@ -97,7 +104,7 @@ def test_cached_document_accepts_repeated_identical_math_on_one_line(
     reference = service.cache_document(service.import_source(source_path))
 
     assert reference.parser_contract == "arc.paper.parser.v4"
-    assert service.get_cached_table_of_contents(reference).entries
+    assert service.get_table_of_contents(_target(reference)).entries
 
 
 def test_cached_document_rebuilds_only_derived_projection(
@@ -111,7 +118,7 @@ def test_cached_document_rebuilds_only_derived_projection(
     entry = parser_cache._entry_dir(parser_cache.cache_key(source))
     (entry / "document.json").write_text("corrupt", encoding="utf-8")
 
-    result = service.get_cached_table_of_contents(reference)
+    result = service.get_table_of_contents(_target(reference))
 
     assert result.warnings == (DERIVED_CACHE_REBUILT_WARNING,)
     assert result.entries
@@ -124,7 +131,7 @@ def test_cached_document_never_masks_missing_source_bytes(tmp_path: Path) -> Non
     )
 
     with pytest.raises(SourceRepositoryError) as error:
-        service.get_cached_table_of_contents(reference)
+        service.get_table_of_contents(_target(reference))
 
     assert error.value.code == "source_not_found"
 
@@ -151,7 +158,7 @@ def test_cached_document_revalidates_full_logical_identity(
     service, reference = _cached(tmp_path)
 
     with pytest.raises(CachedDocumentError) as error:
-        service.get_cached_table_of_contents(replace(reference, **replacement))
+        service.get_table_of_contents(_target(replace(reference, **replacement)))
 
     assert error.value.code == code
 
@@ -263,11 +270,12 @@ def test_cached_document_registry_and_cli_are_typed(
     assert (
         main(
             [
-                "search-cached-document",
+                "search-full-text",
                 "--document-ref",
                 json.dumps(document),
                 "--cache-root",
                 str(tmp_path / "cache"),
+                "--term",
                 "Alpha",
             ]
         )
@@ -275,8 +283,8 @@ def test_cached_document_registry_and_cli_are_typed(
     )
     output = json.loads(capsys.readouterr().out)
     assert output["status"] == "completed"
-    assert output["data"]["document"] == document
-    assert output["data"]["matches"][0]["matched_in"] == "text"
+    assert output["data"]["documents"][0]["source"]["document"] == document
+    assert output["data"]["occurrences"][0]["matched_terms"] == ["Alpha"]
 
 
 def test_cached_source_range_text_only_is_published_by_registry_and_cli(

@@ -32,21 +32,23 @@ from ._cache_archive import (
     import_cache_archive,
 )
 from ._cache_root import resolve_cache_root
-from .arxiv_document import (
-    ArxivDocumentProvenance,
-    ArxivEquationSearch,
-    ArxivFullTextSearch,
-    ArxivSection,
-    ArxivTableOfContents,
+from .parse import (
+    PDFTextExtractor,
+    PaperParserService,
+    ParseError,
+    ParsedDocument,
+    ParsedSection,
 )
+from .parse.parser import PDFTextExtractionError
 from .cached_full_text_search import (
-    CachedFullTextSearchResult,
+    CachedFullTextContextStatus,
+    CachedFullTextSearchMode,
     CachedFullTextSearcher,
+    search_document_occurrences,
 )
 from .cached_document import (
     CachedDocumentError,
     CachedDocumentRef,
-    CachedDocumentSearch,
     CachedSection,
     CachedSourceRange,
     CachedTableOfContents,
@@ -66,11 +68,18 @@ from .document_access import (
     PaperTableOfContents,
     ResolvedDocumentInfo,
 )
+from .content_search import (
+    DocumentTargetFailure,
+    PaperEquationSearch,
+    PaperFullTextSearch,
+    ResolvedSearchDocument,
+)
 from .document_search import (
     EquationSearchResult,
     FullTextSearchResult,
     TableOfContentsEntry,
     search_equations as _search_equations,
+    search_equation_terms as _search_equation_terms,
     search_full_text as _search_full_text,
     select_section as _select_section,
     table_of_contents as _table_of_contents,
@@ -78,12 +87,6 @@ from .document_search import (
 from .ids import arxiv_path_id, doi_value, inspire_recid, normalize_paper_id
 from .ids import extract_paper_ids as _extract_paper_ids
 from .ids import paper_ids_safe_dir_name as _paper_ids_safe_dir_name
-from .parse import (
-    PDFTextExtractor,
-    PaperParserService,
-    ParsedDocument,
-    ParsedSection,
-)
 from .providers import (
     Ar5ivProvider,
     ArxivHtmlProvider,
@@ -92,14 +95,18 @@ from .providers import (
     describe_inspire_citer_request,
 )
 from .providers.base import ProviderError
-from .reference_acquisition import ReferenceAcquisitionService
+from .reference_acquisition import (
+    ReferenceAcquisitionError,
+    ReferenceAcquisitionService,
+)
 from .reference_cache import (
     CachedReferenceMaterial,
     CachedResourceRef,
     ReferenceIdentity,
+    ReferenceCacheError,
     ReferenceMaterialCache,
 )
-from .source_repository import SourceRepository
+from .source_repository import SourceRepository, SourceRepositoryError
 from .sources import (
     ParseOutcome,
     SourceArtifact,
@@ -583,7 +590,17 @@ class ArcPaperService:
                 records.append(
                     CacheUpdateRecord(entry.entry_id, "inspire-record", "updated")
                 )
-            except Exception as exc:
+            except (
+                CachedDocumentError,
+                PaperInputError,
+                ParseError,
+                PDFTextExtractionError,
+                ProviderError,
+                ReferenceAcquisitionError,
+                ReferenceCacheError,
+                SourceRepositoryError,
+                ValueError,
+            ) as exc:
                 records.append(
                     CacheUpdateRecord(
                         entry.entry_id,
@@ -748,20 +765,225 @@ class ArcPaperService:
             "keyword extraction ended without a terminal result",
         )
 
-    def search_cached_full_text(
+    def search_full_text_targets(
         self,
         terms: Sequence[str],
         *,
+        targets: Sequence[DocumentTarget] = (),
+        source_format: SourceFormat | str | None = None,
+        refresh: bool = False,
         limit: int = 100,
         context_lines: int = 0,
         case_sensitive: bool = False,
-    ) -> CachedFullTextSearchResult:
-        return self._cached_full_text_searcher.search(
+    ) -> PaperFullTextSearch:
+        normalized_terms = _normalize_literal_terms(terms)
+        limit = _require_limit(limit, name="limit", maximum=500)
+        if not targets:
+            if source_format is not None or refresh:
+                raise PaperInputError(
+                    "source_format and refresh require reference targets"
+                )
+            result = self._cached_full_text_searcher.search(
+                normalized_terms,
+                limit=limit,
+                context_lines=context_lines,
+                case_sensitive=case_sensitive,
+            )
+            documents = tuple(
+                ResolvedSearchDocument(
+                    source=ResolvedDocumentInfo(
+                        document=item.document,
+                        identity=(
+                            ReferenceIdentity(
+                                arxiv_id=arxiv_path_id(item.arxiv_ids[0])
+                            )
+                            if item.arxiv_ids
+                            else None
+                        ),
+                    )
+                )
+                for item in result.documents
+            )
+            return PaperFullTextSearch(
+                scope="corpus",
+                mode=result.mode,
+                terms=result.terms,
+                limit=result.limit,
+                context_lines=result.context_lines,
+                case_sensitive=result.case_sensitive,
+                total_occurrences=result.total_occurrences,
+                matched_document_count=result.matched_document_count,
+                documents=documents,
+                failures=(),
+                occurrences=result.occurrences,
+                top_paper_titles=result.top_paper_titles,
+                context_status=result.context_status,
+                message=result.message,
+                warnings=result.warnings,
+            )
+
+        resolved, failures = self._resolve_search_targets(
+            targets, source_format=source_format, refresh=refresh
+        )
+        occurrences = tuple(
+            occurrence
+            for document, _ in resolved
+            for occurrence in search_document_occurrences(
+                document,
+                normalized_terms,
+                context_lines=context_lines,
+                case_sensitive=case_sensitive,
+            )
+        )
+        documents = tuple(item for _, item in resolved)
+        matched_document_count = len(
+            {item.document_digest for item in occurrences}
+        )
+        returned = occurrences[:limit]
+        warnings = tuple(
+            dict.fromkeys(
+                warning
+                for item in documents
+                for warning in item.source.warnings
+            )
+        )
+        return PaperFullTextSearch(
+            scope="targets",
+            mode=CachedFullTextSearchMode.OCCURRENCES,
+            terms=normalized_terms,
+            limit=limit,
+            context_lines=context_lines,
+            case_sensitive=case_sensitive,
+            total_occurrences=len(occurrences),
+            matched_document_count=matched_document_count,
+            documents=documents,
+            failures=failures,
+            occurrences=returned,
+            top_paper_titles=(),
+            context_status=(
+                CachedFullTextContextStatus.INCLUDED
+                if context_lines
+                else CachedFullTextContextStatus.NOT_REQUESTED
+            ),
+            message=(
+                f"Found {len(occurrences)} full-text occurrence"
+                f"{'' if len(occurrences) == 1 else 's'} in "
+                f"{matched_document_count} document"
+                f"{'' if matched_document_count == 1 else 's'}."
+            ),
+            warnings=warnings,
+        )
+
+    def search_equation_targets(
+        self,
+        targets: Sequence[DocumentTarget],
+        terms: Sequence[str],
+        *,
+        source_format: SourceFormat | str | None = None,
+        refresh: bool = False,
+        limit: int = 20,
+        context_lines: int = 8,
+        case_sensitive: bool = False,
+    ) -> PaperEquationSearch:
+        if not targets:
+            raise PaperInputError("search-equations requires at least one target")
+        resolved, failures = self._resolve_search_targets(
+            targets, source_format=source_format, refresh=refresh
+        )
+        documents = tuple(document for document, _ in resolved)
+        result = _search_equation_terms(
+            documents,
             terms,
             limit=limit,
             context_lines=context_lines,
             case_sensitive=case_sensitive,
         )
+        resolved_documents = tuple(item for _, item in resolved)
+        warnings = [
+            warning
+            for item in resolved_documents
+            for warning in item.source.warnings
+        ]
+        if any(document.source.source_format is SourceFormat.HTML for document in documents):
+            warnings.append(
+                "HTML equation labels are converter-derived and may differ from printed numbering"
+            )
+        if any(document.source.source_format is SourceFormat.PDF for document in documents):
+            warnings.append(
+                "PDF equations and excerpts come from approximate layout-preserving text extraction"
+            )
+        return PaperEquationSearch(
+            terms=result.terms,
+            limit=result.limit,
+            context_lines=result.context_lines,
+            case_sensitive=result.case_sensitive,
+            searched_document_count=result.searched_documents,
+            documents=resolved_documents,
+            failures=failures,
+            matches=result.matches,
+            truncated=result.truncated,
+            warnings=tuple(dict.fromkeys(warnings)),
+        )
+
+    def _resolve_search_targets(
+        self,
+        targets: Sequence[DocumentTarget],
+        *,
+        source_format: SourceFormat | str | None,
+        refresh: bool,
+    ) -> tuple[
+        tuple[tuple[ParsedDocument, ResolvedSearchDocument], ...],
+        tuple[DocumentTargetFailure, ...],
+    ]:
+        resolved: list[tuple[ParsedDocument, ResolvedSearchDocument]] = []
+        positions: dict[str, int] = {}
+        failures: list[DocumentTargetFailure] = []
+        for index, target in enumerate(targets):
+            try:
+                is_reference = target.kind is DocumentTargetKind.REFERENCE
+                document, source = self._resolve_document_target(
+                    target,
+                    source_format=source_format if is_reference else None,
+                    refresh=refresh if is_reference else False,
+                )
+            except Exception as exc:
+                failures.append(
+                    DocumentTargetFailure(
+                        target_index=index,
+                        target=target,
+                        code=str(getattr(exc, "code", type(exc).__name__)),
+                        message=str(getattr(exc, "message", str(exc))),
+                    )
+                )
+                continue
+            previous = positions.get(document.document_digest)
+            if previous is not None:
+                old_document, old_info = resolved[previous]
+                resolved[previous] = (
+                    old_document,
+                    ResolvedSearchDocument(
+                        source=old_info.source,
+                        target_indices=(*old_info.target_indices, index),
+                    ),
+                )
+                continue
+            positions[document.document_digest] = len(resolved)
+            resolved.append(
+                (
+                    document,
+                    ResolvedSearchDocument(source=source, target_indices=(index,)),
+                )
+            )
+        if not resolved:
+            detail = "; ".join(
+                f"target {item.target_index}: {item.code}: {item.message}"
+                for item in failures
+            )
+            raise PaperInputError(
+                f"no document target resolved{': ' + detail if detail else ''}",
+                code="no_document_target_resolved",
+            )
+        return tuple(resolved), tuple(failures)
 
     def cache_document(
         self, source: SourceArtifact | ParsedDocument
@@ -819,7 +1041,7 @@ class ArcPaperService:
         )
         return self._document_structure_cache.store(overlay)
 
-    def get_cached_table_of_contents(
+    def _get_cached_table_of_contents(
         self,
         document: CachedDocumentRef,
         *,
@@ -849,7 +1071,7 @@ class ArcPaperService:
             warnings=warnings,
         )
 
-    def get_cached_section(
+    def _get_cached_section(
         self,
         document: CachedDocumentRef,
         selector: str | int,
@@ -920,9 +1142,22 @@ class ArcPaperService:
         self,
         target: DocumentTarget,
         *,
+        structure: CachedDocumentStructureRef | None = None,
         source_format: SourceFormat | str | None = None,
         refresh: bool = False,
     ) -> PaperTableOfContents:
+        if structure is not None:
+            if target.kind is not DocumentTargetKind.DOCUMENT or target.document is None:
+                raise PaperInputError("structure applies only to exact document targets")
+            cached = self._get_cached_table_of_contents(
+                target.document, structure=structure
+            )
+            source = ResolvedDocumentInfo(
+                document=target.document, identity=None, warnings=cached.warnings
+            )
+            return PaperTableOfContents(
+                source=source, entries=cached.entries, warnings=cached.warnings
+            )
         parsed, source = self._resolve_document_target(
             target, source_format=source_format, refresh=refresh
         )
@@ -937,9 +1172,30 @@ class ArcPaperService:
         target: DocumentTarget,
         selector: str | int,
         *,
+        structure: CachedDocumentStructureRef | None = None,
         source_format: SourceFormat | str | None = None,
         refresh: bool = False,
     ) -> PaperSection:
+        if structure is not None:
+            if target.kind is not DocumentTargetKind.DOCUMENT or target.document is None:
+                raise PaperInputError("structure applies only to exact document targets")
+            cached = self._get_cached_section(
+                target.document, selector, structure=structure
+            )
+            source = ResolvedDocumentInfo(
+                document=target.document, identity=None, warnings=cached.warnings
+            )
+            return PaperSection(
+                source=source,
+                section_id=cached.section_id,
+                title=cached.title,
+                text=cached.text,
+                level=cached.level,
+                ordinal=cached.ordinal,
+                page_start=cached.page_start,
+                page_end=cached.page_end,
+                warnings=cached.warnings,
+            )
         parsed, source = self._resolve_document_target(
             target, source_format=source_format, refresh=refresh
         )
@@ -1127,6 +1383,7 @@ class ArcPaperService:
                 cache_root=self.cache_root,
                 inspire=self.inspire,
                 arxiv_html=self.arxiv_html,
+                ar5iv=self.ar5iv,
                 arxiv_pdf=self.arxiv_pdf,
             )
         return self._reference_acquisition_service
@@ -1251,34 +1508,6 @@ class ArcPaperService:
                 projected.append(replacement)
         return projected
 
-    def search_cached_document(
-        self,
-        document: CachedDocumentRef,
-        query: str,
-        *,
-        limit: int = 20,
-        context_lines: int = 1,
-        case_sensitive: bool = False,
-    ) -> CachedDocumentSearch:
-        parsed, warnings = self._resolve_cached_document(document)
-        result = _search_full_text(
-            parsed,
-            query,
-            limit=limit,
-            context_lines=context_lines,
-            case_sensitive=case_sensitive,
-        )
-        return CachedDocumentSearch(
-            document=document,
-            query=result.query,
-            matches=result.matches,
-            limit=result.limit,
-            context_lines=result.context_lines,
-            case_sensitive=result.case_sensitive,
-            truncated=result.truncated,
-            warnings=warnings,
-        )
-
     def _resolve_cached_document(
         self, reference: CachedDocumentRef
     ) -> tuple[ParsedDocument, tuple[str, ...]]:
@@ -1368,132 +1597,6 @@ class ArcPaperService:
         self, document: ParsedDocument, selector: str | int
     ) -> ParsedSection:
         return _select_section(document, selector)
-
-    def get_arxiv_table_of_contents(
-        self,
-        arxiv_id: str,
-        *,
-        refresh: bool = False,
-    ) -> ArxivTableOfContents:
-        document, provenance, warnings = self._resolve_arxiv_document(
-            arxiv_id, refresh=refresh
-        )
-        return ArxivTableOfContents(
-            provenance=provenance,
-            entries=_table_of_contents(document),
-            warnings=warnings,
-        )
-
-    def get_arxiv_section(
-        self,
-        arxiv_id: str,
-        selector: str | int,
-        *,
-        refresh: bool = False,
-    ) -> ArxivSection:
-        document, provenance, warnings = self._resolve_arxiv_document(
-            arxiv_id, refresh=refresh
-        )
-        section = _select_section(document, selector)
-        return ArxivSection(
-            provenance=provenance,
-            section_id=section.section_id,
-            title=section.title,
-            text=section.text,
-            level=section.level,
-            ordinal=section.ordinal,
-            page_start=section.page_start,
-            page_end=section.page_end,
-            warnings=warnings,
-        )
-
-    def search_arxiv_full_text(
-        self,
-        arxiv_id: str,
-        query: str,
-        *,
-        limit: int = 20,
-        context_lines: int = 1,
-        case_sensitive: bool = False,
-        refresh: bool = False,
-    ) -> ArxivFullTextSearch:
-        document, provenance, warnings = self._resolve_arxiv_document(
-            arxiv_id, refresh=refresh
-        )
-        result = _search_full_text(
-            document,
-            query,
-            limit=limit,
-            context_lines=context_lines,
-            case_sensitive=case_sensitive,
-        )
-        return ArxivFullTextSearch(
-            provenance=provenance,
-            query=result.query,
-            matches=result.matches,
-            limit=result.limit,
-            context_lines=result.context_lines,
-            case_sensitive=result.case_sensitive,
-            truncated=result.truncated,
-            warnings=warnings,
-        )
-
-    def search_arxiv_equations(
-        self,
-        arxiv_id: str,
-        query: str,
-        *,
-        limit: int = 20,
-        case_sensitive: bool = False,
-        refresh: bool = False,
-    ) -> ArxivEquationSearch:
-        document, provenance, warnings = self._resolve_arxiv_document(
-            arxiv_id, refresh=refresh
-        )
-        result = _search_equations(
-            document,
-            query,
-            limit=limit,
-            case_sensitive=case_sensitive,
-        )
-        return ArxivEquationSearch(
-            provenance=provenance,
-            query=result.query,
-            matches=result.matches,
-            limit=result.limit,
-            case_sensitive=result.case_sensitive,
-            truncated=result.truncated,
-            warnings=warnings,
-        )
-
-    def _resolve_arxiv_document(
-        self,
-        arxiv_id: str,
-        *,
-        refresh: bool,
-    ) -> tuple[
-        ParsedDocument,
-        ArxivDocumentProvenance,
-        tuple[str, ...],
-    ]:
-        path_id = arxiv_path_id(str(arxiv_id or ""))
-        if not path_id:
-            raise PaperInputError(
-                f"arXiv document operation requires an arXiv ID: {arxiv_id}",
-                code="not_arxiv_id",
-            )
-        canonical_id = f"arXiv:{path_id}"
-        source, document, warnings = self._fetch_arxiv_auto_materialized(
-            canonical_id, refresh=refresh
-        )
-        provenance = ArxivDocumentProvenance(
-            canonical_arxiv_id=canonical_id,
-            provider=source.origin.provider,
-            source_format=source.source_format.value,
-            source_digest=source.artifact_digest,
-            document_digest=document.document_digest,
-        )
-        return document, provenance, warnings
 
     def _fetch_arxiv_auto_materialized(
         self, paper_id: str, *, refresh: bool
@@ -1800,6 +1903,24 @@ def _reference_identity_for_query(value: str) -> ReferenceIdentity:
     raise PaperInputError("reference target is empty")
 
 
+def _normalize_literal_terms(terms: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(terms, (str, bytes)):
+        raise PaperInputError("terms must be a sequence of strings")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in terms:
+        if not isinstance(value, str) or not value.strip():
+            raise PaperInputError("each term must be a non-empty string")
+        term = " ".join(value.split())
+        key = term.casefold()
+        if key not in seen:
+            seen.add(key)
+            normalized.append(term)
+    if not normalized:
+        raise PaperInputError("at least one term is required")
+    return tuple(normalized)
+
+
 def _lookup_reference_identity(
     cache: ReferenceMaterialCache, identity: ReferenceIdentity
 ) -> CachedReferenceMaterial | None:
@@ -2000,21 +2121,6 @@ def search_metadata(query: str, *, limit: int = 20) -> list[dict[str, Any]]:
     return ArcPaperService().search_metadata(query, limit=limit)
 
 
-def search_cached_full_text(
-    terms: Sequence[str],
-    *,
-    limit: int = 100,
-    context_lines: int = 0,
-    case_sensitive: bool = False,
-) -> CachedFullTextSearchResult:
-    return ArcPaperService().search_cached_full_text(
-        terms,
-        limit=limit,
-        context_lines=context_lines,
-        case_sensitive=case_sensitive,
-    )
-
-
 def cache_document(
     source: SourceArtifact | ParsedDocument,
     *,
@@ -2068,12 +2174,16 @@ def acquire_reference_cli(
 def get_table_of_contents_cli(
     target: DocumentTarget,
     *,
+    structure: CachedDocumentStructureRef | None = None,
     source_format: str | None = None,
     refresh: bool = False,
     cache_root: str | Path | None = None,
 ) -> PaperTableOfContents:
     return ArcPaperService(cache_root=cache_root).get_table_of_contents(
-        target, source_format=source_format, refresh=refresh
+        target,
+        structure=structure,
+        source_format=source_format,
+        refresh=refresh,
     )
 
 
@@ -2081,6 +2191,7 @@ def get_section_cli(
     target: DocumentTarget,
     selector: str | int,
     *,
+    structure: CachedDocumentStructureRef | None = None,
     source_format: str | None = None,
     refresh: bool = False,
     cache_root: str | Path | None = None,
@@ -2088,8 +2199,53 @@ def get_section_cli(
     return ArcPaperService(cache_root=cache_root).get_section(
         target,
         selector,
+        structure=structure,
         source_format=source_format,
         refresh=refresh,
+    )
+
+
+def search_full_text_cli(
+    terms: Sequence[str],
+    *,
+    targets: Sequence[DocumentTarget] = (),
+    source_format: str | None = None,
+    refresh: bool = False,
+    limit: int = 100,
+    context_lines: int = 0,
+    case_sensitive: bool = False,
+    cache_root: str | Path | None = None,
+) -> PaperFullTextSearch:
+    return ArcPaperService(cache_root=cache_root).search_full_text_targets(
+        terms,
+        targets=targets,
+        source_format=source_format,
+        refresh=refresh,
+        limit=limit,
+        context_lines=context_lines,
+        case_sensitive=case_sensitive,
+    )
+
+
+def search_equations_cli(
+    targets: Sequence[DocumentTarget],
+    terms: Sequence[str],
+    *,
+    source_format: str | None = None,
+    refresh: bool = False,
+    limit: int = 20,
+    context_lines: int = 8,
+    case_sensitive: bool = False,
+    cache_root: str | Path | None = None,
+) -> PaperEquationSearch:
+    return ArcPaperService(cache_root=cache_root).search_equation_targets(
+        targets,
+        terms,
+        source_format=source_format,
+        refresh=refresh,
+        limit=limit,
+        context_lines=context_lines,
+        case_sensitive=case_sensitive,
     )
 
 
@@ -2124,29 +2280,6 @@ def materialize_reference_cli(
     )
 
 
-def get_cached_table_of_contents(
-    document: CachedDocumentRef,
-    *,
-    structure: CachedDocumentStructureRef | None = None,
-    cache_root: str | Path | None = None,
-) -> CachedTableOfContents:
-    return ArcPaperService(cache_root=cache_root).get_cached_table_of_contents(
-        document, structure=structure
-    )
-
-
-def get_cached_section(
-    document: CachedDocumentRef,
-    selector: str | int,
-    *,
-    structure: CachedDocumentStructureRef | None = None,
-    cache_root: str | Path | None = None,
-) -> CachedSection:
-    return ArcPaperService(cache_root=cache_root).get_cached_section(
-        document, selector, structure=structure
-    )
-
-
 def read_cached_source_range(
     document: CachedDocumentRef,
     start_line: int,
@@ -2160,24 +2293,6 @@ def read_cached_source_range(
         start_line,
         end_line,
         text_only=text_only,
-    )
-
-
-def search_cached_document(
-    document: CachedDocumentRef,
-    query: str,
-    *,
-    limit: int = 20,
-    context_lines: int = 1,
-    case_sensitive: bool = False,
-    cache_root: str | Path | None = None,
-) -> CachedDocumentSearch:
-    return ArcPaperService(cache_root=cache_root).search_cached_document(
-        document,
-        query,
-        limit=limit,
-        context_lines=context_lines,
-        case_sensitive=case_sensitive,
     )
 
 
@@ -2223,63 +2338,6 @@ def select_section(
     document: ParsedDocument, selector: str | int
 ) -> ParsedSection:
     return _select_section(document, selector)
-
-
-def get_arxiv_table_of_contents(
-    arxiv_id: str,
-    *,
-    refresh: bool = False,
-) -> ArxivTableOfContents:
-    return ArcPaperService().get_arxiv_table_of_contents(
-        arxiv_id, refresh=refresh
-    )
-
-
-def get_arxiv_section(
-    arxiv_id: str,
-    selector: str | int,
-    *,
-    refresh: bool = False,
-) -> ArxivSection:
-    return ArcPaperService().get_arxiv_section(
-        arxiv_id, selector, refresh=refresh
-    )
-
-
-def search_arxiv_full_text(
-    arxiv_id: str,
-    query: str,
-    *,
-    limit: int = 20,
-    context_lines: int = 1,
-    case_sensitive: bool = False,
-    refresh: bool = False,
-) -> ArxivFullTextSearch:
-    return ArcPaperService().search_arxiv_full_text(
-        arxiv_id,
-        query,
-        limit=limit,
-        context_lines=context_lines,
-        case_sensitive=case_sensitive,
-        refresh=refresh,
-    )
-
-
-def search_arxiv_equations(
-    arxiv_id: str,
-    query: str,
-    *,
-    limit: int = 20,
-    case_sensitive: bool = False,
-    refresh: bool = False,
-) -> ArxivEquationSearch:
-    return ArcPaperService().search_arxiv_equations(
-        arxiv_id,
-        query,
-        limit=limit,
-        case_sensitive=case_sensitive,
-        refresh=refresh,
-    )
 
 
 def import_source(
@@ -2397,8 +2455,6 @@ __all__ = [
     "fetch_arxiv_auto",
     "fetch_arxiv_pdf",
     "get_abstract",
-    "get_arxiv_section",
-    "get_arxiv_table_of_contents",
     "get_authors",
     "get_citer_count",
     "get_citers",
@@ -2416,9 +2472,6 @@ __all__ = [
     "reconstruct_cached_structure",
     "select_section",
     "search_equations",
-    "search_arxiv_equations",
-    "search_arxiv_full_text",
-    "search_cached_full_text",
     "search_citers",
     "search_full_text",
     "search_metadata",

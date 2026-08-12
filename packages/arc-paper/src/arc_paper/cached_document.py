@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from .document_search import FullTextMatch, TableOfContentsEntry
+from .document_search import TableOfContentsEntry
 from .sources import SourceFormat
 
 
@@ -107,18 +107,6 @@ class CachedSourceRange:
     text: str
 
 
-@dataclass(frozen=True)
-class CachedDocumentSearch:
-    document: CachedDocumentRef
-    query: str
-    matches: tuple[FullTextMatch, ...]
-    limit: int
-    context_lines: int
-    case_sensitive: bool
-    truncated: bool
-    warnings: tuple[str, ...] = ()
-
-
 def cached_document_ref_to_document(value: CachedDocumentRef) -> dict[str, Any]:
     if not isinstance(value, CachedDocumentRef):
         raise TypeError("value must be a CachedDocumentRef")
@@ -154,7 +142,6 @@ __all__ = [
     "CACHED_DOCUMENT_REF_SCHEMA",
     "CachedDocumentError",
     "CachedDocumentRef",
-    "CachedDocumentSearch",
     "CachedSection",
     "CachedSourceRange",
     "CachedTableOfContents",

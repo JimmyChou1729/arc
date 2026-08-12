@@ -661,6 +661,14 @@ _DOCUMENT_TARGET_SCHEMA = {
         ),
     ]
 }
+_DOCUMENT_TARGET_RESULT_SCHEMA = _object(
+    {
+        "kind": {"enum": ["reference", "document"]},
+        "reference": _STRING,
+        "document": {"anyOf": [_CACHED_DOCUMENT_REF_SCHEMA, {"type": "null"}]},
+    },
+    required=("kind", "reference", "document"),
+)
 _REFERENCE_IDENTITY_INPUT = {
     "doi": {"type": ["string", "null"], "minLength": 1},
     "arxiv_id": {"type": ["string", "null"], "minLength": 1},
@@ -770,6 +778,26 @@ _PAPER_SECTION_SCHEMA = _object(
         "warnings",
     ),
 )
+_DOCUMENT_TARGET_FAILURE_SCHEMA = _object(
+    {
+        "target_index": {"type": "integer", "minimum": 0},
+        "target": _DOCUMENT_TARGET_RESULT_SCHEMA,
+        "code": _NONEMPTY_STRING,
+        "message": _STRING,
+    },
+    required=("target_index", "target", "code", "message"),
+)
+_RESOLVED_SEARCH_DOCUMENT_SCHEMA = _object(
+    {
+        "source": _RESOLVED_DOCUMENT_INFO_SCHEMA,
+        "target_indices": {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 0},
+            "uniqueItems": True,
+        },
+    },
+    required=("source", "target_indices"),
+)
 _CACHED_DOCUMENT_TOC_SCHEMA = _object(
     {
         "document": _CACHED_DOCUMENT_REF_SCHEMA,
@@ -824,7 +852,7 @@ _CACHED_DOCUMENT_SEARCH_SCHEMA = _object(
 )
 _CACHED_FULL_TEXT_OCCURRENCE_SCHEMA = _object(
     {
-        "source_kind": {"enum": ["arxiv", "local"]},
+        "source_kind": {"enum": ["arxiv", "local", "target"]},
         "arxiv_ids": {
             "type": "array",
             "items": {"type": "string", "pattern": "^arXiv:"},
@@ -876,6 +904,13 @@ _EQUATION_MATCH_SCHEMA = _object(
         "context_before": _STRING,
         "context_after": _STRING,
         "matched_in": _NONEMPTY_STRING,
+        "matched_terms": {"type": "array", "items": _NONEMPTY_STRING},
+        "matched_fields": {"type": "array", "items": _NONEMPTY_STRING},
+        "page_candidates": {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 1},
+        },
+        "source_excerpt": _STRING,
     },
     required=(
         "document_digest",
@@ -891,6 +926,79 @@ _EQUATION_MATCH_SCHEMA = _object(
         "context_before",
         "context_after",
         "matched_in",
+        "matched_terms",
+        "matched_fields",
+        "page_candidates",
+        "source_excerpt",
+    ),
+)
+_PAPER_FULL_TEXT_SEARCH_SCHEMA = _object(
+    {
+        "scope": {"enum": ["corpus", "targets"]},
+        "mode": {"enum": ["occurrences", "refinement_required"]},
+        "terms": {"type": "array", "items": _NONEMPTY_STRING, "minItems": 1},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+        "context_lines": {"type": "integer", "minimum": 0, "maximum": 2},
+        "case_sensitive": {"type": "boolean"},
+        "total_occurrences": {"type": "integer", "minimum": 0},
+        "matched_document_count": {"type": "integer", "minimum": 0},
+        "documents": {"type": "array", "items": _RESOLVED_SEARCH_DOCUMENT_SCHEMA},
+        "failures": {"type": "array", "items": _DOCUMENT_TARGET_FAILURE_SCHEMA},
+        "occurrences": {"type": "array", "items": _CACHED_FULL_TEXT_OCCURRENCE_SCHEMA},
+        "top_paper_titles": {"type": "array", "items": _NONEMPTY_STRING, "maxItems": 50},
+        "context_status": {
+            "enum": [
+                "not_requested",
+                "included",
+                "omitted_too_broad",
+                "omitted_refinement_required",
+            ]
+        },
+        "message": _NONEMPTY_STRING,
+        "warnings": _STRING_ARRAY,
+    },
+    required=(
+        "scope",
+        "mode",
+        "terms",
+        "limit",
+        "context_lines",
+        "case_sensitive",
+        "total_occurrences",
+        "matched_document_count",
+        "documents",
+        "failures",
+        "occurrences",
+        "top_paper_titles",
+        "context_status",
+        "message",
+        "warnings",
+    ),
+)
+_PAPER_EQUATION_SEARCH_SCHEMA = _object(
+    {
+        "terms": {"type": "array", "items": _NONEMPTY_STRING, "minItems": 1},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+        "context_lines": {"type": "integer", "minimum": 0, "maximum": 20},
+        "case_sensitive": {"type": "boolean"},
+        "searched_document_count": {"type": "integer", "minimum": 1},
+        "documents": {"type": "array", "items": _RESOLVED_SEARCH_DOCUMENT_SCHEMA, "minItems": 1},
+        "failures": {"type": "array", "items": _DOCUMENT_TARGET_FAILURE_SCHEMA},
+        "matches": {"type": "array", "items": _EQUATION_MATCH_SCHEMA},
+        "truncated": {"type": "boolean"},
+        "warnings": _STRING_ARRAY,
+    },
+    required=(
+        "terms",
+        "limit",
+        "context_lines",
+        "case_sensitive",
+        "searched_document_count",
+        "documents",
+        "failures",
+        "matches",
+        "truncated",
+        "warnings",
     ),
 )
 _CACHE_LOCAL_IDENTITY_SCHEMA = _object(
@@ -1003,6 +1111,37 @@ def _decode_document_target_parameters(
             )
     except ValueError as exc:
         raise OperationRequestError("invalid_parameters", str(exc)) from exc
+    raw_structure = decoded.get("structure")
+    if raw_structure is not None:
+        if not isinstance(raw_structure, Mapping):
+            raise OperationRequestError(
+                "invalid_parameters", "structure must be an object"
+            )
+        try:
+            decoded["structure"] = cached_document_structure_ref_from_document(
+                raw_structure
+            )
+        except ValueError as exc:
+            raise OperationRequestError("invalid_parameters", str(exc)) from exc
+    return decoded
+
+
+def _decode_document_targets_parameters(
+    value: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    decoded = dict(value)
+    raw_targets = decoded.get("targets", [])
+    if not isinstance(raw_targets, list):
+        raise OperationRequestError("invalid_parameters", "targets must be an array")
+    targets = []
+    for raw_target in raw_targets:
+        if not isinstance(raw_target, Mapping):
+            raise OperationRequestError(
+                "invalid_parameters", "each target must be an object"
+            )
+        target = _decode_document_target_parameters({"target": raw_target})["target"]
+        targets.append(target)
+    decoded["targets"] = tuple(targets)
     return decoded
 
 
@@ -1172,86 +1311,58 @@ _OPERATIONS = (
         effects=_NETWORK_CACHE,
     ),
     _spec(
-        "search-cached-full-text",
+        "search-full-text",
         _object(
             {
+                "targets": {"type": "array", "items": _DOCUMENT_TARGET_SCHEMA},
                 "terms": {
                     "type": "array",
                     "items": _NONEMPTY_STRING,
                     "minItems": 1,
-                    "description": (
-                        "Literal OR terms. Prefer several specific multi-word "
-                        "synonyms, abbreviations, and alternate spellings in one request; "
-                        "broad single words may require refinement."
-                    ),
                 },
+                "source_format": {
+                    "type": ["string", "null"],
+                    "enum": ["html", "markdown", "tex", "pdf", None],
+                },
+                "refresh": {"type": "boolean", "default": False},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                "context_lines": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 2,
-                },
+                "context_lines": {"type": "integer", "minimum": 0, "maximum": 2},
                 "case_sensitive": {"type": "boolean", "default": False},
+                "cache_root": {"type": ["string", "null"]},
             },
             required=("terms",),
         ),
-        service.search_cached_full_text,
-        output_schema=_object(
+        service.search_full_text_cli,
+        output_schema=_PAPER_FULL_TEXT_SEARCH_SCHEMA,
+        effects=_NETWORK_CACHE,
+        decoder=_decode_document_targets_parameters,
+    ),
+    _spec(
+        "search-equations",
+        _object(
             {
-                "mode": {"enum": ["occurrences", "refinement_required"]},
-                "terms": {
+                "targets": {
                     "type": "array",
-                    "items": _NONEMPTY_STRING,
+                    "items": _DOCUMENT_TARGET_SCHEMA,
                     "minItems": 1,
                 },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                "context_lines": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 2,
+                "terms": {"type": "array", "items": _NONEMPTY_STRING, "minItems": 1},
+                "source_format": {
+                    "type": ["string", "null"],
+                    "enum": ["html", "markdown", "tex", "pdf", None],
                 },
-                "case_sensitive": {"type": "boolean"},
-                "total_occurrences": {"type": "integer", "minimum": 0},
-                "matched_document_count": {"type": "integer", "minimum": 0},
-                "occurrences": {
-                    "type": "array",
-                    "items": _CACHED_FULL_TEXT_OCCURRENCE_SCHEMA,
-                },
-                "top_paper_titles": {
-                    "type": "array",
-                    "items": _NONEMPTY_STRING,
-                    "maxItems": 50,
-                    "description": (
-                        "At most 50 cached display titles in refinement mode; "
-                        "no abstracts or summaries are returned."
-                    ),
-                },
-                "context_status": {
-                    "enum": [
-                        "not_requested",
-                        "included",
-                        "omitted_too_broad",
-                        "omitted_refinement_required",
-                    ]
-                },
-                "message": _NONEMPTY_STRING,
-                "warnings": _STRING_ARRAY,
+                "refresh": {"type": "boolean", "default": False},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                "context_lines": {"type": "integer", "minimum": 0, "maximum": 20},
+                "case_sensitive": {"type": "boolean", "default": False},
+                "cache_root": {"type": ["string", "null"]},
             },
-            required=(
-                "mode",
-                "terms",
-                "limit",
-                "context_lines",
-                "case_sensitive",
-                "total_occurrences",
-                "matched_document_count",
-                "occurrences",
-                "top_paper_titles",
-                "context_status",
-                "message",
-                "warnings",
-            ),
+            required=("targets", "terms"),
         ),
+        service.search_equations_cli,
+        output_schema=_PAPER_EQUATION_SEARCH_SCHEMA,
+        effects=_NETWORK_CACHE,
+        decoder=_decode_document_targets_parameters,
     ),
     _spec(
         "reconstruct-cached-structure",
@@ -1272,6 +1383,9 @@ _OPERATIONS = (
         _object(
             {
                 "target": _DOCUMENT_TARGET_SCHEMA,
+                "structure": {
+                    "anyOf": [_CACHED_DOCUMENT_STRUCTURE_REF_SCHEMA, {"type": "null"}]
+                },
                 "source_format": {
                     "type": ["string", "null"],
                     "enum": ["html", "markdown", "tex", "pdf", None],
@@ -1291,6 +1405,9 @@ _OPERATIONS = (
         _object(
             {
                 "target": _DOCUMENT_TARGET_SCHEMA,
+                "structure": {
+                    "anyOf": [_CACHED_DOCUMENT_STRUCTURE_REF_SCHEMA, {"type": "null"}]
+                },
                 "selector": {
                     "oneOf": [
                         {"type": "string", "minLength": 1},
@@ -1399,110 +1516,6 @@ _OPERATIONS = (
         effects=frozenset({OperationEffect.CACHE_WRITE}),
         version=2,
         decoder=_decode_cached_document_parameters,
-    ),
-    _spec(
-        "search-cached-document",
-        _object(
-            {
-                **_CACHED_DOCUMENT_INPUT,
-                "query": _NONEMPTY_STRING,
-                "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
-                "context_lines": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 5,
-                },
-                "case_sensitive": {"type": "boolean", "default": False},
-            },
-            required=("document", "query"),
-        ),
-        service.search_cached_document,
-        output_schema=_CACHED_DOCUMENT_SEARCH_SCHEMA,
-        effects=frozenset({OperationEffect.CACHE_WRITE}),
-        decoder=_decode_cached_document_parameters,
-    ),
-    _spec(
-        "search-arxiv-full-text",
-        _object(
-            {
-                **_ARXIV,
-                "query": _NONEMPTY_STRING,
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
-                "context_lines": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 5,
-                },
-                "case_sensitive": {"type": "boolean", "default": False},
-                **_REFRESH,
-            },
-            required=("arxiv_id", "query"),
-        ),
-        service.search_arxiv_full_text,
-        output_schema=_object(
-            {
-                "provenance": _ARXIV_PROVENANCE_SCHEMA,
-                "query": _NONEMPTY_STRING,
-                "matches": {"type": "array", "items": _FULL_TEXT_MATCH_SCHEMA},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
-                "context_lines": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 5,
-                },
-                "case_sensitive": {"type": "boolean"},
-                "truncated": {"type": "boolean"},
-                "warnings": _STRING_ARRAY,
-            },
-            required=(
-                "provenance",
-                "query",
-                "matches",
-                "limit",
-                "context_lines",
-                "case_sensitive",
-                "truncated",
-                "warnings",
-            ),
-        ),
-        effects=_NETWORK_CACHE,
-        version=3,
-    ),
-    _spec(
-        "search-arxiv-equations",
-        _object(
-            {
-                **_ARXIV,
-                "query": _NONEMPTY_STRING,
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
-                "case_sensitive": {"type": "boolean", "default": False},
-                **_REFRESH,
-            },
-            required=("arxiv_id", "query"),
-        ),
-        service.search_arxiv_equations,
-        output_schema=_object(
-            {
-                "provenance": _ARXIV_PROVENANCE_SCHEMA,
-                "query": _NONEMPTY_STRING,
-                "matches": {"type": "array", "items": _EQUATION_MATCH_SCHEMA},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
-                "case_sensitive": {"type": "boolean"},
-                "truncated": {"type": "boolean"},
-                "warnings": _STRING_ARRAY,
-            },
-            required=(
-                "provenance",
-                "query",
-                "matches",
-                "limit",
-                "case_sensitive",
-                "truncated",
-                "warnings",
-            ),
-        ),
-        effects=_NETWORK_CACHE,
-        version=3,
     ),
     _spec(
         "fetch-arxiv-auto",

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from collections.abc import Sequence
+import re
 from typing import Iterable
 
 from .parse.models import MathSpanKind, ParsedDocument, ParsedSection
@@ -86,6 +88,10 @@ class EquationMatch:
     context_before: str
     context_after: str
     matched_in: str
+    matched_terms: tuple[str, ...] = ()
+    matched_fields: tuple[str, ...] = ()
+    page_candidates: tuple[int, ...] = ()
+    source_excerpt: str = ""
 
 
 @dataclass(frozen=True)
@@ -94,6 +100,17 @@ class EquationSearchResult:
     matches: tuple[EquationMatch, ...]
     searched_documents: int
     limit: int
+    case_sensitive: bool
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class EquationTermsSearchResult:
+    terms: tuple[str, ...]
+    matches: tuple[EquationMatch, ...]
+    searched_documents: int
+    limit: int
+    context_lines: int
     case_sensitive: bool
     truncated: bool
 
@@ -269,35 +286,90 @@ def search_equations(
 ) -> EquationSearchResult:
     """Search every inline and display ``MathSpan`` and its source context."""
 
-    normalized_query, normalized_limit = _validate_request(query, limit)
-    items = _normalize_documents(documents)
-    needle = _normalize(normalized_query, case_sensitive=case_sensitive)
-    matches: list[EquationMatch] = []
-    truncated = False
+    normalized_query, _ = _validate_request(query, limit)
+    result = search_equation_terms(
+        documents,
+        (normalized_query,),
+        limit=limit,
+        context_lines=8,
+        case_sensitive=case_sensitive,
+    )
+    return EquationSearchResult(
+        query=normalized_query,
+        matches=result.matches,
+        searched_documents=result.searched_documents,
+        limit=result.limit,
+        case_sensitive=result.case_sensitive,
+        truncated=result.truncated,
+    )
 
-    for document in items:
-        for span in document.math_spans:
+
+def search_equation_terms(
+    documents: ParsedDocument | Iterable[ParsedDocument],
+    terms: Sequence[str],
+    *,
+    limit: int = 20,
+    context_lines: int = 8,
+    case_sensitive: bool = False,
+) -> EquationTermsSearchResult:
+    """Search equation labels, math, and context with literal-OR terms."""
+
+    normalized_terms = _validate_terms(terms)
+    _, normalized_limit = _validate_request(normalized_terms[0], limit)
+    if (
+        not isinstance(context_lines, int)
+        or isinstance(context_lines, bool)
+        or not 0 <= context_lines <= 20
+    ):
+        raise DocumentSearchError("context_lines must be between 0 and 20")
+    items = _normalize_documents(documents)
+    needles = tuple(
+        _normalize(term, case_sensitive=case_sensitive) for term in normalized_terms
+    )
+    ranked: list[tuple[int, int, int, EquationMatch]] = []
+
+    for document_index, document in enumerate(items):
+        for span_index, span in enumerate(document.math_spans):
+            term_matches: list[str] = []
+            field_matches: list[str] = []
+            ranks: list[int] = []
+            normalized_label = _normalize(
+                span.source_label, case_sensitive=case_sensitive
+            )
+            normalized_span_id = _normalize(
+                span.span_id, case_sensitive=case_sensitive
+            )
             fields = (
-                ("span_id", span.span_id),
-                ("source_label", span.source_label),
-                ("math", span.normalized_tex),
-                ("context_before", span.context_before),
-                ("context_after", span.context_after),
+                ("math", span.normalized_tex, 2),
+                ("context_before", span.context_before, 3),
+                ("context_after", span.context_after, 3),
             )
-            matched_in = next(
-                (
-                    name
-                    for name, value in fields
-                    if value and needle in _normalize(value, case_sensitive=case_sensitive)
-                ),
-                "",
-            )
-            if not matched_in:
+            for term, needle in zip(normalized_terms, needles, strict=True):
+                matched_fields: list[tuple[str, int]] = []
+                if normalized_label and needle == normalized_label:
+                    matched_fields.append(("source_label", 0))
+                elif normalized_label and needle in normalized_label:
+                    matched_fields.append(("source_label", 1))
+                if needle == normalized_span_id:
+                    matched_fields.append(("span_id", 0))
+                for name, value, rank in fields:
+                    if value and needle in _normalize(
+                        value, case_sensitive=case_sensitive
+                    ):
+                        matched_fields.append((name, rank))
+                if not matched_fields:
+                    continue
+                term_matches.append(term)
+                for field, rank in matched_fields:
+                    if field not in field_matches:
+                        field_matches.append(field)
+                    ranks.append(rank)
+            if not term_matches:
                 continue
-            if len(matches) >= normalized_limit:
-                truncated = True
-                break
-            matches.append(
+            page_candidates, excerpt = _pdf_equation_evidence(
+                document, span, context_lines=context_lines
+            )
+            match = (
                 EquationMatch(
                     document_digest=document.document_digest,
                     source_digest=document.source.artifact_digest,
@@ -311,19 +383,70 @@ def search_equations(
                     source_column_end=span.source_column_end,
                     context_before=span.context_before,
                     context_after=span.context_after,
-                    matched_in=matched_in,
+                    matched_in=field_matches[0],
+                    matched_terms=tuple(term_matches),
+                    matched_fields=tuple(field_matches),
+                    page_candidates=page_candidates,
+                    source_excerpt=excerpt,
                 )
             )
-        if truncated:
-            break
+            ranked.append((min(ranks), document_index, span_index, match))
 
-    return EquationSearchResult(
-        query=normalized_query,
-        matches=tuple(matches),
+    ranked.sort(key=lambda item: item[:3])
+    matches = tuple(item[3] for item in ranked[:normalized_limit])
+
+    return EquationTermsSearchResult(
+        terms=normalized_terms,
+        matches=matches,
         searched_documents=len(items),
         limit=normalized_limit,
+        context_lines=context_lines,
         case_sensitive=case_sensitive,
-        truncated=truncated,
+        truncated=len(ranked) > normalized_limit,
+    )
+
+
+def _validate_terms(terms: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(terms, (str, bytes)):
+        terms = (str(terms),)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in terms:
+        term = " ".join(str(value or "").split())
+        if not term:
+            raise DocumentSearchError("search terms cannot be empty")
+        key = term.casefold()
+        if key not in seen:
+            seen.add(key)
+            normalized.append(term)
+    if not normalized:
+        raise DocumentSearchError("at least one search term is required")
+    return tuple(normalized)
+
+
+def _pdf_equation_evidence(document, span, *, context_lines: int):
+    if document.source.source_format.value != "pdf" or span.source_line_start is None:
+        return (), ""
+    candidates: list[tuple[int, str]] = []
+    label_pattern = (
+        re.compile(rf"\(\s*{re.escape(span.source_label)}\s*\)")
+        if span.source_label
+        else None
+    )
+    for page in document.pages:
+        lines = page.text.splitlines()
+        index = span.source_line_start - 1
+        if not 0 <= index < len(lines):
+            continue
+        line = " ".join(lines[index].split())
+        if label_pattern is not None and label_pattern.search(line) is None:
+            continue
+        first = max(0, index - context_lines)
+        last = min(len(lines), index + context_lines + 1)
+        candidates.append((page.page_number, "\n".join(lines[first:last])))
+    return (
+        tuple(item[0] for item in candidates),
+        candidates[0][1] if candidates else "",
     )
 
 
@@ -402,6 +525,7 @@ __all__ = [
     "DocumentSearchError",
     "EquationMatch",
     "EquationSearchResult",
+    "EquationTermsSearchResult",
     "FullTextMatch",
     "FullTextSearchResult",
     "SectionSelectionError",
@@ -409,6 +533,7 @@ __all__ = [
     "TextMatchLocation",
     "select_section",
     "search_equations",
+    "search_equation_terms",
     "search_full_text",
     "table_of_contents",
 ]

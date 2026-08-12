@@ -22,6 +22,7 @@ from arc_paper import (
     search_full_text,
     table_of_contents,
 )
+from arc_paper.document_search import search_equation_terms
 
 
 def _source(name: str, source_format: SourceFormat = SourceFormat.MARKDOWN) -> SourceArtifact:
@@ -236,3 +237,59 @@ def test_equation_search_replaces_equation_context_lookup() -> None:
     assert match.normalized_tex == r"H^2 = \frac{8\pi G}{3}\rho"
     assert match.context_before == "The Hamiltonian constraint gives"
     assert match.context_after == "for a flat universe."
+
+
+def test_equation_term_search_ranks_labels_and_returns_pdf_layout_evidence() -> None:
+    source = SourceArtifact(
+        source_format=SourceFormat.PDF,
+        artifact_digest=hashlib.sha256(b"pdf").hexdigest(),
+        size=3,
+        media_type="application/pdf",
+        origin=SourceOrigin(SourceOriginKind.REPOSITORY),
+    )
+    document = ParsedDocument(
+        source=source,
+        pages=(
+            ParsedPage(
+                1,
+                "Lead\nfirst equation (2.3)\nMiddle\nfull multiline tail (2.30)\nEnd",
+            ),
+        ),
+        math_spans=(
+            MathSpan(
+                span_id="math-30-hash-fragment",
+                kind=MathSpanKind.DISPLAY,
+                source_line_start=2,
+                source_column_start=1,
+                source_line_end=2,
+                source_column_end=20,
+                normalized_tex="x",
+                source_label="2.3",
+            ),
+            MathSpan(
+                span_id="math-exact-equation",
+                kind=MathSpanKind.DISPLAY,
+                source_line_start=4,
+                source_column_start=1,
+                source_line_end=4,
+                source_column_end=30,
+                normalized_tex="x+y+z",
+                source_label="2.30",
+            ),
+        ),
+    )
+
+    result = search_equation_terms(document, ("2.30",), context_lines=2)
+
+    assert [item.source_label for item in result.matches] == ["2.30"]
+    assert result.matches[0].matched_fields == ("source_label",)
+    assert result.matches[0].page_candidates == (1,)
+    assert "full multiline tail (2.30)" in result.matches[0].source_excerpt
+
+    short = search_equation_terms(document, ("30",), context_lines=0)
+    assert [item.source_label for item in short.matches] == ["2.30"]
+
+
+def test_equation_search_does_not_substring_match_opaque_span_ids() -> None:
+    result = search_equations(_document(), "inline")
+    assert result.matches == ()
