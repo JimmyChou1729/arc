@@ -382,6 +382,12 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         ),
         (
             "arc-paper.md",
+            "arc-paper search-metadata",
+            "paper",
+            ["search-metadata", "quasi-single", "field", "inflation"],
+        ),
+        (
+            "arc-paper.md",
             "arc-paper search-citers",
             "paper",
             [
@@ -536,13 +542,43 @@ def test_arc_paper_manual_documents_general_reference_reads() -> None:
     assert "cache-first" in text
     assert "first parseable representation" in text
     assert "`--refresh` applies only to reference targets" in text
-    assert "--source-format html|markdown|tex|pdf" in text
+    for source_format in ("html", "markdown", "tex", "pdf"):
+        assert f"`--source-format {source_format}`" in text
+    assert "data.source.document" in text
+    assert "data.documents[].source.document" in text
     assert "arc-paper <command> --help" in text
+
+
+def test_arc_paper_docs_start_with_read_loop_and_result_paths() -> None:
+    manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    section = manual.split("## Start Here: Read One Paper", 1)[1].split(
+        "\n## ", 1
+    )[0]
+    commands = (
+        "arc-paper get-metadata",
+        "arc-paper get-table-of-contents",
+        "arc-paper search-full-text",
+        "arc-paper get-section",
+        "arc-paper search-equations",
+    )
+
+    positions = [section.index(command) for command in commands]
+    assert positions == sorted(positions)
+    for result_path in (
+        "data.title",
+        "data.entries[]",
+        "data.occurrences[]",
+        "data.text",
+        "data.matches[]",
+        "data.source.document",
+        "data.documents[].source.document",
+    ):
+        assert result_path in section
 
 
 def test_arc_paper_docs_define_unified_full_text_search() -> None:
     manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
-    section = manual.split("## Search Full Text", 1)[1].split(
+    section = manual.split("### Search Full Text", 1)[1].split(
         "\n## ", 1
     )[0]
     compact = " ".join(section.split())
@@ -550,28 +586,61 @@ def test_arc_paper_docs_define_unified_full_text_search() -> None:
     assert "search-full-text" in compact
     assert compact.count("--term") >= 4
     assert "specific multiword alternatives" in compact
-    assert "literal-OR query" in compact
-    assert "With no target" in compact
-    assert "With targets" in compact
-    assert "up to 50 paper titles, not abstracts" in compact
+    assert "Repeated `--term` values form literal OR" in compact
+    assert "Omit targets" in compact
+    assert "explicit targets" in compact
+    assert "data.failures" in compact
+    assert "up to 50 paper titles" in compact
     assert "rg_unavailable" in compact
     assert "refinement_required" in compact
 
 
-def test_arc_paper_docs_explain_equation_source_diagnosis() -> None:
+def test_arc_paper_docs_explain_general_equation_source_diagnosis() -> None:
     manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
     compact = " ".join(manual.split())
 
     assert "search-equations" in manual
-    assert "2.29" in manual and "2.30" in manual
-    assert "cached ar5iv HTML has no literal" in compact
-    assert "upstream HTML-conversion defect" in compact
-    assert "PDF equation search" in compact
+    assert "compare representations before diagnosing ARC" in compact
+    assert "PDF-only match" in compact
+    assert "selected raw representation visibly contains" in compact
+    assert "smallest reproducing command" in compact
+    assert "cached ar5iv HTML has no literal" not in compact
+
+
+def test_arc_paper_docs_map_search_commands_to_distinct_surfaces() -> None:
+    manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    section = manual.split("## Search the Right Surface", 1)[1].split(
+        "\n## ", 1
+    )[0]
+
+    for command in (
+        "search-metadata",
+        "search-full-text",
+        "search-equations",
+        "search-citers",
+    ):
+        assert f"`{command}`" in section
+
+
+def test_arc_paper_docs_contain_no_retired_read_or_search_commands() -> None:
+    manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+
+    for retired in (
+        "get-arxiv-table-of-contents",
+        "get-arxiv-section",
+        "get-cached-table-of-contents",
+        "get-cached-section",
+        "search-arxiv-full-text",
+        "search-arxiv-equations",
+        "search-cached-full-text",
+        "search-cached-document",
+    ):
+        assert retired not in manual
 
 
 def test_arc_paper_docs_define_bounded_citation_neighborhood_search() -> None:
     manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
-    section = manual.split("## Search a Citation Neighborhood", 1)[1].split(
+    section = manual.split("### Search a Citation Neighborhood", 1)[1].split(
         "\n## ", 1
     )[0]
     compact = " ".join(section.split())
