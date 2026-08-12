@@ -66,6 +66,13 @@ workflow results. Raw candidates and any formatter record remain available.
 Provider authority, quota, and availability pauses remain separate from this
 bounded output recovery.
 
+For provider-heavy parallel work, interpret **max parallel** as a target of
+100 concurrent provider calls. Configure the caller's worker pool and ARC's
+`ProviderGateOptions.global_limit` to 100. This is not a hard ceiling for an
+explicit numeric request. Effective concurrency may be lower when demand is
+lower, available memory reaches ARC's guard threshold, a provider-specific
+limit applies, or the provider circuit opens after failures or rate limiting.
+
 Set `<host-authority>` once per run: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
 identical value for every resume of that run.
