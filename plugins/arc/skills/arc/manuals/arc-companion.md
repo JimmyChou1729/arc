@@ -74,8 +74,8 @@ revisions, including useful new anchored ideas and references. The maximum is
 proposer-reviewer-proposer-reviewer-proposer, with no unused final review;
 Companion injects the chapter ID.
 
-Without `--paper-cache-root`, Companion uses ARC's shared paper cache. Durable
-project state remains under `<project-dir>/.arc/companion/`.
+Without `--paper-cache-root`, Companion uses the launch directory's local paper
+cache. Durable project state remains under `<project-dir>/.arc/companion/`.
 
 ## Inspect, Resume, Validate, and Render
 

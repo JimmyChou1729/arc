@@ -52,8 +52,8 @@ is resumable; it is not a failed replacement run. The project directory is
 required: ARC stores durable domain state below `<project-dir>/.arc/domain`.
 Read the returned status, warnings, and published artifact references after
 every attempt.
-The reusable `arc-paper` cache remains shared and can be overridden only with
-`--paper-cache-root` on build and resume.
+The `arc-paper` cache defaults below the launch directory and can be overridden
+with `--paper-cache-root` on build and resume.
 
 The managed domain workflow records visible summary warnings and publishes
 `arc.workflow.domain_manifest.v4` only after verified exports. That manifest

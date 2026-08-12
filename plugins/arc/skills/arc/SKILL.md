@@ -133,9 +133,12 @@ installs or starts MCP.
 
 The launcher defaults `ARC_HOME` to `$HOME/.arc`; other hosts may set an
 explicit portable location. It keeps reusable runtime installations under
-`runtimes/` and the reusable paper cache under `cache/arc-paper/`. Durable
-workflow state belongs in each project's hidden `.arc/` directory. `doctor`
-reports the resolved source, runtime, and paper-cache paths. Provider selection remains owned by the installed `arc-llm` package.
+`runtimes/`. The paper cache defaults to `.arc/cache/arc-paper/` below the
+launch directory; source-checkout development uses ignored
+`local/cache/arc-paper/`. Set `ARC_PAPER_CACHE` for an explicit portable
+location. Durable workflow state belongs in each project's hidden `.arc/`
+directory. `doctor` reports resolved source, runtime, and paper-cache paths.
+Provider selection remains owned by the installed `arc-llm` package.
 
 ## Workflow
 

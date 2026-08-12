@@ -123,7 +123,7 @@ def _parser() -> _Parser:
     add_project_dir(build)
     build.add_argument(
         "--paper-cache-root",
-        help="override the shared arc-paper cache directory",
+        help="override the project-local arc-paper cache directory",
     )
     build.add_argument("--run-id", help="explicit durable run identifier")
 
@@ -139,7 +139,7 @@ def _parser() -> _Parser:
     add_project_dir(resume)
     resume.add_argument(
         "--paper-cache-root",
-        help="override the shared arc-paper cache directory",
+        help="override the project-local arc-paper cache directory",
     )
 
     status = commands.add_parser(

@@ -43,8 +43,8 @@ count is approximate; deduplicated underfill is accepted. Glossary
 `matched_sentences` are literal source search hits for disambiguation, never
 definitions or explanations.
 
-`--paper-cache-root` is optional. Without it, ARC uses the shared reusable
-paper cache. Translation durable state lives only in
+`--paper-cache-root` is optional. Without it, ARC uses the launch directory's
+project-local paper cache. Translation durable state lives only in
 `<project-dir>/.arc/translate/`. A successful translation publishes immutable
 Markdown fragment revisions under `<project-dir>/fragments/` and the native
 `<project-dir>/translation.layer.json`. Language and glossary steps publish

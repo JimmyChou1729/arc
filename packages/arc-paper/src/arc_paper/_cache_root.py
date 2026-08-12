@@ -22,10 +22,8 @@ def resolve_cache_root(
         root = Path(repository.root)
     elif value := os.environ.get("ARC_PAPER_CACHE"):
         root = Path(value).expanduser()
-    elif value := os.environ.get("ARC_HOME"):
-        root = Path(value).expanduser() / "cache" / "arc-paper"
     else:
-        root = Path.home() / ".arc" / "cache" / "arc-paper"
+        root = Path.cwd() / ".arc" / "cache" / "arc-paper"
 
     if (
         explicit is not None

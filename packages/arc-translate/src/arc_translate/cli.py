@@ -139,8 +139,8 @@ def _paper_cache_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--paper-cache-root",
         help=(
-            "shared arc-paper cache root; defaults to ARC_PAPER_CACHE or the "
-            "global ARC paper cache"
+            "arc-paper cache root; defaults to ARC_PAPER_CACHE or "
+            "<current-directory>/.arc/cache/arc-paper"
         ),
     )
 

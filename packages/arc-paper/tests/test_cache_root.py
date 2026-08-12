@@ -18,15 +18,33 @@ def test_cache_environment_precedence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _clear_cache_environment(monkeypatch)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
-    assert default_cache_root() == tmp_path / "home" / ".arc" / "cache" / "arc-paper"
+    assert default_cache_root() == work / ".arc" / "cache" / "arc-paper"
 
     monkeypatch.setenv("ARC_HOME", str(tmp_path / "arc-home"))
-    assert default_cache_root() == tmp_path / "arc-home" / "cache" / "arc-paper"
+    assert default_cache_root() == work / ".arc" / "cache" / "arc-paper"
 
     monkeypatch.setenv("ARC_PAPER_CACHE", str(tmp_path / "paper"))
     assert default_cache_root() == tmp_path / "paper"
+
+
+def test_default_cache_root_tracks_current_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_cache_environment(monkeypatch)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+
+    monkeypatch.chdir(first)
+    assert default_cache_root() == first / ".arc" / "cache" / "arc-paper"
+    monkeypatch.chdir(second)
+    assert default_cache_root() == second / ".arc" / "cache" / "arc-paper"
 
 
 def test_explicit_and_injected_roots_override_environment(

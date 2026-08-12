@@ -5,6 +5,9 @@ references and citers, arXiv or local full text, cache search, and keyword
 inventories. Managed domain, idea, check, and Companion workflows build on it.
 Commands return typed JSON; inspect status, warnings, data, and error.
 
+Unless `ARC_PAPER_CACHE` or `--cache-root` selects another location, cache data
+lives at `<current-directory>/.arc/cache/arc-paper`.
+
 ## Read a Paper
 
 Inspect only the source regions and citation relationships needed:
