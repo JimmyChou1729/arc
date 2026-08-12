@@ -6,6 +6,20 @@ review over verified `arc-paper.RichDocument` sources. It uses `arc-jobs` for
 durable execution, `arc-llm` for model calls, and publishes native
 `arc-render` fragment revisions plus a translation Layer.
 
+## Running the CLI
+
+An installed package provides the `arc-translate` console script. The ARC Skill
+runtime is the portable fallback; inside an ARC source checkout, the package
+virtual environment is a direct development fallback:
+
+```bash
+arc-translate --help
+<skill-dir>/scripts/arc-runtime arc-translate --help
+packages/arc-paper/.venv/bin/arc-translate --help
+```
+
+Use the first available launcher consistently in later commands.
+
 ## Quick start
 
 Detect whether a verified source needs translation:
@@ -14,20 +28,48 @@ Detect whether a verified source needs translation:
 arc-translate detect-language note.md \
   --target-language zh-CN \
   --project-dir local/example/translation \
-  --paper-cache-root <shared-paper-cache> \
-  --host-authority <host-authority>
+  --paper-cache-root local/cache/arc-paper \
+  --host-authority unknown
+
+arc-translate get-result --project-dir local/example/translation \
+  --step language
 ```
 
-Use `arc-translate --help` and `arc-translate detect-language --help` for the
-three independent stages, their prerequisites, and durable project controls.
+Read `data.result.language_tag`, `data.result.target_language`, and
+`data.result.mode` from `get-result`. Stop when `mode` is `skipped`; when it is
+`enabled`, run the remaining two stages against the same source and project:
 
-`--paper-cache-root` is optional and otherwise resolves to ARC's shared paper
-cache. Durable state is project-local under `<project-dir>/.arc/translate/`.
+```bash
+arc-translate build-glossary note.md \
+  --project-dir local/example/translation \
+  --paper-cache-root local/cache/arc-paper \
+  --host-authority unknown --approx-term-count 50
+
+arc-translate translate-blocks note.md \
+  --project-dir local/example/translation \
+  --paper-cache-root local/cache/arc-paper \
+  --host-authority unknown
+
+arc-translate get-result --project-dir local/example/translation \
+  --step blocks
+```
+
+The three commands are independent durable stages and verify their selected
+prerequisites. The final command returns the canonical result at `data.result`
+and the Layer handoff at `data.delivery.layer`.
+
+`--paper-cache-root` is optional. Without it, source access uses
+`ARC_PAPER_CACHE` when set, otherwise
+`<launch-directory>/.arc/cache/arc-paper`. Durable state is project-local under
+`<project-dir>/.arc/translate/`.
 The final translation step publishes immutable revisions below
 `<project-dir>/fragments/` and
 `<project-dir>/translation.layer.json`. Language and glossary steps remain
 durable prerequisites and do not publish a reader delivery. Compose the Layer
 with `arc-render` to produce standalone reader HTML.
+
+Use `arc-translate --help`, `arc-translate get-result --help`, and each stage's
+`--help` for exact source, prerequisite, result, and durable-control options.
 
 Each translation revision is bound to exactly one source RichDocument block,
 has priority `10`, and preserves the block locator and content fingerprint.

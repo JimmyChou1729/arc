@@ -6,6 +6,20 @@ parsing, full-text and equation search, approximate keyword inventory, and
 paper-specific LLM workflows. Generic model execution and durable-run
 mechanics remain in `arc-llm` and `arc-jobs`.
 
+## Running the CLI
+
+An installed package provides the `arc-paper` console script. The ARC Skill
+runtime is the portable fallback; inside an ARC source checkout, the package
+virtual environment is a direct development fallback:
+
+```bash
+arc-paper --help
+<skill-dir>/scripts/arc-runtime arc-paper --help
+packages/arc-paper/.venv/bin/arc-paper --help
+```
+
+Use the first available launcher consistently in later commands.
+
 ## Quick start
 
 Fetch normalized metadata for one paper:
@@ -17,6 +31,28 @@ arc-paper get-metadata "<paper-id>"
 Replace the quoted placeholder with an arXiv, INSPIRE, or DOI identifier.
 Use `arc-paper --help` and `arc-paper get-metadata --help` for the current
 paper, source, search, workflow, and cache commands.
+
+Export a local rich source and its verified assets for direct `arc-render`
+composition:
+
+```bash
+arc-paper export-rich-document ./note.md \
+  --output-dir ./render-input \
+  --cache-root ./.arc/cache/arc-paper
+
+arc-render compose \
+  --source ./render-input/rich-source.json \
+  --metadata ./render-input/metadata.json \
+  --output ./render-input/publication.json
+arc-render render \
+  --publication ./render-input/publication.json \
+  --html ./render-input/reader.html
+```
+
+`export-rich-document` accepts Markdown, HTML, or flattened TeX and an optional
+PDF `--validator`. It refuses a nonempty output directory, copies verified
+assets below `resources/`, and returns the source and metadata paths at
+`data.source` and `data.metadata`.
 
 ## Cache portability
 
@@ -66,7 +102,7 @@ content hierarchy instead of unreliable native heading levels. Each model
 request receives only its selected section text; the complete parsed document
 and its assets are not attached.
 
-References use exact identities and verified shared-cache handles:
+References use exact identities and verified cache handles:
 
 ```bash
 arc-paper lookup-reference --doi '10.1234/example'

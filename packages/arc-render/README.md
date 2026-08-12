@@ -5,6 +5,74 @@ reader delivery. A publication contains its frozen rich source document and
 refers to immutable fragment revision and resource files, so it does not depend
 on an unrecorded caller-supplied source.
 
+## Quick start
+
+When `arc-paper` and `arc-render` are installed on `PATH`, build a source-only
+reader with:
+
+```bash
+arc-paper export-rich-document note.md --output-dir publication
+
+arc-render compose \
+  --source publication/rich-source.json \
+  --metadata publication/metadata.json \
+  --output publication/publication.json
+
+arc-render render \
+  --publication publication/publication.json \
+  --html publication/reader.html
+
+arc-render validate \
+  --publication publication/publication.json \
+  --html publication/reader.html
+```
+
+`export-rich-document` accepts local Markdown, HTML, or flattened single-file
+TeX. Add `--validator note.pdf` when a PDF should validate fidelity or page
+mapping. It creates the rich source, metadata, and verified resource tree; the
+caller should not hand-copy resources or construct the metadata resource array.
+The output directory must be new or empty.
+
+A publication with no overlay Layers is valid. To include existing Layers,
+repeat `--layer publication/<layer>.json` on `compose` in publication order.
+Each Layer and every fragment revision it references must already be below the
+directory containing the output `publication.json`; moving only a Layer is not
+enough.
+
+If bare commands are unavailable in an installed ARC Skill, use its runtime:
+
+```bash
+<skill-dir>/scripts/arc-runtime arc-paper export-rich-document --help
+<skill-dir>/scripts/arc-runtime arc-render --help
+```
+
+From this source checkout, the development fallback is:
+
+```bash
+packages/arc-paper/.venv/bin/arc-paper export-rich-document --help
+packages/arc-paper/.venv/bin/arc-render --help
+```
+
+`arc-paper export-rich-document` prints an `arc.command_result.v2` envelope.
+Check top-level `status`, `warnings`, and `error`; successful paths and identity
+are at `data.source`, `data.metadata`, `data.resources[]`, and
+`data.document_digest`, with parse warnings at `data.warnings[]`.
+
+Successful `arc-render` commands print flat JSON objects with these exact
+fields:
+
+| Command | Result fields |
+| --- | --- |
+| `compose` | `publication`, `publication_digest`, `source_document_digest`, `layer_count` |
+| `render` | `html`, `publication_digest`, `selected_revision_digests`, `warnings` |
+| `validate` | `publication`, `publication_digest`, `warnings`, plus `html` when supplied and `browser` when requested |
+| `standalone-html` | `html` |
+
+Ordinary validation checks the publication and, when supplied, its rendered
+HTML. `--browser` requires `--html` and adds a local Chromium behavior check.
+`standalone-html` is a separate utility for embedding the local assets of an
+existing HTML bundle; it does not compose or validate an ARC publication.
+
 The v1 fragment format uses strict JSON front matter between ARC-specific
 delimiters. YAML is not accepted. Fragment priorities are positive integers;
 block and section are the only anchor kinds. A publication with no overlay

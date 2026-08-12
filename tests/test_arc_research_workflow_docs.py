@@ -379,6 +379,36 @@ def test_peer_manuals_define_new_public_handoffs() -> None:
     assert "complete `fragments/` tree" in render
 
 
+def test_package_readmes_match_peer_manual_handoffs() -> None:
+    readmes = {
+        name: (ROOT / "packages" / f"arc-{name}" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        for name in (
+            "companion",
+            "domain",
+            "jobs",
+            "llm",
+            "paper",
+            "proposer-reviewer",
+            "render",
+            "translate",
+        )
+    }
+
+    assert "--host-authority unknown" in readmes["companion"]
+    assert "--host-authority unrestricted" not in readmes["companion"]
+    assert "arc-domain materialize-export" in readmes["domain"]
+    assert "shared `arc-paper` cache" not in readmes["domain"]
+    assert "data.run.working_state" in readmes["jobs"]
+    assert "data.run.result.path" in readmes["llm"]
+    assert "arc-paper export-rich-document" in readmes["paper"]
+    assert "arc-proposer-reviewer trace" in readmes["proposer-reviewer"]
+    assert "arc-render validate" in readmes["render"]
+    assert "arc-translate get-result" in readmes["translate"]
+    assert "shared paper cache" not in readmes["translate"]
+
+
 def test_llm_and_proposer_manual_json_templates_decode() -> None:
     for package in ("arc-llm", "arc-proposer-reviewer"):
         sys.path.insert(0, str(ROOT / "packages" / package / "src"))

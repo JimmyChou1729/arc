@@ -24,16 +24,75 @@ of a broader guide.
 
 ## Quick start
 
+Use `arc-companion` directly when installed on `PATH`. If it is unavailable in
+an installed ARC Skill, use `<skill-dir>/scripts/arc-runtime arc-companion`.
+From this source checkout, use
+`packages/arc-companion/.venv/bin/arc-companion`.
+
+Build from a local source:
+
 ```bash
 arc-companion build note.md \
   --project-dir local/example \
   --target-language zh-CN \
   --user-intent "Explain the main argument and its assumptions." \
-  --host-authority unrestricted
+  --host-authority unknown
+
+arc-companion status --project-dir local/example
+arc-companion render --project-dir local/example
+arc-companion validate --project-dir local/example
+```
+
+Build from arXiv, optionally fetching a PDF validator:
+
+```bash
+arc-companion build arXiv:0911.3380 \
+  --pdf fetch \
+  --project-dir local/0911.3380-companion \
+  --target-language zh-CN \
+  --user-intent "Connect the main results to their assumptions." \
+  --host-authority unknown
+```
+
+Markdown, HTML, or flattened single-file TeX is authoritative. For local
+sources, `--pdf note.pdf` supplies an optional validator; PDF is never the
+reader source or output. Use `unrestricted` only when the host explicitly
+grants it. Otherwise use `unknown`, or `restricted` when known, and preserve the
+same authority on resume.
+
+Every command prints an `arc.command_result.v2` envelope. For `build` and
+`resume`, read the selected durable identity at top-level `run.id`, lifecycle at
+`data.run.status`, and delivered reader at `data.delivery.html`. Publication
+identity and consistency are at `data.publication_digest`,
+`data.edition_digest`, `data.selected_revision_digests[]`, and
+`data.workspace_html_consistent`. A generation may complete while rendering
+fails: in that case top-level `status` is `"completed"`, but
+`data.published` is false, `data.delivery` is empty, and warnings include
+`web_render_failed`.
+
+Inspect and recover a paused selected run with:
+
+```bash
+arc-companion status --project-dir local/example
+
+arc-companion resume \
+  --project-dir local/example \
+  --input resume-input.json \
+  --host-authority unknown
 
 arc-companion render --project-dir local/example
 arc-companion validate --project-dir local/example
 ```
+
+For `status`, lifecycle is at `data.selected_run.status`; status deliberately
+has no `data.delivery`. A valid promoted reader is reported as an artifact with
+role `web`. On a pause, inspect top-level `resume.input_required` and
+`resume.request_artifact`; `--input` accepts inline JSON or a JSON file and may
+be omitted when no input is required. Resume replays verified completed work in
+the same durable run. Keep the original paper-cache root and host authority.
+After an explicit render, use `data.delivery.html`; an empty delivery with
+`publication_not_selected` means a different run won selection before
+promotion.
 
 Add `--cross-chapter-editorial-review` to `build` to run one optional,
 single-worker proposer-reviewer pass after all chapter-local guides finish.
@@ -63,7 +122,10 @@ the base publication; `edition_digest` identifies that publication plus its
 ordered current fragment heads.
 
 Use `arc-companion --help` and each subcommand's `--help` for the complete
-durable-control and publication options.
+durable-control and publication options. `--paper-cache-root` overrides paper
+storage; otherwise the command uses `ARC_PAPER_CACHE` or
+`<launch-directory>/.arc/cache/arc-paper`. This cache is separate from durable
+project state.
 
 A successful build writes its immutable artifacts under
 `<project-dir>/.arc/companion/jobs/` and materializes the selected publication

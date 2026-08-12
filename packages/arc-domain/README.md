@@ -15,6 +15,21 @@ callers may instead select fixed-seed and strict-window modes explicitly.
 Exported summary packages accept the current `arc.domain_summary.v5`
 contract.
 
+## Running the CLI
+
+An installed package provides the `arc-domain` console script. Check it first;
+when working through the ARC Skill, use its portable runtime launcher. Inside
+an ARC source checkout, the package virtual environment is a direct development
+fallback:
+
+```bash
+arc-domain --help
+<skill-dir>/scripts/arc-runtime arc-domain --help
+packages/arc-paper/.venv/bin/arc-domain --help
+```
+
+Use the first available launcher consistently in later commands.
+
 ## Quick start
 
 Build one domain with an explicit research intent:
@@ -26,13 +41,34 @@ arc-domain build "<seed-paper-id>" \
   --host-authority <host-authority>
 ```
 
-Replace both quoted placeholders with the seed identifier and the scientific
-focus for the domain. Durable state is stored in
-`<project-dir>/.arc/domain`; paper data uses the shared `arc-paper` cache
-unless `--paper-cache-root` selects another explicit cache.
-The result reports durable run and domain identities. Use `arc-domain --help`
-and `arc-domain build --help` for build policy, inspection, published-artifact
-queries, and run controls.
+Replace the seed, research-intent, project-directory, and authority
+placeholders with values appropriate to the build. Durable state is stored in
+`<project-dir>/.arc/domain`. Unless `--paper-cache-root` is provided, paper
+data uses `ARC_PAPER_CACHE` when set, otherwise
+`<launch-directory>/.arc/cache/arc-paper`; keep the launch directory stable
+across related commands.
+
+A completed published build returns the durable attempt ID at `run.id` and the
+stable published domain ID at `data.domain.id`. Use the former for status,
+resume, stop, and validation; use the latter for active-domain reads and
+exports:
+
+```bash
+arc-domain get-summary --project-dir "<project-dir>" \
+  --domain-id "<data.domain.id>"
+arc-domain get-graph --project-dir "<project-dir>" \
+  --domain-id "<data.domain.id>"
+arc-domain materialize-export --project-dir "<project-dir>" \
+  --domain-id "<data.domain.id>" --name evidence-pack \
+  --output ./evidence-pack.json
+```
+
+The read commands return their documents at `data.summary` and `data.graph`.
+Materialization verifies the active export, never overwrites an existing
+output, and reports its path and digest at `data.export.output` and
+`data.export.digest`. Use `arc-domain --help`, `arc-domain build --help`, and
+`arc-domain materialize-export --help` for build policy, inspection, all five
+public export names, and run controls.
 
 `--host-authority` is an execution-only attestation for model calls. It
 defaults to `unknown`; use `unrestricted` only when the invoking host has
