@@ -336,6 +336,74 @@ def test_package_manuals_are_self_contained_quick_starts() -> None:
         assert f"`manuals/{name}`" in skill
 
 
+def test_peer_manuals_explain_launchers_and_public_result_paths() -> None:
+    manuals = {
+        name: (SKILL / "manuals" / f"arc-{name}.md").read_text(encoding="utf-8")
+        for name in (
+            "companion",
+            "domain",
+            "jobs",
+            "llm",
+            "render",
+            "translate",
+        )
+    }
+    for command, text in manuals.items():
+        assert f"arc-{command} --help" in text
+        assert f"<skill-dir>/scripts/arc-runtime arc-{command} --help" in text
+        assert f".venv/bin/arc-{command} --help" in text
+
+    assert "`run.id`" in manuals["domain"]
+    assert "`data.domain.id`" in manuals["domain"]
+    assert "`data.export.output`" in manuals["domain"]
+    assert "`data.run.working_state`" in manuals["jobs"]
+    assert "`data.run.result.path`" in manuals["llm"]
+    assert "`data.result.language_tag`" in manuals["translate"]
+    assert "`data.delivery.layer`" in manuals["translate"]
+    assert "`data.delivery.html`" in manuals["companion"]
+
+
+def test_peer_manuals_define_new_public_handoffs() -> None:
+    domain = (SKILL / "manuals/arc-domain.md").read_text(encoding="utf-8")
+    translate = (SKILL / "manuals/arc-translate.md").read_text(encoding="utf-8")
+    render = (SKILL / "manuals/arc-render.md").read_text(encoding="utf-8")
+
+    for name in ("summary", "graph", "network", "evidence-pack", "paper-pack"):
+        assert f"--name {name}" in domain
+    assert "arc-domain materialize-export" in domain
+    assert "arc-translate get-result" in translate
+    assert "--step language" in translate
+    assert "arc-paper export-rich-document" in render
+    assert "publication/rich-source.json" in render
+    assert "publication/metadata.json" in render
+    assert "complete `fragments/` tree" in render
+
+
+def test_llm_and_proposer_manual_json_templates_decode() -> None:
+    for package in ("arc-llm", "arc-proposer-reviewer"):
+        sys.path.insert(0, str(ROOT / "packages" / package / "src"))
+
+    from arc_llm import decode_request, decode_resume_input
+    from arc_proposer_reviewer.protocol import decode_batch_request
+
+    llm = (SKILL / "manuals/arc-llm.md").read_text(encoding="utf-8")
+    proposer = (SKILL / "manuals/arc-proposer-reviewer.md").read_text(
+        encoding="utf-8"
+    )
+    llm_blocks = re.findall(r"```json\n(.*?)\n```", llm, flags=re.DOTALL)
+    proposer_blocks = re.findall(
+        r"```json\n(.*?)\n```", proposer, flags=re.DOTALL
+    )
+
+    assert len(llm_blocks) == 2
+    assert len(proposer_blocks) == 2
+    decode_request(json.loads(llm_blocks[0]))
+    decode_resume_input(json.loads(llm_blocks[1]))
+    decoded_batch = decode_batch_request(json.loads(proposer_blocks[0]))
+    assert decoded_batch.batch_id == "comparison-1"
+    decode_resume_input(json.loads(proposer_blocks[1]))
+
+
 def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
     for package in (
         "arc-jobs",
@@ -359,6 +427,7 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
             "proposer": "arc_proposer_reviewer.cli",
             "translate": "arc_translate.cli",
             "companion": "arc_companion.cli",
+            "render": "arc_render.cli",
         }.items()
     }
     parsers = {
@@ -369,6 +438,7 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         "proposer": modules["proposer"]._parser(),
         "translate": modules["translate"]._parser(),
         "companion": modules["companion"]._parser(),
+        "render": modules["render"]._parser(),
     }
     cases = (
         ("arc-paper.md", "arc-paper get-metadata", "paper", ["get-metadata", "arXiv:1234.5678"]),
@@ -446,6 +516,26 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
             ["extract-keywords", "source.md", "--project-dir", "run/keywords"],
         ),
         (
+            "arc-render.md",
+            "arc-paper export-rich-document",
+            "paper",
+            ["export-rich-document", "source.md", "--output-dir", "publication"],
+        ),
+        (
+            "arc-render.md",
+            "arc-render compose",
+            "render",
+            [
+                "compose",
+                "--source",
+                "publication/rich-source.json",
+                "--metadata",
+                "publication/metadata.json",
+                "--output",
+                "publication/publication.json",
+            ],
+        ),
+        (
             "arc-domain.md",
             "arc-domain build",
             "domain",
@@ -463,6 +553,22 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
             "arc-domain status",
             "domain",
             ["status", "--project-dir", "project", "--run-id", "domain_run"],
+        ),
+        (
+            "arc-domain.md",
+            "arc-domain materialize-export",
+            "domain",
+            [
+                "materialize-export",
+                "--project-dir",
+                "project",
+                "--domain-id",
+                "domain_1",
+                "--name",
+                "network",
+                "--output",
+                "network.html",
+            ],
         ),
         (
             "arc-jobs.md",
@@ -516,6 +622,12 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
             "arc-translate translate-blocks",
             "translate",
             ["translate-blocks", "source.md", "--project-dir", "translation"],
+        ),
+        (
+            "arc-translate.md",
+            "arc-translate get-result",
+            "translate",
+            ["get-result", "--project-dir", "translation", "--step", "language"],
         ),
         (
             "arc-companion.md",
