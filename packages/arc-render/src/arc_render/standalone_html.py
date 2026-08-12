@@ -157,6 +157,10 @@ def _split_reader_payload(value: str) -> str:
             if isinstance(digest, str) and digest in selected_set:
                 selected_buckets[bucket].append(digest)
 
+    selected_roles, selected_heading_fragments = (
+        _selected_fragment_boot_metadata(revisions, selected, blocks, outline)
+    )
+
     boot = copy.deepcopy(payload)
     boot["schema_version"] = _READER_PAYLOAD_V2
     profile = publication.get("reader_profile")
@@ -180,6 +184,8 @@ def _split_reader_payload(value: str) -> str:
     )
     boot["block_manifest"] = block_manifest
     boot["reader_chunks"] = []
+    boot["selected_roles"] = selected_roles
+    boot["selected_heading_fragments"] = selected_heading_fragments
     boot["block_fingerprints"] = {}
     boot["revisions"] = []
     boot["resources"] = []
@@ -246,6 +252,70 @@ def _split_reader_payload(value: str) -> str:
         + "".join(scripts)
     )
     return value[: match.start()] + replacement + value[match.end() :]
+
+
+def _selected_fragment_boot_metadata(
+    revisions: list[object],
+    selected: list[object],
+    blocks: list[object],
+    outline: list[object],
+) -> tuple[list[str], list[dict[str, object]]]:
+    selected_set = {item for item in selected if isinstance(item, str)}
+    section_anchors = {
+        str(item["section_id"]): str(item["anchor_block_id"])
+        for item in outline
+        if isinstance(item, dict)
+        and isinstance(item.get("section_id"), str)
+        and isinstance(item.get("anchor_block_id"), str)
+    }
+    selected_records: list[tuple[int, str, dict[str, object]]] = []
+    for revision in revisions:
+        if not isinstance(revision, dict):
+            continue
+        digest = revision.get("semantic_digest")
+        metadata = revision.get("metadata")
+        if digest not in selected_set or not isinstance(metadata, dict):
+            continue
+        priority = metadata.get("priority")
+        fragment_id = metadata.get("fragment_id")
+        if not isinstance(priority, int) or not isinstance(fragment_id, str):
+            raise StandaloneHtmlError("ARC reader selected revisions are invalid")
+        selected_records.append((priority, fragment_id, revision))
+    selected_records.sort(key=lambda item: (item[0], item[1]))
+    selected_roles: list[str] = []
+    selected_heading_fragments: list[dict[str, object]] = []
+    heading_ids = {
+        str(block["block_id"])
+        for block in blocks
+        if isinstance(block, dict) and block.get("kind") == "heading"
+    }
+    for priority, fragment_id, revision in selected_records:
+        metadata = revision["metadata"]
+        assert isinstance(metadata, dict)
+        role = metadata.get("role")
+        anchor = metadata.get("anchor")
+        markdown_body = revision.get("markdown_body")
+        if not isinstance(role, str) or not role.strip():
+            raise StandaloneHtmlError("ARC reader selected revision roles are invalid")
+        if role not in selected_roles:
+            selected_roles.append(role)
+        if not isinstance(anchor, dict) or not isinstance(markdown_body, str):
+            continue
+        target = anchor.get("target_id")
+        if anchor.get("kind") == "section":
+            target = section_anchors.get(str(target))
+        if isinstance(target, str) and target in heading_ids:
+            selected_heading_fragments.append(
+                {
+                    "fragment_id": fragment_id,
+                    "role": role,
+                    "target_id": target,
+                    "priority": priority,
+                    "markdown_body": markdown_body,
+                }
+            )
+
+    return selected_roles, selected_heading_fragments
 
 
 def _revision_chunk_index(

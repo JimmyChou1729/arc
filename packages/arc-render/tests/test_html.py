@@ -41,6 +41,7 @@ from arc_render.html import (
     render_publication_html,
     validate_standalone_html,
 )
+from arc_render.standalone_html import _split_reader_payload
 from arc_render.workspace import (
     relative_fragment_path,
     write_fragment_revision,
@@ -269,6 +270,9 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert "@media print" in text
     assert "--print-to-pdf" not in text
     assert 'id="arc-export"' in text
+    assert 'id="arc-view"' in text
+    assert 'id="arc-view-panel"' in text
+    assert 'id="arc-view-options"' in text
     assert 'id="arc-export-panel"' in text
     assert 'id="arc-export-scope"' in text
     assert 'id="arc-export-html"' in text
@@ -369,10 +373,72 @@ def test_standalone_reader_v2_defers_blocks_revisions_and_resources(
     assert all("data_uri" not in item for item in boot["resources"])
     assert len(boot["block_manifest"]) == 3
     assert len(boot["reader_chunks"]) == 1
+    assert boot["selected_roles"] == ["translation"]
+    assert boot["selected_heading_fragments"] == []
     assert text.count('class="arc-render-reader-chunk"') == 1
     assert text.count('class="arc-render-reader-resource"') == 1
     assert len(_payload(text)["revisions"]) == 2
     validate_standalone_html(publication, output)
+
+
+def test_standalone_reader_v2_boot_declares_dynamic_roles_and_heading_text() -> None:
+    payload = {
+        "schema_version": "arc.render.reader_payload.v1",
+        "publication": {
+            "source_document": {
+                "blocks": [
+                    {
+                        "block_id": "heading-1",
+                        "kind": "heading",
+                        "ordinal": 0,
+                        "payload": {"text": "Source", "level": 1},
+                    }
+                ]
+            },
+            "outline": [
+                {
+                    "section_id": "section-1",
+                    "anchor_block_id": "heading-1",
+                }
+            ],
+            "reader_profile": {},
+            "labels": {},
+        },
+        "revisions": [
+            {
+                "metadata": {
+                    "fragment_id": "custom-heading",
+                    "priority": 25,
+                    "role": "commentary-custom",
+                    "anchor": {"kind": "section", "target_id": "section-1"},
+                },
+                "markdown_body": "# Visible custom heading\n",
+                "semantic_digest": "a" * 64,
+            }
+        ],
+        "selected_revision_digests": ["a" * 64],
+        "resources": [],
+        "block_fingerprints": {"heading-1": "b" * 64},
+    }
+    html = (
+        '<script id="arc-render-payload" type="application/json">'
+        + json.dumps(payload)
+        + "</script>"
+    )
+
+    split = _split_reader_payload(html)
+    boot = _boot_payload(split)
+
+    assert boot["selected_roles"] == ["commentary-custom"]
+    assert boot["selected_heading_fragments"] == [
+        {
+            "fragment_id": "custom-heading",
+            "role": "commentary-custom",
+            "target_id": "heading-1",
+            "priority": 25,
+            "markdown_body": "# Visible custom heading\n",
+        }
+    ]
 
 
 def test_standalone_reader_v2_rejects_a_missing_chunk(tmp_path: Path) -> None:
@@ -390,6 +456,32 @@ def test_standalone_reader_v2_rejects_a_missing_chunk(tmp_path: Path) -> None:
     output.write_text(text, encoding="utf-8")
 
     with pytest.raises(HTMLRenderError, match="payload count"):
+        validate_standalone_html(publication, output)
+
+
+def test_standalone_reader_v2_rejects_visibility_manifest_drift(
+    tmp_path: Path,
+) -> None:
+    publication_path, publication, _selected = _workspace(tmp_path)
+    output = tmp_path / "reader-v2.html"
+    render_publication_html(publication_path, output)
+    text = output.read_text(encoding="utf-8")
+    boot = _boot_payload(text)
+    boot["selected_roles"] = ["invented-role"]
+    encoded = json.dumps(
+        boot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).replace("</script", r"<\/script")
+    text = re.sub(
+        r'(<script id="arc-render-payload" type="application/json">)'
+        r".*?(</script>)",
+        lambda match: match.group(1) + encoded + match.group(2),
+        text,
+        count=1,
+        flags=re.DOTALL,
+    )
+    output.write_text(text, encoding="utf-8")
+
+    with pytest.raises(HTMLRenderError, match="visibility manifest differs"):
         validate_standalone_html(publication, output)
 
 

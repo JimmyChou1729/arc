@@ -53,6 +53,9 @@
     chunkByTargetId: new Map(),
     chunkObserver: null,
     laneObserver: null,
+    laneObservedRoot: null,
+    laneObservedWidth: null,
+    laneResizeFrame: null,
     laneFallbackListener: null,
     idleRenderHandle: null,
     idleRenderUsesCallback: false,
@@ -68,7 +71,12 @@
     initialSelectedDigests: new Map(),
     initialSelectionCaptured: false,
     exportHtmlTemplate: null,
-    exportStandaloneSupported: false
+    exportStandaloneSupported: false,
+    sourceVisible: true,
+    hiddenRoles: new Set(),
+    roleOrder: [],
+    visibilityReady: false,
+    visibilityEmptyRoot: null
   };
 
   function element(tag, className, text) {
@@ -125,8 +133,37 @@
       if (!Array.isArray(blocks) || blocks.length !== value.block_manifest.length) {
         throw new Error("ARC reader block manifest is inconsistent");
       }
+      if (value.selected_roles !== undefined && !validSelectedRoles(value.selected_roles)) {
+        throw new Error("ARC reader selected role manifest is invalid");
+      }
+      if (
+        value.selected_heading_fragments !== undefined &&
+        !validSelectedHeadingFragments(value.selected_heading_fragments)
+      ) {
+        throw new Error("ARC reader selected heading manifest is invalid");
+      }
     }
     return value;
+  }
+
+  function validSelectedRoles(values) {
+    if (!Array.isArray(values)) return false;
+    var seen = new Set();
+    return values.every(function (role) {
+      if (!normalizedNonblank(role) || seen.has(role)) return false;
+      seen.add(role);
+      return true;
+    });
+  }
+
+  function validSelectedHeadingFragments(values) {
+    if (!Array.isArray(values)) return false;
+    return values.every(function (item) {
+      return item && normalizedNonblank(item.fragment_id) &&
+        normalizedNonblank(item.role) && normalizedNonblank(item.target_id) &&
+        Number.isFinite(Number(item.priority)) &&
+        typeof item.markdown_body === "string";
+    });
   }
 
   function loadPayloadChunk(descriptor) {
@@ -199,6 +236,7 @@
       state.loadedPayloadChunkIds.add(descriptor.chunk_id);
       publishSelectedRevisionCount();
       rebuildDiagnostics();
+      syncVisibilityRoles();
     } finally {
       state.loadingPayloadChunkIds.delete(descriptor.chunk_id);
     }
@@ -336,6 +374,10 @@
       originalTerm: "原文术语",
       translatedTerm: traditional ? "譯文" : "译文",
       definition: "释义",
+      view: "显示",
+      showLayers: "显示内容",
+      original: "原文",
+      noVisibleContent: "未选择要显示的内容。",
       export: "导出",
       markdownScope: "Markdown 内容",
       allLatest: "全部最新版",
@@ -391,6 +433,10 @@
       originalTerm: "Original term",
       translatedTerm: "Translation",
       definition: "Definition",
+      view: "View",
+      showLayers: "Show content",
+      original: "Original",
+      noVisibleContent: "No content is selected for display.",
       export: "Export",
       markdownScope: "Markdown content",
       allLatest: "All latest",
@@ -864,6 +910,11 @@
     state.diagnosticsRoot = element("div", "arc-reader-diagnostics");
     main.appendChild(state.diagnosticsRoot);
     renderDiagnostics(state.diagnosticsRoot);
+    state.visibilityEmptyRoot = element(
+      "p", "arc-visibility-empty", strings.noVisibleContent
+    );
+    state.visibilityEmptyRoot.hidden = true;
+    main.appendChild(state.visibilityEmptyRoot);
 
     state.renderPlan.forEach(function (chunk) {
       var node = element("div", "arc-render-chunk");
@@ -1085,6 +1136,7 @@
       renderBibliography(content, publication.bibliography || [], labels());
     }
     node.replaceChildren(content);
+    applyVisibility(node);
   }
 
   function renderAllChunks() {
@@ -1117,6 +1169,7 @@
         state.payload.publication.source_document
       );
     }
+    syncVisibilityRoles();
     renderDiagnostics(state.diagnosticsRoot);
     var chunks = new Set();
     changedAnchors.forEach(function (anchor) {
@@ -1234,6 +1287,7 @@
     var row = element("article", "arc-source-row");
     row.id = "block-" + safeToken(block.block_id);
     row.dataset.blockId = block.block_id;
+    row.dataset.blockKind = block.kind;
     var lanes = element("div", "arc-lanes");
     var source = element("section", "arc-source-card");
     source.dataset.role = "source";
@@ -1262,7 +1316,7 @@
     noteButton.addEventListener("click", function () {
       openNewEditor(block);
     });
-    source.appendChild(noteButton);
+    row.appendChild(noteButton);
     return row;
   }
 
@@ -1305,11 +1359,8 @@
     if (block.kind === "equation") {
       var math = element("div", "math math-display", payload.tex || "");
       math.dataset.tex = payload.tex || "";
-      container.appendChild(math);
       var equationLabel = effectiveEquationLabel(block, payload);
-      if (equationLabel) {
-        container.appendChild(element("span", "arc-equation-label", equationLabel));
-      }
+      container.appendChild(equationRow(math, equationLabel));
       removeVisibleHtmlTags(container);
       typeset(container);
       return container;
@@ -1379,6 +1430,14 @@
       return reconciliation.effective_label.trim();
     }
     return typeof payload.label === "string" ? payload.label.trim() : "";
+  }
+
+  function equationRow(math, label) {
+    var row = element("div", "arc-equation-row");
+    if (math.parentElement) math.replaceWith(row);
+    row.appendChild(math);
+    if (label) row.appendChild(element("span", "arc-equation-label", label));
+    return row;
   }
 
   function appendInlineSpans(parent, spans, fallback) {
@@ -1481,7 +1540,9 @@
     header.appendChild(actions);
     card.appendChild(header);
     var saved = element("div", "arc-fragment-saved-content");
-    saved.appendChild(renderMarkdown(fragment.markdown_body));
+    var rendered = renderMarkdown(fragment.markdown_body);
+    decorateOverlayEquation(rendered, fragment);
+    saved.appendChild(rendered);
     saved.addEventListener("click", function (event) {
       if (interactiveFragmentTarget(event.target)) return;
       beginInlineEdit(fragment);
@@ -1492,6 +1553,19 @@
       card.appendChild(renderInlineEditor());
     }
     return card;
+  }
+
+  function decorateOverlayEquation(rendered, fragment) {
+    var block = ensureSourceIndexes().blocksById.get(fragmentTargetId(fragment));
+    if (!block || block.kind !== "equation") return;
+    if (rendered.children.length !== 1) return;
+    var math = rendered.firstElementChild;
+    if (!math || !math.classList.contains("math-display")) return;
+    var sourceTex = String((block.payload || {}).tex || "").replace(/\r\n?/g, "\n").trim();
+    var fragmentTex = String(math.dataset.tex || "").replace(/\r\n?/g, "\n").trim();
+    if (!sourceTex || fragmentTex !== sourceTex) return;
+    var label = effectiveEquationLabel(block, block.payload || {});
+    equationRow(math, label);
   }
 
   function interactiveFragmentTarget(target) {
@@ -1555,6 +1629,159 @@
     return strings[role] || role;
   }
 
+  function syncVisibilityRoles() {
+    var roles = [];
+    (state.payload.selected_roles || []).forEach(function (role) {
+      if (roles.indexOf(role) < 0) roles.push(role);
+    });
+    state.roleOrder.forEach(function (role) {
+      if (roles.indexOf(role) < 0) roles.push(role);
+    });
+    Array.from(state.selected.values()).sort(function (left, right) {
+      return left.priority - right.priority ||
+        left.fragment_id.localeCompare(right.fragment_id);
+    }).forEach(function (fragment) {
+      if (roles.indexOf(fragment.role) < 0) roles.push(fragment.role);
+    });
+    var changed = roles.length !== state.roleOrder.length || roles.some(function (
+      role, index
+    ) {
+      return state.roleOrder[index] !== role;
+    });
+    state.roleOrder = roles;
+    if (!state.visibilityReady) return;
+    if (changed) renderVisibilityOptions();
+    applyVisibility();
+  }
+
+  function setupVisibility() {
+    var strings = labels();
+    var control = document.querySelector(".arc-view-control");
+    var trigger = document.getElementById("arc-view");
+    var panel = document.getElementById("arc-view-panel");
+    trigger.textContent = strings.view;
+    document.getElementById("arc-view-heading").textContent = strings.showLayers;
+    state.visibilityReady = true;
+    syncVisibilityRoles();
+    renderVisibilityOptions();
+    applyVisibility();
+    trigger.addEventListener("click", function () {
+      panel.hidden = !panel.hidden;
+      trigger.setAttribute("aria-expanded", String(!panel.hidden));
+    });
+    document.addEventListener("click", function (event) {
+      if (!panel.hidden && !control.contains(event.target)) {
+        closeVisibilityPanel(false);
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && !panel.hidden) {
+        event.preventDefault();
+        closeVisibilityPanel(true);
+      }
+    });
+  }
+
+  function closeVisibilityPanel(restoreFocus) {
+    var trigger = document.getElementById("arc-view");
+    document.getElementById("arc-view-panel").hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus();
+  }
+
+  function renderVisibilityOptions() {
+    var root = document.getElementById("arc-view-options");
+    if (!root) return;
+    root.replaceChildren();
+    root.appendChild(visibilityOption("source", labels().original, state.sourceVisible));
+    state.roleOrder.forEach(function (role) {
+      root.appendChild(visibilityOption(
+        role, roleLabel(role), !state.hiddenRoles.has(role)
+      ));
+    });
+  }
+
+  function visibilityOption(value, text, checked) {
+    var label = element("label");
+    var input = element("input");
+    input.type = "checkbox";
+    input.value = value;
+    input.checked = checked;
+    input.addEventListener("change", function () {
+      if (value === "source") {
+        state.sourceVisible = input.checked;
+      } else if (input.checked) {
+        state.hiddenRoles.delete(value);
+      } else {
+        state.hiddenRoles.add(value);
+      }
+      applyVisibility();
+    });
+    label.appendChild(input);
+    label.appendChild(element("span", "", text));
+    return label;
+  }
+
+  function visibleRoleCount() {
+    return state.roleOrder.filter(function (role) {
+      return !state.hiddenRoles.has(role);
+    }).length;
+  }
+
+  function applyVisibility(scope) {
+    if (!state.visibilityReady) return;
+    var root = scope && scope.querySelectorAll ? scope : document;
+    var channels = (state.sourceVisible ? 1 : 0) + visibleRoleCount();
+    document.body.classList.toggle("arc-focused-reading", channels === 1);
+    document.body.classList.toggle("arc-no-visible-content", channels === 0);
+    if (state.visibilityEmptyRoot) state.visibilityEmptyRoot.hidden = channels !== 0;
+    Array.prototype.forEach.call(
+      root.querySelectorAll(".arc-source-row"),
+      function (row) { applyRowVisibility(row, channels); }
+    );
+    if (!scope) {
+      updateContentsTitles();
+      scheduleLaneResponsiveness();
+    }
+  }
+
+  function applyRowVisibility(row, channels) {
+    var source = row.querySelector(".arc-source-card");
+    var fragments = Array.prototype.slice.call(
+      row.querySelectorAll(".arc-fragment")
+    );
+    fragments.forEach(function (card) {
+      card.hidden = state.hiddenRoles.has(card.dataset.role);
+    });
+    var visibleFragments = fragments.filter(function (card) { return !card.hidden; });
+    var sharedMedia = !state.sourceVisible && channels > 0 &&
+      row.dataset.blockKind === "figure";
+    source.hidden = !(state.sourceVisible || sharedMedia);
+    source.classList.toggle("arc-shared-media", sharedMedia);
+    var caption = source.querySelector("figcaption");
+    if (caption) {
+      caption.hidden = sharedMedia && visibleFragments.some(function (card) {
+        return card.dataset.role === "translation";
+      });
+    }
+    var lanes = row.querySelector(".arc-lanes");
+    var visibleLanes = Array.prototype.filter.call(
+      lanes.children, function (child) { return !child.hidden; }
+    );
+    lanes.hidden = visibleLanes.length === 0;
+    lanes.style.setProperty("--arc-lane-count", String(Math.max(1, visibleLanes.length)));
+    var fullRows = row.querySelector(".arc-full-rows");
+    if (fullRows) {
+      fullRows.hidden = !Array.prototype.some.call(
+        fullRows.children, function (child) { return !child.hidden; }
+      );
+    }
+    var hasContent = !lanes.hidden || Boolean(fullRows && !fullRows.hidden);
+    row.hidden = !hasContent;
+    var note = row.querySelector(".arc-note-button");
+    if (note) note.hidden = !hasContent;
+  }
+
   function renderContents(list, sections, strings) {
     var contentsHeading = document.getElementById("arc-contents-heading");
     contentsHeading.textContent = strings.contents;
@@ -1563,6 +1790,8 @@
       item.dataset.level = String(section.level);
       var link = element("a");
       link.href = "#block-" + safeToken(section.anchor_block_id);
+      link.dataset.blockId = section.anchor_block_id;
+      link.dataset.sourceTitle = String(section.title || "");
       appendTocTitle(link, section.title);
       item.appendChild(link);
       list.appendChild(item);
@@ -1634,6 +1863,57 @@
     }
     removeVisibleHtmlTags(parent);
     typeset(parent);
+  }
+
+  function updateContentsTitles() {
+    var list = document.getElementById("arc-contents-list");
+    if (!list || !state.md) return;
+    Array.prototype.forEach.call(
+      list.querySelectorAll("a[data-block-id]"),
+      function (link) {
+        link.replaceChildren();
+        var heading = state.sourceVisible ? null : visibleHeadingForBlock(
+          link.dataset.blockId
+        );
+        if (heading) {
+          Array.prototype.forEach.call(heading.childNodes, function (child) {
+            link.appendChild(child.cloneNode(true));
+          });
+          removeVisibleHtmlTags(link);
+          decorateGlossary(link, "target");
+          typeset(link);
+        } else {
+          appendTocTitle(link, link.dataset.sourceTitle);
+        }
+      }
+    );
+  }
+
+  function visibleHeadingForBlock(blockId) {
+    var candidates = [];
+    var loadedIds = new Set();
+    (state.fragmentGroups.get(blockId) || []).forEach(function (fragment) {
+      loadedIds.add(fragment.fragment_id);
+      candidates.push(fragment);
+    });
+    (state.payload.selected_heading_fragments || []).forEach(function (fragment) {
+      if (fragment.target_id === blockId && !loadedIds.has(fragment.fragment_id)) {
+        candidates.push(fragment);
+      }
+    });
+    candidates.sort(function (left, right) {
+      return Number(left.priority) - Number(right.priority) ||
+        left.fragment_id.localeCompare(right.fragment_id);
+    });
+    for (var index = 0; index < candidates.length; index += 1) {
+      var candidate = candidates[index];
+      if (state.hiddenRoles.has(candidate.role)) continue;
+      var holder = element("div");
+      holder.innerHTML = state.md.render(normalizeMarkdown(candidate.markdown_body));
+      var heading = holder.firstElementChild;
+      if (heading && /^H[1-6]$/.test(heading.tagName)) return heading;
+    }
+    return null;
   }
 
   function appendContentsLink(list, text, href) {
@@ -1961,12 +2241,22 @@
     if ("ResizeObserver" in window) {
       if (!state.laneObserver) {
         state.laneObserver = new ResizeObserver(function (entries) {
-          entries.forEach(function (entry) {
-            updateLaneResponsiveness(entry.target);
-          });
+          var entry = entries[entries.length - 1];
+          var width = entry ? Math.round(entry.contentRect.width) : null;
+          if (width === null || width === state.laneObservedWidth) return;
+          state.laneObservedWidth = width;
+          scheduleLaneResponsiveness();
         });
       }
-      lanes.forEach(function (item) { state.laneObserver.observe(item); });
+      var observedRoot = document.getElementById("arc-document");
+      if (observedRoot && state.laneObservedRoot !== observedRoot) {
+        if (state.laneObservedRoot) {
+          state.laneObserver.unobserve(state.laneObservedRoot);
+        }
+        state.laneObservedRoot = observedRoot;
+        state.laneObservedWidth = null;
+        state.laneObserver.observe(observedRoot);
+      }
     } else if (!state.laneFallbackListener) {
       state.laneFallbackListener = function () {
         Array.prototype.forEach.call(
@@ -1978,12 +2268,19 @@
     }
   }
 
+  function scheduleLaneResponsiveness() {
+    if (state.laneResizeFrame !== null) return;
+    state.laneResizeFrame = window.requestAnimationFrame(function () {
+      state.laneResizeFrame = null;
+      Array.prototype.forEach.call(
+        document.querySelectorAll(".arc-lanes:not([hidden])"),
+        updateLaneResponsiveness
+      );
+    });
+  }
+
   function teardownLaneResponsiveness(root) {
-    if (!state.laneObserver || !root) return;
-    Array.prototype.forEach.call(
-      root.querySelectorAll(".arc-lanes"),
-      function (item) { state.laneObserver.unobserve(item); }
-    );
+    /* One stable document-width observer replaces per-lane observation. */
   }
 
   function startProgressiveRendering() {
@@ -2627,6 +2924,8 @@
     payload.schema_version = "arc.render.reader_payload.v1";
     delete payload.block_manifest;
     delete payload.reader_chunks;
+    delete payload.selected_roles;
+    delete payload.selected_heading_fragments;
     payload.resources.forEach(function (resource) {
       delete resource.payload_id;
     });
@@ -3261,6 +3560,9 @@
         addRevision(revision);
         resolveOne(revision.fragment_id);
         refreshFragmentGroup(revision.fragment_id, revision.anchor);
+        state.hiddenRoles.delete(revision.role);
+        syncVisibilityRoles();
+        if (state.visibilityReady) renderVisibilityOptions();
       } catch (error) {
         uiError = error;
       }
@@ -3848,6 +4150,7 @@
       initialRevisions();
       captureInitialSelection();
       renderReader();
+      setupVisibility();
       setupTooltip();
       await setupEditor();
       setupExport();

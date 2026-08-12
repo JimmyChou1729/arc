@@ -38,6 +38,7 @@ from .resolver import (
 )
 from .standalone_html import (
     StandaloneHtmlError,
+    _selected_fragment_boot_metadata,
     _srcset_candidates,
     write_standalone_html,
 )
@@ -723,6 +724,16 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
   <div class="arc-fixed-tools">
     <button id="arc-contents-toggle" class="arc-tool-button" type="button"
       aria-controls="arc-contents" aria-expanded="true">☰</button>
+    <div class="arc-view-control">
+      <button id="arc-view" class="arc-tool-button" type="button"
+        aria-controls="arc-view-panel" aria-expanded="false">View</button>
+      <div id="arc-view-panel" class="arc-view-panel" hidden>
+        <fieldset>
+          <legend id="arc-view-heading">Show</legend>
+          <div id="arc-view-options" class="arc-view-options"></div>
+        </fieldset>
+      </div>
+    </div>
     <div class="arc-export-control">
       <button id="arc-export" class="arc-tool-button" type="button"
         aria-controls="arc-export-panel" aria-expanded="false">Export</button>
@@ -1006,6 +1017,28 @@ def _expand_reader_payload_v2(
         ):
             raise HTMLRenderError("standalone HTML reader block manifest differs")
 
+    boot_roles = boot.get("selected_roles")
+    boot_headings = boot.get("selected_heading_fragments")
+    if boot_roles is not None or boot_headings is not None:
+        outline = publication.get("outline")
+        if not isinstance(outline, list):
+            raise HTMLRenderError("standalone HTML reader outline is invalid")
+        try:
+            expected_roles, expected_headings = _selected_fragment_boot_metadata(
+                revisions, selected, blocks, outline
+            )
+        except StandaloneHtmlError as exc:
+            raise HTMLRenderError(
+                "standalone HTML reader visibility manifest is invalid"
+            ) from exc
+        if (
+            (boot_roles is not None and boot_roles != expected_roles)
+            or (boot_headings is not None and boot_headings != expected_headings)
+        ):
+            raise HTMLRenderError(
+                "standalone HTML reader visibility manifest differs"
+            )
+
     expected_resource_ids: set[str] = set()
     loaded_resources: list[object] = []
     for raw in resources:
@@ -1044,6 +1077,8 @@ def _expand_reader_payload_v2(
     expanded["schema_version"] = READER_PAYLOAD_SCHEMA
     expanded.pop("block_manifest", None)
     expanded.pop("reader_chunks", None)
+    expanded.pop("selected_roles", None)
+    expanded.pop("selected_heading_fragments", None)
     expanded["block_fingerprints"] = fingerprints
     expanded["revisions"] = revisions
     expanded["selected_revision_digests"] = selected

@@ -85,6 +85,7 @@ define = undefined;
     isStandaloneHtmlCommentBlock: isStandaloneHtmlCommentBlock,
     katexCandidates: katexCandidates,
     katexTex: katexTex,
+    syncVisibilityRoles: syncVisibilityRoles,
     validateIntegerJson: validateIntegerJson,
     validateRevisionMetadata: validateRevisionMetadata
   };
@@ -218,6 +219,7 @@ if (helpers.browserCreatedHistory([{
   throw new Error("stale machine fragment history was treated as user-owned");
 }
 helpers.state.payload = {
+  selected_roles: ["translation", "custom-a"],
   source_identity: {
     source_format: "markdown",
     media_type: "text/markdown",
@@ -247,6 +249,17 @@ helpers.state.payload = {
     reader_profile: {target_language: "zh-CN"}
   }
 };
+helpers.state.selected = new Map([
+  ["guide-1", {fragment_id: "guide-1", priority: 30, role: "guide"}],
+  ["custom-1", {fragment_id: "custom-1", priority: 20, role: "custom-a"}]
+]);
+helpers.syncVisibilityRoles();
+if (
+  JSON.stringify(helpers.state.roleOrder) !==
+  JSON.stringify(["translation", "custom-a", "guide"])
+) {
+  throw new Error("dynamic selected roles were not discovered in stable order");
+}
 helpers.state.payload.publication.labels.translation = "译名";
 if (
   helpers.labels().translation !== "译文" ||
@@ -2287,6 +2300,206 @@ def test_reader_uses_low_distraction_controls_and_inline_editor() -> None:
     assert "contents.replaceChildren();" in javascript
     assert 'background: #eaf1f8;' in stylesheet
     assert ".arc-source-card { padding: .3rem .15rem; background: transparent; }" in stylesheet
+
+
+def test_reader_visibility_is_dynamic_ephemeral_and_book_focused() -> None:
+    javascript = _text("reader.js")
+    stylesheet = _text("reader.css")
+
+    assert "function setupVisibility()" in javascript
+    assert "state.payload.selected_roles || []" in javascript
+    assert "Array.from(state.selected.values())" in javascript
+    assert "state.hiddenRoles =" not in javascript
+    assert "localStorage" not in javascript
+    assert 'visibilityOption("source", labels().original' in javascript
+    assert "roleLabel(role)" in javascript
+    assert 'card.dataset.role === "translation"' in javascript
+    assert 'row.dataset.blockKind === "figure"' in javascript
+    assert "loadAllPayload(false);" not in javascript[
+        javascript.index("function setupVisibility()") :
+        javascript.index("function renderContents(")
+    ]
+    assert ".arc-focused-reading .arc-book-header" in stylesheet
+    assert "72ch" in stylesheet
+    assert "margin-block: .2em" in stylesheet
+    assert ".arc-visibility-empty" in stylesheet
+
+
+def test_reader_equation_rows_and_single_resize_observer_are_bounded() -> None:
+    javascript = _text("reader.js")
+    stylesheet = _text("reader.css")
+
+    assert 'element("div", "arc-equation-row")' in javascript
+    assert "decorateOverlayEquation(rendered, fragment)" in javascript
+    assert "fragmentTex !== sourceTex" in javascript
+    assert "effectiveEquationLabel(block, block.payload || {})" in javascript
+    assert "grid-template-columns: minmax(0, 1fr) max-content" in stylesheet
+    assert "white-space: nowrap" in stylesheet
+    observer = javascript[javascript.index("function setupLaneResponsiveness") :]
+    observer = observer[: observer.index("function startProgressiveRendering")]
+    assert "state.laneObserver.observe(observedRoot)" in observer
+    assert "lanes.forEach(function (item)" not in observer
+
+
+def test_matching_overlay_equation_inherits_effective_label_under_node() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    instrumented = (
+        "globalThis.window = globalThis;\n"
+        + javascript[:startup]
+        + r'''
+  globalThis.__arcReaderTest = {
+    state: state,
+    decorateOverlayEquation: decorateOverlayEquation,
+    applyRowVisibility: applyRowVisibility
+  };
+}());
+function FakeNode(tag, className) {
+  this.tagName = tag;
+  this.className = className || "";
+  this.children = [];
+  this.dataset = {};
+  this.parentElement = null;
+  this.textContent = "";
+  this.classList = {
+    owner: this,
+    contains: function (name) {
+      return this.owner.className.split(/\s+/).includes(name);
+    }
+  };
+}
+FakeNode.prototype.appendChild = function (child) {
+  child.parentElement = this;
+  this.children.push(child);
+  return child;
+};
+FakeNode.prototype.replaceWith = function (replacement) {
+  var index = this.parentElement.children.indexOf(this);
+  this.parentElement.children[index] = replacement;
+  replacement.parentElement = this.parentElement;
+  this.parentElement = null;
+};
+Object.defineProperty(FakeNode.prototype, "firstElementChild", {
+  get: function () { return this.children[0] || null; }
+});
+globalThis.document = {
+  createElement: function (tag) { return new FakeNode(tag); }
+};
+var helpers = globalThis.__arcReaderTest;
+var block = {
+  block_id: "eq-1",
+  kind: "equation",
+  payload: {tex: "x = y", label: "(2)"}
+};
+helpers.state.payload = {
+  resources: [],
+  publication: {
+    source_document: {
+      blocks: [block],
+      metadata: {
+        equation_label_reconciliation: {
+          "eq-1": {effective_label: "(7)"}
+        }
+      }
+    },
+    outline: []
+  }
+};
+helpers.state.indexedPayload = helpers.state.payload;
+helpers.state.sourceIndexes = {
+  blocksById: new Map([["eq-1", block]]),
+  resourceCount: 0
+};
+function renderedEquation(tex) {
+  var rendered = new FakeNode("div", "arc-markdown");
+  var math = new FakeNode("div", "math math-display");
+  math.dataset.tex = tex;
+  rendered.appendChild(math);
+  return rendered;
+}
+var fragment = {anchor: {kind: "block", target_id: "eq-1"}};
+var matching = renderedEquation("\n x = y \n");
+helpers.decorateOverlayEquation(matching, fragment);
+if (matching.children[0].className !== "arc-equation-row") {
+  throw new Error("matching translated equation did not receive a row");
+}
+if (
+  matching.children[0].children[1].className !== "arc-equation-label" ||
+  matching.children[0].children[1].textContent !== "(7)"
+) {
+  throw new Error("matching translated equation missed its effective label");
+}
+var changed = renderedEquation("x = z");
+helpers.decorateOverlayEquation(changed, fragment);
+if (!changed.children[0].classList.contains("math-display")) {
+  throw new Error("changed overlay equation inherited a source number");
+}
+function visibilityCard(role) {
+  return {
+    dataset: {role: role},
+    hidden: false,
+    classList: {toggle: function (_name, enabled) { this.enabled = enabled; }}
+  };
+}
+var sourceCard = visibilityCard("source");
+var translatedCard = visibilityCard("translation");
+var companionCard = visibilityCard("companion");
+var figureCaption = {hidden: false};
+sourceCard.querySelector = function (selector) {
+  return selector === "figcaption" ? figureCaption : null;
+};
+var lanes = {
+  children: [sourceCard, translatedCard, companionCard],
+  hidden: false,
+  style: {
+    value: null,
+    setProperty: function (_name, value) { this.value = value; }
+  }
+};
+var noteButton = {hidden: false};
+var figureRow = {
+  dataset: {blockKind: "figure"},
+  hidden: false,
+  querySelectorAll: function (selector) {
+    return selector === ".arc-fragment" ? [translatedCard, companionCard] : [];
+  },
+  querySelector: function (selector) {
+    return {
+      ".arc-source-card": sourceCard,
+      ".arc-lanes": lanes,
+      ".arc-full-rows": null,
+      ".arc-note-button": noteButton
+    }[selector];
+  }
+};
+helpers.state.sourceVisible = false;
+helpers.state.hiddenRoles = new Set(["companion"]);
+helpers.applyRowVisibility(figureRow, 1);
+if (
+  sourceCard.hidden || !sourceCard.classList.enabled ||
+  figureCaption.hidden !== true || translatedCard.hidden ||
+  !companionCard.hidden || lanes.style.value !== "2" || figureRow.hidden
+) {
+  throw new Error("translation-only figure visibility is inconsistent");
+}
+helpers.state.hiddenRoles.add("translation");
+helpers.applyRowVisibility(figureRow, 0);
+if (!sourceCard.hidden || !figureRow.hidden || !noteButton.hidden) {
+  throw new Error("all-hidden figure row remained visible");
+}
+'''
+    )
+
+    subprocess.run(
+        [node, "-"],
+        input=instrumented,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_reader_progressively_hydrates_navigation_find_and_print_content() -> None:
