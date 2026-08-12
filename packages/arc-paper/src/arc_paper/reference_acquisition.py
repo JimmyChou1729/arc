@@ -15,7 +15,7 @@ from .epub import (
     EPUB_READABLE_MEDIA_TYPE,
     derive_epub_readable_html,
 )
-from .ids import arxiv_path_id, doi_value, normalize_paper_id
+from .ids import arxiv_path_id, doi_value, inspire_recid, normalize_paper_id
 from .providers.arxiv_html import ArxivHtmlProvider
 from .providers.arxiv_pdf import ArxivPdfProvider
 from .providers.base import ProviderError
@@ -29,6 +29,7 @@ from .reference_cache import (
     ReferenceMaterialCache,
     normalize_reference_url,
 )
+from .sources import SourceFormat
 
 
 READABLE_MEDIA_TYPES = {
@@ -190,11 +191,16 @@ class ReferenceAcquisitionService:
         identity: ReferenceIdentity | str,
         *,
         refresh: bool = False,
+        source_format: str | None = None,
     ) -> CachedReferenceMaterial:
         requested = _identity_for_query(identity)
+        requested_format = _optional_source_format(source_format)
         if not refresh:
             cached = _lookup_identity(self.cache, requested)
-            if cached is not None:
+            if cached is not None and (
+                requested_format is None
+                or _material_has_source_format(cached, requested_format)
+            ):
                 return cached
 
         for backend in self.backends:
@@ -203,6 +209,13 @@ class ReferenceAcquisitionService:
                 if not isinstance(result, AcquiredReferenceResource):
                     raise TypeError(
                         "reference acquisition backend returned an unsupported result"
+                    )
+                if requested_format is not None and not _media_type_matches_format(
+                    result.media_type, requested_format
+                ):
+                    raise ReferenceAcquisitionError(
+                        "reference_format_unavailable",
+                        f"backend did not provide requested {requested_format.value} source",
                     )
                 return self.admit_reference_bytes(
                     result.payload,
@@ -217,11 +230,38 @@ class ReferenceAcquisitionService:
                 self.inspire, f"arXiv:{requested.arxiv_id}", refresh=refresh
             )
             resolved = _identity_from_metadata(requested, metadata)
-            return self._acquire_arxiv(resolved, refresh=refresh)
+            return self._acquire_arxiv(
+                resolved, refresh=refresh, source_format=requested_format
+            )
+        if requested.inspire_recid:
+            metadata = self.inspire.get_metadata(
+                f"inspire:{requested.inspire_recid}", refresh=refresh
+            )
+            resolved = _identity_from_metadata(requested, metadata)
+            if resolved.arxiv_id:
+                return self._acquire_arxiv(
+                    resolved, refresh=refresh, source_format=requested_format
+                )
+            if resolved.dois:
+                return self._acquire_doi(
+                    resolved, refresh=refresh, source_format=requested_format
+                )
+            if resolved.urls:
+                return self._acquire_url(
+                    resolved, resolved.urls[0], source_format=requested_format
+                )
+            raise ReferenceAcquisitionError(
+                "reference_acquisition_unavailable",
+                "INSPIRE metadata contains no acquirable arXiv, DOI, or URL resource",
+            )
         if requested.dois:
-            return self._acquire_doi(requested, refresh=refresh)
+            return self._acquire_doi(
+                requested, refresh=refresh, source_format=requested_format
+            )
         if requested.urls:
-            return self._acquire_url(requested, requested.urls[0])
+            return self._acquire_url(
+                requested, requested.urls[0], source_format=requested_format
+            )
         raise ReferenceAcquisitionError(
             "reference_acquisition_unavailable",
             "exact-title acquisition requires a caller-supplied authorized "
@@ -229,11 +269,26 @@ class ReferenceAcquisitionService:
         )
 
     def _acquire_arxiv(
-        self, identity: ReferenceIdentity, *, refresh: bool
+        self,
+        identity: ReferenceIdentity,
+        *,
+        refresh: bool,
+        source_format: SourceFormat | None = None,
     ) -> CachedReferenceMaterial:
         paper_id = f"arXiv:{identity.arxiv_id}"
         errors: list[ProviderError] = []
-        for provider in (self.arxiv_html, self.arxiv_pdf):
+        if source_format is None:
+            providers = (self.arxiv_html, self.arxiv_pdf)
+        elif source_format is SourceFormat.HTML:
+            providers = (self.arxiv_html,)
+        elif source_format is SourceFormat.PDF:
+            providers = (self.arxiv_pdf,)
+        else:
+            raise ReferenceAcquisitionError(
+                "reference_format_unavailable",
+                f"arXiv acquisition does not provide {source_format.value} sources",
+            )
+        for provider in providers:
             try:
                 artifact = provider.fetch(paper_id, refresh=refresh)
             except ProviderError as exc:
@@ -258,7 +313,11 @@ class ReferenceAcquisitionService:
         )
 
     def _acquire_doi(
-        self, requested: ReferenceIdentity, *, refresh: bool
+        self,
+        requested: ReferenceIdentity,
+        *,
+        refresh: bool,
+        source_format: SourceFormat | None = None,
     ) -> CachedReferenceMaterial:
         doi = requested.dois[0]
         inspire_metadata = _optional_inspire_metadata(
@@ -275,7 +334,9 @@ class ReferenceAcquisitionService:
         identity = _identity_from_metadata(requested, inspire_metadata)
         identity = _identity_from_metadata(identity, crossref_metadata)
         if identity.arxiv_id:
-            return self._acquire_arxiv(identity, refresh=refresh)
+            return self._acquire_arxiv(
+                identity, refresh=refresh, source_format=source_format
+            )
 
         candidates: list[str] = []
         for item in crossref_metadata.get("links") or []:
@@ -295,7 +356,9 @@ class ReferenceAcquisitionService:
                 continue
             seen.add(normalized)
             try:
-                return self._acquire_url(identity, normalized)
+                return self._acquire_url(
+                    identity, normalized, source_format=source_format
+                )
             except ReferenceAcquisitionError as exc:
                 if exc.__cause__ and isinstance(exc.__cause__, ProviderError):
                     errors.append(exc.__cause__)
@@ -308,7 +371,11 @@ class ReferenceAcquisitionService:
         )
 
     def _acquire_url(
-        self, identity: ReferenceIdentity, url: str
+        self,
+        identity: ReferenceIdentity,
+        url: str,
+        *,
+        source_format: SourceFormat | None = None,
     ) -> CachedReferenceMaterial:
         try:
             acquired = self.http.fetch(url)
@@ -326,6 +393,13 @@ class ReferenceAcquisitionService:
             title=identity.title,
             inspire_recid=identity.inspire_recid,
         )
+        if source_format is not None and not _media_type_matches_format(
+            acquired.media_type, source_format
+        ):
+            raise ReferenceAcquisitionError(
+                "reference_format_unavailable",
+                f"URL did not provide requested {source_format.value} source",
+            )
         return self.admit_reference_bytes(
             acquired.payload,
             resolved,
@@ -364,10 +438,11 @@ def acquire_reference(
     identity: ReferenceIdentity | str,
     *,
     refresh: bool = False,
+    source_format: str | None = None,
     cache_root: str | Path | None = None,
 ) -> CachedReferenceMaterial:
     return ReferenceAcquisitionService(cache_root=cache_root).acquire_reference(
-        identity, refresh=refresh
+        identity, refresh=refresh, source_format=source_format
     )
 
 
@@ -376,6 +451,8 @@ def _lookup_identity(
 ) -> CachedReferenceMaterial | None:
     if identity.arxiv_id:
         return cache.lookup(arxiv_id=identity.arxiv_id)
+    if identity.inspire_recid:
+        return cache.lookup(inspire_recid=identity.inspire_recid)
     for doi in identity.dois:
         if found := cache.lookup(doi=doi):
             return found
@@ -398,11 +475,45 @@ def _identity_for_query(
         return ReferenceIdentity(arxiv_id=arxiv)
     if doi := doi_value(normalized):
         return ReferenceIdentity(dois=(doi,))
+    if recid := inspire_recid(normalized):
+        return ReferenceIdentity(inspire_recid=recid)
     if urlparse(text).scheme.casefold() in {"http", "https"}:
         return ReferenceIdentity(urls=(text,))
     if text:
         return ReferenceIdentity(title=text)
     raise ValueError("reference identity is empty")
+
+
+def _optional_source_format(value: str | SourceFormat | None) -> SourceFormat | None:
+    if value is None:
+        return None
+    try:
+        return SourceFormat(value)
+    except (TypeError, ValueError) as exc:
+        raise ReferenceAcquisitionError(
+            "reference_format_unsupported", "source format is unsupported"
+        ) from exc
+
+
+def _material_has_source_format(
+    material: CachedReferenceMaterial, source_format: SourceFormat
+) -> bool:
+    return any(
+        _media_type_matches_format(item.media_type, source_format)
+        for item in material.resources
+    )
+
+
+def _media_type_matches_format(
+    media_type: str, source_format: SourceFormat
+) -> bool:
+    expected = {
+        SourceFormat.HTML: {"text/html", "application/xhtml+xml"},
+        SourceFormat.MARKDOWN: {"text/markdown"},
+        SourceFormat.TEX: {"text/x-tex", "application/x-tex"},
+        SourceFormat.PDF: {"application/pdf"},
+    }[source_format]
+    return str(media_type).casefold() in expected
 
 
 def _identity_from_metadata(

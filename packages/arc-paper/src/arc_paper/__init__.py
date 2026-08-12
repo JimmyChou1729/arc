@@ -48,6 +48,13 @@ from .cached_document import (  # noqa: E402
     cached_document_ref_from_document,
     cached_document_ref_to_document,
 )
+from .document_access import (  # noqa: E402
+    DocumentTarget,
+    DocumentTargetKind,
+    PaperSection,
+    PaperTableOfContents,
+    ResolvedDocumentInfo,
+)
 from .document_structure import (  # noqa: E402
     CACHED_DOCUMENT_STRUCTURE_REF_SCHEMA,
     DOCUMENT_STRUCTURE_CACHE_SCHEMA,
@@ -387,6 +394,8 @@ __all__ = [
     "arxiv_path_id",
     "DEFAULT_EXCLUDED_EFFECTS",
     "DocumentSearchError",
+    "DocumentTarget",
+    "DocumentTargetKind",
     "EquationMatch",
     "EquationSearchResult",
     "extract_paper_ids",
@@ -404,6 +413,9 @@ __all__ = [
     "OperationRequestError",
     "OperationSpec",
     "PaperInputError",
+    "PaperSection",
+    "PaperTableOfContents",
+    "ResolvedDocumentInfo",
     "REGISTRY_SCHEMA_VERSION",
     "dispatch_operation",
     "get_operation",

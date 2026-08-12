@@ -43,20 +43,15 @@ def test_registry_has_one_typed_spec_per_operation_and_safe_default_projection()
         in OPERATION_REGISTRY["import-source"].effect_flags
     )
     assert {
-        "arc-paper.get-arxiv-table-of-contents.v3",
-        "arc-paper.get-arxiv-section.v3",
+        "arc-paper.get-table-of-contents.v1",
+        "arc-paper.get-section.v1",
         "arc-paper.search-arxiv-full-text.v3",
         "arc-paper.search-arxiv-equations.v3",
         "arc-paper.fetch-arxiv-auto.v2",
         "arc-paper.search-cached-full-text.v1",
         "arc-paper.search-citers.v1",
     } <= set(OPERATION_REGISTRY)
-    for name in (
-        "get-arxiv-table-of-contents",
-        "get-arxiv-section",
-        "search-arxiv-full-text",
-        "search-arxiv-equations",
-    ):
+    for name in ("search-arxiv-full-text", "search-arxiv-equations"):
         spec = OPERATION_REGISTRY[name]
         assert spec.version == 3
         assert spec.input_codec.schema_id == f"arc.paper.{name}.parameters.v3"
@@ -67,8 +62,6 @@ def test_registry_has_one_typed_spec_per_operation_and_safe_default_projection()
         "cache_root"
         not in OPERATION_REGISTRY[name].input_codec.schema["properties"]
         for name in (
-            "get-arxiv-table-of-contents",
-            "get-arxiv-section",
             "search-arxiv-full-text",
             "search-arxiv-equations",
             "search-cached-full-text",
@@ -236,35 +229,46 @@ def test_cli_stdout_is_exactly_one_command_result(
             },
         ),
         (
-            ["get-arxiv-table-of-contents", "0911.3380", "--refresh"],
-            "get-arxiv-table-of-contents",
-            {"arxiv_id": "0911.3380", "refresh": True},
+            ["get-table-of-contents", "--reference", "0911.3380", "--refresh"],
+            "get-table-of-contents",
+            {
+                "target": {"kind": "reference", "reference": "0911.3380"},
+                "source_format": None,
+                "refresh": True,
+                "cache_root": None,
+            },
         ),
         (
-            ["get-arxiv-section", "0911.3380", "Introduction"],
-            "get-arxiv-section",
+            ["get-section", "--reference", "0911.3380", "Introduction"],
+            "get-section",
             {
-                "arxiv_id": "0911.3380",
+                "target": {"kind": "reference", "reference": "0911.3380"},
                 "selector": "Introduction",
+                "source_format": None,
                 "refresh": False,
+                "cache_root": None,
             },
         ),
         (
-            ["get-arxiv-section", "0911.3380", "0"],
-            "get-arxiv-section",
+            ["get-section", "--reference", "0911.3380", "0"],
+            "get-section",
             {
-                "arxiv_id": "0911.3380",
+                "target": {"kind": "reference", "reference": "0911.3380"},
                 "selector": "0",
+                "source_format": None,
                 "refresh": False,
+                "cache_root": None,
             },
         ),
         (
-            ["get-arxiv-section", "0911.3380", "--ordinal", "0"],
-            "get-arxiv-section",
+            ["get-section", "--reference", "0911.3380", "--ordinal", "0"],
+            "get-section",
             {
-                "arxiv_id": "0911.3380",
+                "target": {"kind": "reference", "reference": "0911.3380"},
                 "selector": 0,
+                "source_format": None,
                 "refresh": False,
+                "cache_root": None,
             },
         ),
         (
@@ -393,10 +397,11 @@ def test_cli_routes_supported_provider_and_source_commands(
 @pytest.mark.parametrize(
     "argv",
     [
-        ["get-arxiv-section", "0911.3380"],
-        ["get-arxiv-section", "0911.3380", "--ordinal", "-1"],
+        ["get-section", "--reference", "0911.3380"],
+        ["get-section", "--reference", "0911.3380", "--ordinal", "-1"],
         [
-            "get-arxiv-section",
+            "get-section",
+            "--reference",
             "0911.3380",
             "Introduction",
             "--ordinal",
@@ -486,8 +491,8 @@ def test_cli_preserves_nonfatal_domain_warnings_in_shared_envelope(
         ["search-citers", "--help"],
         ["search-metadata", "--help"],
         ["search-cached-full-text", "--help"],
-        ["get-arxiv-table-of-contents", "--help"],
-        ["get-arxiv-section", "--help"],
+        ["get-table-of-contents", "--help"],
+        ["get-section", "--help"],
         ["search-arxiv-full-text", "--help"],
         ["search-arxiv-equations", "--help"],
         ["fetch-arxiv-auto", "--help"],

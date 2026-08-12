@@ -59,6 +59,13 @@ from .document_structure import (
     cached_document_structure_ref_from_document,
     reconstruct_document_structure,
 )
+from .document_access import (
+    DocumentTarget,
+    DocumentTargetKind,
+    PaperSection,
+    PaperTableOfContents,
+    ResolvedDocumentInfo,
+)
 from .document_search import (
     EquationSearchResult,
     FullTextSearchResult,
@@ -68,7 +75,7 @@ from .document_search import (
     select_section as _select_section,
     table_of_contents as _table_of_contents,
 )
-from .ids import arxiv_path_id, normalize_paper_id
+from .ids import arxiv_path_id, doi_value, inspire_recid, normalize_paper_id
 from .ids import extract_paper_ids as _extract_paper_ids
 from .ids import paper_ids_safe_dir_name as _paper_ids_safe_dir_name
 from .parse import (
@@ -98,6 +105,8 @@ from .sources import (
     SourceArtifact,
     SourceBundle,
     SourceFormat,
+    SourceOrigin,
+    SourceOriginKind,
     ValidationPolicy,
 )
 
@@ -898,12 +907,183 @@ class ArcPaperService:
         url: str | None = None,
         title: str | None = None,
         refresh: bool = False,
+        source_format: SourceFormat | str | None = None,
     ) -> CachedReferenceMaterial:
         identity = _reference_identity(
             doi=doi, arxiv_id=arxiv_id, url=url, title=title
         )
         return self._reference_acquisition().acquire_reference(
-            identity, refresh=refresh
+            identity, refresh=refresh, source_format=source_format
+        )
+
+    def get_table_of_contents(
+        self,
+        target: DocumentTarget,
+        *,
+        source_format: SourceFormat | str | None = None,
+        refresh: bool = False,
+    ) -> PaperTableOfContents:
+        parsed, source = self._resolve_document_target(
+            target, source_format=source_format, refresh=refresh
+        )
+        return PaperTableOfContents(
+            source=source,
+            entries=_table_of_contents(parsed),
+            warnings=source.warnings,
+        )
+
+    def get_section(
+        self,
+        target: DocumentTarget,
+        selector: str | int,
+        *,
+        source_format: SourceFormat | str | None = None,
+        refresh: bool = False,
+    ) -> PaperSection:
+        parsed, source = self._resolve_document_target(
+            target, source_format=source_format, refresh=refresh
+        )
+        section = _select_section(parsed, selector)
+        return PaperSection(
+            source=source,
+            section_id=section.section_id,
+            title=section.title,
+            text=section.text,
+            level=section.level,
+            ordinal=section.ordinal,
+            page_start=section.page_start,
+            page_end=section.page_end,
+            warnings=source.warnings,
+        )
+
+    def _resolve_document_target(
+        self,
+        target: DocumentTarget,
+        *,
+        source_format: SourceFormat | str | None = None,
+        refresh: bool = False,
+    ) -> tuple[ParsedDocument, ResolvedDocumentInfo]:
+        if not isinstance(target, DocumentTarget):
+            raise PaperInputError("target must be a DocumentTarget")
+        requested_format = (
+            SourceFormat(source_format) if source_format is not None else None
+        )
+        if target.kind is DocumentTargetKind.DOCUMENT:
+            if requested_format is not None or refresh:
+                raise PaperInputError(
+                    "source_format and refresh apply only to reference targets"
+                )
+            assert target.document is not None
+            parsed, warnings = self._resolve_cached_document(target.document)
+            return parsed, ResolvedDocumentInfo(
+                document=target.document,
+                identity=None,
+                warnings=warnings,
+            )
+
+        identity = _reference_identity_for_query(target.reference)
+        warnings: list[str] = []
+        material = None if refresh else _lookup_reference_identity(
+            ReferenceMaterialCache(self.cache_root), identity
+        )
+        if (
+            identity.arxiv_id
+            and not refresh
+            and (
+                material is None
+                or (
+                    requested_format is not None
+                    and _select_reference_resource(material, requested_format) is None
+                )
+            )
+        ):
+            legacy_material = self._admit_legacy_catalog_reference(
+                identity, source_format=requested_format
+            )
+            if legacy_material is not None:
+                material = legacy_material
+                warnings.append(
+                    "selected a legacy catalog representation and admitted it to the reference cache"
+                )
+        if material is None or (
+            requested_format is not None
+            and _select_reference_resource(material, requested_format) is None
+        ):
+            material = self._reference_acquisition().acquire_reference(
+                identity,
+                refresh=refresh,
+                source_format=requested_format,
+            )
+        resource = _select_reference_resource(material, requested_format)
+        if resource is None:
+            raise PaperInputError(
+                "reference contains no parseable requested representation",
+                code="reference_format_unavailable",
+            )
+        payload = ReferenceMaterialCache(self.cache_root).read_resource(resource)
+        resolved_format = _source_format_for_media_type(resource.media_type)
+        source = self.repository.store_bytes(
+            payload,
+            source_format=resolved_format,
+            media_type=resource.media_type,
+            origin=SourceOrigin(
+                kind=SourceOriginKind.REPOSITORY,
+                locator=resource.source_locator,
+                metadata=(
+                    {"arxiv_id": material.identity.arxiv_id}
+                    if material.identity.arxiv_id
+                    else {}
+                ),
+            ),
+        )
+        parsed, parse_warnings = self.parser.materialize_source(source)
+        document_ref = self._cached_document_ref(source, parsed)
+        combined = tuple(dict.fromkeys((*warnings, *parse_warnings)))
+        return parsed, ResolvedDocumentInfo(
+            document=document_ref,
+            identity=material.identity,
+            requested_reference=target.reference,
+            warnings=combined,
+        )
+
+    def _admit_legacy_catalog_reference(
+        self,
+        identity: ReferenceIdentity,
+        *,
+        source_format: SourceFormat | None,
+    ) -> CachedReferenceMaterial | None:
+        from ._full_text_catalog import FullTextCatalog
+
+        canonical = f"arXiv:{identity.arxiv_id}"
+        entry = next(
+            (
+                item
+                for item in FullTextCatalog(self.cache_root).current_entries()
+                if item.kind == "arxiv" and canonical in item.paper_ids
+            ),
+            None,
+        )
+        if entry is None:
+            return None
+        by_format = {item.source_format: item for item in entry.representations}
+        selected = (
+            by_format.get(source_format.value)
+            if source_format is not None
+            else by_format.get("html") or by_format.get("pdf")
+        )
+        if selected is None:
+            return None
+        source_identity = selected.source_identity
+        source = self.repository.get(
+            source_identity["source_format"], source_identity["artifact_digest"]
+        )
+        payload = self.repository.read_bytes(source)
+        return self._reference_acquisition().admit_reference_bytes(
+            payload,
+            identity,
+            media_type=source.media_type,
+            source_locator=source.origin.locator,
+            filename=f"{identity.arxiv_id}.{source.source_format.value}",
         )
 
     def admit_reference(
@@ -944,7 +1124,10 @@ class ArcPaperService:
     def _reference_acquisition(self) -> ReferenceAcquisitionService:
         if self._reference_acquisition_service is None:
             self._reference_acquisition_service = ReferenceAcquisitionService(
-                cache_root=self.cache_root
+                cache_root=self.cache_root,
+                inspire=self.inspire,
+                arxiv_html=self.arxiv_html,
+                arxiv_pdf=self.arxiv_pdf,
             )
         return self._reference_acquisition_service
 
@@ -1598,6 +1781,72 @@ def _reference_identity(
         raise PaperInputError(str(exc)) from exc
 
 
+def _reference_identity_for_query(value: str) -> ReferenceIdentity:
+    text = str(value or "").strip()
+    normalized = normalize_paper_id(text)
+    try:
+        if arxiv_id := arxiv_path_id(normalized):
+            return ReferenceIdentity(arxiv_id=arxiv_id)
+        if doi := doi_value(normalized):
+            return ReferenceIdentity(dois=(doi,))
+        if recid := inspire_recid(normalized):
+            return ReferenceIdentity(inspire_recid=recid)
+        if text.casefold().startswith(("http://", "https://")):
+            return ReferenceIdentity(urls=(text,))
+        if text:
+            return ReferenceIdentity(title=text)
+    except ValueError as exc:
+        raise PaperInputError(str(exc)) from exc
+    raise PaperInputError("reference target is empty")
+
+
+def _lookup_reference_identity(
+    cache: ReferenceMaterialCache, identity: ReferenceIdentity
+) -> CachedReferenceMaterial | None:
+    if identity.arxiv_id:
+        return cache.lookup(arxiv_id=identity.arxiv_id)
+    if identity.inspire_recid:
+        return cache.lookup(inspire_recid=identity.inspire_recid)
+    if identity.dois:
+        return cache.lookup(doi=identity.dois[0])
+    if identity.urls:
+        return cache.lookup(url=identity.urls[0])
+    return cache.lookup(title=identity.title)
+
+
+def _source_format_for_media_type(media_type: str) -> SourceFormat:
+    normalized = str(media_type).casefold()
+    formats = {
+        "text/html": SourceFormat.HTML,
+        "application/xhtml+xml": SourceFormat.HTML,
+        "text/markdown": SourceFormat.MARKDOWN,
+        "text/x-tex": SourceFormat.TEX,
+        "application/x-tex": SourceFormat.TEX,
+        "application/pdf": SourceFormat.PDF,
+    }
+    try:
+        return formats[normalized]
+    except KeyError as exc:
+        raise PaperInputError(
+            f"reference media type is not parseable: {media_type}",
+            code="reference_format_unavailable",
+        ) from exc
+
+
+def _select_reference_resource(
+    material: CachedReferenceMaterial,
+    source_format: SourceFormat | None,
+) -> CachedResourceRef | None:
+    for resource in material.resources:
+        try:
+            resolved = _source_format_for_media_type(resource.media_type)
+        except PaperInputError:
+            continue
+        if source_format is None or resolved is source_format:
+            return resource
+    return None
+
+
 def _select_structure_entry(entries, selector: str | int):
     if isinstance(selector, bool):
         raise PaperInputError("section selector cannot be boolean")
@@ -1812,6 +2061,34 @@ def acquire_reference_cli(
         arxiv_id=arxiv_id,
         url=url,
         title=title,
+        refresh=refresh,
+    )
+
+
+def get_table_of_contents_cli(
+    target: DocumentTarget,
+    *,
+    source_format: str | None = None,
+    refresh: bool = False,
+    cache_root: str | Path | None = None,
+) -> PaperTableOfContents:
+    return ArcPaperService(cache_root=cache_root).get_table_of_contents(
+        target, source_format=source_format, refresh=refresh
+    )
+
+
+def get_section_cli(
+    target: DocumentTarget,
+    selector: str | int,
+    *,
+    source_format: str | None = None,
+    refresh: bool = False,
+    cache_root: str | Path | None = None,
+) -> PaperSection:
+    return ArcPaperService(cache_root=cache_root).get_section(
+        target,
+        selector,
+        source_format=source_format,
         refresh=refresh,
     )
 

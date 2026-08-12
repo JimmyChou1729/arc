@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator
 
 from . import service
 from .cached_document import cached_document_ref_from_document
+from .document_access import DocumentTarget
 from .document_structure import (
     cached_document_structure_ref_from_document,
 )
@@ -642,6 +643,24 @@ _CACHED_DOCUMENT_INPUT = {
     "document": _CACHED_DOCUMENT_REF_SCHEMA,
     "cache_root": {"type": ["string", "null"]},
 }
+_DOCUMENT_TARGET_SCHEMA = {
+    "oneOf": [
+        _object(
+            {
+                "kind": {"const": "reference"},
+                "reference": _NONEMPTY_STRING,
+            },
+            required=("kind", "reference"),
+        ),
+        _object(
+            {
+                "kind": {"const": "document"},
+                "document": _CACHED_DOCUMENT_REF_SCHEMA,
+            },
+            required=("kind", "document"),
+        ),
+    ]
+}
 _REFERENCE_IDENTITY_INPUT = {
     "doi": {"type": ["string", "null"], "minLength": 1},
     "arxiv_id": {"type": ["string", "null"], "minLength": 1},
@@ -707,6 +726,49 @@ _CACHED_REFERENCE_MATERIAL_RESULT_SCHEMA = _object(
         },
     },
     required=("identity", "resources", "readable_resource"),
+)
+_RESOLVED_DOCUMENT_INFO_SCHEMA = _object(
+    {
+        "document": _CACHED_DOCUMENT_REF_SCHEMA,
+        "identity": {
+            "anyOf": [_REFERENCE_IDENTITY_RESULT_SCHEMA, {"type": "null"}]
+        },
+        "requested_reference": _STRING,
+        "warnings": _STRING_ARRAY,
+    },
+    required=("document", "identity", "requested_reference", "warnings"),
+)
+_PAPER_TOC_SCHEMA = _object(
+    {
+        "source": _RESOLVED_DOCUMENT_INFO_SCHEMA,
+        "entries": {"type": "array", "items": _TOC_ENTRY_SCHEMA},
+        "warnings": _STRING_ARRAY,
+    },
+    required=("source", "entries", "warnings"),
+)
+_PAPER_SECTION_SCHEMA = _object(
+    {
+        "source": _RESOLVED_DOCUMENT_INFO_SCHEMA,
+        "section_id": _NONEMPTY_STRING,
+        "title": _STRING,
+        "text": _STRING,
+        "level": {"type": "integer", "minimum": 1},
+        "ordinal": {"type": "integer", "minimum": 0},
+        "page_start": _NULLABLE_INTEGER,
+        "page_end": _NULLABLE_INTEGER,
+        "warnings": _STRING_ARRAY,
+    },
+    required=(
+        "source",
+        "section_id",
+        "title",
+        "text",
+        "level",
+        "ordinal",
+        "page_start",
+        "page_end",
+        "warnings",
+    ),
 )
 _CACHED_DOCUMENT_TOC_SCHEMA = _object(
     {
@@ -916,6 +978,31 @@ def _decode_cached_document_parameters(
             )
         except ValueError as exc:
             raise OperationRequestError("invalid_parameters", str(exc)) from exc
+    return decoded
+
+
+def _decode_document_target_parameters(
+    value: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    decoded = dict(value)
+    raw_target = decoded.get("target")
+    if not isinstance(raw_target, Mapping):
+        raise OperationRequestError("invalid_parameters", "target must be an object")
+    try:
+        if raw_target.get("kind") == "reference":
+            decoded["target"] = DocumentTarget(
+                kind="reference", reference=raw_target.get("reference", "")
+            )
+        else:
+            raw_document = raw_target.get("document")
+            if not isinstance(raw_document, Mapping):
+                raise ValueError("document target requires a document object")
+            decoded["target"] = DocumentTarget(
+                kind="document",
+                document=cached_document_ref_from_document(raw_document),
+            )
+    except ValueError as exc:
+        raise OperationRequestError("invalid_parameters", str(exc)) from exc
     return decoded
 
 
@@ -1181,48 +1268,48 @@ _OPERATIONS = (
         decoder=_decode_structure_reconstruction_parameters,
     ),
     _spec(
-        "get-cached-table-of-contents",
+        "get-table-of-contents",
         _object(
             {
-                **_CACHED_DOCUMENT_INPUT,
-                "structure": {
-                    "anyOf": [
-                        _CACHED_DOCUMENT_STRUCTURE_REF_SCHEMA,
-                        {"type": "null"},
-                    ]
+                "target": _DOCUMENT_TARGET_SCHEMA,
+                "source_format": {
+                    "type": ["string", "null"],
+                    "enum": ["html", "markdown", "tex", "pdf", None],
                 },
+                "refresh": {"type": "boolean", "default": False},
+                "cache_root": {"type": ["string", "null"]},
             },
-            required=("document",),
+            required=("target",),
         ),
-        service.get_cached_table_of_contents,
-        output_schema=_CACHED_DOCUMENT_TOC_SCHEMA,
-        effects=frozenset({OperationEffect.CACHE_WRITE}),
-        decoder=_decode_cached_document_parameters,
+        service.get_table_of_contents_cli,
+        output_schema=_PAPER_TOC_SCHEMA,
+        effects=_NETWORK_CACHE,
+        decoder=_decode_document_target_parameters,
     ),
     _spec(
-        "get-cached-section",
+        "get-section",
         _object(
             {
-                **_CACHED_DOCUMENT_INPUT,
-                "structure": {
-                    "anyOf": [
-                        _CACHED_DOCUMENT_STRUCTURE_REF_SCHEMA,
-                        {"type": "null"},
-                    ]
-                },
+                "target": _DOCUMENT_TARGET_SCHEMA,
                 "selector": {
                     "oneOf": [
                         {"type": "string", "minLength": 1},
                         {"type": "integer", "minimum": 0},
                     ]
                 },
+                "source_format": {
+                    "type": ["string", "null"],
+                    "enum": ["html", "markdown", "tex", "pdf", None],
+                },
+                "refresh": {"type": "boolean", "default": False},
+                "cache_root": {"type": ["string", "null"]},
             },
-            required=("document", "selector"),
+            required=("target", "selector"),
         ),
-        service.get_cached_section,
-        output_schema=_CACHED_DOCUMENT_SECTION_SCHEMA,
-        effects=frozenset({OperationEffect.CACHE_WRITE}),
-        decoder=_decode_cached_document_parameters,
+        service.get_section_cli,
+        output_schema=_PAPER_SECTION_SCHEMA,
+        effects=_NETWORK_CACHE,
+        decoder=_decode_document_target_parameters,
     ),
     _spec(
         "lookup-reference",
@@ -1333,59 +1420,6 @@ _OPERATIONS = (
         output_schema=_CACHED_DOCUMENT_SEARCH_SCHEMA,
         effects=frozenset({OperationEffect.CACHE_WRITE}),
         decoder=_decode_cached_document_parameters,
-    ),
-    _spec(
-        "get-arxiv-table-of-contents",
-        _object({**_ARXIV, **_REFRESH}, required=("arxiv_id",)),
-        service.get_arxiv_table_of_contents,
-        output_schema=_object(
-            {
-                "provenance": _ARXIV_PROVENANCE_SCHEMA,
-                "entries": {"type": "array", "items": _TOC_ENTRY_SCHEMA},
-                "warnings": _STRING_ARRAY,
-            },
-            required=("provenance", "entries", "warnings"),
-        ),
-        effects=_NETWORK_CACHE,
-        version=3,
-    ),
-    _spec(
-        "get-arxiv-section",
-        _object(
-            {
-                **_ARXIV,
-                "selector": {"type": ["string", "integer"]},
-                **_REFRESH,
-            },
-            required=("arxiv_id", "selector"),
-        ),
-        service.get_arxiv_section,
-        output_schema=_object(
-            {
-                "provenance": _ARXIV_PROVENANCE_SCHEMA,
-                "section_id": _NONEMPTY_STRING,
-                "title": _STRING,
-                "text": _STRING,
-                "level": {"type": "integer", "minimum": 1},
-                "ordinal": {"type": "integer", "minimum": 0},
-                "page_start": _NULLABLE_INTEGER,
-                "page_end": _NULLABLE_INTEGER,
-                "warnings": _STRING_ARRAY,
-            },
-            required=(
-                "provenance",
-                "section_id",
-                "title",
-                "text",
-                "level",
-                "ordinal",
-                "page_start",
-                "page_end",
-                "warnings",
-            ),
-        ),
-        effects=_NETWORK_CACHE,
-        version=3,
     ),
     _spec(
         "search-arxiv-full-text",

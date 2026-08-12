@@ -274,14 +274,18 @@ class ReferenceMaterialCache:
         *,
         doi: str | None = None,
         arxiv_id: str | None = None,
+        inspire_recid: str | None = None,
         url: str | None = None,
         title: str | None = None,
     ) -> CachedReferenceMaterial | None:
         supplied = [
-            value is not None for value in (doi, arxiv_id, url, title)
+            value is not None
+            for value in (doi, arxiv_id, inspire_recid, url, title)
         ]
         if sum(supplied) != 1:
-            raise ValueError("lookup requires exactly one DOI, arXiv ID, URL, or title")
+            raise ValueError(
+                "lookup requires exactly one DOI, arXiv ID, INSPIRE record, URL, or title"
+            )
         if doi is not None:
             normalized_doi = doi_value(doi)
             if not normalized_doi:
@@ -292,6 +296,11 @@ class ReferenceMaterialCache:
             if not normalized_arxiv:
                 raise ValueError("arxiv_id is invalid")
             predicate = lambda item: item.identity.arxiv_id == normalized_arxiv
+        elif inspire_recid is not None:
+            normalized_recid = str(inspire_recid).strip()
+            if not normalized_recid.isdigit():
+                raise ValueError("inspire_recid is invalid")
+            predicate = lambda item: item.identity.inspire_recid == normalized_recid
         elif url is not None:
             normalized_url = normalize_reference_url(url)
             predicate = lambda item: normalized_url in item.identity.urls

@@ -250,12 +250,14 @@ def test_cached_document_registry_and_cli_are_typed(
     _, reference = _cached(tmp_path)
     document = cached_document_ref_to_document(reference)
     parameters = {
-        "document": document,
+        "target": {"kind": "document", "document": document},
+        "source_format": None,
+        "refresh": False,
         "cache_root": str(tmp_path / "cache"),
     }
 
-    result = dispatch_operation("get-cached-table-of-contents", parameters)
-    assert result["document"] == document
+    result = dispatch_operation("get-table-of-contents", parameters)
+    assert result["source"]["document"] == document
     assert result["entries"]
 
     assert (

@@ -41,6 +41,18 @@ class _Parser(argparse.ArgumentParser):
         super().exit(status, message)
 
 
+class _DocumentTargetAction(argparse.Action):
+    """Append mixed document targets in command-line order."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        targets = list(getattr(namespace, self.dest, None) or [])
+        if option_string == "--reference":
+            targets.append({"kind": "reference", "reference": values})
+        else:
+            targets.append({"kind": "document", "document": _json_object(values)})
+        setattr(namespace, self.dest, targets)
+
+
 def _parser() -> _Parser:
     parser = _Parser(
         prog="arc-paper",
@@ -161,15 +173,12 @@ def _parser() -> _Parser:
         "--case-sensitive", action="store_true", help="match letter case exactly"
     )
 
-    cached_toc = commands.add_parser(
-        "get-cached-table-of-contents",
-        help="read one verified cached document table of contents",
-        description=(
-            "Read a content-addressed document without fetching any provider."
-        ),
+    toc = commands.add_parser(
+        "get-table-of-contents",
+        help="read one paper table of contents",
+        description="Resolve one reference or exact cached document and list its sections.",
     )
-    _cached_document_arguments(cached_toc)
-    _cached_structure_argument(cached_toc)
+    _single_document_target_arguments(toc)
 
     reconstruct_structure = commands.add_parser(
         "reconstruct-cached-structure",
@@ -187,22 +196,17 @@ def _parser() -> _Parser:
         help="PDF CachedDocumentRef JSON object",
     )
 
-    cached_section = commands.add_parser(
-        "get-cached-section",
-        help="read one section from a verified cached document",
-        description=(
-            "Read a cached section by exact ID, title selector, or zero-based ordinal."
-        ),
+    section = commands.add_parser(
+        "get-section",
+        help="read one paper section",
+        description="Resolve one reference or exact cached document and select a section.",
     )
-    _cached_document_arguments(cached_section)
-    _cached_structure_argument(cached_section)
-    cached_section_selector = cached_section.add_mutually_exclusive_group(
-        required=True
-    )
-    cached_section_selector.add_argument(
+    _single_document_target_arguments(section)
+    section_selector = section.add_mutually_exclusive_group(required=True)
+    section_selector.add_argument(
         "selector", nargs="?", help="section ID or title selector"
     )
-    cached_section_selector.add_argument(
+    section_selector.add_argument(
         "--ordinal", type=_section_ordinal, help="zero-based section ordinal"
     )
 
@@ -301,25 +305,6 @@ def _parser() -> _Parser:
     )
     materialize_reference.add_argument(
         "--cache-root", help="override the paper cache directory"
-    )
-
-    toc = commands.add_parser(
-        "get-arxiv-table-of-contents",
-        help="read an arXiv paper table of contents",
-        description="Read the parsed section hierarchy of an arXiv paper.",
-    )
-    _arxiv_arguments(toc)
-
-    section = commands.add_parser(
-        "get-arxiv-section",
-        help="read one parsed arXiv section",
-        description="Read one arXiv section by title selector or zero-based ordinal.",
-    )
-    _arxiv_arguments(section)
-    section_selector = section.add_mutually_exclusive_group(required=True)
-    section_selector.add_argument("selector", nargs="?", help="section title or selector")
-    section_selector.add_argument(
-        "--ordinal", type=_section_ordinal, help="zero-based section ordinal"
     )
 
     full_text = commands.add_parser(
@@ -526,6 +511,29 @@ def _cached_document_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cache-root", help="override the paper cache directory")
 
 
+def _single_document_target_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.set_defaults(targets=[])
+    parser.add_argument(
+        "--reference",
+        dest="targets",
+        action=_DocumentTargetAction,
+        help="exact arXiv, DOI, INSPIRE, URL, or cached-title reference",
+    )
+    parser.add_argument(
+        "--document-ref",
+        dest="targets",
+        action=_DocumentTargetAction,
+        help="CachedDocumentRef JSON object",
+    )
+    parser.add_argument(
+        "--source-format",
+        choices=("html", "markdown", "tex", "pdf"),
+        help="explicit representation for a reference target",
+    )
+    parser.add_argument("--refresh", action="store_true", help="refresh a reference target")
+    parser.add_argument("--cache-root", help="override the paper cache directory")
+
+
 def _cached_structure_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--structure-ref",
@@ -631,10 +639,13 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "context_lines": args.context_lines,
             "case_sensitive": args.case_sensitive,
         }
-    if command == "get-cached-table-of-contents":
+    if command == "get-table-of-contents":
+        if len(args.targets) != 1:
+            raise _UsageError("get-table-of-contents requires exactly one target")
         return {
-            "document": args.document_ref,
-            "structure": args.structure_ref,
+            "target": args.targets[0],
+            "source_format": args.source_format,
+            "refresh": args.refresh,
             "cache_root": args.cache_root,
         }
     if command == "reconstruct-cached-structure":
@@ -643,13 +654,16 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "outline_document": args.outline_document_ref,
             "cache_root": args.cache_root,
         }
-    if command == "get-cached-section":
+    if command == "get-section":
+        if len(args.targets) != 1:
+            raise _UsageError("get-section requires exactly one target")
         return {
-            "document": args.document_ref,
-            "structure": args.structure_ref,
+            "target": args.targets[0],
             "selector": (
                 args.ordinal if args.ordinal is not None else args.selector
             ),
+            "source_format": args.source_format,
+            "refresh": args.refresh,
             "cache_root": args.cache_root,
         }
     if command in {"lookup-reference", "acquire-reference"}:
@@ -695,16 +709,6 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "context_lines": args.context_lines,
             "case_sensitive": args.case_sensitive,
             "cache_root": args.cache_root,
-        }
-    if command == "get-arxiv-table-of-contents":
-        return {"arxiv_id": args.arxiv_id, "refresh": args.refresh}
-    if command == "get-arxiv-section":
-        return {
-            "arxiv_id": args.arxiv_id,
-            "selector": (
-                args.ordinal if args.ordinal is not None else args.selector
-            ),
-            "refresh": args.refresh,
         }
     if command == "search-arxiv-full-text":
         return {
