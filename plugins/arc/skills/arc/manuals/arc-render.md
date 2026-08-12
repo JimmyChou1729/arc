@@ -5,13 +5,24 @@ HTML reader.
 
 ## Quick Start
 
-Compose a publication from a source reference and one or more layer files:
+Compose a publication from a `RichDocument` JSON file and one or more layer
+files:
 
 ```bash
 arc-render compose \
-  --source-ref source-ref.json \
-  --layer translation.layer.json
+  --source rich-source.json \
+  --layer translation.layer.json \
+  --output publication.json
 ```
+
+`--source` is the required source handoff; `arc-render` performs no cache
+lookup. When source parsing depends on relative figures, copy the complete rich
+source directory before parsing so those paths remain available. After parsing,
+copy figure bytes into the publication workspace and declare their relative
+paths in the publication metadata `resources` array. Existing translation and
+Companion publication workspaces already carry figure assets this way. Source
+assets therefore travel as explicit workspace resources alongside the frozen
+`RichDocument` JSON.
 
 Render the publication to standalone HTML:
 

@@ -4,18 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import mimetypes
-import os
 from pathlib import Path
-import tempfile
 from typing import Any, Mapping, Sequence
 
-from arc_paper import (
-    cached_rich_document_ref_from_document,
-    open_cached_rich_document,
-    read_cached_rich_asset,
-    rich_document_from_document,
-)
+from arc_paper import rich_document_from_document
 
 from .contracts import Publication, source_identity_from_rich_document
 from .browser_validation import validate_reader_in_browser
@@ -75,21 +67,11 @@ def _parser() -> argparse.ArgumentParser:
     compose = subparsers.add_parser(
         "compose", help="compose a publication JSON document"
     )
-    source = compose.add_mutually_exclusive_group(required=True)
-    source.add_argument(
+    compose.add_argument(
         "--source",
         type=Path,
+        required=True,
         help="RichDocument JSON document",
-    )
-    source.add_argument(
-        "--source-ref",
-        type=Path,
-        help="CachedRichDocumentRef JSON document",
-    )
-    compose.add_argument(
-        "--cache-root",
-        type=Path,
-        help="arc-paper cache root for --source-ref",
     )
     compose.add_argument(
         "--layer",
@@ -148,40 +130,8 @@ def _compose(args: argparse.Namespace) -> dict[str, Any]:
     output = args.output.resolve()
     root = output.parent
     metadata = _publication_metadata(args.metadata)
-    generated_resources: list[Mapping[str, Any]] = []
-    if args.source is not None:
-        value = _read_json(args.source, "rich source")
-        document = rich_document_from_document(value)
-    else:
-        reference_value = _read_json(args.source_ref, "cached rich source reference")
-        reference = cached_rich_document_ref_from_document(reference_value)
-        document = open_cached_rich_document(
-            reference,
-            cache_root=args.cache_root,
-        )
-        for asset in document.assets:
-            payload = read_cached_rich_asset(
-                reference,
-                asset.artifact_digest,
-                cache_root=args.cache_root,
-            )
-            suffix = Path(asset.logical_name).suffix or (
-                mimetypes.guess_extension(asset.media_type) or ""
-            )
-            relative = (
-                Path("resources")
-                / "source"
-                / f"{asset.artifact_digest}{suffix}"
-            )
-            _write_immutable_bytes(root / relative, payload)
-            generated_resources.append(
-                {
-                    "artifact_digest": asset.artifact_digest,
-                    "media_type": asset.media_type,
-                    "size": asset.size,
-                    "path": relative.as_posix(),
-                }
-            )
+    value = _read_json(args.source, "rich source")
+    document = rich_document_from_document(value)
 
     source = source_identity_from_rich_document(document)
     layer_refs = []
@@ -204,7 +154,7 @@ def _compose(args: argparse.Namespace) -> dict[str, Any]:
         glossary=tuple(metadata["glossary"]),
         bibliography=tuple(metadata["bibliography"]),
         labels=metadata["labels"],
-        resources=tuple((*metadata["resources"], *generated_resources)),
+        resources=tuple(metadata["resources"]),
         reader_profile=metadata["reader_profile"],
     )
     write_publication(output, publication)
@@ -294,31 +244,6 @@ def _read_json(path: Path, description: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{description} JSON must be an object")
     return value
-
-
-def _write_immutable_bytes(path: Path, payload: bytes) -> None:
-    if path.exists():
-        if path.read_bytes() != payload:
-            raise ValueError(f"immutable resource path has conflicting bytes: {path}")
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent
-    )
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temporary_name, path)
-        except FileExistsError:
-            if path.read_bytes() != payload:
-                raise ValueError(
-                    f"concurrent resource publication conflicted: {path}"
-                )
-    finally:
-        Path(temporary_name).unlink(missing_ok=True)
 
 
 def _unique_object(values: list[tuple[str, Any]]) -> dict[str, Any]:

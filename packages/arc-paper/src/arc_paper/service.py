@@ -51,14 +51,6 @@ from .cached_document import (
     CachedSourceRange,
     CachedTableOfContents,
 )
-from .cached_rich_document import (
-    RICH_DOCUMENT_PARSER_CONTRACT,
-    CachedRichDocumentError,
-    CachedRichDocumentRef,
-    CachedRichDocumentStore,
-    RichAssetManifest,
-    rich_asset_manifest,
-)
 from .document_structure import (
     CachedDocumentStructureRef,
     DocumentStructureCache,
@@ -179,7 +171,6 @@ class ArcPaperService:
         )
         self._cached_full_text_searcher = CachedFullTextSearcher(root)
         self._document_structure_cache = DocumentStructureCache(root)
-        self._cached_rich_document_store = CachedRichDocumentStore(root)
         self._reference_acquisition_service: ReferenceAcquisitionService | None = None
         self._keyword_task_service = keyword_task_service
         self._term_inventory_store: Any | None = None
@@ -793,206 +784,6 @@ class ArcPaperService:
                 "parsed document does not match the verified cached projection",
             )
         return self._cached_document_ref(artifact, document)
-
-    def cache_rich_document(
-        self,
-        source: SourceArtifact | RichDocument,
-        *,
-        validators: Sequence[SourceArtifact | ParsedDocument] = (),
-    ) -> CachedRichDocumentRef:
-        """Cache a reproducible RichDocument without exposing physical paths."""
-
-        from .rich_document import RichDocument
-
-        expected_digest: str | None = None
-        seed_manifest: RichAssetManifest | None = None
-        if isinstance(source, RichDocument):
-            artifact = source.source
-            expected_digest = source.document_digest
-            seed_manifest = rich_asset_manifest(source)
-        elif isinstance(source, SourceArtifact):
-            artifact = source
-        else:
-            raise PaperInputError(
-                "cached rich document source must be a SourceArtifact or RichDocument"
-            )
-        validator_artifacts: list[SourceArtifact] = []
-        for validator in validators:
-            if isinstance(validator, ParsedDocument):
-                validator_artifacts.append(validator.source)
-            elif isinstance(validator, SourceArtifact):
-                validator_artifacts.append(validator)
-            else:
-                raise PaperInputError(
-                    "rich document validators must be SourceArtifact or "
-                    "ParsedDocument values"
-                )
-        primary_ref = self.cache_document(artifact)
-        validator_refs = tuple(
-            self.cache_document(item) for item in validator_artifacts
-        )
-        document = self._parse_rich_document(
-            artifact,
-            tuple(validator_artifacts),
-            asset_manifest=seed_manifest,
-        )
-        if (
-            expected_digest is not None
-            and document.document_digest != expected_digest
-        ):
-            raise CachedRichDocumentError(
-                "cached_rich_document_digest_mismatch",
-                "supplied RichDocument does not match the current parser contract",
-            )
-        manifest = rich_asset_manifest(document)
-        reference = CachedRichDocumentRef(
-            primary=primary_ref,
-            validators=validator_refs,
-            rich_parser_contract=RICH_DOCUMENT_PARSER_CONTRACT,
-            rich_document_sha256=document.document_digest,
-            asset_manifest_sha256=manifest.digest,
-        )
-        self._verify_rich_assets(document)
-        self._cached_rich_document_store.store(reference, document)
-        return reference
-
-    def open_cached_rich_document(
-        self, reference: CachedRichDocumentRef
-    ) -> RichDocument:
-        """Open, verify, and when possible repair one cached RichDocument."""
-
-        if not isinstance(reference, CachedRichDocumentRef):
-            raise CachedRichDocumentError(
-                "invalid_cached_rich_document_ref",
-                "document must be a CachedRichDocumentRef",
-            )
-        if reference.rich_parser_contract != RICH_DOCUMENT_PARSER_CONTRACT:
-            raise CachedRichDocumentError(
-                "cached_rich_document_parser_contract_mismatch",
-                "current rich parser contract does not match the document reference",
-            )
-        primary, _ = self._resolve_cached_document(reference.primary)
-        validators = tuple(
-            self._resolve_cached_document(item)[0]
-            for item in reference.validators
-        )
-        try:
-            document = self._cached_rich_document_store.read_document(reference)
-        except CachedRichDocumentError:
-            try:
-                manifest = self._cached_rich_document_store.read_manifest(
-                    reference
-                )
-            except CachedRichDocumentError:
-                empty_manifest = RichAssetManifest((), ())
-                if reference.asset_manifest_sha256 != empty_manifest.digest:
-                    raise
-                manifest = empty_manifest
-            document = self._parse_rich_document(
-                primary.source,
-                tuple(item.source for item in validators),
-                asset_manifest=manifest,
-            )
-            if document.document_digest != reference.rich_document_sha256:
-                raise CachedRichDocumentError(
-                    "cached_rich_document_digest_mismatch",
-                    "reparsed rich document does not match its logical reference",
-                )
-            self._cached_rich_document_store.store(reference, document)
-        else:
-            try:
-                self._cached_rich_document_store.read_manifest(reference)
-            except CachedRichDocumentError:
-                # A valid document carries the complete scoped manifest, so the
-                # independently persisted repair input can be restored safely.
-                self._cached_rich_document_store.store(reference, document)
-        self._verify_rich_assets(document)
-        return document
-
-    def read_cached_rich_asset(
-        self,
-        document: CachedRichDocumentRef,
-        artifact_digest: str,
-    ) -> bytes:
-        """Read one verified asset only when it belongs to ``document``."""
-
-        rich = self.open_cached_rich_document(document)
-        digest = str(artifact_digest).casefold()
-        asset = next(
-            (item for item in rich.assets if item.artifact_digest == digest),
-            None,
-        )
-        if asset is None:
-            raise CachedRichDocumentError(
-                "cached_rich_asset_not_scoped",
-                "asset does not belong to the referenced rich document",
-            )
-        stored = self.repository.get_asset(asset.artifact_digest)
-        if (
-            stored.size != asset.size
-            or stored.media_type != asset.media_type
-        ):
-            raise CachedRichDocumentError(
-                "cached_rich_asset_mismatch",
-                "cached asset metadata does not match the rich document",
-            )
-        return self.repository.read_asset_bytes(stored)
-
-    def _parse_rich_document(
-        self,
-        primary: SourceArtifact,
-        validators: tuple[SourceArtifact, ...],
-        *,
-        asset_manifest: RichAssetManifest | None,
-    ) -> RichDocument:
-        from .rich_document import RichDocumentParserService
-
-        importer = None
-        if asset_manifest is not None:
-            assets = {
-                item.artifact_digest: item for item in asset_manifest.assets
-            }
-            targets = dict(asset_manifest.targets)
-
-            def import_asset(target: str):
-                digest = targets.get(target)
-                asset = assets.get(digest) if digest is not None else None
-                if asset is None:
-                    return None
-                stored = self.repository.get_asset(asset.artifact_digest)
-                if (
-                    stored.size != asset.size
-                    or stored.media_type != asset.media_type
-                ):
-                    raise CachedRichDocumentError(
-                        "cached_rich_asset_mismatch",
-                        "cached asset metadata does not match its manifest",
-                    )
-                self.repository.read_asset_bytes(stored)
-                return asset
-
-            importer = import_asset
-        parser = RichDocumentParserService(
-            self.repository,
-            pdf_text_extractor=self.parser.pdf_text_extractor,
-            asset_importer=importer,
-        )
-        return parser.parse(
-            SourceBundle(primary=primary, validators=validators)
-        ).document
-
-    def _verify_rich_assets(self, document: RichDocument) -> None:
-        for asset in document.assets:
-            stored = self.repository.get_asset(asset.artifact_digest)
-            if (
-                stored.size != asset.size
-                or stored.media_type != asset.media_type
-            ):
-                raise CachedRichDocumentError(
-                    "cached_rich_asset_mismatch",
-                    "cached asset metadata does not match the rich document",
-                )
-            self.repository.read_asset_bytes(stored)
 
     def reconstruct_cached_structure(
         self,
@@ -1983,38 +1774,6 @@ def cache_document(
     return ArcPaperService(cache_root=cache_root).cache_document(source)
 
 
-def cache_rich_document(
-    source: SourceArtifact | RichDocument,
-    *,
-    validators: Sequence[SourceArtifact | ParsedDocument] = (),
-    cache_root: str | Path | None = None,
-) -> CachedRichDocumentRef:
-    return ArcPaperService(cache_root=cache_root).cache_rich_document(
-        source, validators=validators
-    )
-
-
-def open_cached_rich_document(
-    document: CachedRichDocumentRef,
-    *,
-    cache_root: str | Path | None = None,
-) -> RichDocument:
-    return ArcPaperService(cache_root=cache_root).open_cached_rich_document(
-        document
-    )
-
-
-def read_cached_rich_asset(
-    document: CachedRichDocumentRef,
-    artifact_digest: str,
-    *,
-    cache_root: str | Path | None = None,
-) -> bytes:
-    return ArcPaperService(cache_root=cache_root).read_cached_rich_asset(
-        document, artifact_digest
-    )
-
-
 def reconstruct_cached_structure(
     document: CachedDocumentRef,
     outline_document: CachedDocumentRef,
@@ -2354,7 +2113,6 @@ __all__ = [
     "acquire_reference_cli",
     "admit_reference_cli",
     "cache_document",
-    "cache_rich_document",
     "default_cache_root",
     "extract_paper_ids",
     "export_cache",
@@ -2378,8 +2136,6 @@ __all__ = [
     "paper_ids_safe_dir_name",
     "parse_local",
     "remove_cache",
-    "open_cached_rich_document",
-    "read_cached_rich_asset",
     "reconstruct_cached_structure",
     "select_section",
     "search_equations",

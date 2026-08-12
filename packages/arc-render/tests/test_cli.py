@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 from arc_paper import (
     RichDocument,
+    RichDocumentParserService,
+    SourceRepository,
     SourceArtifact,
     SourceFormat,
     SourceOrigin,
@@ -69,6 +71,98 @@ def test_cli_composes_renders_and_validates_source_only_publication(
     ]) == 0
     validated = json.loads(capsys.readouterr().out)
     assert validated["publication_digest"] == compose["publication_digest"]
+
+
+def test_cli_renders_direct_rich_source_with_copied_asset(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rich_source = tmp_path / "rich-source"
+    rich_source.mkdir()
+    asset_payload = b"\x89PNG\r\nexplicit source figure"
+    (rich_source / "figure.png").write_bytes(asset_payload)
+    markdown = rich_source / "paper.md"
+    markdown.write_text("# Result\n\n![Measured result](figure.png)\n", encoding="utf-8")
+
+    repository = SourceRepository(tmp_path / "paper-cache")
+    document = RichDocumentParserService(repository).parse_source(
+        repository.import_path(markdown)
+    )
+    workspace = tmp_path / "publication-workspace"
+    workspace.mkdir()
+    source = workspace / "source.json"
+    source.write_text(
+        json.dumps(rich_document_to_document(document)),
+        encoding="utf-8",
+    )
+    copied_asset = workspace / "resources" / "figure.png"
+    copied_asset.parent.mkdir()
+    copied_asset.write_bytes(asset_payload)
+    asset = document.assets[0]
+    metadata = workspace / "metadata.json"
+    metadata.write_text(
+        json.dumps({
+            "glossary": [],
+            "bibliography": [],
+            "labels": {},
+            "resources": [{
+                "artifact_digest": asset.artifact_digest,
+                "path": "resources/figure.png",
+            }],
+            "reader_profile": {},
+        }),
+        encoding="utf-8",
+    )
+    publication = workspace / "publication.json"
+    html = workspace / "reader.html"
+
+    assert main([
+        "compose",
+        "--source", str(source),
+        "--metadata", str(metadata),
+        "--output", str(publication),
+    ]) == 0
+    capsys.readouterr()
+    assert main([
+        "render",
+        "--publication", str(publication),
+        "--html", str(html),
+    ]) == 0
+    capsys.readouterr()
+
+    rendered = html.read_text(encoding="utf-8")
+    assert "data:image/png;base64," in rendered
+    assert "Measured result" in rendered
+
+
+def test_compose_help_and_parser_reject_removed_cached_source_flags(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as help_exit:
+        main(["compose", "--help"])
+    assert help_exit.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--source-ref" not in help_text
+    assert "--cache-root" not in help_text
+
+    with pytest.raises(SystemExit) as source_ref_exit:
+        main([
+            "compose",
+            "--source-ref", str(tmp_path / "source-ref.json"),
+            "--output", str(tmp_path / "publication.json"),
+        ])
+    assert source_ref_exit.value.code == 2
+
+    source = _source(tmp_path / "source.json")
+    with pytest.raises(SystemExit) as cache_root_exit:
+        main([
+            "compose",
+            "--source", str(source),
+            "--cache-root", str(tmp_path / "cache"),
+            "--output", str(tmp_path / "publication.json"),
+        ])
+    assert cache_root_exit.value.code == 2
 
 
 def test_cli_has_no_pdf_generation_option(
