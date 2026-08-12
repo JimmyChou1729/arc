@@ -18,6 +18,7 @@ from arc_translate.cli import main
         ["resume", "--help"],
         ["stop", "--help"],
         ["validate", "--help"],
+        ["get-result", "--help"],
     ],
 )
 def test_root_and_subcommand_help_is_human_readable(
@@ -58,7 +59,7 @@ def test_only_paper_access_commands_accept_a_paper_cache_root(
     ):
         assert main([command, "--help"]) == 0
         assert "--paper-cache-root" in capsys.readouterr().out
-    for command in ("status", "stop", "validate"):
+    for command in ("status", "stop", "validate", "get-result"):
         assert main([command, "--help"]) == 0
         assert "--paper-cache-root" not in capsys.readouterr().out
 

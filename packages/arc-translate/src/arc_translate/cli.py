@@ -16,6 +16,9 @@ from arc_jobs import (
     CommandRun,
     CommandStatus,
     CommandWarning,
+    InvalidRunIdError,
+    InvalidStateError,
+    RunNotFoundError,
     command_result_from_snapshot,
     command_result_json,
     snapshot_data,
@@ -120,6 +123,19 @@ def _parser() -> _Parser:
     resume.add_argument("--input", help="JSON object or a path to one")
     _paper_cache_argument(resume)
     _host_authority_argument(resume)
+
+    get_result = commands.add_parser(
+        "get-result",
+        help="read a verified selected translation result",
+        description="Read one verified successful selected translation result.",
+    )
+    _project_argument(get_result)
+    get_result.add_argument(
+        "--step",
+        required=True,
+        choices=("language", "glossary", "blocks"),
+        help="selected translation step to read",
+    )
     return parser
 
 
@@ -173,6 +189,7 @@ def _help_command(arguments: list[str]) -> str:
             "resume",
             "stop",
             "validate",
+            "get-result",
         }
         else None
     )
@@ -241,6 +258,8 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
         return _stop(args)
     if args.command == "validate":
         return _validate(args)
+    if args.command == "get-result":
+        return _get_result(args)
     raise _UsageError(f"unsupported command: {args.command}")
 
 
@@ -455,6 +474,67 @@ def _validate(args: argparse.Namespace) -> CommandResult:
                 for item in report.issues
             ]
         },
+    )
+
+
+def _get_result(args: argparse.Namespace) -> CommandResult:
+    project = TranslationProject.load(args.project_dir)
+    run_id = project.run_id(args.step)
+    if run_id is None:
+        raise TranslationServiceError(
+            "run_not_selected",
+            f"project has no selected {args.step} translation run",
+        )
+    service = TranslationService(project.jobs_root)
+    try:
+        snapshot = service.inspect(run_id).snapshot
+        result = service.result(run_id)
+    except RunNotFoundError as exc:
+        raise TranslationServiceError(
+            "run_not_found",
+            f"selected {args.step} translation run does not exist",
+        ) from exc
+    except InvalidRunIdError as exc:
+        raise TranslationProjectError(
+            "project_state_invalid",
+            f"selected {args.step} translation run ID is invalid",
+        ) from exc
+    except InvalidStateError as exc:
+        raise TranslationServiceError(
+            "result_invalid",
+            f"selected {args.step} translation run state is invalid",
+        ) from exc
+
+    expected_type = {
+        "language": LanguageResult,
+        "glossary": GlossaryResult,
+        "blocks": TranslationResult,
+    }[args.step]
+    if not isinstance(result, expected_type):
+        raise TranslationServiceError(
+            "result_invalid",
+            f"selected {args.step} translation run has the wrong result type",
+        )
+
+    data: dict[str, Any] = {
+        "step": args.step,
+        "result": result.to_document(),
+    }
+    artifacts: tuple[CommandArtifact, ...] = ()
+    if args.step == "blocks" and project.translation_layer.is_file():
+        assert isinstance(result, TranslationResult)
+        data["delivery"] = {
+            "layer": str(project.translation_layer),
+            "revision_count": len(result.revision_artifacts),
+        }
+        artifacts = (
+            CommandArtifact("layer", run_id, str(project.translation_layer)),
+        )
+    return CommandResult(
+        CommandStatus.COMPLETED,
+        run=CommandRun(snapshot.run_id, snapshot.revision),
+        data=data,
+        artifacts=artifacts,
     )
 
 
