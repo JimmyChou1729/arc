@@ -388,6 +388,12 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         ),
         (
             "arc-paper.md",
+            "arc-paper get-citer-count",
+            "paper",
+            ["get-citer-count", "arXiv:1234.5678"],
+        ),
+        (
+            "arc-paper.md",
             "arc-paper search-citers",
             "paper",
             [
@@ -653,6 +659,23 @@ def test_arc_paper_docs_define_bounded_citation_neighborhood_search() -> None:
     assert "most recent and most cited" in compact
     assert "scan_complete: false" in compact
     assert "not proof of novelty" in compact
+
+
+def test_arc_paper_docs_cover_external_reference_reuse() -> None:
+    manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    section = manual.split("## Reuse an External Reference", 1)[1].split(
+        "\n## ", 1
+    )[0]
+
+    for command in (
+        "lookup-reference",
+        "acquire-reference",
+        "admit-reference",
+        "materialize-reference",
+    ):
+        assert f"arc-paper {command}" in section
+    assert "cache-only lookup" in section
+    assert "complete `CachedResourceRef` object" in section
 
 
 def test_translate_docs_define_standalone_approximate_workflows() -> None:

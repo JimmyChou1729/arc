@@ -182,9 +182,14 @@ arc-paper get-metadata arXiv:0911.3380
 Inspect a paper's citation neighborhood with exact metadata operations:
 
 ```bash
+arc-paper get-citer-count arXiv:0911.3380
 arc-paper get-references arXiv:0911.3380 --enrich
 arc-paper get-citers arXiv:0911.3380 --limit 100 --sort mostrecent
 ```
+
+Use `get-citer-count` before a bounded scan when the neighborhood size affects
+the search strategy. Use `get-references` for papers cited by the target and
+`get-citers` for papers that cite it.
 
 ### Search a Citation Neighborhood
 
@@ -201,6 +206,31 @@ neighborhoods split the scan between most recent and most cited records and
 report `scan_complete: false`. Inspect matching fields and control samples for
 keyword blind spots. No match is evidence about the scanned neighborhood, not
 proof of novelty.
+
+## Reuse an External Reference
+
+These commands handle a DOI, URL, or already downloaded source without relying
+on an arXiv identity:
+
+```bash
+# Exact cache-only lookup; no download.
+arc-paper lookup-reference --doi "<doi>"
+
+# Acquire one authorized remote resource into verified cache.
+arc-paper acquire-reference --url "<url>"
+
+# Admit a file already available to the agent.
+arc-paper admit-reference <downloaded-file> --url "<source-url>"
+
+# Copy verified cached bytes to an explicit workspace path.
+arc-paper materialize-reference \
+  --resource-ref '<data.resources[] item JSON>' \
+  --output <workspace-file>
+```
+
+`lookup-reference` returning no material is not an acquisition attempt. After
+acquisition or admission, keep the returned identity and resource objects;
+`materialize-reference` requires one complete `CachedResourceRef` object.
 
 ## Parse a Local Source
 
