@@ -54,7 +54,7 @@ arc-translate get-result --project-dir local/example/translation \
   --step blocks
 ```
 
-The three commands are independent durable stages and verify their selected
+The three commands are separately durable stages and verify their selected
 prerequisites. The final command returns the canonical result at `data.result`
 and the Layer handoff at `data.delivery.layer`.
 

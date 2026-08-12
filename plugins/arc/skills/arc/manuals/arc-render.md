@@ -60,11 +60,11 @@ Render and validate the standalone reader:
 ```bash
 arc-render render \
   --publication publication/publication.json \
-  --html reader.html
+  --html publication/reader.html
 
 arc-render validate \
   --publication publication/publication.json \
-  --html reader.html
+  --html publication/reader.html
 ```
 
 Keep `publication.json`, every Layer, every referenced fragment revision, and

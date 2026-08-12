@@ -1,8 +1,13 @@
 # ARC Jobs Quick Start
 
 `arc-jobs` inspects and controls durable runs created by another ARC package.
-Use it when an owning command returned a run root and run ID but does not offer
-a more specific status, validation, or stop command. It does not create or resume package work.
+Use it when an owning workflow exposes a generic run root and run ID but does
+not offer a more specific status, validation, or stop command. For a direct-root
+owner such as `arc-llm`, retain the exact `--run-root` you supplied and the
+`run.id` it returned. Project-based owners such as `arc-domain`,
+`arc-translate`, and `arc-companion` already expose project-aware lifecycle
+commands; use those instead of inferring their internal job roots. `arc-jobs`
+does not create or resume package work.
 
 ## Run ARC Jobs
 
@@ -27,7 +32,7 @@ search package internals for another executable.
 
 ## Inspect or Validate an Existing Run
 
-Keep the exact run root and run ID returned by the owning command, then run:
+Keep the exposed run root and returned run ID together, then run:
 
 ```bash
 arc-jobs status --run-root <run-root> --run-id <run-id>
@@ -127,5 +132,8 @@ arc-jobs --help
 arc-jobs <command> --help
 ```
 
-Help describes current flags. Keep the run root and ID returned by the owning
-command; never reconstruct them from physical durable-state paths.
+Help describes current flags. Keep the run root and ID exposed by the owning
+workflow or supplied to its direct-root command; never reconstruct them from
+physical durable-state paths. There is no generic fixture-creation command:
+creating an ownerless run would not provide valid package semantics or a resume
+path.

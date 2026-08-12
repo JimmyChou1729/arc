@@ -152,9 +152,9 @@ After every attempt, read status, warnings, and published artifact references
 before deciding whether to deliver, recover, or resume.
 
 Durable state lives below `<project-dir>/.arc/domain/`. Without
-`--paper-cache-root`, paper data uses `.arc/cache/arc-paper` below the launch
-directory; keep the working directory stable or pass one explicit local cache
-on both build and resume.
+`--paper-cache-root`, paper data uses `ARC_PAPER_CACHE` when set and otherwise
+`.arc/cache/arc-paper` below the launch directory. Keep the working directory
+stable or pass one explicit local cache on both build and resume.
 
 ## Managed Workflow Semantics
 

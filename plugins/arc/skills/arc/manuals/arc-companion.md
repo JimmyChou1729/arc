@@ -225,9 +225,12 @@ arc-companion revise \
 
 Exact request replay is idempotent. A reused `review_id` with different content,
 a stale publication or fragment base, an unknown fragment, a no-op replacement,
-or an unknown bibliography citation fails. Success returns revision and edition
-digests plus `data.delivery.html`; add `--browser` when the corrected reader
-also needs local Chromium validation.
+or an unknown bibliography citation fails. On success, read the request's
+committed revision digests from `data.revision_digests[]`, all selected heads from
+`data.selected_revision_digests[]`, the resulting edition from
+`data.edition_digest`, replay state from `data.idempotent_replay`, and the
+promoted reader from `data.delivery.html`. Add `--browser` when the corrected
+reader also needs local Chromium validation.
 
 ## Build Semantics
 

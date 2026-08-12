@@ -6,6 +6,9 @@ when these steps must run independently of a Companion build. A source may be
 a verified local Markdown, HTML, or flattened TeX document, or a paper
 identifier resolved through `arc-paper`.
 
+The three generation commands use `arc-llm`; `get-result`, status, and
+validation only read existing project state.
+
 Every command returns a typed JSON envelope. Check top-level `status`,
 `warnings`, and `error` before using fields under `data`.
 
@@ -161,9 +164,9 @@ machine-invalid output.
 
 Use the same project directory for every step. Durable translation state lives
 only below `<project-dir>/.arc/translate/`. Without `--paper-cache-root`, paper
-data uses `.arc/cache/arc-paper` below the launch directory; keep the working
-directory stable or pass the same explicit local cache to every source-reading
-or resume command.
+data uses `ARC_PAPER_CACHE` when set and otherwise `.arc/cache/arc-paper` below
+the launch directory. Keep the working directory stable or pass the same
+explicit local cache to every source-reading or resume command.
 
 ## Help
 

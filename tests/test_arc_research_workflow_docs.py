@@ -925,7 +925,7 @@ def test_companion_docs_describe_html_only_run_owned_publication() -> None:
     assert "does not validate it, reproduce it, automatically publish it, or make durability guarantees" in compact
     assert "--pdf <validator.pdf>" in manual
     assert "PDF input validator" in workflow
-    assert "--html reader.html" in render
+    assert "--html publication/reader.html" in render
     assert "validate" in render
 
 
@@ -2323,6 +2323,9 @@ def test_arc_runtime_and_job_docs_cover_unified_context_and_lifecycle() -> None:
     assert "arc-jobs validate" in jobs
     assert "does not create or resume package work" in jobs
     assert "owning package" in jobs
+    assert "retain the exact `--run-root` you supplied" in jobs
+    assert "there is no generic fixture-creation command" in jobs.lower()
+    assert "returned a run root and run id" not in jobs.lower()
     assert "background-command facility" in skill
     assert "no default runtime or inactivity timeout" in skill
     assert "explicit positive idle timeout" in skill
