@@ -1,12 +1,13 @@
 # ARC Paper Quick Start
 
 `arc-paper` is ARC's deterministic paper and source layer. Use it for metadata,
-references and citers, arXiv or local full text, cache search, and keyword
-inventories. Managed domain, idea, check, and Companion workflows build on it.
-Commands return typed JSON; inspect status, warnings, data, and error.
+references, full text, cache search, and keywords. Managed ARC workflows build
+on it. Commands return typed JSON; inspect status, warnings, data, and error.
 
-Unless `ARC_PAPER_CACHE` or `--cache-root` selects another location, cache data
-lives at `<current-directory>/.arc/cache/arc-paper`.
+Absent an override, cache lives below the current directory at
+`.arc/cache/arc-paper`.
+Use `cache export <entry-id> ... --output <file>` for exact `cache list` IDs or
+`--all` for everything. Import merges a verified tar.gz; conflicts need `--replace-conflicts`.
 
 ## Read a Paper
 
@@ -48,9 +49,8 @@ arc-paper parse-local <note.md> --validator <note.pdf>
 arc-paper parse-local <paper.pdf>
 ```
 
-Keep reconciliation and page-mapping warnings visible downstream.
-The validator may be the same document or a whole-book PDF paired with one
-chapter source.
+Keep reconciliation and page-mapping warnings visible. A validator may be the
+same document or a whole-book PDF paired with one chapter source.
 
 ## Search Materialized Full Text
 

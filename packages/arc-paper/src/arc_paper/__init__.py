@@ -167,6 +167,8 @@ from .parse import (  # noqa: E402
 )
 from .service import (  # noqa: E402
     ArcPaperService,
+    CacheExportResult,
+    CacheImportResult,
     CacheListResult,
     CacheRemoveResult,
     CacheUpdateRecord,
@@ -175,11 +177,13 @@ from .service import (  # noqa: E402
     cache_document,
     cache_rich_document,
     extract_keywords,
+    export_cache,
     get_cached_section,
     get_cached_table_of_contents,
     get_arxiv_section,
     get_arxiv_table_of_contents,
     list_cache,
+    import_cache,
     open_cached_rich_document,
     read_cached_rich_asset,
     read_cached_source_range,
@@ -192,6 +196,7 @@ from .service import (  # noqa: E402
     search_citers,
     update_cache,
 )
+from ._cache_archive import CACHE_ARCHIVE_SCHEMA, CacheArchiveError  # noqa: E402
 from .rich_document import (  # noqa: E402
     AssetImporter,
     EQUATION_LABEL_PAGE_REVIEW_SCHEMA,
@@ -321,6 +326,10 @@ __all__ = [
     "TermInventoryStoreError",
     "build_keyword_terms",
     "CacheListResult",
+    "CACHE_ARCHIVE_SCHEMA",
+    "CacheArchiveError",
+    "CacheExportResult",
+    "CacheImportResult",
     "CacheRemoveResult",
     "CacheUpdateRecord",
     "CacheUpdateResult",
@@ -399,6 +408,7 @@ __all__ = [
     "EquationSearchResult",
     "extract_paper_ids",
     "extract_keywords",
+    "export_cache",
     "cache_document",
     "cache_rich_document",
     "cached_rich_document_ref_from_document",
@@ -422,6 +432,7 @@ __all__ = [
     "get_cached_section",
     "get_cached_table_of_contents",
     "list_cache",
+    "import_cache",
     "open_cached_rich_document",
     "read_cached_rich_asset",
     "remove_cache",

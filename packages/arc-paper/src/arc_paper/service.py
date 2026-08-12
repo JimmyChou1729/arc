@@ -25,6 +25,12 @@ from ._cache_admin import (
     CacheUpdateResult,
     PaperCacheIndex,
 )
+from ._cache_archive import (
+    CacheExportResult,
+    CacheImportResult,
+    export_cache_archive,
+    import_cache_archive,
+)
 from ._cache_root import resolve_cache_root
 from .arxiv_document import (
     ArxivDocumentProvenance,
@@ -462,6 +468,32 @@ class ArcPaperService:
             paper_ids=paper_ids,
             entry_ids=entry_ids,
             since_seconds=since_seconds,
+        )
+
+    def export_cache(
+        self,
+        output: str | Path,
+        *,
+        entry_ids: Sequence[str] = (),
+        all_entries: bool = False,
+    ) -> CacheExportResult:
+        return export_cache_archive(
+            output,
+            cache_root=self.cache_root,
+            entry_ids=entry_ids,
+            all_entries=all_entries,
+        )
+
+    def import_cache(
+        self,
+        archive: str | Path,
+        *,
+        replace_conflicts: bool = False,
+    ) -> CacheImportResult:
+        return import_cache_archive(
+            archive,
+            cache_root=self.cache_root,
+            replace_conflicts=replace_conflicts,
         )
 
     def remove_cache(
@@ -1844,6 +1876,29 @@ def update_cache(
     )
 
 
+def export_cache(
+    output: str | Path,
+    *,
+    entry_ids: Sequence[str] = (),
+    all_entries: bool = False,
+    cache_root: str | Path | None = None,
+) -> CacheExportResult:
+    return ArcPaperService(cache_root=cache_root).export_cache(
+        output, entry_ids=entry_ids, all_entries=all_entries
+    )
+
+
+def import_cache(
+    archive: str | Path,
+    *,
+    replace_conflicts: bool = False,
+    cache_root: str | Path | None = None,
+) -> CacheImportResult:
+    return ArcPaperService(cache_root=cache_root).import_cache(
+        archive, replace_conflicts=replace_conflicts
+    )
+
+
 def get_metadata(paper_id: str, *, refresh: bool = False) -> dict[str, Any]:
     return ArcPaperService().get_metadata(paper_id, refresh=refresh)
 
@@ -2290,6 +2345,8 @@ def extract_keywords(
 __all__ = [
     "ArcPaperService",
     "CacheListResult",
+    "CacheExportResult",
+    "CacheImportResult",
     "CacheRemoveResult",
     "CacheUpdateRecord",
     "CacheUpdateResult",
@@ -2300,6 +2357,7 @@ __all__ = [
     "cache_rich_document",
     "default_cache_root",
     "extract_paper_ids",
+    "export_cache",
     "extract_keywords",
     "fetch_arxiv_auto",
     "fetch_arxiv_pdf",
@@ -2313,6 +2371,7 @@ __all__ = [
     "get_references",
     "get_title",
     "import_source",
+    "import_cache",
     "list_cache",
     "lookup_reference_cli",
     "materialize_reference_cli",

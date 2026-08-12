@@ -469,6 +469,32 @@ def _parser() -> _Parser:
         description="Refresh selected cache entries from their upstream sources.",
     )
     _cache_selector_arguments(cache_update)
+    cache_export = cache_commands.add_parser(
+        "export",
+        help="export selected or all cache entries",
+        description=(
+            "Export exact cache-list entry IDs and their dependencies, or the "
+            "whole cache, as a verified tar.gz archive."
+        ),
+    )
+    cache_export.add_argument(
+        "entry_ids", nargs="*", help="exact entry ID returned by cache list"
+    )
+    cache_export.add_argument("--all", action="store_true", dest="all_entries")
+    cache_export.add_argument("--output", required=True, help="new .tar.gz archive path")
+    cache_export.add_argument("--cache-root", help="override the paper cache directory")
+    cache_import = cache_commands.add_parser(
+        "import",
+        help="import a cache archive",
+        description="Validate and merge a cache tar.gz archive.",
+    )
+    cache_import.add_argument("archive", help="cache tar.gz archive")
+    cache_import.add_argument(
+        "--replace-conflicts",
+        action="store_true",
+        help="replace differing destination files after successful preflight",
+    )
+    cache_import.add_argument("--cache-root", help="override the paper cache directory")
 
     for name, summary in {
         "status": "inspect a durable keyword run through arc-jobs",
@@ -735,6 +761,23 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "host_authority": args.host_authority,
         }
     if command == "cache":
+        if args.cache_command == "export":
+            if args.all_entries == bool(args.entry_ids):
+                raise _UsageError(
+                    "cache export requires either --all or at least one exact entry ID"
+                )
+            return {
+                "output": args.output,
+                "entry_ids": args.entry_ids,
+                "all_entries": args.all_entries,
+                "cache_root": args.cache_root,
+            }
+        if args.cache_command == "import":
+            return {
+                "archive": args.archive,
+                "replace_conflicts": args.replace_conflicts,
+                "cache_root": args.cache_root,
+            }
         values: dict[str, Any] = {
             "paper_ids": args.paper_ids,
             "entry_ids": args.entry_ids,
@@ -871,10 +914,16 @@ def main(argv: list[str] | None = None) -> int:
             else "internal_error"
         )
         message = str(getattr(exc, "message", str(exc)))
+        raw_paths = getattr(exc, "paths", ())
+        details = (
+            {"paths": list(raw_paths)}
+            if isinstance(raw_paths, tuple) and raw_paths
+            else {}
+        )
         return _emit(
             CommandResult(
                 CommandStatus.FAILED,
-                error=CommandError(code, message),
+                error=CommandError(code, message, details),
             ),
             exit_code=1,
         )

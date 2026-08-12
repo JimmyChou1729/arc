@@ -18,6 +18,30 @@ Replace the quoted placeholder with an arXiv, INSPIRE, or DOI identifier.
 Use `arc-paper --help` and `arc-paper get-metadata --help` for the current
 paper, source, search, workflow, and cache commands.
 
+## Cache portability
+
+Cache entries are logical folders with stable IDs returned by `cache list`.
+Export any exact selection, or the entire cache, to a verified tar.gz archive:
+
+```bash
+arc-paper cache list
+arc-paper cache export <entry-id> [<entry-id> ...] --output selected.tar.gz
+arc-paper cache export --all --output complete-cache.tar.gz
+```
+
+An export never overwrites an existing archive. Import validates and stages
+the complete archive before changing the destination:
+
+```bash
+arc-paper cache import selected.tar.gz
+arc-paper cache import selected.tar.gz --replace-conflicts
+```
+
+Identical files are reused and destination-only files are preserved. A
+differing destination file rejects the whole import by default, with all
+conflict paths reported and no writes performed. `--replace-conflicts`
+explicitly replaces only those differing files after the same preflight.
+
 Cached Markdown can retain its exact source identity while adopting hierarchy
 from an independently cached PDF outline:
 

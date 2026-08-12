@@ -882,6 +882,13 @@ _CACHE_FILTER_INPUT = _object(
         "cache_root": {"type": ["string", "null"]},
     }
 )
+_CACHE_ARCHIVE_RESULT_FIELDS = {
+    "archive_path": _NONEMPTY_STRING,
+    "archive_sha256": _NONEMPTY_STRING,
+    "selection_mode": {"enum": ["all", "entries"]},
+    "entry_ids": {"type": "array", "items": _NONEMPTY_STRING},
+    "total_bytes": {"type": "integer", "minimum": 0},
+}
 
 
 def _decode_cached_document_parameters(
@@ -1697,6 +1704,63 @@ _OPERATIONS = (
             }
         ),
         version=2,
+    ),
+    _spec(
+        "cache-export",
+        _object(
+            {
+                "output": _NONEMPTY_STRING,
+                "entry_ids": {"type": "array", "items": _NONEMPTY_STRING},
+                "all_entries": {"type": "boolean", "default": False},
+                "cache_root": {"type": ["string", "null"]},
+            },
+            required=("output",),
+        ),
+        service.export_cache,
+        output_schema=_object(
+            {
+                **_CACHE_ARCHIVE_RESULT_FIELDS,
+                "file_count": {"type": "integer", "minimum": 0},
+            },
+            required=(*_CACHE_ARCHIVE_RESULT_FIELDS, "file_count"),
+        ),
+        effects=frozenset(
+            {OperationEffect.CACHE_ADMIN, OperationEffect.ARBITRARY_LOCAL_PATH}
+        ),
+    ),
+    _spec(
+        "cache-import",
+        _object(
+            {
+                "archive": _NONEMPTY_STRING,
+                "replace_conflicts": {"type": "boolean", "default": False},
+                "cache_root": {"type": ["string", "null"]},
+            },
+            required=("archive",),
+        ),
+        service.import_cache,
+        output_schema=_object(
+            {
+                **_CACHE_ARCHIVE_RESULT_FIELDS,
+                "added_count": {"type": "integer", "minimum": 0},
+                "reused_count": {"type": "integer", "minimum": 0},
+                "replaced_count": {"type": "integer", "minimum": 0},
+            },
+            required=(
+                *_CACHE_ARCHIVE_RESULT_FIELDS,
+                "added_count",
+                "reused_count",
+                "replaced_count",
+            ),
+        ),
+        effects=frozenset(
+            {
+                OperationEffect.CACHE_ADMIN,
+                OperationEffect.CACHE_WRITE,
+                OperationEffect.DESTRUCTIVE,
+                OperationEffect.ARBITRARY_LOCAL_PATH,
+            }
+        ),
     ),
 )
 
