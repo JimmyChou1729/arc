@@ -176,6 +176,7 @@ from .service import (  # noqa: E402
     cache_document,
     extract_keywords,
     export_cache,
+    export_rich_document,
     list_cache,
     import_cache,
     read_cached_source_range,
@@ -204,6 +205,7 @@ from .rich_document import (  # noqa: E402
     RichDocument,
     RichDocumentParserService,
     RichDocumentValidationError,
+    RichDocumentExportError,
     RichPageMapEntry,
     RichParseOutcome,
     RichSection,
@@ -219,6 +221,7 @@ from .rich_document import (  # noqa: E402
     rich_block_to_document,
     rich_document_from_document,
     rich_document_to_document,
+    export_rich_document_workspace,
 )
 from .ids import (  # noqa: E402
     arxiv_path_id,
@@ -504,6 +507,7 @@ __all__ = [
     "EQUATION_LABEL_VISUAL_DIAGNOSTIC_SCHEMA",
     "EQUATION_LABEL_VISUAL_PROMPT_VERSION",
     "RICH_DOCUMENT_SCHEMA",
+    "RichDocumentExportError",
     "EquationLabelMapping",
     "EquationLabelPageMapping",
     "EquationLabelPageReview",
@@ -531,4 +535,6 @@ __all__ = [
     "rich_block_to_document",
     "rich_document_from_document",
     "rich_document_to_document",
+    "export_rich_document",
+    "export_rich_document_workspace",
 ]

@@ -572,6 +572,41 @@ _PARSE_OUTCOME_SCHEMA = _object(
     },
     required=("document", "report", "warnings"),
 )
+_RICH_DOCUMENT_EXPORT_RESOURCE_SCHEMA = _object(
+    {
+        "artifact_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "media_type": _NONEMPTY_STRING,
+        "logical_name": _NONEMPTY_STRING,
+        "size": {"type": "integer", "minimum": 0},
+        "path": _NONEMPTY_STRING,
+    },
+    required=(
+        "artifact_digest",
+        "media_type",
+        "logical_name",
+        "size",
+        "path",
+    ),
+)
+_RICH_DOCUMENT_EXPORT_SCHEMA = _object(
+    {
+        "source": _NONEMPTY_STRING,
+        "metadata": _NONEMPTY_STRING,
+        "resources": {
+            "type": "array",
+            "items": _RICH_DOCUMENT_EXPORT_RESOURCE_SCHEMA,
+        },
+        "document_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "warnings": _STRING_ARRAY,
+    },
+    required=(
+        "source",
+        "metadata",
+        "resources",
+        "document_digest",
+        "warnings",
+    ),
+)
 _ARXIV_PROVENANCE_SCHEMA = _object(
     {
         "canonical_arxiv_id": {
@@ -1604,6 +1639,27 @@ _OPERATIONS = (
             {OperationEffect.CACHE_WRITE, OperationEffect.ARBITRARY_LOCAL_PATH}
         ),
         version=2,
+    ),
+    _spec(
+        "export-rich-document",
+        _object(
+            {
+                "source": _NONEMPTY_STRING,
+                "output_dir": _NONEMPTY_STRING,
+                "validator": {"type": ["string", "null"], "minLength": 1},
+                "source_format": {
+                    "type": ["string", "null"],
+                    "enum": ["html", "markdown", "tex", None],
+                },
+                "cache_root": {"type": ["string", "null"]},
+            },
+            required=("source", "output_dir"),
+        ),
+        service.export_rich_document,
+        output_schema=_RICH_DOCUMENT_EXPORT_SCHEMA,
+        effects=frozenset(
+            {OperationEffect.CACHE_WRITE, OperationEffect.ARBITRARY_LOCAL_PATH}
+        ),
     ),
     _spec(
         "extract-keywords",

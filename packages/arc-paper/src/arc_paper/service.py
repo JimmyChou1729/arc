@@ -270,6 +270,24 @@ class ArcPaperService:
             self._record_local_source(validator)
         return outcome
 
+    def export_rich_document(
+        self,
+        source: str | Path,
+        *,
+        output_dir: str | Path,
+        validator: str | Path | None = None,
+        source_format: SourceFormat | str | None = None,
+    ) -> dict[str, object]:
+        from .rich_document import export_rich_document_workspace
+
+        return export_rich_document_workspace(
+            self.repository,
+            source,
+            output_dir=output_dir,
+            validator=validator,
+            source_format=source_format,
+        )
+
     def parse_arxiv_auto(
         self,
         paper_id: str,
@@ -2391,6 +2409,22 @@ def parse_local(
     )
 
 
+def export_rich_document(
+    source: str | Path,
+    *,
+    output_dir: str | Path,
+    validator: str | Path | None = None,
+    cache_root: str | Path | None = None,
+    source_format: SourceFormat | str | None = None,
+) -> dict[str, object]:
+    return ArcPaperService(cache_root=cache_root).export_rich_document(
+        source,
+        output_dir=output_dir,
+        validator=validator,
+        source_format=source_format,
+    )
+
+
 def extract_keywords(
     source: str | Path,
     *,
@@ -2451,6 +2485,7 @@ __all__ = [
     "default_cache_root",
     "extract_paper_ids",
     "export_cache",
+    "export_rich_document",
     "extract_keywords",
     "fetch_arxiv_auto",
     "fetch_arxiv_pdf",

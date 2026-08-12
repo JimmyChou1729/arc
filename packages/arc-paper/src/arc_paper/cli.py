@@ -354,6 +354,34 @@ def _parser() -> _Parser:
     )
     parsed.add_argument("--cache-root", help="override the paper cache directory")
 
+    exported_rich = commands.add_parser(
+        "export-rich-document",
+        help="export a local rich source for direct arc-render composition",
+        description=(
+            "Parse a local Markdown, HTML, or flattened TeX source and export "
+            "a portable RichDocument workspace with verified resources."
+        ),
+    )
+    exported_rich.add_argument("source", help="local rich source path")
+    exported_rich.add_argument(
+        "--output-dir",
+        required=True,
+        help="new or empty output directory",
+    )
+    exported_rich.add_argument(
+        "--validator",
+        help="optional PDF validator path",
+    )
+    exported_rich.add_argument(
+        "--format",
+        dest="source_format",
+        choices=("html", "markdown", "tex"),
+        help="rich source format override",
+    )
+    exported_rich.add_argument(
+        "--cache-root", help="override the paper cache directory"
+    )
+
     keywords = commands.add_parser(
         "extract-keywords",
         help="build an approximate keyword inventory",
@@ -713,6 +741,14 @@ def _parameters(args: argparse.Namespace) -> dict[str, Any]:
             "validator_formats": args.validator_format,
             "primary_format": args.primary_format,
             "policy": args.policy,
+            "cache_root": args.cache_root,
+        }
+    if command == "export-rich-document":
+        return {
+            "source": args.source,
+            "output_dir": args.output_dir,
+            "validator": args.validator,
+            "source_format": args.source_format,
             "cache_root": args.cache_root,
         }
     if command == "extract-keywords":

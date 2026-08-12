@@ -52,6 +52,12 @@ def test_registry_has_one_typed_spec_per_operation_and_safe_default_projection()
     } <= set(OPERATION_REGISTRY)
     assert OPERATION_REGISTRY["fetch-arxiv-auto"].version == 2
     assert OPERATION_REGISTRY["parse-local"].version == 2
+    export = OPERATION_REGISTRY["export-rich-document"]
+    assert export.operation_id == "arc-paper.export-rich-document.v1"
+    assert export.effect_flags == {
+        OperationEffect.CACHE_WRITE,
+        OperationEffect.ARBITRARY_LOCAL_PATH,
+    }
     assert registry_document()["schema_version"] == "arc.paper.operation_registry.v1"
 
 
@@ -376,6 +382,28 @@ def test_cli_stdout_is_exactly_one_command_result(
         ),
         (
             [
+                "export-rich-document",
+                "paper.md",
+                "--output-dir",
+                "handoff",
+                "--validator",
+                "paper.pdf",
+                "--format",
+                "markdown",
+                "--cache-root",
+                "/cache",
+            ],
+            "export-rich-document",
+            {
+                "source": "paper.md",
+                "output_dir": "handoff",
+                "validator": "paper.pdf",
+                "source_format": "markdown",
+                "cache_root": "/cache",
+            },
+        ),
+        (
+            [
                 "parse-local",
                 "paper.md",
                 "--format",
@@ -524,6 +552,7 @@ def test_cli_preserves_nonfatal_domain_warnings_in_shared_envelope(
         ["fetch-arxiv-pdf", "--help"],
         ["import-source", "--help"],
         ["parse-local", "--help"],
+        ["export-rich-document", "--help"],
         ["extract-keywords", "--help"],
         ["cache", "--help"],
         ["cache", "list", "--help"],

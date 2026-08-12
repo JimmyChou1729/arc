@@ -24,6 +24,7 @@ from .service import (
     RichDocumentValidationError,
     RichParseOutcome,
 )
+from .export import RichDocumentExportError, export_rich_document_workspace
 from .equation_labels import (
     EQUATION_LABEL_PAGE_REVIEW_SCHEMA,
     EQUATION_LABEL_VISUAL_DIAGNOSTIC_SCHEMA,
@@ -53,6 +54,7 @@ __all__ = [
     "RichDocument",
     "RichDocumentParserService",
     "RichDocumentValidationError",
+    "RichDocumentExportError",
     "RichPageMapEntry",
     "RichParseOutcome",
     "RichSection",
@@ -74,4 +76,5 @@ __all__ = [
     "rich_block_to_document",
     "rich_document_from_document",
     "rich_document_to_document",
+    "export_rich_document_workspace",
 ]
