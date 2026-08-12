@@ -78,3 +78,25 @@ def test_usage_error_points_to_contextual_help(
     assert result["error"]["details"] == {
         "help_command": "arc-companion status --help"
     }
+
+
+def test_missing_local_build_source_returns_typed_error(
+    tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = main(
+        [
+            "build",
+            str(tmp_path / "missing.md"),
+            "--project-dir",
+            str(tmp_path / "project"),
+            "--user-intent",
+            "Explain the source.",
+            "--host-authority",
+            "unknown",
+        ]
+    )
+
+    assert code == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["error"]["code"] == "source_not_found"
+    assert "valid arXiv ID" in result["error"]["message"]

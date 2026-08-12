@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from arc_jobs import (
     ArtifactDigest,
     ArtifactSourceRef,
@@ -1477,3 +1479,12 @@ def test_non_rich_pdf_source_is_rejected(tmp_path):
         assert exc.code == "rich_source_required"
     else:  # pragma: no cover
         raise AssertionError("non-rich PDF source was accepted")
+
+
+def test_missing_local_source_is_not_misrouted_to_arxiv(tmp_path):
+    paper = ArcPaperService(cache_root=tmp_path / "cache")
+
+    with pytest.raises(TranslationSourceError) as exc_info:
+        resolve_translation_source(paper, tmp_path / "missing.md")
+
+    assert exc_info.value.code == "source_not_found"

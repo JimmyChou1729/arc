@@ -202,6 +202,23 @@ class ArcPaperService:
         self._record_local_source(source)
         return source
 
+    def resolve_local_or_arxiv_source(
+        self, source: str | Path, *, refresh: bool = False
+    ) -> SourceArtifact:
+        """Resolve an existing local file or a syntactically valid arXiv ID."""
+
+        source_text = str(source)
+        path = Path(source_text)
+        if path.is_file():
+            return self.repository.import_path(path)
+        if arxiv_path_id(source_text):
+            return self.fetch_arxiv_auto(source_text, refresh=refresh)
+        raise SourceRepositoryError(
+            "source_not_found",
+            "source is neither an existing local file nor a valid arXiv ID: "
+            f"{source_text}",
+        )
+
     def fetch_arxiv_auto(
         self, paper_id: str, *, refresh: bool = False
     ) -> SourceArtifact:
@@ -2443,11 +2460,8 @@ def extract_keywords(
 ) -> KeywordResult:
     service = ArcPaperService(cache_root=cache_root)
     source_text = str(source)
-    path = Path(source_text)
-    artifact = (
-        service.import_source(path)
-        if path.is_file()
-        else service.fetch_arxiv_auto(source_text, refresh=refresh)
+    artifact = service.resolve_local_or_arxiv_source(
+        source_text, refresh=refresh
     )
     return service.extract_keywords(
         artifact,

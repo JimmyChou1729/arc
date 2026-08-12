@@ -439,6 +439,11 @@ class _Paper:
         self.html_refreshes.append(refresh)
         return self.refreshed if refresh else self.initial
 
+    def resolve_local_or_arxiv_source(
+        self, source: str, *, refresh: bool = False
+    ):
+        return self.fetch_arxiv_auto(source, refresh=refresh)
+
     def fetch_arxiv_pdf(self, _source: str, *, refresh: bool = False):
         self.pdf_calls += 1
         self.pdf_refreshes.append(refresh)

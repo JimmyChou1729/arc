@@ -14,6 +14,7 @@ from arc_paper import (
     SourceOrigin,
     SourceOriginKind,
     SourceRepository,
+    SourceRepositoryError,
 )
 from arc_paper.providers.base import ProviderError
 
@@ -114,6 +115,34 @@ def _service(
         official,
         ar5iv,
     )
+
+
+def test_local_or_arxiv_source_rejects_missing_path_without_remote_fetch(
+    tmp_path: Path,
+) -> None:
+    service, official, ar5iv = _service(tmp_path)
+
+    with pytest.raises(SourceRepositoryError) as exc_info:
+        service.resolve_local_or_arxiv_source(tmp_path / "missing.md")
+
+    assert exc_info.value.code == "source_not_found"
+    assert official.calls == []
+    assert ar5iv.calls == []
+
+
+def test_local_or_arxiv_source_accepts_local_file_and_arxiv_id(
+    tmp_path: Path,
+) -> None:
+    service, official, _ar5iv = _service(tmp_path)
+    local = tmp_path / "note.md"
+    local.write_text("# Note\n", encoding="utf-8")
+
+    imported = service.resolve_local_or_arxiv_source(local)
+    fetched = service.resolve_local_or_arxiv_source("arXiv:0911.3380")
+
+    assert imported.source_format is SourceFormat.MARKDOWN
+    assert fetched.source_format is SourceFormat.HTML
+    assert official.calls == [("arXiv:0911.3380", False)]
 
 
 @pytest.mark.parametrize(

@@ -60,13 +60,10 @@ def resolve_translation_source(
     """Resolve a local path or paper ID through public ``arc-paper`` APIs."""
 
     source_text = str(source)
-    path = Path(source_text)
-    artifact = (
-        paper.repository.import_path(path)
-        if path.is_file()
-        else paper.fetch_arxiv_auto(source_text, refresh=refresh)
-    )
     try:
+        artifact = paper.resolve_local_or_arxiv_source(
+            source_text, refresh=refresh
+        )
         rich = RichDocumentParserService(paper.repository).parse_source(
             artifact
         )

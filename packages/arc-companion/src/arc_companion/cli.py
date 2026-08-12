@@ -30,6 +30,8 @@ from arc_paper import (
     RichDocumentParserService,
     RichDocumentValidationError,
     SourceBundle,
+    SourceRepositoryError,
+    arxiv_path_id,
     detect_suspicious_equation_labels,
 )
 from arc_render import (
@@ -292,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         CompanionServiceError,
         CompanionTranslationRuntimeError,
         RichDocumentValidationError,
+        SourceRepositoryError,
         HTMLRenderError,
     ) as exc:
         code = str(
@@ -873,9 +876,9 @@ def _resolve_source(
     pdf: str | None,
     refresh: bool,
 ) -> tuple[Any, tuple[str, ...], tuple[str, ...]]:
-    source_path = Path(source)
-    if source_path.is_file():
-        primary = paper.import_source(source_path)
+    is_arxiv = bool(arxiv_path_id(source))
+    primary = paper.resolve_local_or_arxiv_source(source, refresh=refresh)
+    if not is_arxiv:
         if pdf == "fetch":
             raise _UsageError("--pdf fetch is only valid for a paper ID")
         validators = (
@@ -891,7 +894,6 @@ def _resolve_source(
         )
 
     parser = RichDocumentParserService(paper.repository)
-    primary = paper.fetch_arxiv_auto(source, refresh=refresh)
     probe = parser.parse(SourceBundle(primary=primary))
     reasons = detect_suspicious_equation_labels(probe.document)
     forced_html_refresh = False
