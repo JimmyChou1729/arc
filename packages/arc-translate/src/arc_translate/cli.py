@@ -353,13 +353,13 @@ def _status(args: argparse.Namespace) -> CommandResult:
     project = TranslationProject.load(args.project_dir)
     run_id = _current_run(project)
     service = TranslationService(project.jobs_root)
-    base = command_result_from_snapshot(service.inspect(run_id).snapshot)
+    selected_snapshot = service.inspect(run_id).snapshot
+    base = command_result_from_snapshot(selected_snapshot, query=True)
     steps: dict[str, Any] = {}
     for step in ("language", "glossary", "blocks"):
         selected = project.run_id(step)
         if selected is not None:
             steps[step] = snapshot_data(service.inspect(selected).snapshot)
-    selected_snapshot = service.inspect(run_id).snapshot
     delivery_ok = (
         project.current_step == "blocks"
         and selected_snapshot.status.value == "succeeded"
@@ -381,7 +381,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
         run=base.run,
         data={
             "current_step": project.current_step,
-            "run": snapshot_data(service.inspect(run_id).snapshot),
+            "run": snapshot_data(selected_snapshot),
             "steps": steps,
         },
         artifacts=(

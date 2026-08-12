@@ -283,6 +283,28 @@ def test_get_result_reports_missing_and_unfinished_selection(tmp_path, capsys):
     assert _result(capsys)["error"]["code"] == "result_unavailable"
 
 
+def test_status_reports_pending_selected_run_as_query(tmp_path, capsys):
+    project = TranslationProject.open(tmp_path / "project")
+    repository = RunRepository(project.jobs_root)
+    snapshot = repository.create(RunSpec("pending-language", LANGUAGE_HANDLER, {}))
+    project.select("language", snapshot.run_id)
+
+    assert cli.main(
+        ["status", "--project-dir", str(project.root)]
+    ) == 0
+
+    envelope = _result(capsys)
+    assert envelope["status"] == "completed"
+    assert envelope["error"] is None
+    assert envelope["run"] == {
+        "id": snapshot.run_id,
+        "revision": snapshot.revision,
+    }
+    assert envelope["data"]["current_step"] == "language"
+    assert envelope["data"]["run"]["status"] == "pending"
+    assert envelope["data"]["steps"]["language"]["status"] == "pending"
+
+
 def test_get_result_rejects_corrupt_step_selection(tmp_path, capsys):
     result = GlossaryResult(
         document_digest="document-digest",
