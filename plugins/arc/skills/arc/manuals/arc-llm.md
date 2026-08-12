@@ -204,7 +204,8 @@ For provider-heavy parallel work, interpret **max parallel** as a target of
 a hard ceiling on an explicit numeric request. Effective concurrency can be
 lower when demand is lower, available memory reaches ARC's guard threshold, a
 provider limit applies, or the provider circuit opens after failures or rate
-limiting.
+limiting. On Linux, cgroup admission treats `memory.stat`'s inactive file cache
+as reclaimable; active cache and reclaimable slab remain counted as used.
 
 ## Help
 
