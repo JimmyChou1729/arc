@@ -280,6 +280,16 @@ def test_workflow_script_commands_use_skill_dir_placeholder() -> None:
     assert "python3 <skill-dir>/workflows/scripts/" not in calculate
 
 
+def test_calculate_uses_runtime_launcher_for_core_only_batch_queries() -> None:
+    calculate = (WF / "calculate.md").read_text(encoding="utf-8")
+
+    for command in ("inspect", "trace", "show-round"):
+        assert (
+            f"<skill-dir>/scripts/arc-runtime arc-proposer-reviewer {command}"
+            in calculate
+        )
+
+
 def test_domain_summary_warnings_are_visible_and_recorded() -> None:
     domain = (WF / "domain.md").read_text(encoding="utf-8")
     manual = (SKILL / "manuals/arc-domain.md").read_text(encoding="utf-8")

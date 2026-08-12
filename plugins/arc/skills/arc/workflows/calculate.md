@@ -98,9 +98,12 @@ the host's background-command facility instead of frequent manual polling.
 When a completed attempt needs durable inspection, use only the public proposer-reviewer inspection surface with the returned batch run ID:
 
 ```bash
-arc-proposer-reviewer inspect --run-root <attempt-batch-run-root> --run-id <batch-run-id>
-arc-proposer-reviewer trace --run-root <attempt-batch-run-root> --run-id <batch-run-id>
-arc-proposer-reviewer show-round --run-root <attempt-batch-run-root> \
+<skill-dir>/scripts/arc-runtime arc-proposer-reviewer inspect \
+  --run-root <attempt-batch-run-root> --run-id <batch-run-id>
+<skill-dir>/scripts/arc-runtime arc-proposer-reviewer trace \
+  --run-root <attempt-batch-run-root> --run-id <batch-run-id>
+<skill-dir>/scripts/arc-runtime arc-proposer-reviewer show-round \
+  --run-root <attempt-batch-run-root> \
   --run-id <batch-run-id> --loop-id <loop-id> --round 1
 ```
 
