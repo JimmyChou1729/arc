@@ -552,6 +552,7 @@ def test_arc_paper_manual_documents_general_reference_reads() -> None:
         assert f"`--source-format {source_format}`" in text
     assert "data.source.document" in text
     assert "data.documents[].source.document" in text
+    assert "The count is returned at `data.result`" in text
     assert "arc-paper <command> --help" in text
 
 
@@ -582,6 +583,16 @@ def test_arc_paper_docs_start_with_read_loop_and_result_paths() -> None:
         assert result_path in section
 
 
+def test_arc_paper_docs_explain_portable_and_checkout_launchers() -> None:
+    manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
+    section = manual.split("## Run ARC Paper", 1)[1].split("\n## ", 1)[0]
+
+    assert "arc-paper --help" in section
+    assert "<skill-dir>/scripts/arc-runtime arc-paper --help" in section
+    assert "packages/arc-paper/.venv/bin/arc-paper --help" in section
+    assert "/arc-dev/" not in section
+
+
 def test_arc_paper_docs_define_unified_full_text_search() -> None:
     manual = (SKILL / "manuals/arc-paper.md").read_text(encoding="utf-8")
     section = manual.split("### Search Full Text", 1)[1].split(
@@ -610,6 +621,8 @@ def test_arc_paper_docs_explain_general_equation_source_diagnosis() -> None:
     assert "PDF-only match" in compact
     assert "selected raw representation visibly contains" in compact
     assert "smallest reproducing command" in compact
+    assert '--term "=" --limit 100 --context-lines 0' in compact
+    assert "nonempty numeric `source_label`" in compact
     assert "cached ar5iv HTML has no literal" not in compact
 
 

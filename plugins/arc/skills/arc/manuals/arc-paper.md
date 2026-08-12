@@ -12,6 +12,21 @@ Use the same working directory or set `ARC_PAPER_CACHE` consistently across
 related commands. Inside an ARC source checkout, use an ignored location such
 as `local/cache/arc-paper`.
 
+## Run ARC Paper
+
+Examples below assume `arc-paper` is on `PATH`. Check once with
+`arc-paper --help`. If the command is unavailable, use the portable Skill
+launcher; inside an ARC source checkout, the package virtual environment is a
+direct development fallback:
+
+```bash
+<skill-dir>/scripts/arc-runtime arc-paper --help
+packages/arc-paper/.venv/bin/arc-paper --help
+```
+
+Use the selected launcher in place of `arc-paper` in later examples. Do not
+search package internals for another executable.
+
 ## Start Here: Read One Paper
 
 These commands cover the usual reading loop for arXiv:0911.3380:
@@ -150,6 +165,24 @@ PDF matches, inspect `page_candidates` and the layout-preserving
 `source_excerpt`. PDF extraction is approximate, so retain its warning and
 source digest with any derived claim.
 
+When no printed label is known, first find PDF equation candidates containing
+an equals sign. Choose a result with a nonempty numeric `source_label`, then
+rerun that exact label for useful context:
+
+```bash
+arc-paper search-equations \
+  --reference <paper-id> --source-format pdf \
+  --term "=" --limit 100 --context-lines 0
+
+arc-paper search-equations \
+  --reference <paper-id> --source-format pdf \
+  --term "<source_label>" --context-lines 8
+```
+
+This discovers candidates containing `=`; it is not an exhaustive list of all
+mathematical expressions. Do not transfer an HTML converter's label to PDF
+without confirming that label in the PDF results.
+
 If a printed equation label is missing from results, compare representations
 before diagnosing ARC:
 
@@ -189,7 +222,7 @@ arc-paper get-citers arXiv:0911.3380 --limit 100 --sort mostrecent
 
 Use `get-citer-count` before a bounded scan when the neighborhood size affects
 the search strategy. Use `get-references` for papers cited by the target and
-`get-citers` for papers that cite it.
+`get-citers` for papers that cite it. The count is returned at `data.result`.
 
 ### Search a Citation Neighborhood
 
