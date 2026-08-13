@@ -82,7 +82,8 @@ not optional.
 - Research field/domain construction, foundation-paper selection, domain
   networks, evidence packs, graph HTML, or field briefings: read
   `manuals/arc-domain.md`.
-- Durable run inspection, validation, or stop requests: read
+- Durable run inspection, validation, live work-group concurrency adjustment,
+  or stop requests: read
   `manuals/arc-jobs.md`.
 - Host LLM/provider detection, model choice, direct prompt tests, or provider
   troubleshooting: read `manuals/arc-llm.md`.

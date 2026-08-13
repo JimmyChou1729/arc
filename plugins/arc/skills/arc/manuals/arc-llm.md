@@ -207,6 +207,11 @@ provider limit applies, or the provider circuit opens after failures or rate
 limiting. On Linux, cgroup admission treats `memory.stat`'s inactive file cache
 as reclaimable; active cache and reclaimable slab remain counted as used.
 
+If the caller exposes an `arc-jobs` work-group ID, use `arc-jobs workers set`
+to change its pending-work target without restarting; see `manuals/arc-jobs.md`.
+That operation changes caller demand only. It does not raise or bypass the
+provider gate, memory guard, or circuit breaker.
+
 ## Help
 
 ```bash

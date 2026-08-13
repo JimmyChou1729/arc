@@ -28,7 +28,8 @@ commands live in the package-specific references.
 Step 1: For single-paper work, read `manuals/arc-paper.md`.
 Step 2: For domain or research-field work, read
 `manuals/arc-domain.md`.
-Step 3: For durable run inspection or stop requests, read
+Step 3: For durable run inspection, live work-group concurrency adjustment,
+or stop requests, read
 `manuals/arc-jobs.md`.
 Step 4: For provider/model/runtime diagnosis, read
 `manuals/arc-llm.md`.

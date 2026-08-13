@@ -57,12 +57,44 @@ are:
 | `status` | `data.run.working_state` | Exact returned paths for editable recovery state |
 | `validate` | `data.valid` | Whether durable state and referenced artifacts validate |
 | `validate` | `data.issues[]` | Validation issue `code`, `message`, and path components |
+| `workers get/set` | `data.group_workers.target_workers` | Current durable work-group concurrency target |
+| `workers get/set` | `data.group_workers.capacity` | Maximum target accepted by this live executor |
 
 `status` is a read-only query, so its top-level `status` is normally
 `completed` even when `data.run.status` is `failed` or `paused`. Read the nested
 durable lifecycle before deciding what to do. `validate` also completes as a
 query; use `data.valid`, not only the process exit code, as the validation
 answer.
+
+## Adjust Work-Group Concurrency
+
+When an owning workflow exposes a work-group ID, inspect or change its target
+without stopping the run:
+
+```bash
+arc-jobs workers get \
+  --run-root <run-root> \
+  --run-id <run-id> \
+  --group-id <group-id>
+
+arc-jobs workers set \
+  --run-root <run-root> \
+  --run-id <run-id> \
+  --group-id <group-id> \
+  --workers 100
+```
+
+A higher target causes the running scheduler to submit pending units
+immediately. A lower target is graceful: already-running units continue, and
+the scheduler stops filling freed slots until the in-flight count reaches the
+new target. The durable target remains in effect after pause, process
+replacement, or failed-run recovery. It does not change semantic input or
+cancel work.
+
+Treat the value as a target, not a guarantee. Provider limits, an open circuit,
+memory admission, or a smaller remaining queue can reduce effective
+concurrency. Use only a group ID returned or documented by the owning workflow;
+a group has no control record before it starts.
 
 ## Request a Cooperative Stop
 
@@ -130,6 +162,7 @@ for typesetting diagnosis.
 ```bash
 arc-jobs --help
 arc-jobs <command> --help
+arc-jobs workers <get|set> --help
 ```
 
 Help describes current flags. Keep the run root and ID exposed by the owning
