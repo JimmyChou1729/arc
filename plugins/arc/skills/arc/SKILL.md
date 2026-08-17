@@ -103,6 +103,9 @@ not optional.
 
 Use `arc-paper`, `arc-render`, `arc-domain`, `arc-llm`, `arc-translate`,
 `arc-companion`, and `arc-jobs` directly when the host plugin exposes them on
+`PATH`. In DeepSeek Harness, prefer the trusted launcher exported as
+`$DSH_ARC_RUNTIME` when it is present; this avoids assuming that a plugin's
+package-local `bin/` directory has already been added to the model shell's
 `PATH`. The core-only
 `arc-proposer-reviewer` tool deliberately has no plugin-bin wrapper; invoke it
 through the runtime launcher. For a standalone Skill install, or when a bare
@@ -110,6 +113,12 @@ command is unavailable, invoke the same command through:
 
 ```bash
 <skill-dir>/scripts/arc-runtime <arc-command> [args...]
+```
+
+Within DeepSeek Harness, the equivalent portable form is:
+
+```bash
+"$DSH_ARC_RUNTIME" arc-paper <subcommand> [args...]
 ```
 
 For example:
