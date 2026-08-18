@@ -11,7 +11,7 @@ from .publication import (
     materialize_published_companion,
 )
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 
 
 def __getattr__(name: str) -> Any:

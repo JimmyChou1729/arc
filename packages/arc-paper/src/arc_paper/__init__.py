@@ -1,4 +1,4 @@
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 
 from .registry import (  # noqa: E402
     DEFAULT_EXCLUDED_EFFECTS,
