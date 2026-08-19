@@ -6,12 +6,14 @@ import struct
 import subprocess
 import zlib
 
+import pytest
+
 from arc_jobs import ImmutableArtifactStore, RunStatus
 from arc_llm import LLMCompleted
 from arc_paper import RenderedPDFPage
 
 from arc_ocr_proofread import ProofreadProject, ProofreadService, load_mineru_source
-from arc_ocr_proofread.workflow import PAGE_OUTPUT_SCHEMA
+from arc_ocr_proofread.workflow import PAGE_OUTPUT_SCHEMA, ProofreadWorkflowError, _apply_edits
 
 
 def _png(width: int = 40, height: int = 60) -> bytes:
@@ -104,6 +106,20 @@ def test_page_schema_accepts_descriptive_edit_kinds() -> None:
     kind = PAGE_OUTPUT_SCHEMA["$defs"]["edit"]["properties"]["kind"]
 
     assert kind == {"type": "string", "minLength": 1}
+
+
+def test_empty_anchor_inserts_only_into_empty_page() -> None:
+    edit = {
+        "before": "",
+        "after": "Recovered page text",
+        "occurrence": 1,
+        "kind": "omission",
+        "reason": "page OCR was empty",
+    }
+
+    assert _apply_edits("", [edit]) == "Recovered page text"
+    with pytest.raises(ProofreadWorkflowError, match="entirely empty page"):
+        _apply_edits("Existing", [edit])
 
 
 def test_source_uses_pdf_count_and_keeps_blank_pages(tmp_path: Path, monkeypatch) -> None:

@@ -98,7 +98,7 @@ PAGE_OUTPUT_SCHEMA: dict[str, Any] = {
             "additionalProperties": False,
             "required": ["before", "after", "occurrence", "kind", "reason"],
             "properties": {
-                "before": {"type": "string", "minLength": 1},
+                "before": {"type": "string"},
                 "after": {"type": "string"},
                 "occurrence": {"type": "integer", "minimum": 1},
                 "kind": {"type": "string", "minLength": 1},
@@ -359,7 +359,7 @@ class ProofreadHandler:
 
 Do not call tools or access files. All required OCR text is included below; inspect the attached image directly and return JSON only.
 
-Return only exact edit operations. Each `before` must be a literal non-empty substring of the evolving current-page Markdown; `occurrence` is one-based. Use a larger exact span when inserting omitted text or resolving repeated text. Preserve author wording, notation, paragraph order, emphasis, equation order, equation tags, and all image links. Correct every visible OCR mismatch, equation symbol, omission, heading, list, footnote, caption, and table error. Do not rewrite or explain.
+Return only exact edit operations. Each `before` must be a literal non-empty substring of the evolving current-page Markdown; `occurrence` is one-based. Only when the entire current-page Markdown is empty, use `before` as an empty string with `occurrence` 1 to insert the complete page transcription. Use a larger exact span when inserting omitted text or resolving repeated text. Preserve author wording, notation, paragraph order, emphasis, equation order, equation tags, and all image links. Correct every visible OCR mismatch, equation symbol, omission, heading, list, footnote, caption, and table error. Do not rewrite or explain.
 
 Actively identify obvious errors printed in the original source, but put them only in `source_typo_candidates`; never put them in applied `edits`. If unsure, add an uncertainty and preserve the OCR text. Mark checks true only after exhaustive visual comparison.
 
@@ -592,7 +592,6 @@ def _validated_edits(value: Any, label: str) -> list[dict[str, Any]]:
             not isinstance(item, Mapping)
             or set(item) != {"before", "after", "occurrence", "kind", "reason"}
             or not isinstance(item["before"], str)
-            or not item["before"]
             or not isinstance(item["after"], str)
             or type(item["occurrence"]) is not int
             or item["occurrence"] < 1
@@ -611,6 +610,14 @@ def _apply_edits(text: str, edits: list[Mapping[str, Any]]) -> str:
     for edit in edits:
         before = str(edit["before"])
         occurrence = int(edit["occurrence"])
+        if not before:
+            if current or occurrence != 1:
+                raise ProofreadWorkflowError(
+                    "edit_anchor_missing",
+                    "empty edit anchor is valid only for an entirely empty page",
+                )
+            current = str(edit["after"])
+            continue
         starts = [match.start() for match in re.finditer(re.escape(before), current)]
         if occurrence > len(starts):
             raise ProofreadWorkflowError("edit_anchor_missing", "edit occurrence is absent from page")
