@@ -76,16 +76,17 @@ def test_arc_skill_defaults_managed_workflows_to_auto_without_startup_menu() -> 
     assert "domain references" in text
     assert "ranked ideas" in text_flat
     assert "recommendations, research directions" in text_flat
-    assert "All requests default to `automation_level: auto`" in text_flat
+    assert "All accepted requests default to `automation_level: auto`" in text_flat
     assert "never ask the user to choose an execution mode at startup" in text_flat
     assert "Use `interactive` only when the user explicitly asks" in text_flat
     assert "collecting citers or references" in text_flat
     assert "generating paper summaries or summary batches" in text_flat
     assert "non-evaluative paper-data output" in text_flat
     assert "must not produce recommendations, research directions, scientific rankings" in text_flat
-    assert "ARC reports, or project-local workflow artifacts" in text_flat
+    assert "ARC reports, or managed-workflow artifacts" in text_flat
+    assert "Durable state and outputs owned by the selected `arc-paper` operation remain allowed" in text_flat
     assert "download papers that cited 0911.3380 since 2024" in text_flat
-    assert "direct ARC tool orchestration" in text_flat
+    assert "direct `arc-paper` orchestration" in text_flat
     assert "mode-eligible" not in text
     assert "provenance exposed by the host" not in text
     assert "Run automatically (Recommended)" not in text
@@ -93,14 +94,66 @@ def test_arc_skill_defaults_managed_workflows_to_auto_without_startup_menu() -> 
     assert text.index("## Preflight Gate") < text.index("## Required References")
 
 
+def test_arc_skill_implicitly_exposes_all_arc_paper_and_only_arc_paper() -> None:
+    text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    frontmatter = text.split("---", 2)[1]
+    preflight = text[text.index("## Preflight Gate") : text.index("## Required References")]
+    preflight_flat = " ".join(preflight.split())
+    required = text[text.index("## Required References") : text.index("## CLI Resolution")]
+    required_flat = " ".join(required.split())
+
+    for phrase in (
+        "paper metadata and search",
+        "arXiv full text",
+        "INSPIRE references and citers",
+        "local paper parsing",
+        "paper sections and equations",
+        "cache operations",
+        "keyword extraction",
+        "LLM paper summaries or summary batches",
+    ):
+        assert phrase in frontmatter
+
+    for phrase in (
+        "standalone translation",
+        "Companion readers",
+        "research-domain construction",
+        "checking Markdown/PDF research notes",
+        "arc-domain",
+        "arc-llm",
+        "arc-ocr-proofread",
+        "arc-translate",
+        "arc-render",
+        "arc-companion",
+        "arc-jobs",
+        "arc-proposer-reviewer",
+    ):
+        assert phrase not in frontmatter
+
+    assert "any `arc-paper` task" in frontmatter
+    assert "explicitly asks to use ARC or `$arc`" in frontmatter
+    assert "Implicit paper entry" in preflight
+    assert "Explicit ARC entry" in preflight
+    assert "whether an `arc-paper` operation uses an LLM is not a trigger boundary" in preflight_flat
+    assert "capability owned by another ARC package or a managed workflow" in preflight_flat
+    assert "Supporting calls that `arc-paper` explicitly requires" in preflight_flat
+    assert "do not authorize an independent non-paper capability" in preflight_flat
+    assert "do not add a separate cost, duration, or LLM-call classifier" in preflight_flat
+    assert "Implicitly activated direct tasks stay within `arc-paper`" in preflight
+    assert "Durable state and outputs owned by the selected `arc-paper` operation remain allowed" in preflight_flat
+    assert "Do not read or start a managed workflow" in required_flat
+    assert "only when the selected `arc-paper` operation requires that topic" in required_flat
+    assert "Do not preload unrelated capability documents" in required_flat
+
+
 def test_arc_skill_frontloads_workflow_references_before_route_selection() -> None:
     text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     required = text[text.index("## Required References") : text.index("## Workflow")]
     required_flat = " ".join(required.split())
 
-    assert "Note checking, verification, or audit requests" in required
+    assert "Explicit ARC note-checking, verification, or audit requests" in required
     assert "`workflows/check.md` before any parse, section read, or equation extraction call" in required_flat
-    assert "When the user intent triggers a workflow-specific file" in required
+    assert "When an explicit ARC request selects a workflow-specific file" in required
     for name in ["check.md", "domain.md", "ideas.md", "plan.md", "calculate.md"]:
         assert f"`workflows/{name}`" in required
     assert "blocking requirement before any workflow CLI call" in required_flat
@@ -118,6 +171,13 @@ def test_arc_skill_case3_requires_full_check_workflow_phases() -> None:
     ) in case3_flat
     assert "Do not skip directly to parsing results" in case3
     assert "mandatory" in case3
+
+
+def test_arc_skill_idea_route_requires_a_concrete_request_after_opt_in() -> None:
+    text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "Suggest ideas from a request without a concrete idea" in text
+    assert "Suggest ideas from a not-yet-explicit request" not in text
 
 
 def test_check_plan_calculate_workflows_treat_heavy_workload_as_nonoptional() -> None:
@@ -989,12 +1049,15 @@ def test_interaction_rules_define_default_auto_and_explicit_interactive() -> Non
     assert "recommendations, research directions, scientific rankings, ARC reports" in text_flat
     assert "non-evaluative paper-data outputs" in text_flat
     assert "Direct tasks must not produce" in text_flat
+    assert "Durable state and outputs owned by the selected `arc-paper` operation remain allowed" in text_flat
     assert "recommend research directions" in text
     assert "suggest ideas step by step" in text
     assert "what is the title and abstract" in text
-    assert "direct paper lookup allowed" in text
+    assert "implicit `arc-paper` lookup allowed" in text_flat
     assert "download papers that cited 0911.3380 since 2024" in text_flat
-    assert "direct tool orchestration allowed" in text_flat
+    assert "implicit `arc-paper` orchestration allowed" in text_flat
+    assert "without naming ARC" in text
+    assert "do not opt into the ARC domain workflow" in text_flat
     assert "do not include list numbering inside option labels" in lower_flat
     assert "Run automatically (Recommended)" not in text
     assert "Confirm major steps" not in text
@@ -1018,7 +1081,7 @@ def test_runtime_automation_steering_semantics_are_explicit() -> None:
     assert "update that field in place after a runtime switch" in interaction
     assert "Direct ARC tool tasks do not create an extra state file" in interaction
     assert "provenance exposed by the host" not in skill
-    assert "explicitly names ARC" not in interaction
+    assert "Explicit ARC entry" in skill
 
 
 def test_runtime_steering_preserves_hard_gates_and_major_milestones() -> None:
@@ -2296,6 +2359,10 @@ def test_root_plugin_manifests_use_canonical_arc_skill_tree() -> None:
     assert not (PLUGIN / "bin/arc-mcp").exists()
     assert claude_manifest["name"] == "arc"
     assert (SKILL / "SKILL.md").is_file()
+    prompts = codex_manifest["interface"]["defaultPrompt"]
+    assert prompts[0] == "Summarize arXiv:0911.3380"
+    assert prompts[1].startswith("Use ARC to build a research domain")
+    assert prompts[2].startswith("Use ARC to convert a Markdown report")
     legacy_skill = ROOT / "skills/arc"
     assert not legacy_skill.exists()
     assert not legacy_skill.is_symlink()
@@ -2572,17 +2639,22 @@ def test_readme_limits_install_recipes_to_supported_marketplaces() -> None:
     assert "scripts/check-packages.sh" in development
 
 
-def test_readme_preserves_agent_examples_and_human_release_flow() -> None:
+def test_readme_documents_trigger_boundary_and_human_release_flow() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
+    text_flat = " ".join(text.split())
     development = text.split("## Development and release\n", 1)[1]
 
     for example in (
-        "Use ARC to summarize a paper.",
+        "Summarize arXiv:0911.3380.",
         "Use ARC to build a domain from arXiv:0911.3380 with new papers since 2024.",
         "Use ARC to develop and review ideas from the resulting domain.",
         "Use ARC to check this calculation.",
+        "Use ARC to translate this source.",
     ):
         assert example in text
+    assert "naming ARC is optional" in text_flat
+    assert "LLM-backed paper summaries and keyword extraction" in text_flat
+    assert "Explicitly name ARC for other capabilities" in text_flat
     assert "### Source checkout" not in text
     assert "pip install -e" not in text
     assert "explicit human operations" in development

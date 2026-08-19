@@ -1,6 +1,6 @@
 ---
 name: arc
-description: Use for ARC research workflows involving paper metadata, arXiv full text, INSPIRE references and citers, paper section lookup, equation context, LLM paper summaries, standalone translation, Companion readers, research-domain construction from seed papers, and checking Markdown/PDF research notes.
+description: Use for any `arc-paper` task, including paper metadata and search, arXiv full text, INSPIRE references and citers, local paper parsing, paper sections and equations, cache operations, keyword extraction, and LLM paper summaries or summary batches. Also use when the user explicitly asks to use ARC or `$arc`; after explicit invocation, route only the requested ARC capability.
 ---
 
 # Agent Research Copilot  (ARC)
@@ -11,39 +11,63 @@ or reimplementing paper/domain workflows.
 
 ## Preflight Gate
 
-Before any ARC CLI call, decide whether the request is a managed ARC workflow
-run or a direct ARC tool task. All requests default to `automation_level: auto`;
-never ask the user to choose an execution mode at startup. Use
-`interactive` only when the user explicitly asks for manual, step-by-step, or
-major-step review or confirmation. A request to discuss before running creates
-a pre-run pause rather than a third mode.
+Choose one entry path before any ARC CLI call:
+
+- **Implicit paper entry:** activate for any task owned by `arc-paper`, even
+  when the user does not name ARC. This includes its complete paper-access,
+  parsing, search, citation, cache, keyword, and summary surfaces. LLM-backed
+  paper summaries, summary batches, and keyword extraction remain eligible for
+  implicit activation; whether an `arc-paper` operation uses an LLM is not a
+  trigger boundary.
+- **Explicit ARC entry:** require the user to name ARC, invoke `$arc`, or make
+  an unambiguous continuation of an already-started explicit ARC task before
+  selecting a capability owned by another ARC package or a managed workflow.
+  Supporting calls that `arc-paper` explicitly requires remain part of the
+  selected paper task; they do not authorize an independent non-paper
+  capability. Do not infer broader opt-in from a general research request, a
+  paper identifier, or a successful `arc-paper` call. Route only the requested
+  capability.
+
+This package boundary is the complete trigger policy; do not add a separate
+cost, duration, or LLM-call classifier. After entry, decide whether the request
+is a managed ARC workflow run or a direct ARC tool task. All accepted requests
+default to `automation_level: auto`; never ask the user to choose an execution
+mode at startup. Use `interactive` only when the user explicitly asks for
+manual, step-by-step, or major-step review or confirmation. A request to
+discuss before running creates a pre-run pause rather than a third mode.
 
 Managed workflow runs follow `workflows/domain.md`, `workflows/ideas.md`,
 `workflows/check.md`, `workflows/plan.md`, `workflows/calculate.md`, or
 `workflows/companion.md`, and
 create project-local workflow artifacts such as domain references, ranked
 ideas, work notes, note-check records, calculation records, reports, rankings,
-recommendations, research directions, or follow-up project directories. For
-these, read `rules/interaction.md`. Use the latest explicit user steer as the
-current automation level through the end of the managed run or until another
-explicit steer changes it. Perform exactly the workflow scope requested
+recommendations, research directions, or follow-up project directories. They
+always require the explicit ARC entry. For these, read `rules/interaction.md`
+and only the workflow and manuals selected by the requested capability. Use
+the latest explicit user steer as the current automation level through the end
+of the managed run or until another explicit steer changes it. Perform exactly
+the workflow scope requested
 by the caller. Finish at that scope boundary: an automatic domain request does
 not authorize idea generation, and automatic idea generation does not
 authorize planning or calculation. Required prerequisites named by the owning
 workflow may still run, but they do not expand the requested outcome.
 
-Direct ARC tool tasks use the same default-auto and explicit-review policy. These include
+Direct ARC tool tasks use the same default-auto and explicit-review policy.
+Implicitly activated direct tasks stay within `arc-paper`. These include
 bounded paper facts such as title, authors, abstract, citation count, section
-text, or equation context, plus user-directed tool orchestration such as
-collecting citers or references, filtering papers by date, generating paper
-summaries or summary batches, or combining those
-steps into a non-evaluative paper-data output. Direct tasks must not produce
+text, or equation context, plus paper-tool orchestration such as collecting
+citers or references, filtering papers by date, generating paper summaries or
+summary batches, extracting keywords, or combining those steps into a
+non-evaluative paper-data output. An explicit ARC request may instead select a
+direct tool from another ARC package. Direct tasks must not produce
 recommendations, research directions, scientific rankings, ARC reports, or
-project-local workflow artifacts; route those through the owning managed
-workflow. Run direct tasks automatically with safe defaults unless the user
-explicitly asks to review or confirm steps. Example: `use arc to download
-papers that cited 0911.3380 since 2024 and create a full summary of these
-papers` is direct ARC tool orchestration, not a managed workflow mode prompt.
+managed-workflow artifacts; route those through the owning managed workflow.
+Durable state and outputs owned by the selected `arc-paper` operation remain
+allowed. Run direct tasks automatically with safe defaults unless the user
+explicitly asks to review or confirm steps. Example: `download papers that
+cited 0911.3380 since 2024 and create a full summary of these papers` may
+implicitly activate direct `arc-paper` orchestration; it is not a managed
+workflow mode prompt.
 
 ARC LLM calls have no default runtime or inactivity timeout. A caller may set
 an explicit positive idle timeout through the owning command when operationally
@@ -57,6 +81,12 @@ same-run resume.
 Read the relevant reference before calling ARC tools. These reads are required,
 not optional.
 
+- For an implicit paper entry, read `manuals/arc-paper.md`. Read another rule
+  or manual below only when the selected `arc-paper` operation requires that
+  topic. Do not read or start a managed workflow.
+- For an explicit ARC entry, read only the rules, workflow, and manuals needed
+  by the requested capability. Do not preload unrelated capability documents.
+
 - User choices, automation mode, and confirmation behavior: read
   `rules/interaction.md`. Use its Selection Protocol only for a real business
   choice; mandatory safety or scientific gates may require a direct question.
@@ -66,15 +96,15 @@ not optional.
 - General ARC operating rules: read `rules/operating.md`.
 - User-facing Markdown math and TeX typesetting: read
   `rules/math_typeset.md`.
-- Note checking, verification, or audit requests: read
+- Explicit ARC note-checking, verification, or audit requests: read
   `workflows/check.md` before any parse, section read, or equation extraction call.
-- When the user intent triggers a workflow-specific file
+- When an explicit ARC request selects a workflow-specific file
   (`workflows/check.md`, `workflows/domain.md`, `workflows/ideas.md`,
   `workflows/plan.md`, `workflows/calculate.md`, or `workflows/companion.md`),
   read that workflow file
   and follow its steps. Reading the workflow file is a blocking requirement
   before any workflow CLI call.
-- ARC workflow completion checks and improvement notes: read
+- Managed ARC workflow completion checks and improvement notes: read
   `rules/self-reflection.md`.
 - Single-paper metadata, full text, sections, equations, citers, references,
   paper summaries, or summary batches: read
@@ -249,7 +279,7 @@ outcome. Never interpret `auto` as permission to advance to a later case.
 Case 1: Build domain references only.
 Read and execute `workflows/domain.md`.
 
-Case 2: Suggest ideas from a not-yet-explicit request.
+Case 2: Suggest ideas from a request without a concrete idea.
 First complete Case 1. Then read and execute
 `workflows/ideas.md`. The workflow owns one public `BatchRequest` in its
 project-local `RunRepository`; inspect and rank only its verified committed

@@ -17,8 +17,8 @@
     "capabilities": ["Research"],
     "defaultPrompt": [
       "Summarize arXiv:0911.3380",
-      "Build a research domain from arXiv:0911.3380",
-      "Convert a Markdown report to PDF"
+      "Use ARC to build a research domain from arXiv:0911.3380",
+      "Use ARC to convert a Markdown report to PDF"
     ]
   }
 }

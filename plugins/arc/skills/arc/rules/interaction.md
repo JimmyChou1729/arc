@@ -67,7 +67,8 @@ filtering papers by date, generating summaries, using summary batches, looking
 up sections or equations, or exporting requested
 non-evaluative paper-data outputs. Direct tasks must not produce
 recommendations, research directions, scientific rankings, ARC reports, or
-project-local workflow artifacts.
+managed-workflow artifacts. Durable state and outputs owned by the selected
+`arc-paper` operation remain allowed.
 
 Examples:
 
@@ -76,12 +77,14 @@ Examples:
 - `use ARC, suggest ideas step by step for massive scalar exchange`: use
   `interactive` and pause after the top three before candidate selection or a
   requested planning/calculation workflow.
-- `build the research domain around arXiv:0911.3380`: use `auto`, build the
-  domain, and stop.
-- `use arc, what is the title and abstract of arXiv:0911.3380?`: direct paper lookup allowed;
-  no automation mode question is needed.
-- `use arc to download papers that cited 0911.3380 since 2024 and create a full
-  summary of these papers`: direct tool orchestration allowed; no automation
+- `use ARC to build the research domain around arXiv:0911.3380`: use `auto`,
+  build the domain, and stop.
+- `build the research domain around arXiv:0911.3380` without naming ARC: do not
+  opt into the ARC domain workflow.
+- `what is the title and abstract of arXiv:0911.3380?`: implicit `arc-paper`
+  lookup allowed; no automation mode question is needed.
+- `download papers that cited 0911.3380 since 2024 and create a full summary of
+  these papers`: implicit `arc-paper` orchestration allowed; no automation
   question is needed. If staged review was requested, pause only between the
   major collection/filtering and batch-summary/export stages.
 
