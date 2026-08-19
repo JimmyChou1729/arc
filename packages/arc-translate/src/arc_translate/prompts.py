@@ -9,8 +9,8 @@ from typing import Any
 
 LANGUAGE_PROMPT_VERSION = "arc.translate.language_prompt.v1"
 GLOSSARY_PROMPT_VERSION = "arc.translate.glossary_prompt.v3"
-TRANSLATION_PROMPT_VERSION = "arc.translate.blocks_prompt.v7"
-REVIEW_PROMPT_VERSION = "arc.translate.review_prompt.v6"
+TRANSLATION_PROMPT_VERSION = "arc.translate.blocks_prompt.v8"
+REVIEW_PROMPT_VERSION = "arc.translate.review_prompt.v7"
 
 
 def _closed(
@@ -153,6 +153,9 @@ description. Structural figures and all asset identity remain local and are
 not supplied for translation. Copy each block_id exactly; the caller attaches
 source identity locally. Return only the translation layer: do not add
 explanations, guides, summaries, or learning material.
+Translate every language-bearing part of each block from beginning to end;
+never omit, summarize, or start partway through. A source block may begin or
+end mid-sentence at a page boundary, and that fragment must still be translated.
 """,
         {
             "target_language": target_language,
@@ -180,6 +183,9 @@ terminology consistency, and fluency. Return text replacement patches only
 when needed. Patch block IDs must already exist. Do not change coverage,
 ordering, source identity, formulas, code, links, assets, or glossary entries.
 Do not add commentary to translated text. An empty patch list is valid.
+Compare every source block with its translation from beginning to end. Patch
+any omission, summary, or truncation, including source fragments that begin or
+end mid-sentence at page boundaries.
 """,
         {
             "target_language": target_language,

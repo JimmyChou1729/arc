@@ -43,6 +43,8 @@ from arc_translate.prompts import (
     REVIEW_PROMPT_VERSION,
     TRANSLATION_SCHEMA,
     TRANSLATION_PROMPT_VERSION,
+    review_prompt,
+    translation_prompt,
 )
 from arc_translate.source import block_text
 from arc_translate.source import (
@@ -479,6 +481,29 @@ def test_translation_schema_only_requests_block_id_and_text():
     assert entry["additionalProperties"] is False
     assert entry["required"] == ["block_id", "text"]
     assert set(entry["properties"]) == {"block_id", "text"}
+
+
+def test_translation_prompts_require_complete_block_text() -> None:
+    block = {"block_id": "block-1", "kind": "paragraph", "text": "Part"}
+    draft = {"block_id": "block-1", "text": "部分"}
+    generated = translation_prompt(
+        blocks=[block],
+        glossary=[],
+        target_language="zh-CN",
+        language_result={"language_tag": "en"},
+        window_ordinal=0,
+    )
+    reviewed = review_prompt(
+        blocks=[block],
+        translations=[draft],
+        glossary=[],
+        target_language="zh-CN",
+        window_ordinal=0,
+    )
+    assert "beginning to end" in generated
+    assert "never omit, summarize, or start partway through" in generated
+    assert "beginning to end" in reviewed
+    assert "Patch any omission, summary, or truncation" in reviewed
 
 
 def test_language_same_primary_skips_but_mixed_stays_enabled(tmp_path):

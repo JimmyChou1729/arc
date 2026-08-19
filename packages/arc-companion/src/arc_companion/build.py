@@ -153,7 +153,7 @@ from .translation_results import (
     CompanionTranslationResultError,
     load_translation_selection,
 )
-COMPANION_BUILD_HANDLER = "arc.companion.build.v15"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v16"
 COMPANION_BUILD_DIAGNOSTICS_SCHEMA = "arc.companion.build_diagnostics.v1"
 _DIAGNOSTICS_ARTIFACT = "diagnostics/build"
 _EFFECTIVE_SOURCE_ARTIFACT = "source/effective"

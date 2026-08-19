@@ -37,7 +37,7 @@ from .workflow import (
 
 LANGUAGE_HANDLER = "arc.translate.detect_language.v1"
 GLOSSARY_HANDLER = "arc.translate.build_glossary.v2"
-BLOCKS_HANDLER = "arc.translate.translate_blocks.v2"
+BLOCKS_HANDLER = "arc.translate.translate_blocks.v3"
 
 
 class DetectLanguageHandler:
