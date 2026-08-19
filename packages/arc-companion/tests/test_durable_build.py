@@ -57,6 +57,8 @@ from arc_companion.build import (
     CompanionBuildHandler,
     _attach_cached_reference_materials,
     _canonicalize_references,
+    _glossary_contracts,
+    _literal_glossary_entries,
     _verify_cached_reference_materials,
 )
 from arc_companion.generation_validation import CompanionContentError
@@ -419,6 +421,35 @@ def _document(tmp_path: Path):
         ),
     )
     return RichDocumentParserService(repository).parse_source(artifact)
+
+
+def test_glossary_matching_does_not_cross_word_boundaries(
+    tmp_path: Path,
+) -> None:
+    entries = (
+        {
+            "term": "Mathematica",
+            "term_id": "term-mathematica",
+            "preferred_translation": "数学原理",
+            "target_definition": "A title word.",
+            "source_refs": [],
+        },
+    )
+    blocks = (
+        {"payload": {"text": "A mathematical method."}},
+    )
+    assert _literal_glossary_entries(entries, blocks) == ()
+
+    repository = SourceRepository(tmp_path / "bounded-paper")
+    artifact = repository.store_bytes(
+        b"# Chapter\n\nA mathematical method.\n",
+        source_format=SourceFormat.MARKDOWN,
+        origin=SourceOrigin(
+            SourceOriginKind.LOCAL_IMPORT, locator="bounded.md"
+        ),
+    )
+    source = RichDocumentParserService(repository).parse_source(artifact)
+    assert _glossary_contracts({"entries": list(entries)}, source) == ()
 
 
 class StrictLegacyTranslationAdapter(FakeTranslationAdapter):

@@ -39,7 +39,7 @@ from arc_llm import (
     decode_resume_input,
     resume_input_matches,
 )
-from arc_paper import RichBlockKind, rich_block_to_document
+from arc_paper import RichBlockKind, literal_term_occurs, rich_block_to_document
 from arc_render import (
     AnchorKind,
     FragmentAnchor,
@@ -1667,7 +1667,7 @@ def _window_glossary(
     blocks: Sequence[Mapping[str, Any]],
     entries: Sequence[Mapping[str, Any]],
 ) -> tuple[Mapping[str, Any], ...]:
-    text = "\n".join(block_text(item) for item in blocks).casefold()
+    text = "\n".join(block_text(item) for item in blocks)
     return tuple(
         {
             "term_id": item["term_id"],
@@ -1678,7 +1678,7 @@ def _window_glossary(
         }
         for item in entries
         if isinstance(item.get("term"), str)
-        and str(item["term"]).casefold() in text
+        and literal_term_occurs(text, (str(item["term"]),))
     )
 
 

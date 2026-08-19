@@ -611,6 +611,24 @@ def normalize_term(value: str) -> str:
     return normalized.casefold()
 
 
+def literal_term_occurs(text: str, surfaces: Sequence[str]) -> bool:
+    """Return whether a term surface occurs without crossing a word boundary."""
+
+    return _literal_term_pattern(surfaces).search(text) is not None
+
+
+def _literal_term_pattern(surfaces: Sequence[str]) -> re.Pattern[str]:
+    alternatives = []
+    for surface in sorted(
+        {item for item in surfaces if item},
+        key=lambda item: (-len(item), item.casefold(), item),
+    ):
+        prefix = r"(?<!\w)" if re.match(r"\w", surface[0]) else ""
+        suffix = r"(?!\w)" if re.match(r"\w", surface[-1]) else ""
+        alternatives.append(f"{prefix}{re.escape(surface)}{suffix}")
+    return re.compile("|".join(alternatives) or r"(?!x)x", re.IGNORECASE)
+
+
 def build_keyword_terms(
     document: KeywordDocument, candidates: Iterable[TermCandidate]
 ) -> tuple[KeywordTerm, ...]:
@@ -743,9 +761,7 @@ def _literal_occurrences(
     )
     if not ordered_surfaces:
         return 0, ()
-    pattern = re.compile(
-        "|".join(re.escape(item) for item in ordered_surfaces), re.IGNORECASE
-    )
+    pattern = _literal_term_pattern(ordered_surfaces)
     count = 0
     matched_sentences: list[MatchedSentence] = []
     seen_sentences: set[str] = set()
@@ -789,10 +805,7 @@ def _first_occurrence_positions(
                 key=lambda item: (-len(item), item.casefold(), item),
             )
         )
-        pattern = re.compile(
-            "|".join(re.escape(item) for item in surfaces),
-            re.IGNORECASE,
-        )
+        pattern = _literal_term_pattern(surfaces)
         offset = 0
         found: int | None = None
         for unit in units:
@@ -1354,6 +1367,7 @@ __all__ = [
     "keyword_result_from_document",
     "keyword_chapters",
     "keyword_text_units",
+    "literal_term_occurs",
     "normalize_term",
     "result_from_inventory",
     "validate_approx_count",

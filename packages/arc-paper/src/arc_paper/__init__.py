@@ -248,6 +248,7 @@ from .terms import (  # noqa: E402
     keyword_chapters,
     keyword_result_from_document,
     keyword_text_units,
+    literal_term_occurs,
     normalize_term,
     validate_approx_count,
 )
@@ -498,6 +499,7 @@ __all__ = [
     "keyword_chapters",
     "keyword_result_from_document",
     "keyword_text_units",
+    "literal_term_occurs",
     "normalize_term",
     "validate_approx_count",
     "parse_outcome_to_document",

@@ -8,9 +8,9 @@ from typing import Any
 
 
 LANGUAGE_PROMPT_VERSION = "arc.translate.language_prompt.v1"
-GLOSSARY_PROMPT_VERSION = "arc.translate.glossary_prompt.v2"
-TRANSLATION_PROMPT_VERSION = "arc.translate.blocks_prompt.v6"
-REVIEW_PROMPT_VERSION = "arc.translate.review_prompt.v5"
+GLOSSARY_PROMPT_VERSION = "arc.translate.glossary_prompt.v3"
+TRANSLATION_PROMPT_VERSION = "arc.translate.blocks_prompt.v7"
+REVIEW_PROMPT_VERSION = "arc.translate.review_prompt.v6"
 
 
 def _closed(
@@ -119,6 +119,11 @@ grounding, never definitions; do not label, quote, or treat them as a source
 definition. Preserve distinctions between nearby terms and do not merge,
 deduplicate, select, drop, pad, or reorder terms. This is one byte-bounded
 window; a local caller concatenates windows without a reducer.
+Interpret each term only in its supplied matched sentences and source evidence.
+When it belongs to a title or proper name, explain that source usage rather
+than a modern namesake. Use established target-language scientific and
+historical terminology instead of a literal calque when a conventional term
+exists.
 """,
         {
             "target_language": target_language,

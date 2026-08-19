@@ -40,6 +40,7 @@ from arc_paper import (
     keyword_text_units,
     keyword_result_from_document,
     parse_rich_artifact_bytes,
+    literal_term_occurs,
     validate_approx_count,
 )
 from arc_paper.cli import main
@@ -55,6 +56,21 @@ from arc_paper.workflows.keywords import (
 
 def test_keyword_service_has_no_deprecated_extract_alias() -> None:
     assert not hasattr(KeywordExtractionService, "extract")
+
+
+def test_literal_term_matching_does_not_cross_word_boundaries() -> None:
+    assert literal_term_occurs("Principia Mathematica.", ("Mathematica",))
+    assert literal_term_occurs("Mathematica-related title", ("Mathematica",))
+    assert not literal_term_occurs("mathematical methods", ("Mathematica",))
+
+    document = _parsed()
+    term = build_keyword_terms(
+        document,
+        (TermCandidate("concept"), TermCandidate("concep")),
+    )
+    by_surface = {item.term: item for item in term}
+    assert by_surface["concept"].occurrence_count > 0
+    assert by_surface["concep"].occurrence_count == 0
 
 
 class FakeKeywordTasks:
@@ -288,11 +304,11 @@ def test_weighted_chapter_recipe_uses_distinct_cache_lineage() -> None:
     )
     old_lineage = replace(
         lineage,
-        discovery_contract="arc.paper.keyword_chapter_prompt.v1",
+        discovery_contract="arc.paper.keyword_chapter_prompt.v2",
     )
     assert (
         KEYWORD_CHAPTER_PROMPT_CONTRACT
-        == "arc.paper.keyword_chapter_prompt.v2"
+        == "arc.paper.keyword_chapter_prompt.v3"
     )
     assert lineage.key != old_lineage.key
 

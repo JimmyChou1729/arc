@@ -73,12 +73,12 @@ from ._llm import (
 
 KEYWORD_EXTRACTION_HANDLER = "arc.paper.keyword_extraction.v1"
 KEYWORD_REVIEW_PROMPT_CONTRACT = "arc.paper.keyword_review_prompt.v1"
-KEYWORD_CHAPTER_PROMPT_CONTRACT = "arc.paper.keyword_chapter_prompt.v2"
+KEYWORD_CHAPTER_PROMPT_CONTRACT = "arc.paper.keyword_chapter_prompt.v3"
 EXPLICIT_TERM_SUPERVISION_SCHEMA = (
     "arc.paper.explicit_term_supervision_response.v1"
 )
 KEYWORD_NORMALIZATION_CONTRACT = "arc.paper.keyword_normalization.v1"
-KEYWORD_OCCURRENCE_CONTRACT = "arc.paper.keyword_occurrence_literal.v1"
+KEYWORD_OCCURRENCE_CONTRACT = "arc.paper.keyword_occurrence_literal.v2"
 KEYWORD_REVIEW_SEMANTIC_VALIDATOR = "arc.paper.keyword_review_semantics.v1"
 _EXPLICIT_WINDOW_SIZE = 80
 _EXPLICIT_REVIEW_INVALID_ARTIFACT = (
@@ -897,6 +897,7 @@ def _chapter_request(
             "Do not summarize it. Do not rank against other chapters. Do not invent definitions.",
             "Do not select terms by occurrence frequency.",
             "Return distinct concepts actually supported by this text.",
+            "Keep a complete title or proper name when an isolated word would have a different meaning.",
             "Keep abbreviations, synonyms, and related concepts as separate terms.",
             "Prefer relevant terms not already present in the normalized inventory below.",
             f"Approximate requested terms for this chapter: {requested_count}",

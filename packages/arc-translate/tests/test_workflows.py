@@ -966,6 +966,46 @@ def test_block_selector_normalizes_order_and_filters_window_glossary(tmp_path):
     assert invalid.code == "block_selector_invalid"
 
 
+def test_window_glossary_does_not_match_inside_longer_word(tmp_path):
+    source = _source(tmp_path)
+    blocks = source_blocks(source)
+    tensor_block = next(
+        item for item in blocks if "tensor" in block_text(item)
+    )
+    glossary = GlossaryResult(
+        source.document_digest,
+        source.source_digest,
+        "fr",
+        1,
+        "a" * 64,
+        (
+            {
+                **_term("ten", "ten"),
+                "preferred_translation": "dix",
+                "target_definition": "number",
+            },
+        ),
+    )
+    tasks = FakeTasks()
+    result = TranslationWorkflowService(tasks).translate_blocks(
+        _context(tmp_path, "bounded-window-glossary"),
+        source,
+        language=LanguageResult(
+            source.document_digest,
+            source.source_digest,
+            "en",
+            "known",
+            1,
+            "fr",
+            "enabled",
+        ),
+        glossary=glossary,
+        target_language="fr",
+        block_ids=[tensor_block["block_id"]],
+    )
+    assert isinstance(result, TranslationResult)
+    assert tasks.translation_glossaries == [[]]
+
 def test_structural_figures_bypass_models_and_keep_ordered_coverage(tmp_path):
     assets = tmp_path / "images"
     assets.mkdir()

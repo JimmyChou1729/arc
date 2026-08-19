@@ -53,6 +53,7 @@ from arc_paper import (
     SourceRepositoryError,
     apply_visual_equation_labels,
     detect_suspicious_equation_labels,
+    literal_term_occurs,
     cached_document_ref_to_document,
     cached_document_structure_ref_to_document,
     cached_reference_material_from_document,
@@ -152,7 +153,7 @@ from .translation_results import (
     CompanionTranslationResultError,
     load_translation_selection,
 )
-COMPANION_BUILD_HANDLER = "arc.companion.build.v14"
+COMPANION_BUILD_HANDLER = "arc.companion.build.v15"
 COMPANION_BUILD_DIAGNOSTICS_SCHEMA = "arc.companion.build_diagnostics.v1"
 _DIAGNOSTICS_ARTIFACT = "diagnostics/build"
 _EFFECTIVE_SOURCE_ARTIFACT = "source/effective"
@@ -2346,7 +2347,7 @@ def _literal_glossary_entries(
         dict(entry)
         for entry in entries
         if isinstance(entry.get("term"), str)
-        and str(entry["term"]).casefold() in text.casefold()
+        and literal_term_occurs(text, (str(entry["term"]),))
     )
 
 
@@ -2381,8 +2382,9 @@ def _glossary_contracts(
             block_id
             for block_id, block in block_documents.items()
             if block_id in source_refs
-            or term.casefold()
-            in _literal_strings(block.get("payload")).casefold()
+            or literal_term_occurs(
+                _literal_strings(block.get("payload")), (term,)
+            )
         ]
         if not anchors:
             continue
