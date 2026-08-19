@@ -9,6 +9,7 @@ from threading import Event, Lock
 import pytest
 
 import arc_companion.build as companion_build
+import arc_companion.service as companion_service
 
 from arc_jobs import (
     ImmutableArtifactStore,
@@ -72,7 +73,11 @@ from arc_companion.request_contracts import (
     CompanionExecutionOptions,
     CompanionGenerationRecipe,
 )
-from arc_companion.service import CompanionService, CompanionServiceError
+from arc_companion.service import (
+    CompanionService,
+    CompanionServiceError,
+    companion_run_id,
+)
 from arc_companion.source_planning import (
     plan_source_chapters,
     plan_structured_source_chapters,
@@ -450,6 +455,21 @@ def test_glossary_matching_does_not_cross_word_boundaries(
     )
     source = RichDocumentParserService(repository).parse_source(artifact)
     assert _glossary_contracts({"entries": list(entries)}, source) == ()
+
+
+def test_companion_run_id_binds_handler_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = CompanionBuildRequest(
+        _document(tmp_path), target_language="zh-CN"
+    )
+    first = companion_run_id(request, None)
+    monkeypatch.setattr(
+        companion_service,
+        "COMPANION_BUILD_HANDLER",
+        "arc.companion.build.next",
+    )
+    assert companion_run_id(request, None) != first
 
 
 class StrictLegacyTranslationAdapter(FakeTranslationAdapter):

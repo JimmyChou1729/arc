@@ -75,7 +75,10 @@ class TranslationService:
         handler = DetectLanguageHandler(request, recipe)
         return self.repository.create(
             RunSpec(
-                run_id or _run_id("language", handler.semantic_input()),
+                run_id
+                or _run_id(
+                    "language", LANGUAGE_HANDLER, handler.semantic_input()
+                ),
                 LANGUAGE_HANDLER,
                 handler.semantic_input(),
             )
@@ -91,7 +94,10 @@ class TranslationService:
         handler = BuildGlossaryHandler(request, recipe)
         return self.repository.create(
             RunSpec(
-                run_id or _run_id("glossary", handler.semantic_input()),
+                run_id
+                or _run_id(
+                    "glossary", GLOSSARY_HANDLER, handler.semantic_input()
+                ),
                 GLOSSARY_HANDLER,
                 handler.semantic_input(),
             )
@@ -107,7 +113,10 @@ class TranslationService:
         handler = TranslateBlocksHandler(request, recipe)
         return self.repository.create(
             RunSpec(
-                run_id or _run_id("blocks", handler.semantic_input()),
+                run_id
+                or _run_id(
+                    "blocks", BLOCKS_HANDLER, handler.semantic_input()
+                ),
                 BLOCKS_HANDLER,
                 handler.semantic_input(),
             )
@@ -285,8 +294,14 @@ class TranslationService:
         )
 
 
-def _run_id(prefix: str, semantic_input: Mapping[str, Any]) -> str:
-    digest = hashlib.sha256(canonical_json_bytes(semantic_input)).hexdigest()
+def _run_id(
+    prefix: str, handler: str, semantic_input: Mapping[str, Any]
+) -> str:
+    digest = hashlib.sha256(
+        canonical_json_bytes(
+            {"handler": handler, "semantic_input": semantic_input}
+        )
+    ).hexdigest()
     return f"translate-{prefix}-{digest[:24]}"
 
 

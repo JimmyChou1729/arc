@@ -290,7 +290,12 @@ def companion_run_id(
     resolved_recipe = _recipe_for_request(request, recipe)
     semantic_input = encode_handler_semantic_input(request, resolved_recipe)
     digest = hashlib.sha256(
-        canonical_json_bytes(semantic_input)
+        canonical_json_bytes(
+            {
+                "handler": COMPANION_BUILD_HANDLER,
+                "semantic_input": semantic_input,
+            }
+        )
     ).hexdigest()
     return f"companion-{digest[:24]}"
 

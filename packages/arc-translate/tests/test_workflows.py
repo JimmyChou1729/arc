@@ -58,6 +58,7 @@ from arc_translate.workflow import (
     TranslationWorkflowError,
     _output_supervision,
 )
+from arc_translate.service import _run_id
 
 
 class FakeTasks:
@@ -504,6 +505,13 @@ def test_translation_prompts_require_complete_block_text() -> None:
     assert "never omit, summarize, or start partway through" in generated
     assert "beginning to end" in reviewed
     assert "Patch any omission, summary, or truncation" in reviewed
+
+
+def test_derived_run_id_binds_handler_contract() -> None:
+    semantic_input = {"request": {"source": "same"}}
+    assert _run_id("blocks", "handler.v1", semantic_input) != _run_id(
+        "blocks", "handler.v2", semantic_input
+    )
 
 
 def test_language_same_primary_skips_but_mixed_stays_enabled(tmp_path):
