@@ -50,10 +50,12 @@ class SequenceTasks(Tasks):
         super().__init__(None)
         self.values = list(values)
         self.task_ids = []
+        self.prompts = []
 
     def execute_or_resume(self, _context, request, *, options):
         self.calls += 1
         self.task_ids.append(request.task_id)
+        self.prompts.append(request.prompt)
         return LLMCompleted(self.values.pop(0), "codex", "gpt-5.6-luna", None, None)
 
 
@@ -245,3 +247,4 @@ def test_semantic_invalid_output_gets_one_fresh_generation(tmp_path: Path, monke
     assert tasks.calls == 2
     assert tasks.task_ids[0] != tasks.task_ids[1]
     assert "semantic-retry" in tasks.task_ids[1]
+    assert "Do not call tools or access files." in tasks.prompts[0]

@@ -47,7 +47,7 @@ from .source import MineruPage, MineruSource, load_mineru_source, sha256_file
 
 
 HANDLER = "arc.ocr_proofread.document.v1"
-PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v3"
+PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v4"
 RESULT_SCHEMA = "arc.ocr_proofread.result.v1"
 PAGE_SCHEMA = "arc.ocr_proofread.page_result.v1"
 REVIEW_SCHEMA = "arc.ocr_proofread.review_request.v1"
@@ -356,6 +356,8 @@ class ProofreadHandler:
             else ""
         )
         prompt = f"""Proofread OCR Markdown against the attached complete PDF page.
+
+Do not call tools or access files. All required OCR text is included below; inspect the attached image directly and return JSON only.
 
 Return only exact edit operations. Each `before` must be a literal non-empty substring of the evolving current-page Markdown; `occurrence` is one-based. Use a larger exact span when inserting omitted text or resolving repeated text. Preserve author wording, notation, paragraph order, emphasis, equation order, equation tags, and all image links. Correct every visible OCR mismatch, equation symbol, omission, heading, list, footnote, caption, and table error. Do not rewrite or explain.
 
