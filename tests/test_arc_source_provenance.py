@@ -47,6 +47,7 @@ def _make_fake_repo(tmp_path: Path, label: str) -> Path:
         ("arc-domain", "arc_domain"),
         ("arc-translate", "arc_translate"),
         ("arc-companion", "arc_companion"),
+        ("arc-ocr-proofread", "arc_ocr_proofread"),
     ):
         module_dir = root / "packages" / package / "src" / module
         module_dir.mkdir(parents=True)

@@ -57,10 +57,11 @@ def test_arc_skill_routes_check_and_calculation_workflows() -> None:
 
     assert "references/" not in text
     assert "classify" in text.lower()
-    assert "five cases" in text.lower()
+    assert "six cases" in text.lower()
     assert "check.md" in text
     assert "plan.md" in text
     assert "calculate.md" in text
+    assert "ocr-proofread.md" in text
     assert "companion.md" in text
     assert "foundation.md" not in text
     assert "work-note.md" in text
@@ -381,6 +382,7 @@ def test_package_manuals_are_self_contained_quick_starts() -> None:
         "arc-jobs.md": "`arc-jobs`",
         "arc-llm.md": "`arc-llm`",
         "arc-proposer-reviewer.md": "`arc-proposer-reviewer`",
+        "arc-ocr-proofread.md": "`arc-ocr-proofread`",
         "arc-translate.md": "`arc-translate`",
         "arc-render.md": "`arc-render`",
         "arc-companion.md": "`arc-companion`",
@@ -502,6 +504,7 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         "arc-paper",
         "arc-render",
         "arc-domain",
+        "arc-ocr-proofread",
         "arc-translate",
         "arc-companion",
     ):
@@ -515,6 +518,7 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
             "jobs": "arc_jobs.cli",
             "llm": "arc_llm.cli",
             "proposer": "arc_proposer_reviewer.cli",
+            "ocr_proofread": "arc_ocr_proofread.cli",
             "translate": "arc_translate.cli",
             "companion": "arc_companion.cli",
             "render": "arc_render.cli",
@@ -526,6 +530,7 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         "jobs": modules["jobs"]._parser(),
         "llm": modules["llm"]._build_parser(),
         "proposer": modules["proposer"]._parser(),
+        "ocr_proofread": modules["ocr_proofread"]._parser(),
         "translate": modules["translate"]._parser(),
         "companion": modules["companion"]._parser(),
         "render": modules["render"]._parser(),
@@ -692,6 +697,21 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
                 "loop_1",
                 "--round",
                 "1",
+            ],
+        ),
+        (
+            "arc-ocr-proofread.md",
+            "arc-ocr-proofread proofread",
+            "ocr_proofread",
+            [
+                "proofread",
+                "source.md",
+                "--pdf",
+                "source.pdf",
+                "--content-list",
+                "source_content_list.json",
+                "--project-dir",
+                "proofread",
             ],
         ),
         (

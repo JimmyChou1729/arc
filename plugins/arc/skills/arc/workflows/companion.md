@@ -38,6 +38,15 @@ identifier that `arc-paper` can resolve to rich source. A PDF is optional and
 is used only for validation and page mapping. Preserve the user's exact
 `user_intent`; when absent, Companion uses its neutral textbook intent.
 
+When the user explicitly requests OCR proofreading and supplies source
+Markdown, original PDF, and MinerU content-list JSON, first complete
+`workflows/ocr-proofread.md` in this same project root. Use its validated
+`proofread.md` as the Companion source and retain the original PDF as the
+optional validator. This is Skill-level sequencing: `arc-companion` does not
+depend on `arc-ocr-proofread`. If any required proofreading input is absent,
+stop that prerequisite instead of inferring page alignment. Do not add this
+stage when the user did not request it.
+
 If the user explicitly supplies an author, pass one `--author <name>` per
 author. Otherwise leave author resolution to Companion: source metadata and
 bylines are only candidates, and a model identity check publishes them only at

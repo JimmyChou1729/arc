@@ -34,6 +34,11 @@ package internals for another executable.
 Markdown, HTML, or flattened single-file TeX is authoritative. A PDF is an
 optional input validator for fidelity and page mapping, never a reader output:
 
+If OCR proofreading was explicitly requested, follow
+`workflows/ocr-proofread.md` first and use its validated `proofread.md` here.
+The original PDF remains only a Companion validator. The two packages remain
+independent; this sequencing belongs to the ARC Skill.
+
 ```bash
 arc-companion build <source.md> --pdf <validator.pdf> \
   --project-dir <project-dir> --target-language <language-tag> \

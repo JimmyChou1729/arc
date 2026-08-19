@@ -5,6 +5,10 @@ images. It uses `arc-jobs` for durable page work, `arc-llm` for bounded model
 calls, and the public `arc-paper` PDF renderer.
 
 ```bash
+arc-ocr-proofread --help
+```
+
+```bash
 arc-ocr-proofread proofread book.md --pdf book_origin.pdf \
   --content-list book_content_list.json --project-dir project
 arc-ocr-proofread status --project-dir project
@@ -17,3 +21,9 @@ package does not run OCR or infer page alignment. Private state lives below
 `.arc/ocr-proofread/`; successful delivery is `proofread.md`,
 `proofread.manifest.json`, `proofread.changes.jsonl`, and
 `proofread-assets/`.
+
+## Tests
+
+```bash
+python -m pytest packages/arc-ocr-proofread/tests
+```

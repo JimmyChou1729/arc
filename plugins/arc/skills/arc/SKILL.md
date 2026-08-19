@@ -38,7 +38,7 @@ discuss before running creates a pre-run pause rather than a third mode.
 
 Managed workflow runs follow `workflows/domain.md`, `workflows/ideas.md`,
 `workflows/check.md`, `workflows/plan.md`, `workflows/calculate.md`, or
-`workflows/companion.md`, and
+`workflows/ocr-proofread.md`, or `workflows/companion.md`, and
 create project-local workflow artifacts such as domain references, ranked
 ideas, work notes, note-check records, calculation records, reports, rankings,
 recommendations, research directions, or follow-up project directories. They
@@ -100,7 +100,8 @@ not optional.
   `workflows/check.md` before any parse, section read, or equation extraction call.
 - When an explicit ARC request selects a workflow-specific file
   (`workflows/check.md`, `workflows/domain.md`, `workflows/ideas.md`,
-  `workflows/plan.md`, `workflows/calculate.md`, or `workflows/companion.md`),
+  `workflows/plan.md`, `workflows/calculate.md`, `workflows/ocr-proofread.md`,
+  or `workflows/companion.md`),
   read that workflow file
   and follow its steps. Reading the workflow file is a blocking requirement
   before any workflow CLI call.
@@ -119,6 +120,9 @@ not optional.
   troubleshooting: read `manuals/arc-llm.md`.
 - Standalone language detection, bilingual glossary generation, or block
   translation: read `manuals/arc-translate.md`.
+- OCR proofreading against PDF page images: read
+  `workflows/ocr-proofread.md` and `manuals/arc-ocr-proofread.md` before any
+  proofreading command or main-agent review.
 - Renderable source publications or standalone HTML readers: read
   `manuals/arc-render.md`.
 - Typed proposer-reviewer batch construction, resume, or safe observation of
@@ -131,8 +135,8 @@ not optional.
 
 ## CLI Resolution
 
-Use `arc-paper`, `arc-render`, `arc-domain`, `arc-llm`, `arc-translate`,
-`arc-companion`, and `arc-jobs` directly when the host plugin exposes them on
+Use `arc-paper`, `arc-render`, `arc-domain`, `arc-llm`, `arc-ocr-proofread`,
+`arc-translate`, `arc-companion`, and `arc-jobs` directly when the host plugin exposes them on
 `PATH`. The core-only
 `arc-proposer-reviewer` tool deliberately has no plugin-bin wrapper; invoke it
 through the runtime launcher. For a standalone Skill install, or when a bare
@@ -271,7 +275,7 @@ for this field; follow the latest explicit instruction in the current session.
 
 ### Phase 2: Route Selection
 
-Resolve the user's intent and classify it into one of the five cases below.
+Resolve the user's intent and classify it into one of the six cases below.
 Choose only the case needed for the requested outcome. Run another case only
 when it is an explicit prerequisite below or the caller also requested that
 outcome. Never interpret `auto` as permission to advance to a later case.
@@ -325,7 +329,13 @@ obsolete/not triggered, or record an explicit stop condition in `Open Questions`
 or `Calculation Status`. Only stop when requested calculation coverage is
 complete and no triggered rough/pending item remains.
 
-Case 5: Generate a Companion reader.
+Case 5: Proofread page-mapped OCR.
+Use only when the user explicitly requests OCR proofreading and supplies the
+source Markdown, original PDF, and MinerU content-list JSON. Read and execute
+`workflows/ocr-proofread.md`. The page map is mandatory; do not infer alignment
+or start model work without it.
+
+Case 6: Generate a Companion reader.
 Use only when the user explicitly requests a companion reading or asks for the
 original paper to be split into semantic units with interleaved translation
 and commentary.

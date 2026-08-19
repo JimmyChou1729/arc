@@ -21,6 +21,7 @@ ARC_PACKAGE_MODULES = (
     ("arc-paper", "arc_paper"),
     ("arc-render", "arc_render"),
     ("arc-domain", "arc_domain"),
+    ("arc-ocr-proofread", "arc_ocr_proofread"),
     ("arc-translate", "arc_translate"),
     ("arc-companion", "arc_companion"),
 )

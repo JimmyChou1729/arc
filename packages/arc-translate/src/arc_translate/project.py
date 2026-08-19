@@ -168,7 +168,15 @@ def _has_arc_project_state(root: Path) -> bool:
         return False
     return any(
         (arc_root / name).exists()
-        for name in ("companion", "translate", "domain", "ideas", "calculate", "llm")
+        for name in (
+            "companion",
+            "ocr-proofread",
+            "translate",
+            "domain",
+            "ideas",
+            "calculate",
+            "llm",
+        )
     )
 
 
