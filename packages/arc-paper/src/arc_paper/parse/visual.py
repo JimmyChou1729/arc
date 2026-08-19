@@ -161,6 +161,68 @@ class PdftoppmFullPageRenderer:
                 pages.append(RenderedPDFPage(page_number, payload, width, height))
             return tuple(pages)
 
+    def render_page(self, pdf_bytes: bytes, page_number: int) -> RenderedPDFPage:
+        """Render one complete page without materializing the whole document."""
+
+        if not isinstance(pdf_bytes, bytes) or not pdf_bytes:
+            raise PDFRenderError("pdf_render_invalid_input", "PDF bytes are empty")
+        if type(page_number) is not int or page_number < 1:
+            raise PDFRenderError("pdf_page_invalid", "PDF page number must be positive")
+        with tempfile.TemporaryDirectory(prefix="arc-paper-pdf-page-") as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            target = root / "page"
+            source.write_bytes(pdf_bytes)
+            command = (
+                self.executable,
+                "-png",
+                "-scale-to",
+                str(self.longest_edge),
+                "-f",
+                str(page_number),
+                "-l",
+                str(page_number),
+                "-singlefile",
+                str(source),
+                str(target),
+            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    timeout=self.timeout_seconds,
+                )
+            except FileNotFoundError as exc:
+                raise PDFRenderError(
+                    "pdf_renderer_unavailable",
+                    f"PDF renderer is unavailable: {self.executable}",
+                ) from exc
+            except subprocess.TimeoutExpired as exc:
+                raise PDFRenderError(
+                    "pdf_render_timeout",
+                    f"PDF rendering exceeded {self.timeout_seconds:g} seconds",
+                ) from exc
+            if completed.returncode != 0:
+                detail = completed.stderr.decode("utf-8", errors="replace").strip()
+                raise PDFRenderError(
+                    "pdf_render_failed",
+                    f"PDF renderer failed: {detail[:500] or 'unknown error'}",
+                )
+            output = target.with_suffix(".png")
+            if not output.is_file():
+                raise PDFRenderError("pdf_render_empty", "PDF renderer produced no page")
+            payload = output.read_bytes()
+            width, height = _png_dimensions(payload)
+            if max(width, height) > self.longest_edge:
+                raise PDFRenderError(
+                    "pdf_render_oversize",
+                    "PDF renderer exceeded the configured longest edge",
+                )
+            return RenderedPDFPage(page_number, payload, width, height)
+
 
 class PageMathVerdict(str, Enum):
     EXACT = "exact"

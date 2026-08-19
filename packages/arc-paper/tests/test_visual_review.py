@@ -923,3 +923,21 @@ def test_pdftoppm_adapter_uses_full_page_scale_and_timeout(
     assert observed["timeout"] == 3
     assert observed["command"][1:4] == ("-png", "-scale-to", "2000")
     assert not any("crop" in argument.casefold() for argument in observed["command"])
+
+
+def test_pdftoppm_adapter_can_render_one_page_without_full_document(
+    monkeypatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        Path(f"{command[-1]}.png").write_bytes(_png(1000, 2000))
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    page = PdftoppmFullPageRenderer().render_page(b"%PDF fixture", 7)
+
+    assert page.page_number == 7
+    assert observed["command"][1:4] == ("-png", "-scale-to", "2000")
+    assert observed["command"][4:10] == ("-f", "7", "-l", "7", "-singlefile", observed["command"][-2])
