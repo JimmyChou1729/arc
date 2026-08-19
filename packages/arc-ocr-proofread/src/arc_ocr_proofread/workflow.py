@@ -47,7 +47,7 @@ from .source import MineruPage, MineruSource, load_mineru_source, sha256_file
 
 
 HANDLER = "arc.ocr_proofread.document.v1"
-PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v4"
+PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v5"
 RESULT_SCHEMA = "arc.ocr_proofread.result.v1"
 PAGE_SCHEMA = "arc.ocr_proofread.page_result.v1"
 REVIEW_SCHEMA = "arc.ocr_proofread.review_request.v1"
