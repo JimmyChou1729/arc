@@ -932,6 +932,26 @@ def test_scanned_pdf_primary_returns_partial_document_instead_of_failing(tmp_pat
     assert "partial parse retained" in outcome.warnings[0]
 
 
+def test_pdf_repeated_math_at_same_page_position_has_unique_stable_ids(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    payload = b"%PDF repeated math position"
+    pdf = _store(repository, payload, SourceFormat.PDF)
+    extractor = FakePDFTextExtractor(
+        {payload: PDFTextLayer(("x = 1", "x = 1"))}
+    )
+    service = PaperParserService(repository, pdf_text_extractor=extractor)
+
+    first = service.parse_source(pdf)
+    second = service.parse_source(pdf)
+
+    assert [span.normalized_tex for span in first.math_spans] == ["x = 1", "x = 1"]
+    assert [span.source_line_start for span in first.math_spans] == [1, 1]
+    assert len({span.span_id for span in first.math_spans}) == 2
+    assert [span.span_id for span in first.math_spans] == [
+        span.span_id for span in second.math_spans
+    ]
+
+
 @pytest.mark.parametrize(
     ("source_format", "source_payload"),
     [

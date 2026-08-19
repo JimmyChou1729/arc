@@ -242,23 +242,25 @@ def _span_id(
     artifact: SourceArtifact,
     *,
     kind: MathSpanKind,
+    identity_scope: str,
     start_line: int | None,
     start_column: int | None,
     end_line: int | None,
     end_column: int | None,
     tex: str,
 ) -> str:
-    material = "\0".join(
-        (
-            artifact.artifact_digest,
-            kind.value,
-            str(start_line),
-            str(start_column),
-            str(end_line),
-            str(end_column),
-            tex,
-        )
-    )
+    parts = [
+        artifact.artifact_digest,
+        kind.value,
+        str(start_line),
+        str(start_column),
+        str(end_line),
+        str(end_column),
+        tex,
+    ]
+    if identity_scope:
+        parts.insert(2, identity_scope)
+    material = "\0".join(parts)
     return f"math-{hashlib.sha256(material.encode('utf-8')).hexdigest()[:24]}"
 
 
@@ -273,6 +275,7 @@ def _make_span(
     end_column: int,
     raw: str,
     precise_columns: bool = True,
+    identity_scope: str = "",
 ) -> MathSpan | None:
     tex = normalize_tex(raw)
     if not tex:
@@ -292,6 +295,7 @@ def _make_span(
         span_id=_span_id(
             artifact,
             kind=kind,
+            identity_scope=identity_scope,
             start_line=start_line,
             start_column=start_column,
             end_line=end_line,
@@ -1271,6 +1275,7 @@ def _parse_pdf(
                 end_line=line_number,
                 end_column=max(1, len(line)),
                 raw=unit.raw,
+                identity_scope=f"pdf-page:{page_number}",
             )
             if span:
                 spans.append(

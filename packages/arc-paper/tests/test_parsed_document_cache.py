@@ -120,7 +120,7 @@ def test_cache_round_trip_preserves_canonical_projection_bytes(
     )
     expected_manifest = (
         b'{"document_digest":"29c9105bed159fa0c2f0ee7bb0487dec298f0ea73d314c6d47d1434bae2b3749",'
-        b'"parser_contract":"arc.paper.parser.v4","payload_digest":'
+        b'"parser_contract":"arc.paper.parser.v5","payload_digest":'
         b'"49378479c7b892a1387ed983035c53d43a6d5ce8d40230cd3c07985631096318",'
         b'"payload_size":499,"schema_version":"arc.paper.parsed_document_cache.v1",'
         b'"source_identity":{"artifact_digest":'
