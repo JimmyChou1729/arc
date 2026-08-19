@@ -47,14 +47,13 @@ from .source import MineruPage, MineruSource, load_mineru_source, sha256_file
 
 
 HANDLER = "arc.ocr_proofread.document.v1"
-PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v2"
+PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v3"
 RESULT_SCHEMA = "arc.ocr_proofread.result.v1"
 PAGE_SCHEMA = "arc.ocr_proofread.page_result.v1"
 REVIEW_SCHEMA = "arc.ocr_proofread.review_request.v1"
 AUDIT_SCHEMA = "arc.ocr_proofread.audit_request.v1"
 GROUP_ID = "pages"
 _IMAGE_LINK = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
-_KINDS = {"text", "equation", "omission", "layout", "footnote", "figure", "table", "other"}
 
 
 PAGE_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -102,7 +101,7 @@ PAGE_OUTPUT_SCHEMA: dict[str, Any] = {
                 "before": {"type": "string", "minLength": 1},
                 "after": {"type": "string"},
                 "occurrence": {"type": "integer", "minimum": 1},
-                "kind": {"type": "string", "enum": sorted(_KINDS)},
+                "kind": {"type": "string", "minLength": 1},
                 "reason": {"type": "string", "minLength": 1},
             },
         }
@@ -360,8 +359,6 @@ class ProofreadHandler:
 
 Return only exact edit operations. Each `before` must be a literal non-empty substring of the evolving current-page Markdown; `occurrence` is one-based. Use a larger exact span when inserting omitted text or resolving repeated text. Preserve author wording, notation, paragraph order, emphasis, equation order, equation tags, and all image links. Correct every visible OCR mismatch, equation symbol, omission, heading, list, footnote, caption, and table error. Do not rewrite or explain.
 
-For every edit, use exactly one supported `kind`: {", ".join(sorted(_KINDS))}.
-
 Actively identify obvious errors printed in the original source, but put them only in `source_typo_candidates`; never put them in applied `edits`. If unsure, add an uncertainty and preserve the OCR text. Mark checks true only after exhaustive visual comparison.
 
 Previous-page boundary context:
@@ -597,7 +594,8 @@ def _validated_edits(value: Any, label: str) -> list[dict[str, Any]]:
             or not isinstance(item["after"], str)
             or type(item["occurrence"]) is not int
             or item["occurrence"] < 1
-            or item["kind"] not in _KINDS
+            or not isinstance(item["kind"], str)
+            or not item["kind"]
             or not isinstance(item["reason"], str)
             or not item["reason"]
         ):

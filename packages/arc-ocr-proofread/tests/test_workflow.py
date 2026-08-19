@@ -98,22 +98,10 @@ def _pass_audit(request: dict) -> dict:
     }
 
 
-def test_page_schema_constrains_edit_kinds() -> None:
+def test_page_schema_accepts_descriptive_edit_kinds() -> None:
     kind = PAGE_OUTPUT_SCHEMA["$defs"]["edit"]["properties"]["kind"]
 
-    assert kind == {
-        "type": "string",
-        "enum": [
-            "equation",
-            "figure",
-            "footnote",
-            "layout",
-            "omission",
-            "other",
-            "table",
-            "text",
-        ],
-    }
+    assert kind == {"type": "string", "minLength": 1}
 
 
 def test_source_uses_pdf_count_and_keeps_blank_pages(tmp_path: Path, monkeypatch) -> None:
@@ -136,7 +124,7 @@ def test_durable_review_audit_and_delivery(tmp_path: Path, monkeypatch) -> None:
                     "before": "Helo",
                     "after": "Hello",
                     "occurrence": 1,
-                    "kind": "text",
+                    "kind": "spelling",
                     "reason": "visible missing l",
                 }
             ],
@@ -145,7 +133,7 @@ def test_durable_review_audit_and_delivery(tmp_path: Path, monkeypatch) -> None:
                     "before": "Hello",
                     "after": "Hallo",
                     "occurrence": 1,
-                    "kind": "text",
+                    "kind": "grammar",
                     "reason": "printed source typo",
                 }
             ],
@@ -191,6 +179,7 @@ def test_durable_review_audit_and_delivery(tmp_path: Path, monkeypatch) -> None:
         "ocr_correction",
         "approved_source_correction",
     ]
+    assert [item["kind"] for item in ledger] == ["spelling", "grammar"]
     manifest = service.result()
     assert manifest["corrections_per_page"] == 2.0
     assert service.validate(snapshot.run_id).ok
