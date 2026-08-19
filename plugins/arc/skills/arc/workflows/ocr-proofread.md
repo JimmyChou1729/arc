@@ -41,9 +41,12 @@ Never bulk-accept model judgments.
 The run then pauses for a deterministic audit of up to 10 recorded changes and
 10 pages. For each change, confirm the edit matches the page image and did not
 alter correct source text. For each page, compare the complete corrected
-Markdown with the complete image for uncovered errors. Mark `pass` only after
-inspection. Any failure prevents publication; diagnose and correct a general
-package or prompt defect before rerunning.
+Markdown with the complete image for uncovered errors. When a sampled page has
+a safely anchored omission or OCR artifact, include exact `edits` in that
+page's audit decision and mark `pass` only after the corrected page has been
+inspected. A failed sampled change, or a page that cannot be corrected
+confidently, prevents publication; diagnose and correct any general package or
+prompt defect before rerunning.
 
 ## Phase 4: Deliver
 

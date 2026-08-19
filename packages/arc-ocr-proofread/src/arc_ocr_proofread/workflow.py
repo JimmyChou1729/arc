@@ -464,6 +464,30 @@ Next-page boundary context:
             )
             audit_ref = context.artifacts.publish_json("audit/decisions", audit)
         audit = json.loads(context.artifacts.read_bytes(audit_ref).decode("utf-8"))
+        page_map = {f"page-{int(page['page_index']) + 1:06d}": page for page in pages}
+        for decision in audit["pages"]:
+            edits = decision.get("edits", [])
+            if not edits:
+                continue
+            page = page_map[str(decision["id"])]
+            corrected = _apply_edits(page["corrected_markdown"], edits)
+            if sorted(_IMAGE_LINK.findall(corrected)) != sorted(
+                _IMAGE_LINK.findall(page["corrected_markdown"])
+            ):
+                raise ProofreadWorkflowError(
+                    "asset_links_changed", "audit edits changed image links"
+                )
+            start = len(page["changes"])
+            page["corrected_markdown"] = corrected
+            page["changes"].extend(
+                _change_record(
+                    int(page["page_index"]),
+                    start + index,
+                    edit,
+                    "ocr_correction",
+                )
+                for index, edit in enumerate(edits)
+            )
         failed = [item for key in ("changes", "pages") for item in audit[key] if item["verdict"] != "pass"]
         if failed:
             return RunError("audit_failed", f"{len(failed)} sampled items failed main-agent audit")
@@ -713,7 +737,25 @@ def _validate_audit_input(
             raise ProofreadWorkflowError(
                 "audit_input_invalid", f"audit {name} do not cover the requested sample"
             )
-        result[name] = [dict(item) for item in items]
+        normalized = []
+        for item in items:
+            normalized_item = dict(item)
+            if name == "changes" and "edits" in item:
+                raise ProofreadWorkflowError(
+                    "audit_input_invalid", "audit change decisions cannot contain edits"
+                )
+            if name == "pages":
+                edits = item.get("edits", [])
+                if item["verdict"] != "pass" and edits:
+                    raise ProofreadWorkflowError(
+                        "audit_input_invalid", "audit corrections require a pass verdict"
+                    )
+                try:
+                    normalized_item["edits"] = _validated_edits(edits, "audit edits")
+                except ProofreadWorkflowError as exc:
+                    raise ProofreadWorkflowError("audit_input_invalid", str(exc)) from exc
+            normalized.append(normalized_item)
+        result[name] = normalized
     return result
 
 

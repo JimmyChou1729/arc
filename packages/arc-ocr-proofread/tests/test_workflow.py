@@ -230,6 +230,53 @@ def test_no_review_items_pauses_directly_for_audit(tmp_path: Path, monkeypatch) 
     assert _artifact_json(service, snapshot)["schema_version"] == "arc.ocr_proofread.audit_request.v1"
 
 
+def test_audit_can_apply_exact_page_corrections(tmp_path: Path, monkeypatch) -> None:
+    source = _bundle(tmp_path / "source", monkeypatch)
+    project = ProofreadProject.open(tmp_path / "project")
+    service = ProofreadService(project)
+    snapshot = service.prepare(source)
+    tasks = Tasks(
+        {
+            "edits": [],
+            "source_typo_candidates": [],
+            "uncertainties": [],
+            "checks": {
+                "all_visible_text": True,
+                "all_visible_equations": True,
+                "page_boundary": True,
+            },
+        }
+    )
+
+    snapshot = service.execute(snapshot.run_id, task_service=tasks, renderer=Renderer())
+    audit = _artifact_json(service, snapshot)
+    audit_input = _pass_audit(audit)
+    audit_input["pages"][0]["edits"] = [
+        {
+            "before": "Helo",
+            "after": "Hello",
+            "occurrence": 1,
+            "kind": "spelling",
+            "reason": "Main-agent page audit found the missing letter.",
+        }
+    ]
+
+    snapshot = service.resume(
+        snapshot.run_id,
+        input=audit_input,
+        task_service=tasks,
+        renderer=Renderer(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    assert "Hello" in project.markdown.read_text(encoding="utf-8")
+    ledger = [json.loads(line) for line in project.changes.read_text(encoding="utf-8").splitlines()]
+    assert [(item["category"], item["kind"]) for item in ledger] == [
+        ("ocr_correction", "spelling")
+    ]
+    assert service.result()["ocr_corrections"] == 1
+
+
 def test_semantic_invalid_output_gets_one_fresh_generation(tmp_path: Path, monkeypatch) -> None:
     source = _bundle(tmp_path / "source", monkeypatch)
     project = ProofreadProject.open(tmp_path / "project")
