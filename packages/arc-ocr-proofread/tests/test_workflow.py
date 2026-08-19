@@ -11,6 +11,7 @@ from arc_llm import LLMCompleted
 from arc_paper import RenderedPDFPage
 
 from arc_ocr_proofread import ProofreadProject, ProofreadService, load_mineru_source
+from arc_ocr_proofread.workflow import PAGE_OUTPUT_SCHEMA
 
 
 def _png(width: int = 40, height: int = 60) -> bytes:
@@ -94,6 +95,24 @@ def _pass_audit(request: dict) -> dict:
         "resume_key": request["resume_key"],
         "changes": [{"id": item["id"], "verdict": "pass"} for item in request["changes"]],
         "pages": [{"id": item["id"], "verdict": "pass"} for item in request["pages"]],
+    }
+
+
+def test_page_schema_constrains_edit_kinds() -> None:
+    kind = PAGE_OUTPUT_SCHEMA["$defs"]["edit"]["properties"]["kind"]
+
+    assert kind == {
+        "type": "string",
+        "enum": [
+            "equation",
+            "figure",
+            "footnote",
+            "layout",
+            "omission",
+            "other",
+            "table",
+            "text",
+        ],
     }
 
 

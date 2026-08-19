@@ -47,7 +47,7 @@ from .source import MineruPage, MineruSource, load_mineru_source, sha256_file
 
 
 HANDLER = "arc.ocr_proofread.document.v1"
-PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v1"
+PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v2"
 RESULT_SCHEMA = "arc.ocr_proofread.result.v1"
 PAGE_SCHEMA = "arc.ocr_proofread.page_result.v1"
 REVIEW_SCHEMA = "arc.ocr_proofread.review_request.v1"
@@ -102,7 +102,7 @@ PAGE_OUTPUT_SCHEMA: dict[str, Any] = {
                 "before": {"type": "string", "minLength": 1},
                 "after": {"type": "string"},
                 "occurrence": {"type": "integer", "minimum": 1},
-                "kind": {"type": "string"},
+                "kind": {"type": "string", "enum": sorted(_KINDS)},
                 "reason": {"type": "string", "minLength": 1},
             },
         }
@@ -359,6 +359,8 @@ class ProofreadHandler:
         prompt = f"""Proofread OCR Markdown against the attached complete PDF page.
 
 Return only exact edit operations. Each `before` must be a literal non-empty substring of the evolving current-page Markdown; `occurrence` is one-based. Use a larger exact span when inserting omitted text or resolving repeated text. Preserve author wording, notation, paragraph order, emphasis, equation order, equation tags, and all image links. Correct every visible OCR mismatch, equation symbol, omission, heading, list, footnote, caption, and table error. Do not rewrite or explain.
+
+For every edit, use exactly one supported `kind`: {", ".join(sorted(_KINDS))}.
 
 Actively identify obvious errors printed in the original source, but put them only in `source_typo_candidates`; never put them in applied `edits`. If unsure, add an uncertainty and preserve the OCR text. Mark checks true only after exhaustive visual comparison.
 
