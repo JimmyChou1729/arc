@@ -553,6 +553,9 @@ def test_cli_adapter_preserves_arguments_and_emits_json(
         calls["config"] = config
         calls["dry_run"] = dry_run
         calls["authority"] = llm_options.host_authority.value
+        calls["idle_timeout_seconds"] = (
+            llm_options.limits.idle_timeout_seconds
+        )
         calls["max_concurrent_calculators"] = max_concurrent_calculators
         return expected
 
@@ -567,6 +570,8 @@ def test_cli_adapter_preserves_arguments_and_emits_json(
         "restricted",
         "--max-concurrent-calculators",
         "1",
+        "--idle-timeout-seconds",
+        "1800",
     ])
 
     assert status == 0
@@ -575,9 +580,53 @@ def test_cli_adapter_preserves_arguments_and_emits_json(
         "config": payload,
         "dry_run": True,
         "authority": "restricted",
+        "idle_timeout_seconds": 1800.0,
         "max_concurrent_calculators": 1,
     }
     assert json.loads(capsys.readouterr().out) == expected
+
+
+def test_cli_disables_idle_timeout_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    modules = load_calculate_modules()
+    config_path = tmp_path / "config.json"
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(modules.entry, "_read_json", lambda path: {})
+
+    def fake_run(
+        config: dict[str, Any],
+        *,
+        dry_run: bool,
+        llm_options: Any,
+        max_concurrent_calculators: int,
+    ) -> dict[str, Any]:
+        captured["idle_timeout_seconds"] = (
+            llm_options.limits.idle_timeout_seconds
+        )
+        return {"status": "dry_run"}
+
+    monkeypatch.setattr(modules.entry, "run_calculation", fake_run)
+
+    assert modules.entry.main(["--config", str(config_path)]) == 0
+    assert captured["idle_timeout_seconds"] is None
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "not-a-number"])
+def test_cli_rejects_invalid_idle_timeout(value: str) -> None:
+    modules = load_calculate_modules()
+
+    with pytest.raises(SystemExit) as caught:
+        modules.entry.main([
+            "--config",
+            "unused.json",
+            "--idle-timeout-seconds",
+            value,
+        ])
+
+    assert caught.value.code == 2
 
 
 def test_cli_rejects_obsolete_json_flag() -> None:
@@ -673,11 +722,17 @@ def test_default_executor_uses_public_engine_and_committed_round(
         request,
         tmp_path / "serial-batches",
         "calculate_calc_001_step_001_attempt_001_serial",
+        llm_options=modules.entry.LLMExecutionOptions(
+            limits=modules.entry.ExecutionLimits(
+                idle_timeout_seconds=1800
+            )
+        ),
         max_concurrent_calculators=1,
     )
 
     assert serial_result is expected
     assert calls["run"][3].max_concurrent_workers == 1
+    assert calls["run"][3].llm.limits.idle_timeout_seconds == 1800
 
 
 def test_default_executor_recovers_committed_frontier_after_exception(
