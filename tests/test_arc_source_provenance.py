@@ -459,10 +459,10 @@ def test_source_runtime_verifier_records_current_checkout(tmp_path):
         "arc_paper",
         "arc_render",
         "arc_domain",
-            "arc_translate",
-            "arc_companion",
-            "arc_ocr_proofread",
-        }
+        "arc_translate",
+        "arc_companion",
+        "arc_ocr_proofread",
+    }
     for details in record["modules"].values():
         assert Path(details["file"]).is_relative_to(ROOT / "packages")
     hashed_paths = {item["path"] for item in record["workflow_files"]}
