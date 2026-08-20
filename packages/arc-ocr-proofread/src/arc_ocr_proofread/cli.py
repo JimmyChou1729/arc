@@ -42,6 +42,19 @@ def _parser() -> argparse.ArgumentParser:
     proofread.add_argument("--workers", type=int, default=30)
     proofread.add_argument("--max-workers", type=int, default=200)
 
+    boundaries = commands.add_parser("reconcile-boundaries")
+    boundaries.add_argument("--pdf", required=True)
+    boundaries.add_argument("--project-dir", required=True)
+    boundaries.add_argument("--provider", default="auto")
+    boundaries.add_argument("--model")
+    boundaries.add_argument(
+        "--model-tier",
+        choices=("low", "medium", "high", "xhigh"),
+        default="medium",
+    )
+    boundaries.add_argument("--workers", type=int, default=30)
+    boundaries.add_argument("--max-workers", type=int, default=200)
+
     for name in ("status", "validate", "get-result"):
         command = commands.add_parser(name)
         command.add_argument("--project-dir", required=True)
@@ -94,6 +107,19 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
         )
         snapshot = service.execute(snapshot.run_id)
         return _generation_result(service, snapshot)
+    if args.command == "reconcile-boundaries":
+        project = ProofreadProject.load(args.project_dir)
+        service = ProofreadService(project)
+        snapshot = service.prepare_boundary_repair(
+            args.pdf,
+            provider=args.provider,
+            model=args.model,
+            model_tier=args.model_tier,
+            workers=args.workers,
+            max_workers=args.max_workers,
+        )
+        snapshot = service.execute(snapshot.run_id)
+        return _generation_result(service, snapshot)
     project = ProofreadProject.load(args.project_dir)
     service = ProofreadService(project)
     run_id = project.current_run_id
@@ -118,7 +144,7 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
                 "group_workers": {
                     "target_workers": control.target_workers,
                     "capacity": control.capacity,
-                    "maximum": service._config(run_id).max_workers,
+                    "maximum": service._handler_config(run_id).max_workers,
                 },
             },
         )
@@ -130,7 +156,7 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
             data["group_workers"] = {
                 "target_workers": control.target_workers,
                 "capacity": control.capacity,
-                "maximum": service._config(run_id).max_workers,
+                "maximum": service._handler_config(run_id).max_workers,
             }
         except Exception:
             pass

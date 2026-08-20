@@ -151,12 +151,21 @@ class RichDocumentParserService:
         equation_provenance, equation_warning = _equation_label_provenance(
             parsed.document, entries
         )
-        page_map = _build_page_map(
-            parsed.document,
-            entries,
-            standard_primary.sections,
-            parsed_validator.pages,
-        )
+        page_map = parsed.document.page_map
+        if page_map:
+            maximum_page = max(item.page_number for item in page_map)
+            if maximum_page > len(parsed_validator.pages):
+                raise RichDocumentValidationError(
+                    "rich_page_marker_out_of_range",
+                    "Markdown source page markers exceed the PDF page count",
+                )
+        else:
+            page_map = _build_page_map(
+                parsed.document,
+                entries,
+                standard_primary.sections,
+                parsed_validator.pages,
+            )
         page_map = _with_equation_pages(page_map, equation_provenance)
         metadata = dict(parsed.document.metadata)
         if equation_provenance:

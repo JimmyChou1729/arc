@@ -61,6 +61,38 @@ class SequenceTasks(Tasks):
         return LLMCompleted(self.values.pop(0), "codex", "gpt-5.6-luna", None, None)
 
 
+class BoundaryTasks(Tasks):
+    def __init__(self, *, boundary_action="join", join_mode="space"):
+        super().__init__(None)
+        self.boundary_action = boundary_action
+        self.join_mode = join_mode
+
+    def execute_or_resume(self, _context, request, *, options):
+        self.calls += 1
+        if "boundary_prompt" in request.task_id:
+            value = {
+                "action": self.boundary_action,
+                "join_mode": (
+                    self.join_mode
+                    if self.boundary_action == "join"
+                    else None
+                ),
+                "reason": "The sentence continues across the page turn.",
+            }
+        else:
+            value = {
+                "edits": [],
+                "source_typo_candidates": [],
+                "uncertainties": [],
+                "checks": {
+                    "all_visible_text": True,
+                    "all_visible_equations": True,
+                    "page_boundary": True,
+                },
+            }
+        return LLMCompleted(value, "codex", "gpt-5.6-luna", None, None)
+
+
 def _bundle(tmp_path: Path, monkeypatch, *, pages: int = 1):
     tmp_path.mkdir(parents=True, exist_ok=True)
     markdown = tmp_path / "book.md"
@@ -85,6 +117,43 @@ def _bundle(tmp_path: Path, monkeypatch, *, pages: int = 1):
     return load_mineru_source(markdown, pdf, content)
 
 
+def _two_page_bundle(tmp_path: Path, monkeypatch):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    markdown = tmp_path / "book.md"
+    pdf = tmp_path / "book_origin.pdf"
+    content = tmp_path / "book_content_list.json"
+    markdown.write_text(
+        "This paragraph continues on the next page.\n", encoding="utf-8"
+    )
+    pdf.write_bytes(b"%PDF fixture")
+    content.write_text(
+        json.dumps(
+            [
+                {
+                    "type": "text",
+                    "text": "This paragraph continues",
+                    "page_idx": 0,
+                    "bbox": [0, 0, 1, 1],
+                },
+                {
+                    "type": "text",
+                    "text": "on the next page.",
+                    "page_idx": 1,
+                    "bbox": [0, 0, 1, 1],
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **_kwargs):
+        assert command[0] == "pdfinfo"
+        return subprocess.CompletedProcess(command, 0, "Pages: 2\n", "")
+
+    monkeypatch.setattr("arc_ocr_proofread.source.subprocess.run", fake_run)
+    return load_mineru_source(markdown, pdf, content)
+
+
 def _artifact_json(service: ProofreadService, snapshot) -> dict:
     assert snapshot.awaiting is not None and snapshot.awaiting.request_ref is not None
     store = ImmutableArtifactStore(
@@ -99,6 +168,10 @@ def _pass_audit(request: dict) -> dict:
         "resume_key": request["resume_key"],
         "changes": [{"id": item["id"], "verdict": "pass"} for item in request["changes"]],
         "pages": [{"id": item["id"], "verdict": "pass"} for item in request["pages"]],
+        "boundaries": [
+            {"id": item["id"], "verdict": "pass"}
+            for item in request["boundaries"]
+        ],
     }
 
 
@@ -106,6 +179,55 @@ def test_page_schema_accepts_descriptive_edit_kinds() -> None:
     kind = PAGE_OUTPUT_SCHEMA["$defs"]["edit"]["properties"]["kind"]
 
     assert kind == {"type": "string", "minLength": 1}
+
+
+def test_boundary_repair_reuses_verified_delivery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _two_page_bundle(tmp_path / "source", monkeypatch)
+    project = ProofreadProject.open(tmp_path / "project")
+    service = ProofreadService(project)
+    snapshot = service.prepare(source)
+    baseline_tasks = BoundaryTasks(boundary_action="separate")
+
+    snapshot = service.execute(
+        snapshot.run_id, task_service=baseline_tasks, renderer=Renderer()
+    )
+    assert snapshot.status is RunStatus.PAUSED
+    audit = _artifact_json(service, snapshot)
+    snapshot = service.resume(
+        snapshot.run_id,
+        input=_pass_audit(audit),
+        task_service=baseline_tasks,
+        renderer=Renderer(),
+    )
+    assert snapshot.status is RunStatus.SUCCEEDED
+    assert service.result()["page_boundary_repairs"] == 0
+
+    snapshot = service.prepare_boundary_repair(source.pdf_path)
+    repair_tasks = BoundaryTasks(boundary_action="join", join_mode="space")
+    snapshot = service.execute(
+        snapshot.run_id, task_service=repair_tasks, renderer=Renderer()
+    )
+    assert snapshot.status is RunStatus.PAUSED
+    audit = _artifact_json(service, snapshot)
+    assert len(audit["boundaries"]) == 1
+    assert {item["page_index"] for item in audit["pages"]} == {0, 1}
+    snapshot = service.resume(
+        snapshot.run_id,
+        input=_pass_audit(audit),
+        task_service=repair_tasks,
+        renderer=Renderer(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    text = project.markdown.read_text(encoding="utf-8")
+    assert "This paragraph continues on the next page." in text
+    assert text.index("on the next page.") < text.index("<!-- Source PDF page 2 -->")
+    manifest = service.result()
+    assert manifest["page_boundary_repairs"] == 1
+    assert manifest["corrections_per_page"] == 0.5
+    assert service.validate(snapshot.run_id).ok
 
 
 def test_empty_anchor_inserts_only_into_empty_page() -> None:
@@ -228,6 +350,43 @@ def test_no_review_items_pauses_directly_for_audit(tmp_path: Path, monkeypatch) 
 
     assert snapshot.status is RunStatus.PAUSED
     assert _artifact_json(service, snapshot)["schema_version"] == "arc.ocr_proofread.audit_request.v1"
+
+
+def test_llm_reviewed_boundary_join_moves_marker_below_merged_paragraph(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _two_page_bundle(tmp_path / "source", monkeypatch)
+    project = ProofreadProject.open(tmp_path / "project")
+    service = ProofreadService(project)
+    snapshot = service.prepare(source)
+    tasks = BoundaryTasks()
+
+    snapshot = service.execute(
+        snapshot.run_id, task_service=tasks, renderer=Renderer()
+    )
+
+    assert snapshot.status is RunStatus.PAUSED
+    audit = _artifact_json(service, snapshot)
+    assert len(audit["boundaries"]) == 1
+    assert tasks.calls == 3
+
+    snapshot = service.resume(
+        snapshot.run_id,
+        input=_pass_audit(audit),
+        task_service=tasks,
+        renderer=Renderer(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    delivered = project.markdown.read_text(encoding="utf-8")
+    assert (
+        "This paragraph continues on the next page.\n\n"
+        "<!-- Source PDF page 2 -->"
+    ) in delivered
+    assert delivered.count("<!-- Source PDF page 2 -->") == 1
+    manifest = service.result()
+    assert manifest["page_boundary_repairs"] == 1
+    assert manifest["corrections_per_page"] == 0.5
 
 
 def test_audit_can_apply_exact_page_corrections(tmp_path: Path, monkeypatch) -> None:

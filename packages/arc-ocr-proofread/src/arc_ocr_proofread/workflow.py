@@ -40,19 +40,32 @@ from arc_llm import (
     ModelSelection,
     ProviderGateOptions,
 )
-from arc_paper import PdftoppmFullPageRenderer
+from arc_paper import (
+    PdftoppmFullPageRenderer,
+    RichBlockKind,
+    SourceArtifact,
+    SourceFormat,
+    SourceOrigin,
+    SourceOriginKind,
+    parse_rich_artifact_bytes,
+)
 
 from .project import ProofreadProject
 from .source import MineruPage, MineruSource, load_mineru_source, sha256_file
 
 
 HANDLER = "arc.ocr_proofread.document.v1"
-PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v5"
+BOUNDARY_REPAIR_HANDLER = "arc.ocr_proofread.boundary_repair.v1"
+PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v6"
+BOUNDARY_PROMPT_VERSION = "arc.ocr_proofread.boundary_prompt.v1"
 RESULT_SCHEMA = "arc.ocr_proofread.result.v1"
 PAGE_SCHEMA = "arc.ocr_proofread.page_result.v1"
 REVIEW_SCHEMA = "arc.ocr_proofread.review_request.v1"
 AUDIT_SCHEMA = "arc.ocr_proofread.audit_request.v1"
 GROUP_ID = "pages"
+BOUNDARY_GROUP_ID = "boundaries"
+BOUNDARY_IMAGE_GROUP_ID = "boundary-page-images"
+BOUNDARY_REVIEW_SCHEMA = "arc.ocr_proofread.boundary_review_request.v1"
 _IMAGE_LINK = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
 
@@ -105,6 +118,29 @@ PAGE_OUTPUT_SCHEMA: dict[str, Any] = {
                 "reason": {"type": "string", "minLength": 1},
             },
         }
+    },
+}
+
+
+BOUNDARY_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["action", "join_mode", "reason"],
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["separate", "join", "uncertain"],
+        },
+        "join_mode": {
+            "anyOf": [
+                {
+                    "type": "string",
+                    "enum": ["space", "none", "drop_hyphen"],
+                },
+                {"type": "null"},
+            ]
+        },
+        "reason": {"type": "string", "minLength": 1},
     },
 }
 
@@ -166,6 +202,74 @@ class ProofreadConfig:
         )
 
 
+@dataclass(frozen=True)
+class BoundaryRepairConfig:
+    project_dir: str
+    pdf: str
+    baseline_markdown_sha256: str
+    baseline_manifest_sha256: str
+    baseline_changes_sha256: str
+    pdf_sha256: str
+    provider: str = "auto"
+    model: str | None = None
+    model_tier: str = "medium"
+    workers: int = 30
+    max_workers: int = 200
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.workers <= self.max_workers <= 200:
+            raise ValueError(
+                "workers must satisfy 1 <= workers <= max_workers <= 200"
+            )
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "schema_version": "arc.ocr_proofread.boundary_repair_request.v1",
+            "project_dir": self.project_dir,
+            "pdf": self.pdf,
+            "baseline_markdown_sha256": self.baseline_markdown_sha256,
+            "baseline_manifest_sha256": self.baseline_manifest_sha256,
+            "baseline_changes_sha256": self.baseline_changes_sha256,
+            "pdf_sha256": self.pdf_sha256,
+            "provider": self.provider,
+            "model": self.model,
+            "model_tier": self.model_tier,
+            "workers": self.workers,
+            "max_workers": self.max_workers,
+            "boundary_prompt_version": BOUNDARY_PROMPT_VERSION,
+        }
+
+    @classmethod
+    def from_document(
+        cls, value: Mapping[str, Any]
+    ) -> "BoundaryRepairConfig":
+        if value.get("schema_version") != (
+            "arc.ocr_proofread.boundary_repair_request.v1"
+        ):
+            raise ValueError("unsupported OCR boundary-repair request")
+        return cls(
+            project_dir=str(value["project_dir"]),
+            pdf=str(value["pdf"]),
+            baseline_markdown_sha256=str(
+                value["baseline_markdown_sha256"]
+            ),
+            baseline_manifest_sha256=str(
+                value["baseline_manifest_sha256"]
+            ),
+            baseline_changes_sha256=str(value["baseline_changes_sha256"]),
+            pdf_sha256=str(value["pdf_sha256"]),
+            provider=str(value["provider"]),
+            model=(
+                value.get("model")
+                if isinstance(value.get("model"), str)
+                else None
+            ),
+            model_tier=str(value["model_tier"]),
+            workers=int(value["workers"]),
+            max_workers=int(value["max_workers"]),
+        )
+
+
 class ProofreadWorkflowError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -177,7 +281,7 @@ class ProofreadHandler:
 
     def __init__(
         self,
-        config: ProofreadConfig,
+        config: ProofreadConfig | BoundaryRepairConfig,
         *,
         task_service: Any | None = None,
         renderer: Any | None = None,
@@ -243,6 +347,12 @@ class ProofreadHandler:
             if isinstance(review, Paused):
                 return review
             corrected_pages, source_corrections = review
+            boundaries = self._reconcile_boundaries(
+                context, corrected_pages
+            )
+            if isinstance(boundaries, Paused):
+                return boundaries
+            corrected_pages = boundaries
             audit = self._resolve_audit(context, corrected_pages)
             if isinstance(audit, Paused):
                 return audit
@@ -432,6 +542,286 @@ Next-page boundary context:
             source_corrections.append(record)
         return pages, source_corrections
 
+    def _reconcile_boundaries(
+        self, context: RunContext, pages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]] | Paused:
+        if len(pages) < 2:
+            return pages
+        candidates = [
+            {
+                "boundary_index": index,
+                "left_page_index": index,
+                "right_page_index": index + 1,
+                "left": _boundary_paragraph(
+                    str(pages[index]["corrected_markdown"]), side="left"
+                ),
+                "right": _boundary_paragraph(
+                    str(pages[index + 1]["corrected_markdown"]), side="right"
+                ),
+            }
+            for index in range(len(pages) - 1)
+        ]
+        units = tuple(
+            WorkUnit(
+                f"boundary-{item['left_page_index'] + 1:06d}-{item['right_page_index'] + 1:06d}",
+                {
+                    "left_page_index": item["left_page_index"],
+                    "right_page_index": item["right_page_index"],
+                    "left_markdown_sha256": hashlib.sha256(
+                        str(pages[item["left_page_index"]]["corrected_markdown"]).encode()
+                    ).hexdigest(),
+                    "right_markdown_sha256": hashlib.sha256(
+                        str(pages[item["right_page_index"]]["corrected_markdown"]).encode()
+                    ).hexdigest(),
+                    "prompt_version": BOUNDARY_PROMPT_VERSION,
+                },
+            )
+            for item in candidates
+        )
+        by_id = {
+            unit.unit_id: candidates[index]
+            for index, unit in enumerate(units)
+        }
+
+        def worker(unit: WorkUnit):
+            context.checkpoint()
+            item = by_id[unit.unit_id]
+            return self._review_boundary(context, pages, item, unit.unit_id)
+
+        grouped = context.run_group(
+            BOUNDARY_GROUP_ID,
+            units,
+            worker,
+            max_workers=self.config.workers,
+            failure_mode=FailureMode.COLLECT,
+        )
+        if isinstance(grouped, Paused):
+            return grouped
+        failed = [unit for unit in grouped.units if unit.status == "failed"]
+        if failed:
+            raise ProofreadWorkflowError(
+                "boundary_review_failed",
+                f"{len(failed)} page-boundary tasks failed",
+            )
+        results = [
+            dict(unit.value)
+            for unit in grouped.units
+            if isinstance(unit.value, Mapping)
+        ]
+        results.sort(key=lambda item: int(item["boundary_index"]))
+        decisions = self._resolve_boundary_review(context, results)
+        if isinstance(decisions, Paused):
+            return decisions
+        return _apply_boundary_decisions(pages, results, decisions)
+
+    def _review_boundary(
+        self,
+        context: RunContext,
+        pages: list[dict[str, Any]],
+        item: Mapping[str, Any],
+        unit_id: str,
+    ) -> UnitResult | Paused:
+        left_page = pages[int(item["left_page_index"])]
+        right_page = pages[int(item["right_page_index"])]
+        inputs: list[LLMInputArtifact] = []
+        for name, page in (("left-page", left_page), ("right-page", right_page)):
+            image_ref = context.artifacts.find(str(page["image_artifact"]))
+            if image_ref is None:
+                raise ProofreadWorkflowError(
+                    "boundary_image_missing", "page image is unavailable"
+                )
+            inputs.append(
+                LLMInputArtifact(
+                    name,
+                    ArtifactSourceRef(
+                        context.run_id,
+                        image_ref.artifact_id,
+                        image_ref.digest,
+                    ),
+                    "image/png",
+                )
+            )
+        request = self._boundary_request(
+            item,
+            left_markdown=str(left_page["corrected_markdown"]),
+            right_markdown=str(right_page["corrected_markdown"]),
+            inputs=tuple(inputs),
+        )
+        options = LLMExecutionOptions(
+            profile=LLMExecutionProfile.BOUNDED,
+            internet=False,
+            gate=ProviderGateOptions(
+                global_limit=self.config.max_workers,
+                minimum_available_memory_fraction=0.10,
+            ),
+        )
+        feedback: ProofreadWorkflowError | None = None
+        for attempt in (1, 2):
+            current = request if feedback is None else _retry_request(request, feedback)
+            outcome = self.task_service.execute_or_resume(
+                context, current, options=options
+            )
+            if isinstance(outcome, LLMPaused):
+                return Paused(
+                    Awaiting(
+                        outcome.reason,
+                        outcome.resume_key,
+                        outcome.input_required,
+                        outcome.request_ref,
+                        outcome.response_contract,
+                        outcome.details,
+                    )
+                )
+            if isinstance(outcome, LLMStopped):
+                context.checkpoint()
+                return UnitResult(
+                    unit_id,
+                    "failed",
+                    error=RunError("provider_stopped", "boundary provider stopped"),
+                )
+            if isinstance(outcome, LLMFailed):
+                return UnitResult(
+                    unit_id,
+                    "failed",
+                    error=RunError(outcome.error.code.value, str(outcome.error)),
+                )
+            assert isinstance(outcome, LLMCompleted)
+            try:
+                value = _validate_boundary_output(item, outcome.value)
+            except ProofreadWorkflowError as exc:
+                feedback = exc
+                context.working.write_candidate_json(
+                    f"boundaries/{int(item['boundary_index']) + 1:06d}-attempt-{attempt}.json",
+                    outcome.value
+                    if isinstance(outcome.value, Mapping)
+                    else {"value": outcome.value},
+                )
+                continue
+            value.update(
+                {
+                    "schema_version": "arc.ocr_proofread.boundary_result.v1",
+                    "boundary_index": item["boundary_index"],
+                    "left_page_index": item["left_page_index"],
+                    "right_page_index": item["right_page_index"],
+                    "left": item["left"],
+                    "right": item["right"],
+                    "provider": outcome.provider,
+                    "model": outcome.model,
+                    "left_image_artifact": left_page["image_artifact"],
+                    "right_image_artifact": right_page["image_artifact"],
+                }
+            )
+            return UnitResult(unit_id, "succeeded", value)
+        assert feedback is not None
+        return UnitResult(
+            unit_id,
+            "failed",
+            error=RunError(feedback.code, str(feedback)),
+        )
+
+    def _boundary_request(
+        self,
+        item: Mapping[str, Any],
+        *,
+        left_markdown: str,
+        right_markdown: str,
+        inputs: tuple[LLMInputArtifact, ...],
+    ) -> LLMRequest:
+        left = item.get("left")
+        right = item.get("right")
+        variants = _boundary_variants(left, right)
+        prompt = f"""Review the boundary between two consecutive OCR-proofread PDF pages using both attached full-page images.
+
+Decide whether the candidate paragraph at the end of the left page and the candidate paragraph at the start of the right page are one paragraph split by pagination. Return JSON only. Do not rewrite either page and do not correct source wording here.
+
+Use `separate` when they are distinct paragraphs. Use `join` only when they are visibly and semantically one paragraph, and select exactly one offered `join_mode`: `space`, `none`, or `drop_hyphen`. Use `uncertain` when the images or context do not justify a decision. `join_mode` must be null unless action is `join`.
+
+LEFT CANDIDATE:
+{json.dumps(left, ensure_ascii=False, sort_keys=True)}
+
+RIGHT CANDIDATE:
+{json.dumps(right, ensure_ascii=False, sort_keys=True)}
+
+SAFE JOIN VARIANTS:
+{json.dumps(variants, ensure_ascii=False, sort_keys=True)}
+
+LEFT PAGE TAIL:
+{left_markdown[-1800:]}
+
+RIGHT PAGE HEAD:
+{right_markdown[:1800]}
+"""
+        return LLMRequest(
+            f"ocr-proofread-{BOUNDARY_PROMPT_VERSION}-{int(item['boundary_index']) + 1:06d}",
+            prompt,
+            JsonOutput(BOUNDARY_OUTPUT_SCHEMA, repair="format"),
+            ModelSelection(
+                self.config.provider,
+                self.config.model,
+                self.config.model_tier,
+            ),
+            inputs=inputs,
+        )
+
+    def _resolve_boundary_review(
+        self, context: RunContext, results: list[dict[str, Any]]
+    ) -> dict[str, Mapping[str, Any]] | Paused:
+        items = [
+            item
+            for item in results
+            if item["action"] == "uncertain"
+            or (
+                item["action"] == "join"
+                and not (
+                    item.get("left", {}).get("is_edge")
+                    and item.get("right", {}).get("is_edge")
+                )
+            )
+        ]
+        if not items:
+            return {}
+        review_ref = context.artifacts.find("boundary-review/decisions")
+        if review_ref is None:
+            request_items = [
+                {
+                    "id": _boundary_id(item),
+                    **item,
+                }
+                for item in items
+            ]
+            key = _key("boundary-review", request_items)
+            if context.resume_input is None:
+                request_ref = context.artifacts.publish_json(
+                    "boundary-review/request",
+                    {
+                        "schema_version": BOUNDARY_REVIEW_SCHEMA,
+                        "resume_key": key,
+                        "items": request_items,
+                    },
+                )
+                return Paused(
+                    Awaiting(
+                        ResumeReason.SUPERVISION_REQUIRED,
+                        key,
+                        True,
+                        request_ref,
+                        "arc.ocr_proofread.boundary_review_input.v1",
+                        {"count": len(request_items)},
+                    )
+                )
+            decisions = _validate_boundary_review_input(
+                context.resume_input, key, request_items
+            )
+            review_ref = context.artifacts.publish_json(
+                "boundary-review/decisions", decisions
+            )
+        document = json.loads(
+            context.artifacts.read_bytes(review_ref).decode("utf-8")
+        )
+        return {
+            str(item["id"]): item for item in document["decisions"]
+        }
+
     def _audit_awaiting(self, context: RunContext, pages: list[dict[str, Any]]) -> Awaiting:
         request = _audit_request(pages)
         key = _key("audit", request)
@@ -445,7 +835,11 @@ Next-page boundary context:
             True,
             request_ref,
             "arc.ocr_proofread.audit_input.v1",
-            {"change_sample": len(request["changes"]), "page_sample": len(request["pages"])},
+            {
+                "change_sample": len(request["changes"]),
+                "page_sample": len(request["pages"]),
+                "boundary_sample": len(request["boundaries"]),
+            },
         )
 
     def _resolve_audit(
@@ -488,7 +882,12 @@ Next-page boundary context:
                 )
                 for index, edit in enumerate(edits)
             )
-        failed = [item for key in ("changes", "pages") for item in audit[key] if item["verdict"] != "pass"]
+        failed = [
+            item
+            for key in ("changes", "pages", "boundaries")
+            for item in audit[key]
+            if item["verdict"] != "pass"
+        ]
         if failed:
             return RunError("audit_failed", f"{len(failed)} sampled items failed main-agent audit")
         return audit
@@ -509,7 +908,10 @@ Next-page boundary context:
         ]
         changes: list[dict[str, Any]] = []
         for page in pages:
-            chunks.append(f"<!-- Source PDF page {int(page['page_index']) + 1} -->")
+            if not page.get("suppress_page_marker", False):
+                chunks.append(
+                    f"<!-- Source PDF page {int(page['page_index']) + 1} -->"
+                )
             if page["corrected_markdown"]:
                 chunks.append(page["corrected_markdown"])
             changes.extend(page["changes"])
@@ -526,6 +928,10 @@ Next-page boundary context:
             "pages": source.page_count,
             "ocr_corrections": sum(item["category"] == "ocr_correction" for item in changes),
             "approved_source_corrections": len(source_corrections),
+            "page_boundary_repairs": sum(
+                item["category"] == "page_boundary_repair"
+                for item in changes
+            ),
             "corrections_per_page": len(changes) / source.page_count,
             "unresolved": 0,
             "audit": audit,
@@ -557,6 +963,553 @@ Next-page boundary context:
             shutil.rmtree(project.assets)
         temporary.replace(project.assets)
         return result_ref
+
+
+class BoundaryRepairHandler(ProofreadHandler):
+    """Review page boundaries in an existing verified proofreading delivery."""
+
+    name = BOUNDARY_REPAIR_HANDLER
+
+    def __init__(
+        self,
+        config: BoundaryRepairConfig,
+        *,
+        task_service: Any | None = None,
+        renderer: Any | None = None,
+    ) -> None:
+        super().__init__(config, task_service=task_service, renderer=renderer)
+        self.config = config
+
+    def execute(self, context: RunContext):
+        if dict(context.semantic_input) != self.semantic_input():
+            return Failed(
+                RunError(
+                    "request_binding_mismatch",
+                    "handler request differs from durable spec",
+                )
+            )
+        try:
+            project = ProofreadProject.load(self.config.project_dir)
+            manifest, baseline_changes, pages = self._load_baseline(project)
+            pdf_bytes = Path(self.config.pdf).read_bytes()
+            units = tuple(
+                WorkUnit(
+                    f"boundary-page-{index + 1:06d}",
+                    {
+                        "page_index": index,
+                        "pdf_sha256": self.config.pdf_sha256,
+                    },
+                )
+                for index in range(len(pages))
+            )
+
+            def worker(unit: WorkUnit):
+                context.checkpoint()
+                index = int(unit.semantic_input["page_index"])
+                rendered = self.renderer.render_page(pdf_bytes, index + 1)
+                page_ref = context.artifacts.publish_bytes(
+                    f"page-images/{index + 1:06d}",
+                    rendered.png_bytes,
+                    media_type="image/png",
+                )
+                return UnitResult(
+                    unit.unit_id,
+                    "succeeded",
+                    {
+                        "page_index": index,
+                        "corrected_markdown": pages[index],
+                        "changes": [],
+                        "image_artifact": page_ref.artifact_id,
+                    },
+                )
+
+            grouped = context.run_group(
+                BOUNDARY_IMAGE_GROUP_ID,
+                units,
+                worker,
+                max_workers=self.config.workers,
+                failure_mode=FailureMode.COLLECT,
+            )
+            if isinstance(grouped, Paused):
+                return grouped
+            failed = [unit for unit in grouped.units if unit.status == "failed"]
+            if failed:
+                return Failed(
+                    RunError(
+                        "boundary_page_render_failed",
+                        f"{len(failed)} page renders failed",
+                    )
+                )
+            rendered_pages = [
+                dict(unit.value)
+                for unit in grouped.units
+                if isinstance(unit.value, Mapping)
+            ]
+            rendered_pages.sort(key=lambda item: int(item["page_index"]))
+            reconciled = self._reconcile_boundaries(context, rendered_pages)
+            if isinstance(reconciled, Paused):
+                return reconciled
+            audit = self._resolve_audit(context, reconciled)
+            if isinstance(audit, Paused):
+                return audit
+            if isinstance(audit, RunError):
+                return Failed(audit)
+            result_ref = self._publish_boundary_repair(
+                context,
+                project,
+                manifest,
+                baseline_changes,
+                reconciled,
+                audit,
+            )
+            return Succeeded(result_ref)
+        except ProofreadWorkflowError as exc:
+            return Failed(RunError(exc.code, str(exc)))
+        except Exception as exc:
+            return Failed(
+                RunError(getattr(exc, "code", "boundary_repair_failed"), str(exc))
+            )
+
+    def _load_baseline(
+        self, project: ProofreadProject
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+        expected = (
+            self.config.baseline_markdown_sha256,
+            self.config.baseline_manifest_sha256,
+            self.config.baseline_changes_sha256,
+            self.config.pdf_sha256,
+        )
+        actual = (
+            sha256_file(project.markdown),
+            sha256_file(project.manifest),
+            sha256_file(project.changes),
+            sha256_file(Path(self.config.pdf)),
+        )
+        if actual != expected:
+            raise ProofreadWorkflowError(
+                "source_changed", "proofreading delivery or PDF changed after run creation"
+            )
+        try:
+            manifest = json.loads(project.manifest.read_text(encoding="utf-8"))
+            baseline_changes = [
+                json.loads(line)
+                for line in project.changes.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ProofreadWorkflowError(
+                "baseline_invalid", "proofreading delivery is unreadable"
+            ) from exc
+        if not isinstance(manifest, dict) or manifest.get("schema_version") != RESULT_SCHEMA:
+            raise ProofreadWorkflowError(
+                "baseline_invalid", "proofreading manifest is invalid"
+            )
+        if int(manifest.get("page_boundary_repairs", 0)):
+            raise ProofreadWorkflowError(
+                "boundaries_already_reconciled",
+                "proofreading delivery already contains page-boundary repairs",
+            )
+        markdown = project.markdown.read_text(encoding="utf-8")
+        pages = _split_proofread_pages(markdown, int(manifest.get("pages", 0)))
+        return manifest, baseline_changes, pages
+
+    def _publish_boundary_repair(
+        self,
+        context: RunContext,
+        project: ProofreadProject,
+        baseline_manifest: dict[str, Any],
+        baseline_changes: list[dict[str, Any]],
+        pages: list[dict[str, Any]],
+        audit: dict[str, Any],
+    ):
+        source = baseline_manifest.get("source")
+        if not isinstance(source, Mapping):
+            raise ProofreadWorkflowError("baseline_invalid", "source metadata is invalid")
+        chunks = [
+            "<!-- Generated by ARC OCR proofreading. -->",
+            f"<!-- Source Markdown SHA-256: {source['markdown_sha256']} -->",
+            f"<!-- Source PDF SHA-256: {source['pdf_sha256']} -->",
+        ]
+        boundary_changes: list[dict[str, Any]] = []
+        for page in pages:
+            if not page.get("suppress_page_marker", False):
+                chunks.append(
+                    f"<!-- Source PDF page {int(page['page_index']) + 1} -->"
+                )
+            if page["corrected_markdown"]:
+                chunks.append(str(page["corrected_markdown"]))
+            boundary_changes.extend(
+                item
+                for item in page["changes"]
+                if item.get("category") == "page_boundary_repair"
+            )
+        all_changes = [*baseline_changes, *boundary_changes]
+        markdown = "\n\n".join(chunks).rstrip() + "\n"
+        ledger = b"".join(canonical_json_bytes(item) + b"\n" for item in all_changes)
+        manifest = dict(baseline_manifest)
+        manifest.update(
+            {
+                "run_id": context.run_id,
+                "page_boundary_repairs": len(boundary_changes),
+                "corrections_per_page": len(all_changes) / len(pages),
+                "boundary_audit": audit,
+                "delivery_sha256": {
+                    "markdown": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+                    "changes": hashlib.sha256(ledger).hexdigest(),
+                    "assets": dict(
+                        baseline_manifest.get("delivery_sha256", {}).get(
+                            "assets", {}
+                        )
+                    ),
+                },
+            }
+        )
+        for name, digest in manifest["delivery_sha256"]["assets"].items():
+            if sha256_file(project.assets / name) != digest:
+                raise ProofreadWorkflowError(
+                    "asset_changed", f"asset changed: {name}"
+                )
+        result_ref = context.artifacts.publish_json("result", manifest)
+        atomic_write_bytes(project.markdown, markdown.encode("utf-8"))
+        atomic_write_bytes(project.changes, ledger)
+        atomic_write_json(project.manifest, manifest)
+        return result_ref
+
+
+def _boundary_paragraph(markdown: str, *, side: str) -> dict[str, Any] | None:
+    payload = markdown.encode("utf-8")
+    artifact = SourceArtifact(
+        source_format=SourceFormat.MARKDOWN,
+        artifact_digest=hashlib.sha256(payload).hexdigest(),
+        size=len(payload),
+        media_type="text/markdown",
+        origin=SourceOrigin(
+            kind=SourceOriginKind.LOCAL_IMPORT,
+            locator=f"ocr-boundary-{side}",
+        ),
+    )
+    document = parse_rich_artifact_bytes(artifact, payload).document
+    paragraphs = [
+        block
+        for block in document.blocks
+        if block.kind is RichBlockKind.PARAGRAPH
+    ]
+    if not paragraphs:
+        return None
+    block = paragraphs[-1] if side == "left" else paragraphs[0]
+    line_start = block.locator.line_start
+    line_end = block.locator.line_end
+    if line_start is None or line_end is None:
+        raise ProofreadWorkflowError(
+            "boundary_candidate_invalid", "paragraph has no Markdown line range"
+        )
+    lines = markdown.splitlines()
+    return {
+        "block_id": block.block_id,
+        "line_start": line_start,
+        "line_end": line_end,
+        "markdown": "\n".join(lines[line_start - 1 : line_end]),
+        "is_edge": (
+            block.ordinal == len(document.blocks) - 1
+            if side == "left"
+            else block.ordinal == 0
+        ),
+    }
+
+
+def _split_proofread_pages(markdown: str, expected_pages: int) -> list[str]:
+    marker = re.compile(r"(?m)^<!-- Source PDF page ([1-9][0-9]*) -->[ \t]*$")
+    matches = list(marker.finditer(markdown))
+    numbers = [int(match.group(1)) for match in matches]
+    if expected_pages < 1 or numbers != list(range(1, expected_pages + 1)):
+        raise ProofreadWorkflowError(
+            "baseline_page_map_invalid",
+            "proofread Markdown does not contain one ordered marker per PDF page",
+        )
+    return [
+        markdown[
+            match.end() : (
+                matches[index + 1].start()
+                if index + 1 < len(matches)
+                else len(markdown)
+            )
+        ].strip()
+        for index, match in enumerate(matches)
+    ]
+
+
+def _boundary_variants(left: Any, right: Any) -> dict[str, str]:
+    if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+        return {}
+    left_text = str(left["markdown"])
+    right_text = str(right["markdown"])
+    result = {
+        "space": _join_boundary_text(left_text, right_text, "space"),
+        "none": _join_boundary_text(left_text, right_text, "none"),
+    }
+    if left_text.rstrip().endswith("-"):
+        result["drop_hyphen"] = _join_boundary_text(
+            left_text, right_text, "drop_hyphen"
+        )
+    return result
+
+
+def _join_boundary_text(left: str, right: str, mode: str) -> str:
+    left = left.rstrip()
+    right = right.lstrip()
+    if mode == "space":
+        return left + " " + right
+    if mode == "none":
+        return left + right
+    if mode == "drop_hyphen" and left.endswith("-"):
+        return left[:-1] + right
+    raise ProofreadWorkflowError(
+        "boundary_join_invalid", "selected boundary join mode is unavailable"
+    )
+
+
+def _validate_boundary_output(
+    candidate: Mapping[str, Any], value: Any
+) -> dict[str, Any]:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"action", "join_mode", "reason"}
+        or value.get("action") not in {"separate", "join", "uncertain"}
+        or not isinstance(value.get("reason"), str)
+        or not str(value["reason"]).strip()
+    ):
+        raise ProofreadWorkflowError(
+            "boundary_output_invalid", "boundary result has invalid fields"
+        )
+    action = str(value["action"])
+    mode = value.get("join_mode")
+    if action == "join":
+        variants = _boundary_variants(
+            candidate.get("left"), candidate.get("right")
+        )
+        if not isinstance(mode, str) or mode not in variants:
+            raise ProofreadWorkflowError(
+                "boundary_output_invalid",
+                "joined boundary must select one available safe join mode",
+            )
+    elif mode is not None:
+        raise ProofreadWorkflowError(
+            "boundary_output_invalid",
+            "non-joined boundary must use a null join_mode",
+        )
+    return {
+        "action": action,
+        "join_mode": mode,
+        "reason": str(value["reason"]).strip(),
+    }
+
+
+def _boundary_id(item: Mapping[str, Any]) -> str:
+    return (
+        f"boundary-{int(item['left_page_index']) + 1:06d}-"
+        f"{int(item['right_page_index']) + 1:06d}"
+    )
+
+
+def _validate_boundary_review_input(
+    value: Mapping[str, Any],
+    key: str,
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if value.get("resume_key") != key or not isinstance(
+        value.get("decisions"), list
+    ):
+        raise ProofreadWorkflowError(
+            "boundary_review_input_invalid", "boundary review input is invalid"
+        )
+    expected = {str(item["id"]) for item in items}
+    decisions = value["decisions"]
+    actual = {
+        str(item.get("id"))
+        for item in decisions
+        if isinstance(item, Mapping)
+    }
+    if actual != expected or len(decisions) != len(expected):
+        raise ProofreadWorkflowError(
+            "boundary_review_input_invalid",
+            "boundary decisions do not cover every requested item",
+        )
+    by_id = {str(item["id"]): item for item in items}
+    normalized: list[dict[str, Any]] = []
+    for item in decisions:
+        if not isinstance(item, Mapping) or item.get("action") not in {
+            "separate",
+            "join",
+        }:
+            raise ProofreadWorkflowError(
+                "boundary_review_input_invalid", "boundary action is invalid"
+            )
+        result = {
+            "id": str(item["id"]),
+            "action": str(item["action"]),
+            "join_mode": item.get("join_mode"),
+        }
+        candidate = by_id[result["id"]]
+        if result["action"] == "join":
+            variants = _boundary_variants(
+                candidate.get("left"), candidate.get("right")
+            )
+            if result["join_mode"] not in variants:
+                raise ProofreadWorkflowError(
+                    "boundary_review_input_invalid",
+                    "joined boundary requires an available safe join mode",
+                )
+        elif result["join_mode"] is not None:
+            raise ProofreadWorkflowError(
+                "boundary_review_input_invalid",
+                "separate boundary must use a null join_mode",
+            )
+        normalized.append(result)
+    return {
+        "schema_version": "arc.ocr_proofread.boundary_review_decisions.v1",
+        "resume_key": key,
+        "decisions": normalized,
+    }
+
+
+def _apply_boundary_decisions(
+    pages: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    reviewed: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    joins: list[dict[str, Any]] = []
+    for result in results:
+        decision: Mapping[str, Any] = reviewed.get(
+            _boundary_id(result), result
+        )
+        if decision["action"] != "join":
+            continue
+        left = result.get("left")
+        right = result.get("right")
+        if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+            raise ProofreadWorkflowError(
+                "boundary_join_invalid", "joined boundary has no paragraphs"
+            )
+        joins.append(
+            {
+                **result,
+                "join_mode": str(decision["join_mode"]),
+            }
+        )
+    if not joins:
+        return pages
+
+    parent: dict[str, str] = {}
+
+    def node(page_index: int, block: Mapping[str, Any]) -> str:
+        value = f"{page_index}:{block['block_id']}"
+        parent.setdefault(value, value)
+        return value
+
+    def find(value: str) -> str:
+        while parent[value] != value:
+            parent[value] = parent[parent[value]]
+            value = parent[value]
+        return value
+
+    def union(left: str, right: str) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    edges: dict[tuple[str, str], dict[str, Any]] = {}
+    node_values: dict[str, tuple[int, Mapping[str, Any]]] = {}
+    for join in joins:
+        left_block = join["left"]
+        right_block = join["right"]
+        left_node = node(int(join["left_page_index"]), left_block)
+        right_node = node(int(join["right_page_index"]), right_block)
+        node_values[left_node] = (int(join["left_page_index"]), left_block)
+        node_values[right_node] = (int(join["right_page_index"]), right_block)
+        union(left_node, right_node)
+        edges[(left_node, right_node)] = join
+
+    components: dict[str, list[str]] = {}
+    for value in parent:
+        components.setdefault(find(value), []).append(value)
+    edits_by_page: dict[int, list[tuple[int, int, str]]] = {}
+    for values in components.values():
+        values.sort(key=lambda value: node_values[value][0])
+        first_page, first_block = node_values[values[0]]
+        merged = str(first_block["markdown"])
+        markers: list[int] = []
+        for left_node, right_node in zip(values, values[1:]):
+            edge = edges.get((left_node, right_node))
+            if edge is None:
+                raise ProofreadWorkflowError(
+                    "boundary_join_invalid", "boundary join chain is discontinuous"
+                )
+            right_page, right_block = node_values[right_node]
+            merged = _join_boundary_text(
+                merged,
+                str(right_block["markdown"]),
+                str(edge["join_mode"]),
+            )
+            markers.append(right_page + 1)
+        replacement = merged + "".join(
+            f"\n\n<!-- Source PDF page {page_number} -->"
+            for page_number in markers
+        )
+        edits_by_page.setdefault(first_page, []).append(
+            (
+                int(first_block["line_start"]),
+                int(first_block["line_end"]),
+                replacement,
+            )
+        )
+        for value in values[1:]:
+            page_index, block = node_values[value]
+            edits_by_page.setdefault(page_index, []).append(
+                (int(block["line_start"]), int(block["line_end"]), "")
+            )
+
+    for page_index, edits in edits_by_page.items():
+        pages[page_index]["corrected_markdown"] = _replace_line_ranges(
+            str(pages[page_index]["corrected_markdown"]), edits
+        )
+    for repair_index, join in enumerate(joins):
+        right_page = int(join["right_page_index"])
+        pages[right_page]["suppress_page_marker"] = True
+        left_text = str(join["left"]["markdown"])
+        right_text = str(join["right"]["markdown"])
+        record = {
+            "id": (
+                f"p{right_page + 1:06d}-page_boundary_repair-"
+                f"{repair_index + 1:04d}"
+            ),
+            "page_index": right_page,
+            "left_page_index": int(join["left_page_index"]),
+            "category": "page_boundary_repair",
+            "kind": "paragraph_join",
+            "before": left_text + "\n\n--- PAGE BREAK ---\n\n" + right_text,
+            "after": _join_boundary_text(
+                left_text, right_text, str(join["join_mode"])
+            ),
+            "occurrence": 1,
+            "reason": str(join["reason"]),
+            "left_image_artifact": join["left_image_artifact"],
+            "right_image_artifact": join["right_image_artifact"],
+        }
+        pages[right_page]["changes"].append(record)
+    return pages
+
+
+def _replace_line_ranges(
+    markdown: str, edits: list[tuple[int, int, str]]
+) -> str:
+    lines = markdown.splitlines()
+    for line_start, line_end, replacement in sorted(
+        edits, key=lambda item: item[0], reverse=True
+    ):
+        replacement_lines = replacement.splitlines() if replacement else []
+        lines[line_start - 1 : line_end] = replacement_lines
+    return "\n".join(lines).strip()
 
 
 def _validate_page_output(page: MineruPage, value: Any) -> dict[str, Any]:
@@ -696,14 +1649,42 @@ def _validate_review_input(
 
 def _audit_request(pages: list[dict[str, Any]]) -> dict[str, Any]:
     changes = [change for page in pages for change in page["changes"]]
-    change_sample = sorted(changes, key=lambda item: hashlib.sha256(item["id"].encode()).hexdigest())[:10]
+    change_sample = sorted(
+        (
+            item
+            for item in changes
+            if item["category"] != "page_boundary_repair"
+        ),
+        key=lambda item: hashlib.sha256(item["id"].encode()).hexdigest(),
+    )[:10]
+    boundary_sample = sorted(
+        (
+            item
+            for item in changes
+            if item["category"] == "page_boundary_repair"
+        ),
+        key=lambda item: hashlib.sha256(item["id"].encode()).hexdigest(),
+    )[:10]
+    affected = {
+        int(item["page_index"])
+        for item in boundary_sample
+    } | {
+        int(item["left_page_index"])
+        for item in boundary_sample
+    }
+    page_pool = (
+        [page for page in pages if int(page["page_index"]) in affected]
+        if affected
+        else pages
+    )
     page_sample = sorted(
-        pages,
+        page_pool,
         key=lambda item: hashlib.sha256(f"page-{item['page_index']}".encode()).hexdigest(),
     )[:10]
     return {
         "schema_version": AUDIT_SCHEMA,
         "changes": change_sample,
+        "boundaries": boundary_sample,
         "pages": [
             {
                 "id": f"page-{int(item['page_index']) + 1:06d}",
@@ -722,7 +1703,7 @@ def _validate_audit_input(
     if value.get("resume_key") != key:
         raise ProofreadWorkflowError("audit_input_invalid", "audit resume key is invalid")
     result = {"schema_version": "arc.ocr_proofread.audit_decisions.v1", "resume_key": key}
-    for name in ("changes", "pages"):
+    for name in ("changes", "pages", "boundaries"):
         items = value.get(name)
         if not isinstance(items, list) or any(
             not isinstance(item, Mapping)
@@ -740,9 +1721,10 @@ def _validate_audit_input(
         normalized = []
         for item in items:
             normalized_item = dict(item)
-            if name == "changes" and "edits" in item:
+            if name in {"changes", "boundaries"} and "edits" in item:
                 raise ProofreadWorkflowError(
-                    "audit_input_invalid", "audit change decisions cannot contain edits"
+                    "audit_input_invalid",
+                    "audit change decisions cannot contain edits",
                 )
             if name == "pages":
                 edits = item.get("edits", [])
@@ -764,6 +1746,12 @@ def _key(prefix: str, value: Any) -> str:
 
 
 __all__ = [
+    "BOUNDARY_IMAGE_GROUP_ID",
+    "BOUNDARY_GROUP_ID",
+    "BOUNDARY_OUTPUT_SCHEMA",
+    "BOUNDARY_REPAIR_HANDLER",
+    "BoundaryRepairConfig",
+    "BoundaryRepairHandler",
     "GROUP_ID",
     "HANDLER",
     "PAGE_OUTPUT_SCHEMA",

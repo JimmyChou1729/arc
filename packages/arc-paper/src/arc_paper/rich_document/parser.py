@@ -40,6 +40,7 @@ from .models import (
     RichBlock,
     RichBlockKind,
     RichDocument,
+    RichPageMapEntry,
     RichSection,
     SourceLocator,
 )
@@ -63,6 +64,11 @@ _MARKDOWN_EXTRACTION_SUMMARY_RE = re.compile(
     r"<summary>\s*("
     + "|".join(sorted(_MARKDOWN_EXTRACTION_SIDECAR_KINDS))
     + r")\s*</summary>"
+)
+SOURCE_PAGE_BOUNDARIES_SCHEMA = "arc.paper.source_page_boundaries.v1"
+SOURCE_PAGE_BOUNDARIES_METADATA_KEY = "source_page_boundaries"
+_MARKDOWN_PAGE_MARKER_RE = re.compile(
+    r"^\s*<!--\s*(?:Source PDF page\s+|PDF_PAGE:\s*)([1-9][0-9]*)\s*-->\s*$"
 )
 
 
@@ -195,6 +201,8 @@ def parse_rich_artifact_bytes(
         assets=tuple(assets.values()),
         metadata=metadata,
     )
+    if artifact.source_format is SourceFormat.MARKDOWN:
+        document = _with_markdown_page_boundaries(document, text)
     return RichSourceParseResult(document=document, warnings=tuple(_dedupe(warnings)))
 
 
@@ -211,6 +219,10 @@ def _parse_markdown(
         line = lines[index]
         if not line.strip():
             index += 1
+            continue
+        comment_end = _markdown_standalone_comment_end(lines, index)
+        if comment_end is not None:
+            index = comment_end
             continue
         heading = match_atx_heading(line)
         if heading:
@@ -435,6 +447,117 @@ def _markdown_starts_block(
         or _markdown_figure(line)
         or _markdown_display_equation(lines, index, artifact)
         or _markdown_table(lines, index)
+        or _markdown_standalone_comment_end(lines, index) is not None
+    )
+
+
+def _markdown_standalone_comment_end(
+    lines: list[str], index: int
+) -> int | None:
+    """Return the exclusive end of a standalone HTML comment.
+
+    Markdown comments are metadata/non-visible authoring material.  Mixed
+    comment-and-prose lines remain ordinary paragraph input.
+    """
+
+    stripped = lines[index].strip()
+    if not stripped.startswith("<!--"):
+        return None
+    current = index
+    while current < len(lines):
+        close = lines[current].find("-->")
+        if close >= 0:
+            if lines[current][close + 3 :].strip():
+                return None
+            return current + 1
+        current += 1
+    return None
+
+
+def _with_markdown_page_boundaries(
+    document: RichDocument, text: str
+) -> RichDocument:
+    lines = text.splitlines()
+    markers: list[tuple[int, int, int]] = []
+    index = 0
+    while index < len(lines):
+        end = _markdown_standalone_comment_end(lines, index)
+        if end is None:
+            index += 1
+            continue
+        if end == index + 1:
+            match = _MARKDOWN_PAGE_MARKER_RE.fullmatch(lines[index])
+            if match is not None:
+                markers.append((index + 1, end, int(match.group(1))))
+        index = end
+    if not markers:
+        return document
+    page_numbers = [item[2] for item in markers]
+    if any(
+        current <= previous
+        for previous, current in zip(page_numbers, page_numbers[1:])
+    ):
+        raise ParseError(
+            "rich_page_markers_invalid",
+            "Markdown source page markers must be strictly increasing",
+            artifact=document.source,
+        )
+
+    positioned = [
+        block
+        for block in document.blocks
+        if block.locator.line_start is not None
+    ]
+    boundary_items: list[dict[str, Any]] = []
+    for _start, end, page_number in markers:
+        following = next(
+            (
+                block
+                for block in positioned
+                if int(block.locator.line_start or 0) > end
+            ),
+            None,
+        )
+        boundary_items.append(
+            {
+                "page_number": page_number,
+                "before_block_id": (
+                    following.block_id if following is not None else None
+                ),
+            }
+        )
+
+    page_map: list[RichPageMapEntry] = []
+    marker_index = 0
+    current_page: int | None = None
+    for block in positioned:
+        line_start = int(block.locator.line_start or 0)
+        while (
+            marker_index < len(markers)
+            and markers[marker_index][0] < line_start
+        ):
+            current_page = markers[marker_index][2]
+            marker_index += 1
+        if current_page is not None:
+            page_map.append(
+                RichPageMapEntry(
+                    block_id=block.block_id,
+                    page_number=current_page,
+                )
+            )
+
+    metadata = dict(document.metadata)
+    metadata[SOURCE_PAGE_BOUNDARIES_METADATA_KEY] = {
+        "schema_version": SOURCE_PAGE_BOUNDARIES_SCHEMA,
+        "items": boundary_items,
+    }
+    return RichDocument(
+        source=document.source,
+        blocks=document.blocks,
+        sections=document.sections,
+        assets=document.assets,
+        page_map=tuple(page_map),
+        metadata=metadata,
     )
 
 
@@ -1904,6 +2027,8 @@ def _dedupe(values: list[str]) -> list[str]:
 __all__ = [
     "AssetImporter",
     "RichSourceParseResult",
+    "SOURCE_PAGE_BOUNDARIES_METADATA_KEY",
+    "SOURCE_PAGE_BOUNDARIES_SCHEMA",
     "parse_rich_artifact_bytes",
     "resolve_local_asset_path",
 ]

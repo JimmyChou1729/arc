@@ -28,6 +28,13 @@ failed pages, correction records, and `corrections_per_completed_page`.
 Use `workers set`, `stop`, and same-project `resume` for runtime steering. Do
 not kill worker processes to reduce concurrency.
 
+After page corrections, review every adjacent page pair using both full-page
+images. Join only a clearly continuous paragraph using one offered exact join
+form. Uncertain results and proposed joins whose candidates are not page-edge
+paragraphs require main-agent review. Page markers remain provenance notes
+immediately above the first block on their page; they are not prose and must
+not be translated.
+
 ## Phase 3: Main-Agent Review
 
 The run pauses with a public request artifact when any source-typo candidate
@@ -38,8 +45,9 @@ when page evidence supports the exact edit; otherwise reject and preserve the
 source. Review every item exactly once and resume with the opaque `resume_key`.
 Never bulk-accept model judgments.
 
-The run then pauses for a deterministic audit of up to 10 recorded changes and
-10 pages. For each change, confirm the edit matches the page image and did not
+The run then pauses for a deterministic audit of up to 10 recorded changes, 10
+page-boundary repairs, and 10 pages. For each change, confirm the edit matches
+the page image and did not
 alter correct source text. For each page, compare the complete corrected
 Markdown with the complete image for uncovered errors. When a sampled page has
 a safely anchored omission or OCR artifact, include exact `edits` in that
@@ -47,6 +55,17 @@ page's audit decision and mark `pass` only after the corrected page has been
 inspected. A failed sampled change, or a page that cannot be corrected
 confidently, prevents publication; diagnose and correct any general package or
 prompt defect before rerunning.
+
+For a verified delivery created before boundary review was available, run:
+
+```bash
+arc-ocr-proofread reconcile-boundaries --project-dir <project-dir> \
+  --pdf <source.pdf> --workers 30 --max-workers 200
+```
+
+This verifies the frozen delivery and PDF digests, reuses corrected text, and
+reviews only page boundaries. It refuses a delivery that already contains
+boundary repairs.
 
 ## Phase 4: Deliver
 
@@ -58,4 +77,4 @@ arc-ocr-proofread get-result --project-dir <project-dir>
 Claim completion only when validation succeeds. Deliver `proofread.md`,
 `proofread.manifest.json`, `proofread.changes.jsonl`, and
 `proofread-assets/`. Report OCR corrections, approved source corrections,
-average corrections per page, and the 10-change/10-page audit outcome.
+page-boundary repairs, average corrections per page, and all audit outcomes.

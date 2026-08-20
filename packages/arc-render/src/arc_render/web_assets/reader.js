@@ -73,6 +73,7 @@
     exportHtmlTemplate: null,
     exportStandaloneSupported: false,
     sourceVisible: true,
+    pageMarkersVisible: false,
     hiddenRoles: new Set(),
     roleOrder: [],
     visibilityReady: false,
@@ -377,6 +378,7 @@
       view: "显示",
       showLayers: "显示内容",
       original: "原文",
+      pdfPages: "PDF 页码",
       noVisibleContent: "未选择要显示的内容。",
       export: "导出",
       markdownScope: "Markdown 内容",
@@ -436,6 +438,7 @@
       view: "View",
       showLayers: "Show content",
       original: "Original",
+      pdfPages: "PDF pages",
       noVisibleContent: "No content is selected for display.",
       export: "Export",
       markdownScope: "Markdown content",
@@ -1127,9 +1130,17 @@
         if (isPdfPageMarkerBlock(block) || isStandaloneHtmlCommentBlock(block)) {
           continue;
         }
+        sourcePageNotesBefore(block.block_id).forEach(function (pageNumber) {
+          content.appendChild(renderSourcePageNote(pageNumber));
+        });
         content.appendChild(renderSourceRow(
           block, state.fragmentGroups.get(block.block_id) || []
         ));
+      }
+      if (chunk.block_end === documentValue.blocks.length) {
+        sourcePageNotesBefore(null).forEach(function (pageNumber) {
+          content.appendChild(renderSourcePageNote(pageNumber));
+        });
       }
     } else {
       renderGlossary(content, publication.glossary || [], labels());
@@ -1318,6 +1329,26 @@
     });
     row.appendChild(noteButton);
     return row;
+  }
+
+  function sourcePageNotesBefore(blockId) {
+    var metadata = state.payload.publication.source_document.metadata || {};
+    var boundaries = metadata.source_page_boundaries || {};
+    if (
+      boundaries.schema_version !== "arc.paper.source_page_boundaries.v1" ||
+      !Array.isArray(boundaries.items)
+    ) return [];
+    return boundaries.items.filter(function (item) {
+      return item && item.before_block_id === blockId &&
+        Number.isInteger(item.page_number) && item.page_number > 0;
+    }).map(function (item) { return item.page_number; });
+  }
+
+  function renderSourcePageNote(pageNumber) {
+    var note = element("aside", "arc-page-marker-note", "PDF · " + pageNumber);
+    note.dataset.pageNumber = String(pageNumber);
+    note.setAttribute("aria-label", labels().pdfPages + " " + pageNumber);
+    return note;
   }
 
   function renderSourceBlock(block) {
@@ -1694,6 +1725,9 @@
     if (!root) return;
     root.replaceChildren();
     root.appendChild(visibilityOption("source", labels().original, state.sourceVisible));
+    root.appendChild(visibilityOption(
+      "page-markers", labels().pdfPages, state.pageMarkersVisible
+    ));
     state.roleOrder.forEach(function (role) {
       root.appendChild(visibilityOption(
         role, roleLabel(role), !state.hiddenRoles.has(role)
@@ -1710,6 +1744,8 @@
     input.addEventListener("change", function () {
       if (value === "source") {
         state.sourceVisible = input.checked;
+      } else if (value === "page-markers") {
+        state.pageMarkersVisible = input.checked;
       } else if (input.checked) {
         state.hiddenRoles.delete(value);
       } else {
@@ -1734,6 +1770,9 @@
     var channels = (state.sourceVisible ? 1 : 0) + visibleRoleCount();
     document.body.classList.toggle("arc-focused-reading", channels === 1);
     document.body.classList.toggle("arc-no-visible-content", channels === 0);
+    document.body.classList.toggle(
+      "arc-show-page-markers", state.pageMarkersVisible
+    );
     if (state.visibilityEmptyRoot) state.visibilityEmptyRoot.hidden = channels !== 0;
     Array.prototype.forEach.call(
       root.querySelectorAll(".arc-source-row"),

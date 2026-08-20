@@ -215,6 +215,14 @@ button { cursor: pointer; }
   scroll-margin-top: 1rem;
   break-inside: avoid-page;
 }
+.arc-page-marker-note {
+  display: none;
+  margin: 1.1rem 0 .15rem;
+  color: var(--arc-muted);
+  font-size: .72rem;
+  letter-spacing: .04em;
+}
+.arc-show-page-markers .arc-page-marker-note { display: block; }
 .arc-lanes {
   display: grid;
   grid-template-columns: 1fr;

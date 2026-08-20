@@ -32,6 +32,18 @@ def test_reader_javascript_passes_node_syntax_check() -> None:
     )
 
 
+def test_reader_renders_structured_pdf_page_notes_default_hidden() -> None:
+    javascript = _text("reader.js")
+    stylesheet = _text("reader.css")
+
+    assert "metadata.source_page_boundaries" in javascript
+    assert '"arc.paper.source_page_boundaries.v1"' in javascript
+    assert '"arc-page-marker-note"' in javascript
+    assert '"page-markers"' in javascript
+    assert "pageMarkersVisible: false" in javascript
+    assert ".arc-show-page-markers .arc-page-marker-note" in stylesheet
+
+
 def test_reader_exposes_lightweight_supplement_coverage_download() -> None:
     javascript = _text("reader.js")
 

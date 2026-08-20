@@ -15,6 +15,8 @@ from .models import (
 from .parser import (
     AssetImporter,
     RichSourceParseResult,
+    SOURCE_PAGE_BOUNDARIES_METADATA_KEY,
+    SOURCE_PAGE_BOUNDARIES_SCHEMA,
     parse_rich_artifact_bytes,
     resolve_local_asset_path,
 )
@@ -59,6 +61,8 @@ __all__ = [
     "RichParseOutcome",
     "RichSection",
     "RichSourceParseResult",
+    "SOURCE_PAGE_BOUNDARIES_METADATA_KEY",
+    "SOURCE_PAGE_BOUNDARIES_SCHEMA",
     "EquationLabelMapping",
     "EquationLabelPageMapping",
     "EquationLabelPageReview",
