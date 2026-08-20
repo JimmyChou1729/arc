@@ -864,8 +864,10 @@ RIGHT PAGE HEAD:
         request = _audit_request(pages)
         key = _key("audit", request)
         request["resume_key"] = key
-        request_ref = context.artifacts.find("audit/request") or context.artifacts.publish_json(
-            "audit/request", request
+        request_ref = context.artifacts.find(
+            "audit/request-v2"
+        ) or context.artifacts.publish_json(
+            "audit/request-v2", request
         )
         return Awaiting(
             ResumeReason.SUPERVISION_REQUIRED,
@@ -1554,31 +1556,23 @@ def _apply_boundary_decisions(
         values.sort(key=lambda value: node_values[value][0])
         first_page, first_block = node_values[values[0]]
         merged = str(first_block["markdown"])
-        markers: list[int] = []
         for left_node, right_node in zip(values, values[1:]):
             edge = edges.get((left_node, right_node))
             if edge is None:
                 raise ProofreadWorkflowError(
                     "boundary_join_invalid", "boundary join chain is discontinuous"
                 )
-            right_page, right_block = node_values[right_node]
+            _, right_block = node_values[right_node]
             merged = _join_boundary_text(
                 merged,
                 str(right_block["markdown"]),
                 str(edge["join_mode"]),
             )
-            left_page, _ = node_values[left_node]
-            if right_page == left_page + 1:
-                markers.append(right_page + 1)
-        replacement = merged + "".join(
-            f"\n\n<!-- Source PDF page {page_number} -->"
-            for page_number in markers
-        )
         edits_by_page.setdefault(first_page, []).append(
             (
                 int(first_block["line_start"]),
                 int(first_block["line_end"]),
-                replacement,
+                merged,
             )
         )
         for value in values[1:]:
@@ -1594,8 +1588,6 @@ def _apply_boundary_decisions(
     for repair_index, join in enumerate(joins):
         right_page = int(join["right_page_index"])
         left_page = int(join["left_page_index"])
-        if right_page == left_page + 1:
-            pages[right_page]["suppress_page_marker"] = True
         left_text = str(join["left"]["markdown"])
         right_text = str(join["right"]["markdown"])
         record = {

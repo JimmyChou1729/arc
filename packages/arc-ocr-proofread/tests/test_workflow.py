@@ -635,6 +635,9 @@ def test_main_agent_can_replace_a_trailing_footer_boundary_candidate(
     assert "apparent motion along the ecliptic; the sentence continues." in delivered
     assert "32" in delivered
     assert "32 the ecliptic" not in delivered
+    footer = delivered.index("\n\n32\n\n")
+    assert delivered.index("the sentence continues.") < footer
+    assert footer < delivered.index("<!-- Source PDF page 2 -->")
 
 
 def test_boundary_join_can_span_an_empty_plate_page(
