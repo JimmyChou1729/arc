@@ -1104,7 +1104,7 @@ class BoundaryRepairHandler(ProofreadHandler):
             raise ProofreadWorkflowError(
                 "baseline_invalid", "proofreading manifest is invalid"
             )
-        if int(manifest.get("page_boundary_repairs", 0)):
+        if int(manifest.get("page_boundary_repairs") or 0):
             raise ProofreadWorkflowError(
                 "boundaries_already_reconciled",
                 "proofreading delivery already contains page-boundary repairs",

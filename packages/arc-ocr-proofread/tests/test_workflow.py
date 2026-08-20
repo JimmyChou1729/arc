@@ -203,6 +203,9 @@ def test_boundary_repair_reuses_verified_delivery(
     )
     assert snapshot.status is RunStatus.SUCCEEDED
     assert service.result()["page_boundary_repairs"] == 0
+    baseline = service.result()
+    baseline.pop("page_boundary_repairs")
+    project.manifest.write_text(json.dumps(baseline), encoding="utf-8")
 
     snapshot = service.prepare_boundary_repair(source.pdf_path)
     repair_tasks = BoundaryTasks(boundary_action="join", join_mode="space")
