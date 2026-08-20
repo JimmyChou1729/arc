@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 
 import pytest
 from arc_paper import (
@@ -13,8 +14,11 @@ from arc_paper import (
 )
 from arc_render import (
     FRONT_MATTER_BEGIN,
+    FRAGMENT_REVISION_SCHEMA,
+    FRAGMENT_REVISION_SCHEMA_V1,
     AnchorBlock,
     FragmentAnchor,
+    FragmentAppearance,
     FragmentRevision,
     decode_fragment_revision,
     encode_fragment_revision,
@@ -74,14 +78,39 @@ def test_json_front_matter_round_trip_and_markdown_normalization() -> None:
     encoded = encode_fragment_revision(revision)
     assert encoded.startswith(FRONT_MATTER_BEGIN + "\n{")
     metadata_line = encoded.splitlines()[1]
-    assert json.loads(metadata_line)["schema_version"] == (
-        "arc.render.fragment_revision.v1"
-    )
+    assert json.loads(metadata_line)["schema_version"] == FRAGMENT_REVISION_SCHEMA
+    assert json.loads(metadata_line)["appearance"] is None
     decoded = decode_fragment_revision(
         encoded, filename=fragment_revision_filename(revision)
     )
     assert decoded == revision
     assert decoded.markdown_body == "One\nTwo\n"
+
+
+def test_v1_round_trip_retains_original_schema_and_digest() -> None:
+    revision = replace(
+        make_revision(),
+        schema_version=FRAGMENT_REVISION_SCHEMA_V1,
+        appearance=None,
+    )
+    encoded = encode_fragment_revision(revision)
+    metadata = json.loads(encoded.splitlines()[1])
+    assert metadata["schema_version"] == FRAGMENT_REVISION_SCHEMA_V1
+    assert "appearance" not in metadata
+    assert decode_fragment_revision(
+        encoded, filename=fragment_revision_filename(revision)
+    ) == revision
+
+
+def test_v2_appearance_round_trip_is_canonical_and_digest_bound() -> None:
+    plain = make_revision()
+    styled = replace(
+        plain,
+        appearance=FragmentAppearance("#F9FAFB", "#111827"),
+    )
+    assert styled.appearance == FragmentAppearance("#f9fafb", "#111827")
+    assert styled.semantic_digest != plain.semantic_digest
+    assert decode_fragment_revision(encode_fragment_revision(styled)) == styled
 
 
 def test_semantic_digest_is_independent_of_mapping_insertion_order() -> None:

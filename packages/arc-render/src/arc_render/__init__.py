@@ -2,11 +2,13 @@
 
 from .contracts import (
     FRAGMENT_REVISION_SCHEMA,
+    FRAGMENT_REVISION_SCHEMA_V1,
     LAYER_SCHEMA,
     PUBLICATION_SCHEMA,
     AnchorBlock,
     AnchorKind,
     FragmentAnchor,
+    FragmentAppearance,
     FragmentRevision,
     FragmentRevisionRef,
     Layer,
@@ -19,6 +21,8 @@ from .contracts import (
     anchor_block_to_document,
     fragment_anchor_from_document,
     fragment_anchor_to_document,
+    fragment_appearance_from_document,
+    fragment_appearance_to_document,
     fragment_revision_from_document,
     fragment_revision_ref_from_document,
     fragment_revision_ref_to_document,
@@ -97,6 +101,7 @@ from .workspace import (
 
 __all__ = [
     "FRAGMENT_REVISION_SCHEMA",
+    "FRAGMENT_REVISION_SCHEMA_V1",
     "FRONT_MATTER_BEGIN",
     "FRONT_MATTER_END",
     "HTML_RENDER_RECIPE",
@@ -108,6 +113,7 @@ __all__ = [
     "AnchorKind",
     "BrowserValidation",
     "FragmentAnchor",
+    "FragmentAppearance",
     "FragmentRevision",
     "FragmentRevisionRef",
     "Layer",
@@ -134,6 +140,8 @@ __all__ = [
     "extract_markdown_citation_ids",
     "fragment_anchor_from_document",
     "fragment_anchor_to_document",
+    "fragment_appearance_from_document",
+    "fragment_appearance_to_document",
     "fragment_revision_filename",
     "fragment_revision_from_document",
     "fragment_revision_ref",

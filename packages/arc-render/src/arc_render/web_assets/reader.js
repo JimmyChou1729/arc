@@ -3,7 +3,23 @@
 
   var FRONT_BEGIN = "<!-- ARC:FRAGMENT-JSON:BEGIN -->";
   var FRONT_END = "<!-- ARC:FRAGMENT-JSON:END -->";
-  var FRAGMENT_SCHEMA = "arc.render.fragment_revision.v1";
+  var FRAGMENT_SCHEMA_V1 = "arc.render.fragment_revision.v1";
+  var FRAGMENT_SCHEMA = "arc.render.fragment_revision.v2";
+  var HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+  var COLOR_PRESETS = [
+    {name: "Ink", foreground: "#f9fafb", background: "#111827"},
+    {name: "Paper", foreground: "#3a2e1f", background: "#fff4d6"},
+    {name: "Ocean", foreground: "#17324d", background: "#e7f0fa"},
+    {name: "Sage", foreground: "#193d2d", background: "#e7f1e9"},
+    {name: "Plum", foreground: "#442857", background: "#f2eaf6"},
+    {name: "Rose", foreground: "#572633", background: "#fbeaec"}
+  ];
+  var ROLE_APPEARANCES = {
+    translation: {foreground: "#20262e", background: "#eaf1f8"},
+    companion: {foreground: "#20262e", background: "#fff8e8"},
+    guide: {foreground: "#20262e", background: "#fff8e8"},
+    note: {foreground: "#f9fafb", background: "#111827"}
+  };
   var MAX_BLOCKS_PER_RENDER_CHUNK = 36;
   var CHUNK_BLOCK_HEIGHT_ESTIMATE = 220;
   var DIRECTORY_READ_CONCURRENCY = 8;
@@ -355,6 +371,10 @@
       title: "标题",
       role: "类型",
       priority: "优先级",
+      colors: traditional ? "顏色" : "颜色",
+      foreground: traditional ? "前景色" : "前景色",
+      background: traditional ? "背景色" : "背景色",
+      roleDefaultColors: traditional ? "恢復類型預設" : "恢复类型默认",
       advanced: "预览与更多设置",
       advancedAction: "高级",
       markdown: "Markdown",
@@ -415,6 +435,10 @@
       title: "Title",
       role: "Role",
       priority: "Priority",
+      colors: "Colors",
+      foreground: "Foreground",
+      background: "Background",
+      roleDefaultColors: "Use role default",
       advanced: "Preview and more settings",
       advancedAction: "Advanced",
       markdown: "Markdown",
@@ -1531,24 +1555,66 @@
       : role + " · v" + fragment.revision;
   }
 
+  function normalizeHexColor(value) {
+    var color = String(value || "");
+    if (!HEX_COLOR.test(color)) throw new Error("color must use #rrggbb");
+    return color.toLowerCase();
+  }
+
+  function normalizeAppearance(value) {
+    if (value === null || value === undefined) return null;
+    if (!plainObject(value) || Object.keys(value).sort().join(",") !==
+      "background,foreground") {
+      throw new Error("fragment appearance is invalid");
+    }
+    return {
+      foreground: normalizeHexColor(value.foreground),
+      background: normalizeHexColor(value.background)
+    };
+  }
+
+  function effectiveAppearance(role, appearance) {
+    return appearance || ROLE_APPEARANCES[role] || {
+      foreground: "#20262e", background: "#ffffff"
+    };
+  }
+
+  function applyFragmentAppearance(node, role, appearance) {
+    var colors = effectiveAppearance(role, appearance);
+    if (node.style && typeof node.style.setProperty === "function") {
+      node.style.setProperty("--arc-fragment-foreground", colors.foreground);
+      node.style.setProperty("--arc-fragment-background", colors.background);
+    } else if (node.style) {
+      node.style["--arc-fragment-foreground"] = colors.foreground;
+      node.style["--arc-fragment-background"] = colors.background;
+    }
+  }
+
   function renderFragment(fragment) {
-    var card = element("aside", "arc-fragment");
-    card.dataset.fragmentId = fragment.fragment_id;
-    card.dataset.revision = String(fragment.revision);
-    card.dataset.role = fragment.role;
-    card.dataset.roleSlot = String(roleSlot(fragment.role));
-    card.dataset.priority = String(fragment.priority);
-    var header = element("header", "arc-fragment-header");
-    var title = fragment.title ? element("h4", "", fragment.title) : element("span");
-    decorateGlossary(title, "target");
-    header.appendChild(title);
-    var actions = element("div", "arc-fragment-actions");
     var draft = state.activeDraft;
     var editing = Boolean(
       draft && draft.base && draft.base.fragment_id === fragment.fragment_id
     );
+    var visual = editing ? Object.assign({}, fragment, {
+      title: draft.title,
+      role: draft.role,
+      priority: draft.priority,
+      appearance: draft.appearance
+    }) : fragment;
+    var card = element("aside", "arc-fragment");
+    card.dataset.fragmentId = fragment.fragment_id;
+    card.dataset.revision = String(fragment.revision);
+    card.dataset.role = visual.role;
+    card.dataset.roleSlot = String(roleSlot(visual.role));
+    card.dataset.priority = String(visual.priority);
+    applyFragmentAppearance(card, visual.role, visual.appearance);
+    var header = element("header", "arc-fragment-header");
+    var title = visual.title ? element("h4", "", visual.title) : element("span");
+    decorateGlossary(title, "target");
+    header.appendChild(title);
+    var actions = element("div", "arc-fragment-actions");
     actions.appendChild(element(
-      "span", "arc-fragment-meta", fragmentMetaText(fragment, editing)
+      "span", "arc-fragment-meta", fragmentMetaText(visual, editing)
     ));
     if (editing) {
       actions.classList.add("arc-inline-actions");
@@ -2964,6 +3030,14 @@
       strings.role;
     document.getElementById("arc-editor-priority-label").textContent =
       strings.priority;
+    document.getElementById("arc-editor-colors-label").textContent =
+      strings.colors;
+    document.getElementById("arc-editor-foreground-label").textContent =
+      strings.foreground;
+    document.getElementById("arc-editor-background-label").textContent =
+      strings.background;
+    document.getElementById("arc-editor-colors-reset").textContent =
+      strings.roleDefaultColors;
     document.getElementById("arc-editor-save").textContent = strings.save;
     document.getElementById("arc-editor-cancel").textContent = strings.cancel;
     var close = document.getElementById("arc-editor-close");
@@ -2982,9 +3056,13 @@
     document.getElementById("arc-editor-title").addEventListener(
       "input", syncDraftAndSaveState
     );
-    document.getElementById("arc-editor-role").addEventListener(
-      "change", syncDraftAndSaveState
-    );
+    document.getElementById("arc-editor-role").addEventListener("change", function () {
+      syncDraftAndSaveState();
+      if (state.activeDraft && !state.activeDraft.appearance) {
+        syncAppearanceControlsFromDraft();
+      }
+      markEditorPreviewDirty();
+    });
     document.getElementById("arc-editor-priority").addEventListener(
       "input", syncDraftAndSaveState
     );
@@ -2992,7 +3070,119 @@
       syncDraftAndSaveState();
       markEditorPreviewDirty();
     });
+    renderColorPresets();
+    ["foreground", "background"].forEach(function (kind) {
+      document.getElementById("arc-editor-" + kind + "-picker").addEventListener(
+        "input", function (event) { updateAppearanceFromPicker(kind, event.target); }
+      );
+      document.getElementById("arc-editor-" + kind).addEventListener(
+        "input", function (event) { updateAppearanceFromText(kind, event.target); }
+      );
+    });
+    document.getElementById("arc-editor-colors-reset").addEventListener(
+      "click", resetDraftAppearance
+    );
     document.getElementById("arc-editor-save").addEventListener("click", saveEditor);
+  }
+
+  function renderColorPresets() {
+    var root = document.getElementById("arc-editor-color-presets");
+    root.replaceChildren();
+    COLOR_PRESETS.forEach(function (preset) {
+      var button = element("button", "arc-color-preset");
+      button.type = "button";
+      button.title = preset.foreground + " / " + preset.background;
+      var swatch = element("span", "arc-color-preset-swatch", "Aa");
+      swatch.style.setProperty("--arc-preset-fg", preset.foreground);
+      swatch.style.setProperty("--arc-preset-bg", preset.background);
+      button.appendChild(swatch);
+      button.appendChild(element("span", "", preset.name));
+      button.addEventListener("click", function () {
+        setDraftAppearance(preset);
+      });
+      root.appendChild(button);
+    });
+  }
+
+  function appearanceInputs(kind) {
+    return {
+      picker: document.getElementById("arc-editor-" + kind + "-picker"),
+      text: document.getElementById("arc-editor-" + kind)
+    };
+  }
+
+  function syncAppearanceControlsFromDraft() {
+    if (!state.activeDraft) return;
+    var colors = effectiveAppearance(
+      state.activeDraft.role, state.activeDraft.appearance
+    );
+    ["foreground", "background"].forEach(function (kind) {
+      var controls = appearanceInputs(kind);
+      controls.picker.value = colors[kind];
+      controls.text.value = colors[kind];
+      controls.text.setCustomValidity("");
+      controls.text.removeAttribute("aria-invalid");
+    });
+  }
+
+  function setDraftAppearance(appearance) {
+    if (!state.activeDraft || state.saveInProgress) return;
+    state.activeDraft.appearance = normalizeAppearance(appearance);
+    syncAppearanceControlsFromDraft();
+    updateDraftSaveButtons();
+    markEditorPreviewDirty();
+  }
+
+  function resetDraftAppearance(event) {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    if (!state.activeDraft || state.saveInProgress) return;
+    state.activeDraft.appearance = null;
+    syncAppearanceControlsFromDraft();
+    updateDraftSaveButtons();
+    markEditorPreviewDirty();
+  }
+
+  function updateAppearanceFromPicker(kind, picker) {
+    if (!state.activeDraft) return;
+    var controls = appearanceInputs(kind);
+    controls.text.value = picker.value.toLowerCase();
+    controls.text.setCustomValidity("");
+    controls.text.removeAttribute("aria-invalid");
+    updateDraftAppearanceColor(kind, picker.value);
+  }
+
+  function updateAppearanceFromText(kind, input) {
+    var value = String(input.value || "");
+    var valid = HEX_COLOR.test(value);
+    input.setCustomValidity(valid ? "" : "Use #RRGGBB");
+    input.setAttribute("aria-invalid", String(!valid));
+    if (valid) {
+      var normalized = value.toLowerCase();
+      appearanceInputs(kind).picker.value = normalized;
+      updateDraftAppearanceColor(kind, normalized);
+    } else {
+      updateDraftSaveButtons();
+    }
+  }
+
+  function updateDraftAppearanceColor(kind, value) {
+    if (!state.activeDraft) return;
+    var current = effectiveAppearance(
+      state.activeDraft.role, state.activeDraft.appearance
+    );
+    state.activeDraft.appearance = {
+      foreground: kind === "foreground" ? normalizeHexColor(value) : current.foreground,
+      background: kind === "background" ? normalizeHexColor(value) : current.background
+    };
+    updateDraftSaveButtons();
+    markEditorPreviewDirty();
+  }
+
+  function appearanceControlsValid() {
+    var foreground = document.getElementById("arc-editor-foreground");
+    var background = document.getElementById("arc-editor-background");
+    if (!foreground || !background) return true;
+    return HEX_COLOR.test(foreground.value) && HEX_COLOR.test(background.value);
   }
 
   function updateDirectoryControl() {
@@ -3249,7 +3439,9 @@
       title: fragment.title || null,
       role: fragment.role,
       priority: fragment.priority,
-      markdown_body: fragment.markdown_body || ""
+      markdown_body: fragment.markdown_body || "",
+      appearance: fragment.appearance ?
+        JSON.parse(JSON.stringify(fragment.appearance)) : null
     };
   }
 
@@ -3293,7 +3485,8 @@
       title: null,
       role: "note",
       priority: 110,
-      markdown_body: ""
+      markdown_body: "",
+      appearance: null
     };
     state.editorBase = null;
     state.editorHistorical = null;
@@ -3313,6 +3506,7 @@
     document.getElementById("arc-editor-role").value = draft.role || "note";
     document.getElementById("arc-editor-priority").value = String(draft.priority || 110);
     document.getElementById("arc-editor-markdown").value = draft.markdown_body || "";
+    syncAppearanceControlsFromDraft();
     state.editorPreviewDirty = true;
     renderHistory(draft.base && draft.base.fragment_id);
     updatePreview();
@@ -3424,10 +3618,13 @@
     state.activeDraft.role = revision.role;
     state.activeDraft.priority = revision.priority;
     state.activeDraft.markdown_body = revision.markdown_body;
+    state.activeDraft.appearance = revision.appearance ?
+      JSON.parse(JSON.stringify(revision.appearance)) : null;
     document.getElementById("arc-editor-title").value = revision.title || "";
     document.getElementById("arc-editor-role").value = revision.role;
     document.getElementById("arc-editor-priority").value = String(revision.priority);
     document.getElementById("arc-editor-markdown").value = revision.markdown_body;
+    syncAppearanceControlsFromDraft();
     updateDraftSaveButtons();
     markEditorPreviewDirty();
   }
@@ -3468,6 +3665,11 @@
     preview.replaceChildren(renderMarkdown(
       document.getElementById("arc-editor-markdown").value
     ));
+    if (state.activeDraft) {
+      applyFragmentAppearance(
+        preview, state.activeDraft.role, state.activeDraft.appearance
+      );
+    }
     state.editorPreviewDirty = false;
   }
 
@@ -3521,6 +3723,8 @@
       if (!state.directory) return;
       if (base) assertEditorBaseCurrent(base);
       var metadata = base ? metadataOnly(base) : newNoteMetadata(editorAnchor);
+      metadata.schema_version = FRAGMENT_SCHEMA;
+      metadata.appearance = editable.appearance;
       metadata.revision = base ? base.revision + 1 : 1;
       metadata.parent_semantic_digest = base ? base.semantic_digest : null;
       metadata.title = editable.title;
@@ -3610,7 +3814,8 @@
       markdown_body: markdown,
       role: String(draft.role || ""),
       priority: priority,
-      citation_ids: citationIds(markdown)
+      citation_ids: citationIds(markdown),
+      appearance: normalizeAppearance(draft.appearance)
     };
   }
 
@@ -3621,7 +3826,8 @@
       markdown_body: markdown,
       role: revision.role,
       priority: revision.priority,
-      citation_ids: citationIds(markdown)
+      citation_ids: citationIds(markdown),
+      appearance: normalizeAppearance(revision.appearance)
     };
   }
 
@@ -3638,7 +3844,8 @@
   }
 
   function updateDraftSaveButtons(scope) {
-    var disabled = !activeDraftHasChanges() || state.saveInProgress;
+    var disabled = !appearanceControlsValid() || !activeDraftHasChanges() ||
+      state.saveInProgress;
     var dialogSave = document.getElementById("arc-editor-save");
     if (dialogSave) dialogSave.disabled = disabled;
     var localSave = scope && typeof scope.querySelector === "function" ?
@@ -3740,6 +3947,7 @@
       "parent_semantic_digest", "anchor", "priority", "role", "language",
       "title", "citation_ids", "provenance"
     ];
+    if (revision.schema_version === FRAGMENT_SCHEMA) keys.push("appearance");
     var value = {};
     keys.forEach(function (key) { value[key] = revision[key]; });
     return JSON.parse(JSON.stringify(value));
@@ -3760,6 +3968,7 @@
       language: profile.target_language || profile.source_language || "und",
       title: null,
       citation_ids: [],
+      appearance: null,
       provenance: {
         producer: "arc-render-browser",
         created_at: new Date().toISOString()
@@ -3863,10 +4072,11 @@
       "parent_semantic_digest", "priority", "provenance", "revision", "role",
       "schema_version", "source", "title"
     ];
+    if (metadata.schema_version === FRAGMENT_SCHEMA) fields.push("appearance");
     requireExactObject(metadata, fields, "fragment revision");
     validateIntegerJson(metadata, "fragment revision");
     if (
-      metadata.schema_version !== FRAGMENT_SCHEMA ||
+      ![FRAGMENT_SCHEMA_V1, FRAGMENT_SCHEMA].includes(metadata.schema_version) ||
       !portableIdentifier(metadata.fragment_id) ||
       !positiveInteger(metadata.revision) ||
       !positiveInteger(metadata.priority) ||
@@ -3902,6 +4112,9 @@
     });
     if (!plainObject(metadata.provenance)) {
       throw new Error("fragment provenance must be an object");
+    }
+    if (metadata.schema_version === FRAGMENT_SCHEMA) {
+      normalizeAppearance(metadata.appearance);
     }
   }
 

@@ -4,9 +4,12 @@
   --arc-muted: #68717c;
   --arc-line: #dfe4e9;
   --arc-source: #ffffff;
-  --arc-translation: #f4f7fb;
-  --arc-companion: #fff8e8;
-  --arc-note: #f5f4fb;
+  --arc-translation-fg: #20262e;
+  --arc-translation-bg: #eaf1f8;
+  --arc-companion-fg: #20262e;
+  --arc-companion-bg: #fff8e8;
+  --arc-note-fg: #f9fafb;
+  --arc-note-bg: #111827;
   --arc-contents-width: 18rem;
 }
 
@@ -241,15 +244,22 @@ button { cursor: pointer; }
 .arc-source-card { padding: .3rem .15rem; background: transparent; }
 .arc-source-card p,
 .arc-fragment .arc-markdown p { margin-block: .2em; }
+.arc-fragment {
+  color: var(--arc-fragment-foreground, var(--arc-ink));
+  background: var(--arc-fragment-background, transparent);
+}
 .arc-fragment[data-role="translation"] {
-  background: #eaf1f8;
+  --arc-fragment-foreground: var(--arc-translation-fg);
+  --arc-fragment-background: var(--arc-translation-bg);
 }
 .arc-fragment[data-role="companion"],
 .arc-fragment[data-role="guide"] {
-  background: var(--arc-companion);
+  --arc-fragment-foreground: var(--arc-companion-fg);
+  --arc-fragment-background: var(--arc-companion-bg);
 }
 .arc-fragment[data-role="note"] {
-  background: var(--arc-note);
+  --arc-fragment-foreground: var(--arc-note-fg);
+  --arc-fragment-background: var(--arc-note-bg);
 }
 .arc-full-rows {
   display: grid;
@@ -272,7 +282,8 @@ button { cursor: pointer; }
   font-size: 1.02rem;
 }
 .arc-fragment-meta {
-  color: var(--arc-muted);
+  color: inherit;
+  opacity: .7;
   font-size: .72rem;
   white-space: nowrap;
 }
@@ -354,6 +365,9 @@ pre {
   border-radius: .35rem;
   background: #eef1f4;
 }
+.arc-fragment pre {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
 code { overflow-wrap: normal; }
 .math-display {
   min-width: 0;
@@ -411,8 +425,8 @@ img.arc-markdown-image {
 .arc-focused-reading .arc-source-card,
 .arc-focused-reading .arc-fragment {
   padding-block: .2rem;
-  background: transparent;
 }
+.arc-focused-reading .arc-source-card { background: transparent; }
 .arc-focused-reading .arc-fragment:not(.is-inline-editing) .arc-fragment-meta {
   display: none;
 }
@@ -564,7 +578,8 @@ img.arc-markdown-image {
   border: 1px solid var(--arc-line);
   border-radius: .35rem;
   overflow: auto;
-  background: white;
+  color: var(--arc-fragment-foreground, var(--arc-ink));
+  background: var(--arc-fragment-background, white);
 }
 .arc-editor-advanced {
   border-top: 1px solid var(--arc-line);
@@ -577,6 +592,82 @@ img.arc-markdown-image {
   font-size: .78rem;
 }
 .arc-editor-extra-content { padding-bottom: .7rem; }
+.arc-appearance-editor {
+  display: grid;
+  gap: .55rem;
+  margin: 0 1rem .75rem;
+  padding: .7rem;
+  border: 1px solid var(--arc-line);
+  border-radius: .4rem;
+  background: white;
+}
+.arc-appearance-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .7rem;
+  color: #45515c;
+  font-size: .78rem;
+}
+.arc-appearance-heading button { box-shadow: none; }
+.arc-color-presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .35rem;
+}
+.arc-color-preset {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  min-width: 0;
+  box-shadow: none !important;
+  text-align: left;
+}
+.arc-color-preset-swatch {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: 0 0 auto;
+  border: 1px solid rgb(32 38 46 / 28%);
+  border-radius: 50%;
+  color: var(--arc-preset-fg);
+  background: var(--arc-preset-bg);
+}
+.arc-color-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .55rem;
+}
+.arc-color-fields label {
+  display: grid;
+  gap: .25rem;
+  color: #45515c;
+  font-size: .78rem;
+}
+.arc-color-control {
+  display: grid;
+  grid-template-columns: 2.2rem minmax(0, 1fr);
+  gap: .35rem;
+}
+.arc-color-control input[type="color"] {
+  width: 2.2rem;
+  min-height: 2.2rem;
+  padding: .15rem;
+  border: 1px solid #bac4cc;
+  border-radius: .35rem;
+  background: white;
+}
+.arc-color-control input[type="text"] {
+  width: 100%;
+  min-height: 2.2rem;
+  padding: .35rem .5rem;
+  border: 1px solid #bac4cc;
+  border-radius: .35rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.arc-color-control input[type="text"]:invalid {
+  border-color: #a74848;
+  outline-color: #a74848;
+}
 .arc-editor-preview-pane {
   display: grid;
   gap: .25rem;
@@ -690,7 +781,9 @@ img.arc-markdown-image {
   .arc-glossary-row > :last-child { grid-column: 1 / -1; }
   .arc-editor-grid,
   .arc-dialog-fields,
+  .arc-color-fields,
   .arc-history-compare { grid-template-columns: 1fr; }
+  .arc-color-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .arc-dialog {
     width: calc(100vw - .75rem);
     height: calc(100dvh - .75rem);

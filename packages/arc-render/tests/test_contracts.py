@@ -18,6 +18,7 @@ from arc_paper import (
 from arc_render import (
     AnchorBlock,
     FragmentAnchor,
+    FragmentAppearance,
     FragmentRevision,
     FragmentRevisionRef,
     Layer,
@@ -135,6 +136,17 @@ def revision(*, priority: int = 10) -> FragmentRevision:
 def test_fragment_priority_must_be_positive(priority: int) -> None:
     with pytest.raises(ValueError, match="priority"):
         revision(priority=priority)
+
+
+@pytest.mark.parametrize(
+    ("foreground", "background"),
+    (("red", "#ffffff"), ("#fff", "#000000"), ("#12345g", "#000000")),
+)
+def test_fragment_appearance_requires_six_digit_hex_colors(
+    foreground: str, background: str
+) -> None:
+    with pytest.raises(ValueError, match="#rrggbb"):
+        FragmentAppearance(foreground, background)
 
 
 def test_fragment_id_is_safe_for_atomic_workspace_paths() -> None:

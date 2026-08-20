@@ -455,6 +455,7 @@ def commit_publication_revision(
             citation_ids=citation_ids,
             provenance=provenance,
             markdown_body=replacement.markdown_body,
+            appearance=base.appearance,
         )
         if (
             revision.title == base.title
@@ -835,6 +836,7 @@ def _validate_bundle_request_children(
             citation_ids=citations,
             provenance=provenance,
             markdown_body=replacement.markdown_body,
+            appearance=base.appearance,
         )
         if child != expected:
             raise ValueError("bundle child does not match its canonical request")

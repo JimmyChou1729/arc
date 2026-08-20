@@ -31,7 +31,8 @@ from ._json import (
 )
 
 
-FRAGMENT_REVISION_SCHEMA = "arc.render.fragment_revision.v1"
+FRAGMENT_REVISION_SCHEMA_V1 = "arc.render.fragment_revision.v1"
+FRAGMENT_REVISION_SCHEMA = "arc.render.fragment_revision.v2"
 LAYER_SCHEMA = "arc.render.layer.v1"
 PUBLICATION_SCHEMA = "arc.render.publication.v1"
 
@@ -62,7 +63,7 @@ _ANCHOR_BLOCK_FIELDS = {
     "content_fingerprint",
 }
 _ANCHOR_FIELDS = {"kind", "target_id", "related_blocks"}
-_FRAGMENT_FIELDS = {
+_FRAGMENT_V1_FIELDS = {
     "schema_version",
     "source",
     "fragment_id",
@@ -76,6 +77,8 @@ _FRAGMENT_FIELDS = {
     "citation_ids",
     "provenance",
 }
+_FRAGMENT_V2_FIELDS = _FRAGMENT_V1_FIELDS | {"appearance"}
+_APPEARANCE_FIELDS = {"foreground", "background"}
 _REVISION_REF_FIELDS = {
     "path",
     "fragment_id",
@@ -117,6 +120,7 @@ _PUBLICATION_FIELDS = {
     "reader_profile",
     "publication_digest",
 }
+_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}")
 
 
 class AnchorKind(str, Enum):
@@ -219,6 +223,22 @@ class FragmentAnchor:
 
 
 @dataclass(frozen=True)
+class FragmentAppearance:
+    """Optional reader colors owned by one immutable fragment revision."""
+
+    foreground: str
+    background: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "foreground", _hex_color(self.foreground, "foreground")
+        )
+        object.__setattr__(
+            self, "background", _hex_color(self.background, "background")
+        )
+
+
+@dataclass(frozen=True)
 class FragmentRevision:
     source: SourceIdentity
     fragment_id: str
@@ -233,10 +253,21 @@ class FragmentRevision:
     provenance: Mapping[str, JsonValue]
     markdown_body: str
     schema_version: str = FRAGMENT_REVISION_SCHEMA
+    appearance: FragmentAppearance | None = None
 
     def __post_init__(self) -> None:
-        if self.schema_version != FRAGMENT_REVISION_SCHEMA:
+        if self.schema_version not in {
+            FRAGMENT_REVISION_SCHEMA_V1,
+            FRAGMENT_REVISION_SCHEMA,
+        }:
             raise ValueError("unsupported fragment revision schema")
+        if self.schema_version == FRAGMENT_REVISION_SCHEMA_V1:
+            if self.appearance is not None:
+                raise ValueError("v1 fragment revisions cannot define appearance")
+        elif self.appearance is not None and not isinstance(
+            self.appearance, FragmentAppearance
+        ):
+            raise ValueError("appearance must be a FragmentAppearance or null")
         if not isinstance(self.source, SourceIdentity):
             raise ValueError("fragment source must be a SourceIdentity")
         if not isinstance(self.anchor, FragmentAnchor):
@@ -673,12 +704,29 @@ def fragment_anchor_from_document(value: Any) -> FragmentAnchor:
     )
 
 
+def fragment_appearance_to_document(
+    appearance: FragmentAppearance,
+) -> dict[str, str]:
+    return {
+        "foreground": appearance.foreground,
+        "background": appearance.background,
+    }
+
+
+def fragment_appearance_from_document(value: Any) -> FragmentAppearance:
+    item = require_exact(value, _APPEARANCE_FIELDS, "fragment appearance")
+    return FragmentAppearance(
+        foreground=require_string(item["foreground"], "appearance foreground"),
+        background=require_string(item["background"], "appearance background"),
+    )
+
+
 def fragment_revision_to_document(
     revision: FragmentRevision,
 ) -> dict[str, Any]:
     """Encode front matter metadata; Markdown remains outside the JSON."""
 
-    return {
+    value = {
         "schema_version": revision.schema_version,
         "source": source_identity_to_document(revision.source),
         "fragment_id": revision.fragment_id,
@@ -692,13 +740,33 @@ def fragment_revision_to_document(
         "citation_ids": list(revision.citation_ids),
         "provenance": thaw_json(revision.provenance),
     }
+    if revision.schema_version == FRAGMENT_REVISION_SCHEMA:
+        value["appearance"] = (
+            None
+            if revision.appearance is None
+            else fragment_appearance_to_document(revision.appearance)
+        )
+    return value
 
 
 def fragment_revision_from_document(
     value: Any, markdown_body: str
 ) -> FragmentRevision:
-    item = require_exact(value, _FRAGMENT_FIELDS, "fragment revision")
-    if item["schema_version"] != FRAGMENT_REVISION_SCHEMA:
+    if not isinstance(value, Mapping):
+        raise ValueError("fragment revision must be an object")
+    schema_version = value.get("schema_version")
+    if schema_version == FRAGMENT_REVISION_SCHEMA_V1:
+        item = require_exact(value, _FRAGMENT_V1_FIELDS, "fragment revision")
+        appearance = None
+    elif schema_version == FRAGMENT_REVISION_SCHEMA:
+        item = require_exact(value, _FRAGMENT_V2_FIELDS, "fragment revision")
+        raw_appearance = item["appearance"]
+        appearance = (
+            None
+            if raw_appearance is None
+            else fragment_appearance_from_document(raw_appearance)
+        )
+    else:
         raise ValueError("unsupported fragment revision schema")
     parent = item["parent_semantic_digest"]
     if parent is not None and not isinstance(parent, str):
@@ -726,6 +794,8 @@ def fragment_revision_from_document(
         citation_ids=citation_ids,
         provenance=provenance,
         markdown_body=markdown_body,
+        schema_version=str(schema_version),
+        appearance=appearance,
     )
 
 
@@ -957,6 +1027,12 @@ def _require_integer_json_numbers(value: Any, description: str) -> None:
             _require_integer_json_numbers(item, description)
 
 
+def _hex_color(value: Any, description: str) -> str:
+    if not isinstance(value, str) or _HEX_COLOR_RE.fullmatch(value) is None:
+        raise ValueError(f"{description} must be a #rrggbb color")
+    return value.casefold()
+
+
 def _digest(value: Any, description: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{description} must be a SHA-256 digest")
@@ -1007,11 +1083,13 @@ def _relative_path(value: Any, description: str) -> str:
 
 __all__ = [
     "FRAGMENT_REVISION_SCHEMA",
+    "FRAGMENT_REVISION_SCHEMA_V1",
     "LAYER_SCHEMA",
     "PUBLICATION_SCHEMA",
     "AnchorBlock",
     "AnchorKind",
     "FragmentAnchor",
+    "FragmentAppearance",
     "FragmentRevision",
     "FragmentRevisionRef",
     "Layer",
@@ -1024,6 +1102,8 @@ __all__ = [
     "anchor_block_to_document",
     "fragment_anchor_from_document",
     "fragment_anchor_to_document",
+    "fragment_appearance_from_document",
+    "fragment_appearance_to_document",
     "fragment_revision_from_document",
     "fragment_revision_ref_from_document",
     "fragment_revision_ref_to_document",

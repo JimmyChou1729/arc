@@ -12,6 +12,7 @@ from arc_paper import (
     SourceRepository,
 )
 from arc_render import (
+    FragmentAppearance,
     FragmentRevision,
     read_publication_workspace_state,
     write_fragment_revision,
@@ -262,14 +263,20 @@ def test_revision_adopts_unmanaged_browser_ancestor(tmp_path: Path):
         citation_ids=base.citation_ids,
         provenance={**dict(base.provenance), "last_editor": "arc-render-browser"},
         markdown_body=base.markdown_body + "Browser.\n",
+        appearance=FragmentAppearance(
+            foreground="#f9fafb",
+            background="#111827",
+        ),
     )
     write_fragment_revision(publication_path.parent, browser)
     request = _request(paths, publication_path, suffix=" formal")
 
     result = commit_publication_revision(paths, request, publication_path)
-    assert read_publication_workspace_state(
+    selected = read_publication_workspace_state(
         publication_path
-    ).selected_revisions[0].revision == 3
+    ).selected_revisions[0]
+    assert selected.revision == 3
+    assert selected.appearance == browser.appearance
 
     workspace = publication_path.parent
     for item in sorted(workspace.rglob("*"), reverse=True):

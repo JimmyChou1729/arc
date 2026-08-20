@@ -811,6 +811,29 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
               <input id="arc-editor-priority" type="number" min="1">
             </label>
           </div>
+          <section class="arc-appearance-editor" aria-labelledby="arc-editor-colors-label">
+            <div class="arc-appearance-heading">
+              <span id="arc-editor-colors-label">Colors</span>
+              <button id="arc-editor-colors-reset" type="button">Use role default</button>
+            </div>
+            <div id="arc-editor-color-presets" class="arc-color-presets"></div>
+            <div class="arc-color-fields">
+              <label><span id="arc-editor-foreground-label">Foreground</span>
+                <span class="arc-color-control">
+                  <input id="arc-editor-foreground-picker" type="color">
+                  <input id="arc-editor-foreground" type="text" inputmode="text"
+                    maxlength="7" pattern="#[0-9A-Fa-f]{{6}}" placeholder="#20262e">
+                </span>
+              </label>
+              <label><span id="arc-editor-background-label">Background</span>
+                <span class="arc-color-control">
+                  <input id="arc-editor-background-picker" type="color">
+                  <input id="arc-editor-background" type="text" inputmode="text"
+                    maxlength="7" pattern="#[0-9A-Fa-f]{{6}}" placeholder="#ffffff">
+                </span>
+              </label>
+            </div>
+          </section>
           <div id="arc-editor-history" class="arc-history"></div>
         </div>
       </section>

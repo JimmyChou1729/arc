@@ -1151,6 +1151,10 @@ globalThis.window = globalThis;
     cancelActiveDraft: cancelActiveDraft,
     restoreHistoricalRevision: restoreHistoricalRevision,
     syncDraftFromDialog: syncDraftFromDialog,
+    setDraftAppearance: setDraftAppearance,
+    resetDraftAppearance: resetDraftAppearance,
+    updateAppearanceFromPicker: updateAppearanceFromPicker,
+    updateAppearanceFromText: updateAppearanceFromText,
     openNewEditorForAnchor: openNewEditorForAnchor,
     openExportPanel: openExportPanel,
     connectDirectory: connectDirectory,
@@ -1213,6 +1217,10 @@ FakeNode.prototype.replaceChildren = function () {
 FakeNode.prototype.setAttribute = function (name, value) {
   this.attrs[name] = String(value);
 };
+FakeNode.prototype.removeAttribute = function (name) { delete this.attrs[name]; };
+FakeNode.prototype.setCustomValidity = function (value) {
+  this.validationMessage = String(value || "");
+};
 FakeNode.prototype.addEventListener = function (name, listener) {
   (this.listeners[name] = this.listeners[name] || []).push(listener);
 };
@@ -1268,10 +1276,16 @@ var nodes = {
   "arc-editor-save": new FakeNode("button"),
   "arc-editor-history": new FakeNode("div"),
   "arc-editor-preview": new FakeNode("div"),
+  "arc-editor-foreground-picker": new FakeNode("input"),
+  "arc-editor-foreground": new FakeNode("input"),
+  "arc-editor-background-picker": new FakeNode("input"),
+  "arc-editor-background": new FakeNode("input"),
   "arc-export": new FakeNode("button"),
   "arc-export-panel": new FakeNode("div"),
   "arc-storage-status": new FakeNode("div")
 };
+nodes["arc-editor-foreground"].value = "#f9fafb";
+nodes["arc-editor-background"].value = "#111827";
 nodes["arc-export-panel"].hidden = true;
 globalThis.document = {
   createElement: function (tag) { return new FakeNode(tag); },
@@ -1425,6 +1439,40 @@ helpers.state.selected = new Map([[first.fragment_id, first]]);
     "Advanced did not open on the latest inline draft"
   );
   assert(!nodes["arc-editor-save"].disabled, "changed Advanced draft disabled Save");
+  helpers.setDraftAppearance({foreground: "#f9fafb", background: "#111827"});
+  assert(
+    active.appearance.foreground === "#f9fafb" &&
+      nodes["arc-editor-foreground"].value === "#f9fafb" &&
+      nodes["arc-editor-background-picker"].value === "#111827",
+    "preset colors did not synchronize draft, text, and picker controls"
+  );
+  nodes["arc-editor-foreground"].value = "#ABCDEF";
+  helpers.updateAppearanceFromText("foreground", nodes["arc-editor-foreground"]);
+  assert(
+    active.appearance.foreground === "#abcdef" &&
+      nodes["arc-editor-foreground-picker"].value === "#abcdef",
+    "valid color text did not update picker and canonical draft"
+  );
+  nodes["arc-editor-background"].value = "#bad";
+  helpers.updateAppearanceFromText("background", nodes["arc-editor-background"]);
+  assert(nodes["arc-editor-save"].disabled, "invalid color text left Save enabled");
+  nodes["arc-editor-background-picker"].value = "#010203";
+  helpers.updateAppearanceFromPicker(
+    "background", nodes["arc-editor-background-picker"]
+  );
+  assert(
+    active.appearance.background === "#010203" &&
+      nodes["arc-editor-background"].value === "#010203" &&
+      !nodes["arc-editor-save"].disabled,
+    "picker color did not repair text and draft state"
+  );
+  helpers.resetDraftAppearance({preventDefault: function () {}});
+  assert(
+    active.appearance === null &&
+      nodes["arc-editor-foreground"].value === "#f9fafb" &&
+      nodes["arc-editor-background"].value === "#111827",
+    "role-default reset did not clear the override and restore note colors"
+  );
   nodes["arc-editor-title"].value = "Latest title";
   nodes["arc-editor-role"].value = "companion";
   nodes["arc-editor-priority"].value = "80";
@@ -2310,7 +2358,11 @@ def test_reader_uses_low_distraction_controls_and_inline_editor() -> None:
     assert "readingArea.replaceChildren();" in javascript
     assert "header.replaceChildren();" in javascript
     assert "contents.replaceChildren();" in javascript
-    assert 'background: #eaf1f8;' in stylesheet
+    assert '--arc-translation-bg: #eaf1f8;' in stylesheet
+    assert '--arc-note-fg: #f9fafb;' in stylesheet
+    assert '--arc-note-bg: #111827;' in stylesheet
+    assert 'var COLOR_PRESETS = [' in javascript
+    assert 'pattern="#[0-9A-Fa-f]{6}"' not in javascript
     assert ".arc-source-card { padding: .3rem .15rem; background: transparent; }" in stylesheet
 
 
