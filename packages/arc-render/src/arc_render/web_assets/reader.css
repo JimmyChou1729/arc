@@ -44,12 +44,43 @@ button { cursor: pointer; }
   top: 0;
   align-self: start;
   height: 100vh;
-  overflow: auto;
-  padding: 3.2rem 1rem 2rem;
+  overflow: hidden;
   border-right: 1px solid var(--arc-line);
   background: #fafbfc;
   transition: opacity .15s ease, visibility .15s ease;
 }
+.arc-contents nav {
+  height: 100%;
+  overflow: auto;
+  padding: 3.2rem 1rem 2rem;
+}
+.arc-contents-resizer {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+.arc-contents-resizer::after {
+  position: absolute;
+  top: 0;
+  right: 3px;
+  width: 2px;
+  height: 100%;
+  background: transparent;
+  content: "";
+  transition: background .12s ease;
+}
+.arc-contents-resizer:hover::after,
+.arc-contents-resizer:focus-visible::after,
+.arc-shell.is-resizing-contents .arc-contents-resizer::after {
+  background: #4f7896;
+}
+.arc-contents-resizer:focus-visible { outline: none; }
+.arc-shell.is-resizing-contents { user-select: none; }
 .contents-collapsed .arc-contents {
   visibility: hidden;
   opacity: 0;
@@ -776,6 +807,7 @@ img.arc-markdown-image {
     opacity: 1;
     transform: translateX(-102%);
   }
+  .arc-contents-resizer { display: none; }
   .arc-lanes { grid-template-columns: 1fr; }
   .arc-glossary-row { grid-template-columns: 1fr 1fr; }
   .arc-glossary-row > :last-child { grid-column: 1 / -1; }
@@ -805,6 +837,7 @@ img.arc-markdown-image {
   @page { margin: 16mm 14mm 18mm; }
   body { background: white; font-size: 10.5pt; }
   .arc-contents,
+  .arc-contents-resizer,
   .arc-fixed-tools,
   .arc-storage-status,
   .arc-edit-accessible,

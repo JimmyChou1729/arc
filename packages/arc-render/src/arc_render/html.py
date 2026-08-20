@@ -765,6 +765,8 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
         <h2 id="arc-contents-heading">Contents</h2>
         <ol id="arc-contents-list"></ol>
       </nav>
+      <div id="arc-contents-resizer" class="arc-contents-resizer"
+        role="separator" aria-orientation="vertical" tabindex="0"></div>
     </aside>
     <div class="arc-reader">
       <header id="arc-book-header" class="arc-book-header"></header>

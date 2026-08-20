@@ -293,6 +293,8 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert 'id="arc-view"' in text
     assert 'id="arc-view-panel"' in text
     assert 'id="arc-view-options"' in text
+    assert 'id="arc-contents-resizer"' in text
+    assert 'role="separator" aria-orientation="vertical"' in text
     assert 'id="arc-export-panel"' in text
     assert 'id="arc-export-scope"' in text
     assert 'id="arc-export-html"' in text

@@ -32,6 +32,135 @@ def test_reader_javascript_passes_node_syntax_check() -> None:
     )
 
 
+def test_reader_contents_sidebar_resizes_and_collapses_under_node() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        "globalThis.window = globalThis;\n"
+        + javascript[:startup]
+        + """
+  globalThis.__arcReaderTest = {state: state, setupContents: setupContents};
+}());
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+function Node() {
+  this.attrs = {};
+  this.listeners = {};
+  this.style = {
+    values: {},
+    setProperty: function (name, value) { this.values[name] = value; }
+  };
+  this.classes = new Set();
+  this.classList = {
+    owner: this,
+    toggle: function (name, enabled) {
+      if (enabled) this.owner.classes.add(name);
+      else this.owner.classes.delete(name);
+    },
+    add: function (name) { this.owner.classes.add(name); },
+    remove: function (name) { this.owner.classes.delete(name); },
+    contains: function (name) { return this.owner.classes.has(name); }
+  };
+}
+Node.prototype.setAttribute = function (name, value) {
+  this.attrs[name] = String(value);
+};
+Node.prototype.addEventListener = function (name, callback) {
+  (this.listeners[name] = this.listeners[name] || []).push(callback);
+};
+Node.prototype.dispatch = function (name, event) {
+  (this.listeners[name] || []).forEach(function (callback) { callback(event); });
+};
+var shell = new Node();
+var contents = new Node();
+var toggle = new Node();
+var resizer = new Node();
+var root = new Node();
+var nodes = {
+  "arc-shell": shell,
+  "arc-contents": contents,
+  "arc-contents-toggle": toggle,
+  "arc-contents-resizer": resizer
+};
+globalThis.document = {
+  documentElement: root,
+  getElementById: function (id) { return nodes[id]; }
+};
+globalThis.innerWidth = 1400;
+globalThis.getComputedStyle = function () { return {fontSize: "16px"}; };
+globalThis.matchMedia = function () { return {matches: false}; };
+var windowListeners = {};
+globalThis.addEventListener = function (name, callback) {
+  (windowListeners[name] = windowListeners[name] || []).push(callback);
+};
+globalThis.removeEventListener = function (name, callback) {
+  windowListeners[name] = (windowListeners[name] || []).filter(function (item) {
+    return item !== callback;
+  });
+};
+function windowDispatch(name, event) {
+  (windowListeners[name] || []).slice().forEach(function (callback) {
+    callback(event || {});
+  });
+}
+globalThis.__arcReaderTest.state.payload = {
+  publication: {labels: {}, reader_profile: {target_language: "en"}}
+};
+globalThis.__arcReaderTest.setupContents();
+assert(
+  shell.style.values["--arc-contents-width"] === "288px" &&
+    resizer.attrs["aria-valuemin"] === "192" &&
+    resizer.attrs["aria-valuemax"] === "512",
+  "sidebar did not initialize its bounded width"
+);
+resizer.dispatch("pointerdown", {button: 0, preventDefault: function () {}});
+windowDispatch("pointermove", {clientX: 420, preventDefault: function () {}});
+windowDispatch("pointerup");
+assert(
+  shell.style.values["--arc-contents-width"] === "420px",
+  "pointer drag did not resize the sidebar"
+);
+resizer.dispatch("pointerdown", {button: 0, preventDefault: function () {}});
+windowDispatch("pointermove", {clientX: 180, preventDefault: function () {}});
+assert(
+  shell.classList.contains("contents-collapsed") &&
+    toggle.attrs["aria-expanded"] === "false",
+  "dragging below the minimum did not collapse the sidebar"
+);
+toggle.onclick();
+assert(
+  !shell.classList.contains("contents-collapsed") &&
+    shell.style.values["--arc-contents-width"] === "420px",
+  "contents button did not restore the previous width"
+);
+resizer.dispatch("keydown", {key: "Home", preventDefault: function () {}});
+assert(
+  shell.style.values["--arc-contents-width"] === "192px",
+  "Home did not select the minimum sidebar width"
+);
+resizer.dispatch("keydown", {key: "ArrowLeft", preventDefault: function () {}});
+assert(
+  shell.classList.contains("contents-collapsed"),
+  "keyboard resize below the minimum did not collapse"
+);
+toggle.onclick();
+resizer.dispatch("keydown", {key: "End", preventDefault: function () {}});
+assert(
+  shell.style.values["--arc-contents-width"] === "512px",
+  "End did not select the maximum sidebar width"
+);
+"""
+    )
+    subprocess.run(
+        [node, "-"], input=instrumented, check=True, capture_output=True, text=True
+    )
+
+
 def test_reader_renders_structured_pdf_page_notes_default_hidden() -> None:
     javascript = _text("reader.js")
     stylesheet = _text("reader.css")

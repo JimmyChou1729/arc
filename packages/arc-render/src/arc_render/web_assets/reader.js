@@ -375,6 +375,7 @@
       foreground: traditional ? "前景色" : "前景色",
       background: traditional ? "背景色" : "背景色",
       roleDefaultColors: traditional ? "恢復類型預設" : "恢复类型默认",
+      resizeContents: traditional ? "調整目錄寬度" : "调整目录宽度",
       advanced: "预览与更多设置",
       advancedAction: "高级",
       markdown: "Markdown",
@@ -442,6 +443,7 @@
       foreground: "Foreground",
       background: "Background",
       roleDefaultColors: "Use role default",
+      resizeContents: "Resize contents",
       advanced: "Preview and more settings",
       advancedAction: "Advanced",
       markdown: "Markdown",
@@ -2576,16 +2578,89 @@
     var shell = document.getElementById("arc-shell");
     var contents = document.getElementById("arc-contents");
     var toggle = document.getElementById("arc-contents-toggle");
+    var resizer = document.getElementById("arc-contents-resizer");
     var mobile = window.matchMedia("(max-width: 899px)");
     var strings = labels();
     var open = !mobile.matches;
+    var rootFontSize = parseFloat(
+      window.getComputedStyle(document.documentElement).fontSize
+    ) || 16;
+    var minimumWidth = 12 * rootFontSize;
+    var preferredMaximumWidth = 32 * rootFontSize;
+    var width = 18 * rootFontSize;
+    var dragging = false;
+
+    function maximumWidth() {
+      return Math.max(
+        minimumWidth,
+        Math.min(preferredMaximumWidth, window.innerWidth * .45)
+      );
+    }
+
+    function setWidth(value) {
+      width = Math.min(maximumWidth(), Math.max(minimumWidth, Number(value)));
+      shell.style.setProperty("--arc-contents-width", Math.round(width) + "px");
+      resizer.setAttribute("aria-valuemin", String(Math.round(minimumWidth)));
+      resizer.setAttribute("aria-valuemax", String(Math.round(maximumWidth())));
+      resizer.setAttribute("aria-valuenow", String(Math.round(width)));
+      resizer.setAttribute("aria-valuetext", Math.round(width) + " px");
+    }
+
     function setOpen(value) {
       open = Boolean(value);
       shell.classList.toggle("contents-collapsed", !open);
       contents.setAttribute("aria-hidden", String(!open));
       toggle.setAttribute("aria-expanded", String(open));
       toggle.title = open ? strings.collapse : strings.expand;
+      if (open) setWidth(width);
     }
+
+    function stopDragging() {
+      if (!dragging) return;
+      dragging = false;
+      shell.classList.remove("is-resizing-contents");
+      window.removeEventListener("pointermove", drag);
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
+    }
+
+    function drag(event) {
+      if (!dragging) return;
+      if (event.clientX < minimumWidth) {
+        stopDragging();
+        setOpen(false);
+        return;
+      }
+      setWidth(event.clientX);
+      if (typeof event.preventDefault === "function") event.preventDefault();
+    }
+
+    resizer.title = strings.resizeContents;
+    resizer.setAttribute("aria-label", strings.resizeContents);
+    resizer.addEventListener("pointerdown", function (event) {
+      if (mobile.matches || !open || event.button !== 0) return;
+      dragging = true;
+      shell.classList.add("is-resizing-contents");
+      window.addEventListener("pointermove", drag);
+      window.addEventListener("pointerup", stopDragging);
+      window.addEventListener("pointercancel", stopDragging);
+      if (typeof event.preventDefault === "function") event.preventDefault();
+    });
+    resizer.addEventListener("keydown", function (event) {
+      var next = width;
+      if (event.key === "ArrowLeft") next -= rootFontSize;
+      else if (event.key === "ArrowRight") next += rootFontSize;
+      else if (event.key === "Home") next = minimumWidth;
+      else if (event.key === "End") next = maximumWidth();
+      else return;
+      event.preventDefault();
+      if (next < minimumWidth) setOpen(false);
+      else setWidth(next);
+    });
+    window.addEventListener("resize", function () {
+      if (open && !mobile.matches) setWidth(width);
+    });
+    setWidth(width);
     setOpen(open);
     toggle.onclick = function () { setOpen(!open); };
     contents.onclick = function (event) {
