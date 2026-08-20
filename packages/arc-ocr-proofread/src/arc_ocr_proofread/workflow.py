@@ -27,6 +27,7 @@ from arc_jobs import (
     canonical_json_bytes,
 )
 from arc_llm import (
+    ExecutionLimits,
     JsonOutput,
     LLMCompleted,
     LLMExecutionOptions,
@@ -66,6 +67,7 @@ GROUP_ID = "pages"
 BOUNDARY_GROUP_ID = "boundaries"
 BOUNDARY_IMAGE_GROUP_ID = "boundary-page-images"
 BOUNDARY_REVIEW_SCHEMA = "arc.ocr_proofread.boundary_review_request.v1"
+PROVIDER_IDLE_TIMEOUT_SECONDS = 600
 _IMAGE_LINK = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
 
@@ -399,6 +401,9 @@ class ProofreadHandler:
         options = LLMExecutionOptions(
             profile=LLMExecutionProfile.BOUNDED,
             internet=False,
+            limits=ExecutionLimits(
+                idle_timeout_seconds=PROVIDER_IDLE_TIMEOUT_SECONDS
+            ),
             gate=ProviderGateOptions(
                 global_limit=self.config.max_workers,
                 minimum_available_memory_fraction=0.10,
@@ -650,6 +655,9 @@ Next-page boundary context:
         options = LLMExecutionOptions(
             profile=LLMExecutionProfile.BOUNDED,
             internet=False,
+            limits=ExecutionLimits(
+                idle_timeout_seconds=PROVIDER_IDLE_TIMEOUT_SECONDS
+            ),
             gate=ProviderGateOptions(
                 global_limit=self.config.max_workers,
                 minimum_available_memory_fraction=0.10,

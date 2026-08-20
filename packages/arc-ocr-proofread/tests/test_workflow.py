@@ -44,6 +44,7 @@ class Tasks:
         self.calls += 1
         assert options.profile.value == "bounded"
         assert options.gate.global_limit == 200
+        assert options.limits.idle_timeout_seconds == 600
         return LLMCompleted(self.value, "codex", "gpt-5.6-luna", None, None)
 
 
