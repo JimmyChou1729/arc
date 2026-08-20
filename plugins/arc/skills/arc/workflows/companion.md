@@ -258,6 +258,19 @@ Revisions replace complete titles and Markdown bodies while preserving source
 identity, anchors, language, role, and priority. They cannot add bibliography
 entries, resources, or anchors; rebuild the Companion for those changes.
 
+Before starting a full rebuild after a source edit, classify the change. A
+renderer, style, font, or validation-only change uses `render`. When the source
+change is limited to standalone metadata, corrected paragraph segmentation, or
+a small number of visually verified page joins, first compare the old and new
+rich documents. Reuse and re-anchor fragments whose complete source content is
+unchanged, remove overlays anchored only to metadata, and ask a model to revise
+only the changed spans from their frozen prior translations. The main agent
+must review every ambiguous mapping and every correction to source text. Keep
+the prior run-owned workspace immutable and validate the newly source-bound
+publication and reader. Use a full build when semantic changes are broad,
+anchors cannot be mapped with high confidence, or focused revision cannot
+produce a complete usable layer.
+
 ARC has no Companion PDF release artifact or automated PDF pipeline. A person
 may open the standalone HTML in Chrome and use Print / Save as PDF, but that
 file is a user-side derivative: ARC does not validate it, reproduce it,
@@ -265,7 +278,8 @@ automatically publish it, or make durability guarantees for it.
 
 ### Step 2: Render without model calls
 
-Use render after a style, font, renderer, or validator change:
+Use render after a style, font, renderer, or validator change when source
+identity is unchanged:
 
 ```bash
 arc-companion render --project-dir <project-dir>
