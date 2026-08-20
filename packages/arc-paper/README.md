@@ -1,9 +1,11 @@
 # arc-paper
 
-`arc-paper` owns deterministic paper identifiers, metadata, references,
-citers, source acquisition, content-addressed caches, HTML/Markdown/TeX/PDF
-parsing, full-text and equation search, approximate keyword inventory, and
-paper-specific LLM workflows. Generic model execution and durable-run
+`arc-paper` owns deterministic paper identifiers, arXiv/INSPIRE acquisition,
+metadata, references, citers, paper-cache administration, and paper-specific
+LLM workflows. Provider-neutral source storage, HTML/Markdown/TeX/PDF parsing,
+rich-document contracts, document structure, full-text and equation search,
+and approximate keyword inventory come from `arc-document` and remain exposed
+through the compatible `arc-paper` API. Generic model execution and durable-run
 mechanics remain in `arc-llm` and `arc-jobs`.
 
 ## Running the CLI

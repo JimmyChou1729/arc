@@ -1,26 +1,22 @@
-"""Logical locators for the current parsed full-text cache.
-
-The catalog contains no source bytes, parsed text, or physical cache paths.
-Each representation points to immutable content identities that must still be
-verified by :class:`ParsedDocumentCache` before use.
-"""
+"""Paper dialect over :mod:`arc_document` full-text catalog storage."""
 
 from __future__ import annotations
 
-import hashlib
-import json
-import shutil
 from collections.abc import Mapping
-from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any
+
+from arc_document._full_text_catalog import (
+    FullTextCatalog as _DocumentFullTextCatalog,
+    FullTextCatalogDialect,
+    FullTextCatalogEntry as _DocumentFullTextCatalogEntry,
+    FullTextRepresentation,
+    _validated_source_identity,
+)
 
 from ._cache_root import resolve_cache_root
-from ._durable_io import atomic_write_bytes
-from ._file_lock import exclusive_file_lock
 from .ids import arxiv_path_id
 from .sources import SourceArtifact
 
@@ -30,55 +26,31 @@ if TYPE_CHECKING:
 
 FULL_TEXT_CATALOG_SCHEMA = "arc.paper.full_text_catalog.v2"
 FULL_TEXT_CATALOG_ADMIN_SCHEMA = "arc.paper.full_text_catalog_admin.v2"
-_ENTRY_FIELDS = {
-    "schema_version",
-    "kind",
-    "paper_ids",
-    "local_source_identity",
-    "representations",
-}
-_REPRESENTATION_FIELDS = {
-    "source_identity",
-    "parser_contract",
-    "parsed_cache_key",
-    "document_digest",
-}
-_SOURCE_IDENTITY_FIELDS = {
-    "source_format",
-    "media_type",
-    "artifact_digest",
-    "size",
-}
-_ADMIN_FIELDS = {
-    "schema_version",
-    "cached_at",
-}
 
 
-@dataclass(frozen=True)
-class FullTextRepresentation:
-    """One current format-specific projection selected by a locator."""
+def _paper_identifier(source: SourceArtifact) -> str:
+    arxiv_id = arxiv_path_id(str(source.origin.metadata.get("arxiv_id") or ""))
+    return f"arXiv:{arxiv_id}" if arxiv_id else ""
 
-    source_identity: Mapping[str, Any]
-    parser_contract: str
-    parsed_cache_key: str
-    document_digest: str
 
-    def __post_init__(self) -> None:
-        identity = _validated_source_identity(self.source_identity)
-        parser_contract = str(self.parser_contract).strip()
-        if not parser_contract:
-            raise ValueError("parser_contract is required")
-        if not _is_sha256(self.parsed_cache_key):
-            raise ValueError("parsed_cache_key must be a SHA-256 digest")
-        if not _is_sha256(self.document_digest):
-            raise ValueError("document_digest must be a SHA-256 digest")
-        object.__setattr__(self, "source_identity", MappingProxyType(identity))
-        object.__setattr__(self, "parser_contract", parser_contract)
+def _valid_paper_identifier(value: str) -> bool:
+    return (
+        value.startswith("arXiv:")
+        and bool(arxiv_path_id(value))
+        and f"arXiv:{arxiv_path_id(value)}" == value
+    )
 
-    @property
-    def source_format(self) -> str:
-        return str(self.source_identity["source_format"])
+
+_PAPER_FULL_TEXT_CATALOG_DIALECT = FullTextCatalogDialect(
+    schema_version=FULL_TEXT_CATALOG_SCHEMA,
+    admin_schema_version=FULL_TEXT_CATALOG_ADMIN_SCHEMA,
+    directory="full-text-catalog",
+    identified_kind="arxiv",
+    identifier_field="paper_ids",
+    admin_prefix="paper",
+    identify_source=_paper_identifier,
+    validate_identifier=_valid_paper_identifier,
+)
 
 
 @dataclass(frozen=True)
@@ -104,9 +76,7 @@ class FullTextCatalogEntry:
             raise ValueError("catalog entry requires a representation")
         if self.kind == "arxiv":
             if not paper_ids or any(
-                not item.startswith("arXiv:")
-                or f"arXiv:{arxiv_path_id(item)}" != item
-                for item in paper_ids
+                not _valid_paper_identifier(item) for item in paper_ids
             ):
                 raise ValueError("arxiv catalog entry requires canonical paper IDs")
             if self.local_source_identity is not None:
@@ -138,10 +108,14 @@ class FullTextCatalogAdminEntry:
 
 
 class FullTextCatalog:
-    """Atomic per-entry locator index for materialized full text."""
+    """Paper-named facade over the provider-neutral catalog engine."""
 
     def __init__(self, root: str | Path | None = None) -> None:
         self.root = resolve_cache_root(root)
+        self._catalog = _DocumentFullTextCatalog(
+            self.root,
+            _dialect=_PAPER_FULL_TEXT_CATALOG_DIALECT,
+        )
 
     def record(
         self,
@@ -151,377 +125,38 @@ class FullTextCatalog:
         parser_contract: str,
         parsed_cache_key: str,
     ) -> FullTextCatalogEntry:
-        if document.source.content_identity != source.content_identity:
-            raise ValueError("catalog document source does not match source")
-        representation = FullTextRepresentation(
-            source_identity=_source_identity(source),
-            parser_contract=parser_contract,
-            parsed_cache_key=parsed_cache_key,
-            document_digest=document.document_digest,
-        )
-        locator_kind, locator_identity, paper_id = _locator_identity(source)
-        locator_key = _locator_key(locator_kind, locator_identity)
-        path = self._entry_path(locator_key)
-        with self._entry_lock(locator_key):
-            previous = self._read_path(path)
-            if previous is not None and not _entry_matches_locator(
-                previous, locator_kind, locator_identity
-            ):
-                previous = None
-            by_format = (
-                {item.source_format: item for item in previous.representations}
-                if previous is not None
-                else {}
+        return _paper_entry(
+            self._catalog.record(
+                source,
+                document,
+                parser_contract=parser_contract,
+                parsed_cache_key=parsed_cache_key,
             )
-            by_format[representation.source_format] = representation
-            if locator_kind == "arxiv":
-                paper_ids = set(previous.paper_ids if previous is not None else ())
-                paper_ids.add(paper_id)
-                entry = FullTextCatalogEntry(
-                    kind="arxiv",
-                    paper_ids=tuple(paper_ids),
-                    local_source_identity=None,
-                    representations=tuple(by_format.values()),
-                )
-            else:
-                entry = FullTextCatalogEntry(
-                    kind="local",
-                    paper_ids=(),
-                    local_source_identity=locator_identity,
-                    representations=tuple(by_format.values()),
-                )
-            payload = _canonical_json_bytes(_entry_document(entry))
-            try:
-                unchanged = path.read_bytes() == payload
-            except OSError:
-                unchanged = False
-            if not unchanged or self._read_admin(path.parent) is None:
-                atomic_write_bytes(
-                    path.parent / "admin.json",
-                    _canonical_json_bytes(
-                        {
-                            "schema_version": FULL_TEXT_CATALOG_ADMIN_SCHEMA,
-                            "cached_at": _utc_now(),
-                        }
-                    ),
-                )
-                atomic_write_bytes(path, payload)
-            return entry
+        )
 
     def current_entries(self) -> tuple[FullTextCatalogEntry, ...]:
-        """Return only strict current locators; damaged entries are ignored."""
-
-        entries_root = self.root / "full-text-catalog" / "v2" / "entries"
-        if not entries_root.is_dir():
-            return ()
-        entries = tuple(
-            entry
-            for path in entries_root.glob("*/*/locator.json")
-            if (entry := self._read_path(path)) is not None
-        )
-        return tuple(sorted(entries, key=_entry_sort_key))
+        return tuple(_paper_entry(item) for item in self._catalog.current_entries())
 
     def admin_entries(self) -> tuple[FullTextCatalogAdminEntry, ...]:
-        """Return current locators with their last successful publication time."""
-
-        entries_root = self.root / "full-text-catalog" / "v2" / "entries"
-        if not entries_root.is_dir():
-            return ()
-        entries: list[FullTextCatalogAdminEntry] = []
-        for path in entries_root.glob("*/*/locator.json"):
-            entry = self._read_path(path)
-            if entry is None:
-                continue
-            cached_at = self._read_admin(path.parent)
-            if cached_at is None:
-                continue
-            entries.append(
-                FullTextCatalogAdminEntry(
-                    entry_id=_admin_entry_id(entry),
-                    entry=entry,
-                    cached_at=cached_at,
-                )
+        return tuple(
+            FullTextCatalogAdminEntry(
+                entry_id=item.entry_id,
+                entry=_paper_entry(item.entry),
+                cached_at=item.cached_at,
             )
-        return tuple(sorted(entries, key=lambda item: item.entry_id))
+            for item in self._catalog.admin_entries()
+        )
 
     def remove_admin_entry(self, entry_id: str) -> bool:
-        """Physically remove one locator and its selected source/parsed objects."""
-
-        selected = next(
-            (item for item in self.admin_entries() if item.entry_id == entry_id),
-            None,
-        )
-        if selected is None:
-            return False
-        removed = False
-        for locator_key in sorted(_locator_keys(selected.entry)):
-            path = self._entry_path(locator_key)
-            with self._entry_lock(locator_key):
-                if path.parent.exists():
-                    shutil.rmtree(path.parent)
-                    removed = True
-        from ._parsed_document_cache import ParsedDocumentCache
-        from .source_repository import SourceRepository
-
-        repository = SourceRepository(self.root)
-        for representation in selected.entry.representations:
-            cache = ParsedDocumentCache(
-                self.root,
-                repository=repository,
-                parser_contract=representation.parser_contract,
-            )
-            removed = (
-                cache.remove_by_key(representation.parsed_cache_key) or removed
-            )
-            removed = (
-                repository.remove(
-                    representation.source_identity["source_format"],
-                    representation.source_identity["artifact_digest"],
-                )
-                or removed
-            )
-        return removed
-
-    def _read_path(self, path: Path) -> FullTextCatalogEntry | None:
-        try:
-            if self._read_admin(path.parent) is None:
-                return None
-            value = json.loads(path.read_text(encoding="utf-8"))
-            entry = _entry_from_document(value)
-            if path.parent.name not in _locator_keys(entry):
-                return None
-            return entry
-        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _read_admin(entry_dir: Path) -> str | None:
-        try:
-            value = json.loads(
-                (entry_dir / "admin.json").read_text(encoding="utf-8")
-            )
-            if (
-                not isinstance(value, dict)
-                or set(value) != _ADMIN_FIELDS
-                or value.get("schema_version")
-                != FULL_TEXT_CATALOG_ADMIN_SCHEMA
-                or not isinstance(value.get("cached_at"), str)
-                or not value["cached_at"]
-                or not _is_utc_timestamp(value["cached_at"])
-            ):
-                return None
-            return value["cached_at"]
-        except (
-            OSError,
-            UnicodeError,
-            json.JSONDecodeError,
-            TypeError,
-            ValueError,
-        ):
-            return None
-
-    def _entry_path(self, locator_key: str) -> Path:
-        return (
-            self.root
-            / "full-text-catalog"
-            / "v2"
-            / "entries"
-            / locator_key[:2]
-            / locator_key
-            / "locator.json"
-        )
-
-    @contextmanager
-    def _entry_lock(self, locator_key: str) -> Iterator[None]:
-        path = (
-            self.root
-            / "full-text-catalog"
-            / "v2"
-            / "locks"
-            / f"{locator_key}.lock"
-        )
-        with exclusive_file_lock(path):
-            yield
+        return self._catalog.remove_admin_entry(entry_id)
 
 
-def _locator_identity(
-    source: SourceArtifact,
-) -> tuple[str, str | dict[str, Any], str]:
-    arxiv_id = arxiv_path_id(str(source.origin.metadata.get("arxiv_id") or ""))
-    if arxiv_id:
-        canonical = f"arXiv:{arxiv_id}"
-        return "arxiv", canonical, canonical
-    identity = _source_identity(source)
-    return "local", identity, ""
-
-
-def _locator_key(kind: str, identity: str | Mapping[str, Any]) -> str:
-    return hashlib.sha256(
-        _canonical_json_bytes({"kind": kind, "identity": identity})
-    ).hexdigest()
-
-
-def _entry_matches_locator(
-    entry: FullTextCatalogEntry,
-    kind: str,
-    identity: str | Mapping[str, Any],
-) -> bool:
-    if entry.kind != kind:
-        return False
-    if kind == "arxiv":
-        return identity in entry.paper_ids
-    return dict(entry.local_source_identity or {}) == dict(identity)
-
-
-def _locator_keys(entry: FullTextCatalogEntry) -> set[str]:
-    if entry.kind == "arxiv":
-        return {
-            _locator_key("arxiv", paper_id)
-            for paper_id in entry.paper_ids
-        }
-    return {
-        _locator_key("local", dict(entry.local_source_identity or {}))
-    }
-
-
-def _entry_document(entry: FullTextCatalogEntry) -> dict[str, Any]:
-    return {
-        "schema_version": FULL_TEXT_CATALOG_SCHEMA,
-        "kind": entry.kind,
-        "paper_ids": list(entry.paper_ids),
-        "local_source_identity": (
-            dict(entry.local_source_identity)
-            if entry.local_source_identity is not None
-            else None
-        ),
-        "representations": [
-            {
-                "source_identity": dict(item.source_identity),
-                "parser_contract": item.parser_contract,
-                "parsed_cache_key": item.parsed_cache_key,
-                "document_digest": item.document_digest,
-            }
-            for item in entry.representations
-        ],
-    }
-
-
-def _entry_from_document(value: object) -> FullTextCatalogEntry:
-    if not isinstance(value, Mapping) or set(value) != _ENTRY_FIELDS:
-        raise ValueError("catalog locator has invalid fields")
-    if value.get("schema_version") != FULL_TEXT_CATALOG_SCHEMA:
-        raise ValueError("catalog locator has unsupported schema")
-    paper_ids = value.get("paper_ids")
-    representations = value.get("representations")
-    if not isinstance(paper_ids, list) or not all(
-        isinstance(item, str) for item in paper_ids
-    ):
-        raise ValueError("catalog paper_ids must be strings")
-    if not isinstance(representations, list):
-        raise ValueError("catalog representations must be a list")
-    decoded: list[FullTextRepresentation] = []
-    for item in representations:
-        if not isinstance(item, Mapping) or set(item) != _REPRESENTATION_FIELDS:
-            raise ValueError("catalog representation has invalid fields")
-        decoded.append(
-            FullTextRepresentation(
-                source_identity=item["source_identity"],
-                parser_contract=item["parser_contract"],
-                parsed_cache_key=item["parsed_cache_key"],
-                document_digest=item["document_digest"],
-            )
-        )
-    local_identity = value.get("local_source_identity")
-    if local_identity is not None and not isinstance(local_identity, Mapping):
-        raise ValueError("catalog local identity must be an object or null")
+def _paper_entry(entry: _DocumentFullTextCatalogEntry) -> FullTextCatalogEntry:
     return FullTextCatalogEntry(
-        kind=value.get("kind"),
-        paper_ids=tuple(paper_ids),
-        local_source_identity=local_identity,
-        representations=tuple(decoded),
-    )
-
-
-def _source_identity(source: SourceArtifact) -> dict[str, Any]:
-    return {
-        "source_format": source.source_format.value,
-        "media_type": source.media_type,
-        "artifact_digest": source.artifact_digest,
-        "size": source.size,
-    }
-
-
-def _validated_source_identity(value: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != _SOURCE_IDENTITY_FIELDS:
-        raise ValueError("source identity has invalid fields")
-    source_format = value.get("source_format")
-    media_type = value.get("media_type")
-    artifact_digest = value.get("artifact_digest")
-    size = value.get("size")
-    if (
-        source_format not in {"html", "markdown", "tex", "pdf"}
-        or not isinstance(media_type, str)
-        or not media_type
-        or "/" not in media_type
-        or ";" in media_type
-        or not _is_sha256(artifact_digest)
-        or not isinstance(size, int)
-        or isinstance(size, bool)
-        or size < 0
-    ):
-        raise ValueError("source identity is invalid")
-    return {
-        "source_format": source_format,
-        "media_type": media_type,
-        "artifact_digest": artifact_digest,
-        "size": size,
-    }
-
-
-def _entry_sort_key(entry: FullTextCatalogEntry) -> tuple[str, str]:
-    if entry.kind == "arxiv":
-        return entry.kind, entry.paper_ids[0].casefold()
-    return entry.kind, str(
-        (entry.local_source_identity or {}).get("artifact_digest", "")
-    )
-
-
-def _admin_entry_id(entry: FullTextCatalogEntry) -> str:
-    if entry.kind == "arxiv":
-        return f"paper:{entry.paper_ids[0]}"
-    identity = entry.local_source_identity or {}
-    return (
-        f"local:{identity.get('source_format', '')}:"
-        f"{identity.get('artifact_digest', '')}"
-    )
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _is_utc_timestamp(value: str) -> bool:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    return parsed.tzinfo is not None
-
-
-def _canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-
-def _is_sha256(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == 64
-        and all(character in "0123456789abcdef" for character in value)
+        kind="arxiv" if entry.kind == "identified" else "local",
+        paper_ids=entry.document_ids,
+        local_source_identity=entry.local_source_identity,
+        representations=entry.representations,
     )
 
 
