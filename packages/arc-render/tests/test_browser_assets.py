@@ -254,6 +254,17 @@ define = undefined;
   };
 }());
 var helpers = globalThis.__arcReaderTest;
+helpers.setupMarkdown();
+var nestedMathTex = String.raw`\\langle\\Psi^{-}|M|\\Psi^{-}\\rangle>\\mbox{$\\textstyle\\frac{1}{2}$}`;
+var nestedMathTokens = helpers.state.md.parseInline(
+  "成立 $" + nestedMathTex + "$。", {}
+)[0].children.filter(function (token) { return token.type === "arc_math_inline"; });
+if (
+  nestedMathTokens.length !== 1 ||
+  nestedMathTokens[0].content !== nestedMathTex
+) {
+  throw new Error("old-style nested TeX math shift split Markdown math");
+}
 helpers.validateIntegerJson({value: 4, nested: [1, 2]}, "fixture");
 var rejected = false;
 try {
@@ -354,6 +365,43 @@ if (
   })
 ) {
   throw new Error("grouped TeX size delimiters were not repaired for KaTeX");
+}
+var oldMathShiftCandidates = helpers.katexCandidates(
+  String.raw`F>\\mbox{$\\textstyle\\frac{1}{2}$}`
+);
+if (
+  !oldMathShiftCandidates.some(function (candidate) {
+    return candidate === String.raw`F>{\\textstyle\\frac{1}{2}}`;
+  })
+) {
+  throw new Error("old-style nested TeX math shift was not repaired for KaTeX");
+}
+if (
+  !helpers.katexCandidates(String.raw`x,\\mbox{ where }y`).some(function (candidate) {
+    return candidate === String.raw`x,\\text{ where }y`;
+  })
+) {
+  throw new Error("legacy TeX text box was not repaired for KaTeX");
+}
+var strippedArrayCandidates = helpers.katexCandidates(
+  String.raw`[]{cc|cl}a&&b&c\\\\d&e&f&g\\\\`
+);
+if (
+  !strippedArrayCandidates.some(function (candidate) {
+    return candidate === String.raw`\\begin{array}{cc|cl}a&&b&c\\\\d&e&f&g\\\\\\end{array}`;
+  })
+) {
+  throw new Error("legacy stripped TeX array environment was not repaired");
+}
+var optionalArrayCandidates = helpers.katexCandidates(
+  String.raw`\\begin{array}[]{cc}a&b\\end{array}`
+);
+if (
+  !optionalArrayCandidates.some(function (candidate) {
+    return candidate === String.raw`\\begin{array}{cc}a&b\\end{array}`;
+  })
+) {
+  throw new Error("empty TeX array position option was not removed");
 }
 if (
   !helpers.katexCandidates("x+\frac{a}{b}").some(function (candidate) {

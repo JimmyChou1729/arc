@@ -548,14 +548,7 @@
         return false;
       }
       var start = position + open.length;
-      var end = source.indexOf(close, start);
-      while (
-        end >= 0 &&
-        close === "$" &&
-        source.charAt(end - 1) === "\\"
-      ) {
-        end = source.indexOf(close, end + 1);
-      }
+      var end = inlineMathEnd(source, start, close);
       if (end < 0 || end === start || source.slice(start, end).indexOf("\n") >= 0) {
         return false;
       }
@@ -650,6 +643,30 @@
       return defaultLinkOpen(tokens, index, options, env, renderer);
     };
     state.md = md;
+  }
+
+  function inlineMathEnd(source, start, close) {
+    var braceDepth = 0;
+    for (var index = start; index < source.length; index += 1) {
+      var escaped = false;
+      var slashCount = 0;
+      for (var cursor = index - 1; cursor >= 0 && source.charAt(cursor) === "\\"; cursor -= 1) {
+        slashCount += 1;
+      }
+      escaped = slashCount % 2 === 1;
+      if (!escaped && close === "$" && source.charAt(index) === "{") {
+        braceDepth += 1;
+      } else if (
+        !escaped && close === "$" && source.charAt(index) === "}" && braceDepth
+      ) {
+        braceDepth -= 1;
+      } else if (
+        !escaped && braceDepth === 0 && source.slice(index, index + close.length) === close
+      ) {
+        return index;
+      }
+    }
+    return -1;
   }
 
   function bibliographyIdentity(entry) {
@@ -2430,9 +2447,46 @@
     });
   }
 
+  function repairOldStyleMathShifts(value) {
+    return String(value || "").replace(
+      /\\mbox\s*\{\$([\s\S]*?)\$\}/g,
+      function (_match, math) { return "{" + math + "}"; }
+    );
+  }
+
+  function repairTextBoxes(value) {
+    // KaTeX does not expose legacy plain-TeX \mbox.  After removing nested
+    // math shifts, its text-mode equivalent preserves authored labels.
+    return String(value || "").replace(/\\mbox\b/g, "\\text");
+  }
+
+  function repairArrayEnvironment(value) {
+    var tex = String(value || "").replace(
+      /\\begin\s*\{array\}\s*\[\s*\]\s*/g,
+      "\\begin{array}"
+    );
+    var stripped = /^\s*\[\s*\]\s*\{([clr|\s]+)\}([\s\S]*)$/.exec(tex);
+    if (stripped && stripped[2].indexOf("&") >= 0) {
+      return "\\begin{array}{" + stripped[1].replace(/\s+/g, "") + "}" +
+        stripped[2] + "\\end{array}";
+    }
+    return tex;
+  }
+
   function katexCandidates(value) {
     var primary = katexTex(value);
-    var repaired = repairMatrixShorthand(primary);
+    var repairedMathShifts = katexTex(repairOldStyleMathShifts(value));
+    var repairedTextBoxes = katexTex(
+      repairTextBoxes(repairOldStyleMathShifts(value))
+    );
+    // Repair a stripped array before generic bare-ampersand handling wraps it
+    // as an aligned equation.
+    var repairedArrays = katexTex(
+      repairArrayEnvironment(
+        repairTextBoxes(repairOldStyleMathShifts(value))
+      )
+    );
+    var repaired = repairMatrixShorthand(repairedArrays);
     var repairedScripts = repairRepeatedSuperscripts(repaired)
       .replace(/\u000crac/g, "\\frac");
     var repairedDelimiters = repairGroupedSizeDelimiters(repairedScripts);
@@ -2441,6 +2495,9 @@
       .replace(/\\right\b/g, "\\bigr");
     return [
       primary,
+      repairedMathShifts,
+      repairedTextBoxes,
+      repairedArrays,
       repaired,
       repairedScripts,
       repairedDelimiters,
