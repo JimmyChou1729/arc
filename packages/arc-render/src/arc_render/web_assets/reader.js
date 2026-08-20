@@ -413,6 +413,9 @@
       saveSuccess: "新版本已保存。",
       saveUnchanged: "内容没有变化。",
       draftActive: "请先保存或取消当前编辑。",
+      draftRedirected: traditional ?
+        "目前編輯有未儲存內容，已返回該編輯框。" :
+        "当前编辑有未保存内容，已返回该编辑框。",
       editContent: "编辑这段 Markdown",
       loading: "正在读取版本……",
       historyChanged: "目录中的当前版本已变化；请关闭编辑器并重新打开后再保存。",
@@ -477,6 +480,7 @@
       saveSuccess: "A new revision was saved.",
       saveUnchanged: "Content is unchanged.",
       draftActive: "Save or cancel the current edit first.",
+      draftRedirected: "The current edit has unsaved changes; returned to it.",
       editContent: "Edit this Markdown",
       loading: "Loading revisions…",
       historyChanged: "The current directory revision changed; close and reopen the editor before saving.",
@@ -3418,11 +3422,10 @@
         state.activeDraft.base &&
         state.activeDraft.base.fragment_id === fragment.fragment_id
       ) {
-        focusInlineEditor(fragment.fragment_id);
-      } else {
-        setStatus(labels().draftActive, "error");
+        focusActiveDraft();
+        return;
       }
-      return;
+      if (!prepareForDraftSwitch()) return;
     }
     state.activeDraft = draftFromFragment(fragment);
     state.editorBase = fragment;
@@ -3450,9 +3453,36 @@
       var card = document.querySelector(
         '.arc-fragment[data-fragment-id="' + cssString(fragmentId) + '"]'
       );
+      if (card && typeof card.scrollIntoView === "function") {
+        card.scrollIntoView({block: "center", behavior: "auto"});
+      }
       var textarea = card && card.querySelector(".arc-inline-markdown");
       if (textarea) textarea.focus();
     });
+  }
+
+  function focusActiveDraft() {
+    if (!state.activeDraft) return;
+    var dialog = document.getElementById("arc-editor-dialog");
+    if (dialog && dialog.open) {
+      var markdown = document.getElementById("arc-editor-markdown");
+      if (markdown && typeof markdown.focus === "function") markdown.focus();
+      return;
+    }
+    if (state.activeDraft.base) {
+      focusInlineEditor(state.activeDraft.base.fragment_id);
+    }
+  }
+
+  function prepareForDraftSwitch() {
+    if (!state.activeDraft) return true;
+    if (activeDraftHasChanges()) {
+      setStatus(labels().draftRedirected, "error");
+      focusActiveDraft();
+      return false;
+    }
+    cancelActiveDraft();
+    return true;
   }
 
   function cssString(value) {
@@ -3475,10 +3505,7 @@
       setStatus(labels().revisionBusy, "error");
       return;
     }
-    if (state.activeDraft) {
-      setStatus(labels().draftActive, "error");
-      return;
-    }
+    if (!prepareForDraftSwitch()) return;
     state.activeDraft = {
       base: null,
       anchor: JSON.parse(JSON.stringify(anchor)),
@@ -3834,8 +3861,17 @@
   function activeDraftHasChanges() {
     var draft = state.activeDraft;
     if (!draft) return false;
-    if (!draft.base) return true;
     try {
+      if (!draft.base) {
+        return stableStringify(editableDraftState(draft)) !== stableStringify({
+          title: null,
+          markdown_body: normalizeMarkdown(""),
+          role: "note",
+          priority: 110,
+          citation_ids: [],
+          appearance: null
+        });
+      }
       return stableStringify(editableDraftState(draft)) !==
         stableStringify(editableRevisionState(draft.base));
     } catch (_error) {

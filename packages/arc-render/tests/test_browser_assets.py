@@ -1254,6 +1254,10 @@ FakeNode.prototype.querySelector = function (selector) {
   return null;
 };
 FakeNode.prototype.focus = function () { this.focused = true; };
+FakeNode.prototype.scrollIntoView = function (options) {
+  this.scrollCalls = (this.scrollCalls || 0) + 1;
+  this.scrollOptions = options;
+};
 FakeNode.prototype.setSelectionRange = function (start, end) {
   this.selection = [start, end];
 };
@@ -1287,13 +1291,16 @@ var nodes = {
 nodes["arc-editor-foreground"].value = "#f9fafb";
 nodes["arc-editor-background"].value = "#111827";
 nodes["arc-export-panel"].hidden = true;
+var visibleCard = null;
 globalThis.document = {
   createElement: function (tag) { return new FakeNode(tag); },
   getElementById: function (id) {
     if (!nodes[id]) throw new Error("unexpected DOM lookup: " + id);
     return nodes[id];
   },
-  querySelector: function () { return null; }
+  querySelector: function (selector) {
+    return selector.includes('.arc-fragment[data-fragment-id=') ? visibleCard : null;
+  }
 };
 globalThis.innerHeight = 900;
 globalThis.requestAnimationFrame = function (callback) { callback(); };
@@ -1389,11 +1396,17 @@ helpers.state.selected = new Map([[first.fragment_id, first]]);
   var active = helpers.state.activeDraft;
   var secondCard = helpers.renderFragment(second);
   secondCard.querySelector(".arc-fragment-saved-content").dispatch("click");
-  assert(helpers.state.activeDraft === active, "a second fragment replaced the active draft");
   assert(
-    nodes["arc-storage-status"].textContent === "Save or cancel the current edit first.",
-    "second edit did not report the single-draft guard"
+    helpers.state.activeDraft !== active &&
+      helpers.state.activeDraft.base === second,
+    "a clean draft did not switch directly to the second fragment"
   );
+  saved.dispatch("click", {target: saved});
+  assert(
+    helpers.state.activeDraft.base === first,
+    "switching back from a clean second draft failed"
+  );
+  active = helpers.state.activeDraft;
 
   var editingCard = helpers.renderFragment(first);
   assert(
@@ -1508,12 +1521,22 @@ helpers.state.selected = new Map([[first.fragment_id, first]]);
     "history restore did not flow back to the inline editor"
   );
 
+  var redirectCard = helpers.renderFragment(first);
+  visibleCard = redirectCard;
+  helpers.closeEditorDialog();
   var showCalls = nodes["arc-editor-dialog"].showCalls;
   helpers.openNewEditorForAnchor(anchor("block-3"));
   assert(
     helpers.state.activeDraft === active &&
       nodes["arc-editor-dialog"].showCalls === showCalls,
     "add-note bypassed the active-draft guard"
+  );
+  assert(
+    redirectCard.scrollCalls === 1 &&
+      redirectCard.querySelector(".arc-inline-markdown").focused &&
+      nodes["arc-storage-status"].textContent ===
+        "The current edit has unsaved changes; returned to it.",
+    "dirty draft guard did not reveal and focus the unsaved editor"
   );
   await helpers.openExportPanel();
   assert(nodes["arc-export-panel"].hidden, "export opened during an active draft");
@@ -1523,6 +1546,19 @@ helpers.state.selected = new Map([[first.fragment_id, first]]);
   var cancel = helpers.renderFragment(first).querySelector(".arc-inline-cancel");
   cancel.dispatch("click", {preventDefault: function () {}});
   assert(helpers.state.activeDraft === null, "inline cancel retained the active draft");
+
+  helpers.openNewEditorForAnchor(anchor("block-4"));
+  assert(
+    helpers.state.activeDraft && !helpers.state.activeDraft.base,
+    "blank new-note editor did not open"
+  );
+  helpers.beginInlineEdit(second);
+  assert(
+    helpers.state.activeDraft && helpers.state.activeDraft.base === second &&
+      !nodes["arc-editor-dialog"].open,
+    "blank new-note draft was not treated as clean during a switch"
+  );
+  helpers.cancelActiveDraft();
 })().catch(function (error) {
   console.error(error.stack || error);
   process.exitCode = 1;
