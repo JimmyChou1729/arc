@@ -93,6 +93,8 @@ arc-render compose \
 
 A Layer outside `publication/` is rejected even when its contents are valid.
 Do not move only a Layer while leaving its referenced revisions elsewhere.
+A Companion layer is optional: source-only and source-plus-translation
+publications can both be rendered and exported as standalone HTML.
 
 ## Read Command Results
 
@@ -153,18 +155,28 @@ publication; use `compose`, `render`, and `validate` for a native ARC reader.
 ## Browser Editing and Export
 
 In an ARC reader, click a translation, companion, guide, or note body to edit
-its raw Markdown. Only one draft may be active. Advanced exposes the complete
-title, Markdown, preview, metadata, and revision history; closing it returns
-unsaved values to the inline editor. Cancel discards the draft. Unchanged Save
-is disabled and creates no revision.
+its raw Markdown. Only one draft may be active. Selecting another fragment
+automatically cancels an unchanged draft. If the current draft has unsaved
+changes, the reader blocks the switch, scrolls the existing editor into view,
+and focuses it. Advanced exposes the complete title, Markdown, preview,
+metadata, revision history, and appearance controls; closing it returns unsaved
+values to the inline editor. Cancel discards the draft. Unchanged Save is
+disabled and creates no revision.
+
+Notes default to black with white text. Any fragment type can use a paired
+color preset or a custom foreground/background pair. The color picker and
+`#RRGGBB` text field stay synchronized; resetting uses the current role's
+default. New saves use fragment revision v2 for this optional appearance, while
+existing v1 revisions remain readable.
 
 A changed Save uses the revision snapshot already loaded by the browser,
 writes and verifies one new immutable fragment revision, then refreshes only
 the affected fragment and reading chunk. Later directory refresh incorporates
 revisions written by other processes and reports forks. Directory changes,
-exports, and another edit wait until the active draft is saved or cancelled.
-Reading mode shows each fragment role and any non-v1 revision; editing also
-shows priority and revision. Toolbar status messages clear after ten seconds.
+and exports wait until the active draft is saved or cancelled.
+Reading mode shows each fragment role and revision numbers greater than 1;
+editing also shows priority and revision. Toolbar status messages clear after
+ten seconds.
 
 The directory action is `New save location` until a project directory is
 connected and `Change save location` afterward. Export refreshes that directory
@@ -175,7 +187,10 @@ and available only for all-latest export from a standalone reader.
 Large readers render the initial view first, then nearby and idle-time chunks.
 Contents links and URL fragments materialize their target before scrolling.
 Native find covers the complete document after background rendering; printing
-forces remaining chunks to render.
+forces remaining chunks to render. On desktop, drag the contents sidebar's
+right edge to resize it from 12rem up to the smaller of 32rem or 45% of the
+viewport. Dragging below the minimum collapses it to the contents button; that
+button restores the previous width. The choice lasts only for the current page.
 
 ## Printing
 

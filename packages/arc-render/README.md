@@ -73,10 +73,13 @@ HTML. `--browser` requires `--html` and adds a local Chromium behavior check.
 `standalone-html` is a separate utility for embedding the local assets of an
 existing HTML bundle; it does not compose or validate an ARC publication.
 
-The v1 fragment format uses strict JSON front matter between ARC-specific
-delimiters. YAML is not accepted. Fragment priorities are positive integers;
-block and section are the only anchor kinds. A publication with no overlay
-layers is valid.
+Fragment revisions use strict JSON front matter between ARC-specific
+delimiters. YAML is not accepted. The v2 contract adds an optional paired
+foreground/background appearance; readers remain compatible with v1
+revisions. Fragment priorities are positive integers; block and section are
+the only anchor kinds. A publication with no overlay layers is valid, and a
+source plus translation layer can be rendered and exported without a Companion
+layer.
 
 The initial public API includes:
 
@@ -97,19 +100,26 @@ large publications, the reader renders an initial reading view first, loads
 nearby chunks on demand, and completes the remaining chunks during browser idle
 time. Contents links and URL fragments render their target before scrolling;
 printing renders every remaining chunk before the browser creates its preview.
-The reader never unloads a rendered chunk.
+The reader never unloads a rendered chunk. On desktop, drag the right edge of
+the contents sidebar to resize it between 12rem and the smaller of 32rem or 45%
+of the viewport. Dragging below the minimum collapses it; the contents button
+restores its last width for the current page. The width is not persisted.
 
 Clicking a translation, companion, guide, or note body opens its raw Markdown
 inline. The inline controls save or discard the single active draft; Advanced
 opens the complete title, Markdown, preview, metadata, and history editor while
 preserving the same unsaved values. Browser editing saves from the revision
 snapshot already loaded in the reader. Reading mode shows the fragment role and
-shows its revision only when it is not v1; inline editing shows the role,
-priority, and revision. Save remains disabled while normalized
-content is unchanged, and the defensive no-op path chooses no directory and
-creates no revision. A changed save
-appends and verifies one immutable revision file, then updates only the affected
-fragment and render chunk; it does not rescan the fragments tree.
+shows its revision number only when it is greater than 1; inline editing shows the role,
+priority, and revision. Advanced also offers paired color presets, synchronized
+color pickers and `#RRGGBB` fields, plus a reset to the role default. Notes use
+black with white text by default; any fragment role may store its own colors.
+Save remains disabled while normalized content is unchanged, and the defensive
+no-op path chooses no directory and creates no revision. Selecting another
+fragment cancels a clean draft immediately. If the active draft has unsaved
+changes, the reader keeps it, scrolls it into view, and focuses its editor. A
+changed save appends and verifies one immutable revision file, then updates only
+the affected fragment and render chunk; it does not rescan the fragments tree.
 Files added by another process are incorporated, with fork diagnostics when
 needed, the next time the reader connects to or restores the project directory.
 That refresh enumerates nested fragment directories in bounded concurrent
@@ -123,8 +133,8 @@ all currently selected revisions or only selections changed from the reader's
 embedded baseline. Full-text HTML export always contains the complete latest
 publication and remains a standalone interactive reader, so its action is shown
 only for the all-latest scope. It is available only from a standalone reader
-whose assets are already embedded. Directory changes,
-exports, and another edit wait until the active draft is saved or cancelled.
+whose assets are already embedded. Directory changes and exports wait until the
+active draft is saved or cancelled.
 
 For now, a PDF copy may be made manually with Chrome's Print / Save as PDF
 command. Such a PDF is a user-side derivative, not an ARC release artifact,
