@@ -800,14 +800,7 @@ RIGHT PAGE HEAD:
         items = [
             item
             for item in results
-            if item["action"] == "uncertain"
-            or (
-                item["action"] == "join"
-                and not (
-                    item.get("left", {}).get("is_edge")
-                    and item.get("right", {}).get("is_edge")
-                )
-            )
+            if item["action"] in {"join", "uncertain"}
         ]
         if not items:
             return {}

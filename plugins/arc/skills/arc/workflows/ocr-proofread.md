@@ -30,12 +30,13 @@ not kill worker processes to reduce concurrency.
 
 After page corrections, review every adjacent page pair using both full-page
 images. Join only a clearly continuous paragraph using one offered exact join
-form. Uncertain results and proposed joins whose candidates are not page-edge
-paragraphs require main-agent review. If a boundary provider remains
-interrupted after its bounded retries, that boundary also becomes uncertain so
-the main agent can inspect it without discarding completed boundary work. Page
-markers remain provenance notes immediately above the first block on their
-page; they are not prose and must not be translated.
+form. Every proposed join and every uncertain result requires main-agent
+review; page-edge position alone is not enough evidence that the selected OCR
+blocks are the prose visible across the page turn. If a boundary provider
+remains interrupted after its bounded retries, that boundary also becomes
+uncertain so the main agent can inspect it without discarding completed
+boundary work. Page markers remain provenance notes immediately above the
+first block on their page; they are not prose and must not be translated.
 
 ## Phase 3: Main-Agent Review
 

@@ -187,6 +187,20 @@ def _pass_audit(request: dict) -> dict:
     }
 
 
+def _accept_boundary_joins(request: dict) -> dict:
+    return {
+        "resume_key": request["resume_key"],
+        "decisions": [
+            {
+                "id": item["id"],
+                "action": "join",
+                "join_mode": item["join_mode"],
+            }
+            for item in request["items"]
+        ],
+    }
+
+
 def test_page_schema_accepts_descriptive_edit_kinds() -> None:
     kind = PAGE_OUTPUT_SCHEMA["$defs"]["edit"]["properties"]["kind"]
 
@@ -223,6 +237,15 @@ def test_boundary_repair_reuses_verified_delivery(
     repair_tasks = BoundaryTasks(boundary_action="join", join_mode="space")
     snapshot = service.execute(
         snapshot.run_id, task_service=repair_tasks, renderer=Renderer()
+    )
+    assert snapshot.status is RunStatus.PAUSED
+    review = _artifact_json(service, snapshot)
+    assert review["schema_version"] == "arc.ocr_proofread.boundary_review_request.v1"
+    snapshot = service.resume(
+        snapshot.run_id,
+        input=_accept_boundary_joins(review),
+        task_service=repair_tasks,
+        renderer=Renderer(),
     )
     assert snapshot.status is RunStatus.PAUSED
     audit = _artifact_json(service, snapshot)
@@ -380,6 +403,15 @@ def test_llm_reviewed_boundary_join_moves_marker_below_merged_paragraph(
         snapshot.run_id, task_service=tasks, renderer=Renderer()
     )
 
+    assert snapshot.status is RunStatus.PAUSED
+    review = _artifact_json(service, snapshot)
+    assert review["schema_version"] == "arc.ocr_proofread.boundary_review_request.v1"
+    snapshot = service.resume(
+        snapshot.run_id,
+        input=_accept_boundary_joins(review),
+        task_service=tasks,
+        renderer=Renderer(),
+    )
     assert snapshot.status is RunStatus.PAUSED
     audit = _artifact_json(service, snapshot)
     assert len(audit["boundaries"]) == 1
