@@ -59,6 +59,7 @@ HANDLER = "arc.ocr_proofread.document.v1"
 BOUNDARY_REPAIR_HANDLER = "arc.ocr_proofread.boundary_repair.v1"
 PROMPT_VERSION = "arc.ocr_proofread.page_prompt.v6"
 BOUNDARY_PROMPT_VERSION = "arc.ocr_proofread.boundary_prompt.v1"
+BOUNDARY_REPAIR_REQUEST_SCHEMA = "arc.ocr_proofread.boundary_repair_request.v2"
 RESULT_SCHEMA = "arc.ocr_proofread.result.v1"
 PAGE_SCHEMA = "arc.ocr_proofread.page_result.v1"
 REVIEW_SCHEMA = "arc.ocr_proofread.review_request.v1"
@@ -217,6 +218,7 @@ class BoundaryRepairConfig:
     model_tier: str = "medium"
     workers: int = 30
     max_workers: int = 200
+    request_schema_version: str = BOUNDARY_REPAIR_REQUEST_SCHEMA
 
     def __post_init__(self) -> None:
         if not 1 <= self.workers <= self.max_workers <= 200:
@@ -226,7 +228,7 @@ class BoundaryRepairConfig:
 
     def document(self) -> dict[str, Any]:
         return {
-            "schema_version": "arc.ocr_proofread.boundary_repair_request.v1",
+            "schema_version": self.request_schema_version,
             "project_dir": self.project_dir,
             "pdf": self.pdf,
             "baseline_markdown_sha256": self.baseline_markdown_sha256,
@@ -245,9 +247,11 @@ class BoundaryRepairConfig:
     def from_document(
         cls, value: Mapping[str, Any]
     ) -> "BoundaryRepairConfig":
-        if value.get("schema_version") != (
-            "arc.ocr_proofread.boundary_repair_request.v1"
-        ):
+        schema_version = value.get("schema_version")
+        if schema_version not in {
+            "arc.ocr_proofread.boundary_repair_request.v1",
+            BOUNDARY_REPAIR_REQUEST_SCHEMA,
+        }:
             raise ValueError("unsupported OCR boundary-repair request")
         return cls(
             project_dir=str(value["project_dir"]),
@@ -269,6 +273,7 @@ class BoundaryRepairConfig:
             model_tier=str(value["model_tier"]),
             workers=int(value["workers"]),
             max_workers=int(value["max_workers"]),
+            request_schema_version=str(schema_version),
         )
 
 

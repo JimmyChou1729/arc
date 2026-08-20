@@ -13,7 +13,12 @@ from arc_llm import LLMCompleted, LLMPaused
 from arc_paper import RenderedPDFPage
 
 from arc_ocr_proofread import ProofreadProject, ProofreadService, load_mineru_source
-from arc_ocr_proofread.workflow import PAGE_OUTPUT_SCHEMA, ProofreadWorkflowError, _apply_edits
+from arc_ocr_proofread.workflow import (
+    PAGE_OUTPUT_SCHEMA,
+    BoundaryRepairConfig,
+    ProofreadWorkflowError,
+    _apply_edits,
+)
 
 
 def _png(width: int = 40, height: int = 60) -> bytes:
@@ -302,6 +307,21 @@ def test_page_schema_accepts_descriptive_edit_kinds() -> None:
     kind = PAGE_OUTPUT_SCHEMA["$defs"]["edit"]["properties"]["kind"]
 
     assert kind == {"type": "string", "minLength": 1}
+
+
+def test_legacy_boundary_request_keeps_its_semantic_identity() -> None:
+    current = BoundaryRepairConfig(
+        "/project",
+        "/book.pdf",
+        "markdown",
+        "manifest",
+        "changes",
+        "pdf",
+    ).document()
+    legacy = dict(current, schema_version="arc.ocr_proofread.boundary_repair_request.v1")
+
+    assert BoundaryRepairConfig.from_document(legacy).document() == legacy
+    assert current["schema_version"] == "arc.ocr_proofread.boundary_repair_request.v2"
 
 
 def test_boundary_repair_reuses_verified_delivery(
