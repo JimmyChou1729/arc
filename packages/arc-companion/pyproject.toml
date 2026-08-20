@@ -4,19 +4,19 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arc-companion"
-version = "1.0.6"
+version = "1.1.0"
 description = "Source-faithful, LLM-assisted paper companions for ARC."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "ARC" }]
 requires-python = ">=3.11"
 dependencies = [
-  "arc-jobs>=1.0,<1.1",
-  "arc-llm>=1.0,<1.1",
-  "arc-document>=1.0,<1.1",
-  "arc-render>=1.0,<1.1",
-  "arc-proposer-reviewer>=1.0,<1.1",
-  "arc-translate>=1.0,<1.1",
+  "arc-jobs>=1.1,<1.2",
+  "arc-llm>=1.1,<1.2",
+  "arc-document>=1.1,<1.2",
+  "arc-render>=1.1,<1.2",
+  "arc-proposer-reviewer>=1.1,<1.2",
+  "arc-translate>=1.1,<1.2",
   "markdown-it-py>=4.2,<5",
 ]
 classifiers = [
