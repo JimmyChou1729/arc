@@ -25,14 +25,6 @@ from .contracts import TranslationSource
 
 
 STRUCTURAL_FIGURE_PLACEHOLDER = "\ufffc"
-_MARKDOWN_MATH = re.compile(
-    r"(?P<bracket>(?<!\\)\\\[(?P<bracket_tex>.+?)(?<!\\)\\\])"
-    r"|(?P<paren>(?<!\\)\\\((?P<paren_tex>.+?)(?<!\\)\\\))"
-    r"|(?P<double>(?<!\\)\$\$(?P<double_tex>.+?)(?<!\\)\$\$)"
-    r"|(?P<single>(?<!\\)(?<!\$)\$(?!\$)"
-    r"(?P<single_tex>.+?)(?<!\\)\$(?!\$))",
-    re.DOTALL,
-)
 _MARKDOWN_LINK = re.compile(
     r"(?<!!)\[[^\]]+\]\(([^)\s]+)(?:\s+[^)]*)?\)"
 )
@@ -285,7 +277,14 @@ def _compact_inline_text(value: Mapping[str, Any]) -> str:
     for span in spans:
         kind = str(span.get("kind"))
         if kind == "math" and "tex" in span:
-            rendered.append(f"${span['tex']}$")
+            tex = str(span["tex"])
+            # Old LaTeX commonly embeds a math shift inside ``\mbox{...}``.
+            # Wrapping such TeX in another pair of dollar delimiters creates
+            # ambiguous Markdown, so use the equivalent parenthesized form.
+            if _contains_unescaped(tex, "$"):
+                rendered.append(f"\\({tex}\\)")
+            else:
+                rendered.append(f"${tex}$")
         elif kind == "link" and "target" in span:
             rendered.append(f"[{span.get('text', '')}]({span['target']})")
         else:
@@ -391,19 +390,90 @@ def _extend_markdown_identity(
 
 
 def _markdown_math_occurrences(text: str) -> tuple[str, ...]:
-    return tuple(
-        next(
-            value
-            for value in (
-                match.group("bracket_tex"),
-                match.group("paren_tex"),
-                match.group("double_tex"),
-                match.group("single_tex"),
-            )
-            if value is not None
+    return tuple(tex for _, _, tex in _markdown_math_spans(text))
+
+
+def _markdown_math_spans(text: str) -> tuple[tuple[int, int, str], ...]:
+    """Return Markdown math spans, tolerating old TeX nested math shifts.
+
+    A formula such as ``$x>\\mbox{$1/2$}$`` is valid old-style TeX carried
+    through LaTeXML, but a non-greedy dollar regex closes it at the inner math
+    shift.  Braces make those inner shifts unambiguous: only an unescaped
+    dollar at brace depth zero closes the outer Markdown span.
+    """
+
+    spans: list[tuple[int, int, str]] = []
+    index = 0
+    while index < len(text):
+        delimiter: str | None = None
+        closing: str | None = None
+        content_start = index
+        if text.startswith(r"\[", index) and not _is_escaped(text, index):
+            delimiter, closing, content_start = r"\[", r"\]", index + 2
+        elif text.startswith(r"\(", index) and not _is_escaped(text, index):
+            delimiter, closing, content_start = r"\(", r"\)", index + 2
+        elif text.startswith("$$", index) and not _is_escaped(text, index):
+            delimiter, closing, content_start = "$$", "$$", index + 2
+        elif (
+            text[index] == "$"
+            and not _is_escaped(text, index)
+            and not text.startswith("$$", index)
+            and (index == 0 or text[index - 1] != "$")
+        ):
+            delimiter, closing, content_start = "$", "$", index + 1
+        if delimiter is None or closing is None:
+            index += 1
+            continue
+
+        end = _find_math_closing(
+            text,
+            content_start,
+            closing,
+            brace_aware=delimiter == "$",
         )
-        for match in _MARKDOWN_MATH.finditer(text)
+        if end is None:
+            index += len(delimiter)
+            continue
+        spans.append((index, end + len(closing), text[content_start:end]))
+        index = end + len(closing)
+    return tuple(spans)
+
+
+def _find_math_closing(
+    text: str,
+    start: int,
+    closing: str,
+    *,
+    brace_aware: bool,
+) -> int | None:
+    brace_depth = 0
+    index = start
+    while index < len(text):
+        if not _is_escaped(text, index):
+            if brace_aware and text[index] == "{":
+                brace_depth += 1
+            elif brace_aware and text[index] == "}" and brace_depth:
+                brace_depth -= 1
+            elif brace_depth == 0 and text.startswith(closing, index):
+                return index
+        index += 1
+    return None
+
+
+def _contains_unescaped(text: str, token: str) -> bool:
+    return any(
+        text.startswith(token, index) and not _is_escaped(text, index)
+        for index in range(len(text))
     )
+
+
+def _is_escaped(text: str, index: int) -> bool:
+    backslashes = 0
+    index -= 1
+    while index >= 0 and text[index] == "\\":
+        backslashes += 1
+        index -= 1
+    return backslashes % 2 == 1
 
 
 def _formula_occurrences(
@@ -618,10 +688,13 @@ def _link_occurrences(
 
 
 def _without_markdown_math(text: str) -> str:
-    return _MARKDOWN_MATH.sub(
-        lambda match: " " * len(match.group(0)),
-        text,
-    )
+    pieces: list[str] = []
+    previous = 0
+    for start, end, _ in _markdown_math_spans(text):
+        pieces.extend((text[previous:start], " " * (end - start)))
+        previous = end
+    pieces.append(text[previous:])
+    return "".join(pieces)
 
 
 def _literal_occurrence_count(

@@ -84,6 +84,31 @@ def test_source_identity_uses_current_inline_spans() -> None:
     assert "inline_spans" not in str(prompted["payload"])
 
 
+def test_nested_old_tex_math_shifts_are_preserved_as_one_formula() -> None:
+    tex = (
+        r"\langle\Psi^{-}|M|\Psi^{-}\rangle>"
+        r"\mbox{$\textstyle\frac{1}{2}$}"
+    )
+    block = _math_paragraph("nested-math-shift", tex)
+
+    prompted = prompt_block(block)
+    assert prompted["payload"]["text"] == rf"\({tex}\)"
+    validate_translation_text(rf"当 \({tex}\) 时成立。", block)
+    # Accept already-produced translations that used dollar delimiters around
+    # the exact old-style TeX payload.
+    validate_translation_text(rf"当 ${tex}$ 时成立。", block)
+
+    with pytest.raises(
+        TranslationSourceError,
+        match="changed formula occurrences",
+    ):
+        validate_translation_text(
+            rf"当 $\langle\Psi^{{-}}|M|\Psi^{{-}}\rangle>"
+            r"\mbox{$\textstyle\frac{2}{3}$}$ 时成立。",
+            block,
+        )
+
+
 def test_formula_occurrences_and_links_can_be_reordered_exactly() -> None:
     validate_translation_text(
         r"先看 $\Psi^\dagger$，再看 $a$；"
