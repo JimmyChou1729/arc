@@ -3177,7 +3177,10 @@
       button.appendChild(swatch);
       button.appendChild(element("span", "", preset.name));
       button.addEventListener("click", function () {
-        setDraftAppearance(preset);
+        setDraftAppearance({
+          foreground: preset.foreground,
+          background: preset.background
+        });
       });
       root.appendChild(button);
     });

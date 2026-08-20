@@ -1281,6 +1281,7 @@ globalThis.window = globalThis;
     restoreHistoricalRevision: restoreHistoricalRevision,
     syncDraftFromDialog: syncDraftFromDialog,
     setDraftAppearance: setDraftAppearance,
+    renderColorPresets: renderColorPresets,
     resetDraftAppearance: resetDraftAppearance,
     updateAppearanceFromPicker: updateAppearanceFromPicker,
     updateAppearanceFromText: updateAppearanceFromText,
@@ -1310,7 +1311,9 @@ function FakeNode(tag) {
   this.listeners = {};
   this.attrs = {};
   this.dataset = {};
-  this.style = {};
+  this.style = {
+    setProperty: function (name, value) { this[name] = value; }
+  };
   this.textContent = "";
   this.value = "";
   this.disabled = false;
@@ -1413,6 +1416,7 @@ var nodes = {
   "arc-editor-foreground": new FakeNode("input"),
   "arc-editor-background-picker": new FakeNode("input"),
   "arc-editor-background": new FakeNode("input"),
+  "arc-editor-color-presets": new FakeNode("div"),
   "arc-export": new FakeNode("button"),
   "arc-export-panel": new FakeNode("div"),
   "arc-storage-status": new FakeNode("div")
@@ -1581,12 +1585,14 @@ helpers.state.selected = new Map([[first.fragment_id, first]]);
     "Advanced did not open on the latest inline draft"
   );
   assert(!nodes["arc-editor-save"].disabled, "changed Advanced draft disabled Save");
-  helpers.setDraftAppearance({foreground: "#f9fafb", background: "#111827"});
+  helpers.renderColorPresets();
+  nodes["arc-editor-color-presets"].children[1].dispatch("click");
   assert(
-    active.appearance.foreground === "#f9fafb" &&
-      nodes["arc-editor-foreground"].value === "#f9fafb" &&
-      nodes["arc-editor-background-picker"].value === "#111827",
-    "preset colors did not synchronize draft, text, and picker controls"
+    active.appearance.foreground === "#3a2e1f" &&
+      active.appearance.background === "#fff4d6" &&
+      nodes["arc-editor-foreground"].value === "#3a2e1f" &&
+      nodes["arc-editor-background-picker"].value === "#fff4d6",
+    "clicking a preset did not synchronize draft, text, and picker controls"
   );
   nodes["arc-editor-foreground"].value = "#ABCDEF";
   helpers.updateAppearanceFromText("foreground", nodes["arc-editor-foreground"]);
