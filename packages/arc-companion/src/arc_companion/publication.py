@@ -19,6 +19,7 @@ from arc_jobs import (
 )
 from arc_paper import (
     ArcPaperService,
+    RichBlockKind,
     RichDocument,
     SourceRepositoryError,
 )
@@ -30,6 +31,8 @@ from arc_render import (
     Layer,
     Publication,
     PublicationOutlineItem,
+    READER_ICON_LOGICAL_NAME,
+    READER_ICON_MEDIA_TYPE,
     anchor_block_from_rich_block,
     encode_fragment_revision,
     fragment_revision_ref,
@@ -37,6 +40,7 @@ from arc_render import (
     layer_from_document,
     layer_to_document,
     normalize_markdown,
+    build_reader_icon,
     publication_from_document,
     publication_to_document,
 )
@@ -268,6 +272,7 @@ def publish_companion(
     paper = ArcPaperService(cache_root=paper_cache_root)
     resource_artifacts: list[ArtifactRef] = []
     resources: list[dict[str, Any]] = []
+    source_payloads: dict[str, bytes] = {}
     for asset in source.assets:
         try:
             cached = paper.repository.get_asset(asset.artifact_digest)
@@ -277,6 +282,7 @@ def publish_companion(
                 "source asset is unavailable for the run-owned publication: "
                 f"{asset.artifact_digest}"
             ) from exc
+        source_payloads[asset.artifact_digest] = payload
         relative = f"resources/{asset.artifact_digest}"
         resource_artifacts.append(
             context.artifacts.publish_bytes(
@@ -294,6 +300,25 @@ def publish_companion(
                 "path": relative,
             }
         )
+
+    icon = build_reader_icon(
+        _cover_payload(source, source_payloads), authors=authors, title=title
+    )
+    icon_ref = context.artifacts.publish_bytes(
+        "publication/resources/reader-icon.svg",
+        icon.payload,
+        media_type=READER_ICON_MEDIA_TYPE,
+    )
+    resource_artifacts.append(icon_ref)
+    resources.append(
+        {
+            "artifact_digest": icon_ref.digest.value,
+            "media_type": READER_ICON_MEDIA_TYPE,
+            "logical_name": READER_ICON_LOGICAL_NAME,
+            "size": icon_ref.digest.size_bytes,
+            "path": "resources/reader-icon.svg",
+        }
+    )
 
     resource_digests = {
         str(item["artifact_digest"]) for item in resources
@@ -480,6 +505,14 @@ def publish_companion(
             "source_language": source_language,
             "target_language": target_language,
             "translation_mode": translation_mode,
+            "reader_icon": {
+                "recipe": "arc.render.reader_icon.v1",
+                "logical_name": READER_ICON_LOGICAL_NAME,
+                "media_type": READER_ICON_MEDIA_TYPE,
+                "initial": icon.initial,
+                "foreground_rgb": list(icon.foreground_rgb),
+                "background_rgb": list(icon.background_rgb),
+            },
             **(
                 {"supplement_coverage": coverage_summary}
                 if coverage_summary is not None
@@ -504,6 +537,34 @@ def publish_companion(
     )
 
 
+def _cover_payload(
+    source: RichDocument, payloads: Mapping[str, bytes]
+) -> bytes | None:
+    raster_types = {
+        "image/bmp",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/tiff",
+        "image/webp",
+    }
+    pages = {item.block_id: item.page_number for item in source.page_map}
+    figures = [
+        block
+        for block in source.blocks
+        if block.kind is RichBlockKind.FIGURE
+        and str(block.payload.get("media_type")) in raster_types
+        and str(block.payload.get("asset_digest")) in payloads
+    ]
+    first_page = next(
+        (block for block in figures if pages.get(block.block_id) == 1), None
+    )
+    selected = first_page or (figures[0] if figures else None)
+    return (
+        payloads[str(selected.payload["asset_digest"])]
+        if selected is not None
+        else None
+    )
 def _editorial_review_document(
     value: Mapping[str, Any],
 ) -> dict[str, Any]:

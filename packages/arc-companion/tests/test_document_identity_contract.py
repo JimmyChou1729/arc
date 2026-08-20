@@ -66,7 +66,7 @@ def test_current_request_and_recipe_round_trip_only(tmp_path: Path) -> None:
     assert request_document["reviewed_supplements"] == []
     assert recipe_document["schema_version"] == COMPANION_GENERATION_RECIPE_SCHEMA
     assert recipe_document == {
-        "schema_version": "arc.companion.generation_recipe.v17",
+        "schema_version": "arc.companion.generation_recipe.v19",
         "model": {"provider": "auto", "model": None, "tier": "medium"},
         "approx_term_count": 50,
         "author_identity_prompt": "arc.companion.author-identity-prompt.v3",
@@ -79,6 +79,7 @@ def test_current_request_and_recipe_round_trip_only(tmp_path: Path) -> None:
         "equation_label_visual_prompt": (
             "arc.paper.equation_label_visual_prompt.v1"
         ),
+        "reader_publication_recipe": "arc.companion.reader_publication.v1",
     }
     decoded_request = decode_build_request(request_document)
     assert decoded_request.source.document_digest == request.source.document_digest
@@ -87,7 +88,7 @@ def test_current_request_and_recipe_round_trip_only(tmp_path: Path) -> None:
     assert decode_generation_recipe(recipe_document) == recipe
 
 
-def test_editorial_recipe_uses_v18_only_when_enabled() -> None:
+def test_editorial_recipe_uses_current_schema_only_when_enabled() -> None:
     recipe = CompanionGenerationRecipe(cross_chapter_editorial_review=True)
 
     document = encode_generation_recipe(recipe)
@@ -107,13 +108,19 @@ def test_editorial_recipe_uses_v18_only_when_enabled() -> None:
 
 def test_v17_recipe_normalizes_without_editorial_fields() -> None:
     document = encode_generation_recipe(CompanionGenerationRecipe())
+    document["schema_version"] = "arc.companion.generation_recipe.v17"
+    document.pop("reader_publication_recipe")
 
     decoded = decode_generation_recipe(document)
 
     assert decoded.cross_chapter_editorial_review is False
     assert decoded.editorial_proposer_prompt == EDITORIAL_PROPOSER_PROMPT_VERSION
     assert decoded.editorial_reviewer_prompt == EDITORIAL_REVIEWER_PROMPT_VERSION
-    assert encode_generation_recipe(decoded) == document
+    normalized = encode_generation_recipe(decoded)
+    assert normalized["schema_version"] == COMPANION_GENERATION_RECIPE_SCHEMA
+    assert normalized["reader_publication_recipe"] == (
+        "arc.companion.reader_publication.v1"
+    )
 
 
 def test_v18_recipe_cannot_encode_a_disabled_editorial_review() -> None:

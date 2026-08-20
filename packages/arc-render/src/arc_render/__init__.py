@@ -58,6 +58,13 @@ from .resolver import (
     resolve_fragment_revision_files,
     resolve_fragment_revisions,
 )
+from .reader_icon import (
+    READER_ICON_LOGICAL_NAME,
+    READER_ICON_MEDIA_TYPE,
+    ReaderIcon,
+    build_reader_icon,
+    reader_initial,
+)
 from .html import (
     HTML_RENDER_RECIPE,
     READER_PAYLOAD_SCHEMA,
@@ -114,10 +121,14 @@ __all__ = [
     "RenderWorkspaceError",
     "RevisionDiagnostic",
     "RevisionResolution",
+    "READER_ICON_LOGICAL_NAME",
+    "READER_ICON_MEDIA_TYPE",
+    "ReaderIcon",
     "anchor_block_from_rich_block",
     "anchor_block_from_document",
     "anchor_block_to_document",
     "block_text_to_markdown",
+    "build_reader_icon",
     "decode_fragment_revision",
     "encode_fragment_revision",
     "extract_markdown_citation_ids",
@@ -146,6 +157,7 @@ __all__ = [
     "publication_to_document",
     "read_fragment_revision",
     "read_publication_workspace_state",
+    "reader_initial",
     "read_layer",
     "read_publication",
     "relative_fragment_path",

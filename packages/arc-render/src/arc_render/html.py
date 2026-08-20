@@ -707,6 +707,7 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
         separators=(",", ":"),
     ).replace("</script", r"<\/script")
     digest = publication.publication_digest
+    icon_link = _reader_icon_link(profile, payload)
     return f"""<!doctype html>
 <html lang="{escape(language)}">
 <head>
@@ -714,6 +715,7 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>{escape(title)}</title>
+  {icon_link}
   <link rel="stylesheet" href="assets/katex/katex.min.css">
   <link rel="stylesheet" href="assets/reader.css">
   <script defer src="assets/markdown-it/markdown-it.min.js"></script>
@@ -822,6 +824,31 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
 </body>
 </html>
 """
+
+
+def _reader_icon_link(
+    profile: Mapping[str, Any], payload: Mapping[str, Any]
+) -> str:
+    icon = profile.get("reader_icon")
+    if not isinstance(icon, Mapping):
+        return ""
+    logical_name = icon.get("logical_name")
+    resources = payload.get("resources")
+    if not isinstance(logical_name, str) or not isinstance(resources, list):
+        return ""
+    for resource in resources:
+        if not isinstance(resource, Mapping):
+            continue
+        if resource.get("logical_name") != logical_name:
+            continue
+        media_type = resource.get("media_type")
+        data_uri = resource.get("data_uri")
+        if isinstance(media_type, str) and isinstance(data_uri, str):
+            return (
+                f'<link rel="icon" type="{escape(media_type, quote=True)}" '
+                f'href="{escape(data_uri, quote=True)}">'
+            )
+    return ""
 
 
 def _source_title(document: RichDocument) -> str:

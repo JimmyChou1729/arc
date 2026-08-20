@@ -41,10 +41,17 @@ COMPANION_BUILD_REQUEST_SCHEMA = "arc.companion.build_request.v8"
 LEGACY_COMPANION_BUILD_REQUEST_SCHEMA_V7 = (
     "arc.companion.build_request.v7"
 )
-COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v17"
-EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA = (
+LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V17 = (
+    "arc.companion.generation_recipe.v17"
+)
+LEGACY_EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA_V18 = (
     "arc.companion.generation_recipe.v18"
 )
+COMPANION_GENERATION_RECIPE_SCHEMA = "arc.companion.generation_recipe.v19"
+EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA = (
+    "arc.companion.generation_recipe.v20"
+)
+READER_PUBLICATION_RECIPE = "arc.companion.reader_publication.v1"
 COMPANION_CONTENT_CONTRACT = "arc.companion.source_anchored_textbook.v1"
 NEUTRAL_TEXTBOOK_INTENT = (
     "Explain the source faithfully as a neutral textbook companion for an "
@@ -210,6 +217,7 @@ class CompanionGenerationRecipe:
     equation_label_visual_prompt: str = (
         EQUATION_LABEL_VISUAL_PROMPT_VERSION
     )
+    reader_publication_recipe: str = READER_PUBLICATION_RECIPE
     cross_chapter_editorial_review: bool = False
     editorial_proposer_prompt: str = EDITORIAL_PROPOSER_PROMPT_VERSION
     editorial_reviewer_prompt: str = EDITORIAL_REVIEWER_PROMPT_VERSION
@@ -253,6 +261,7 @@ class CompanionGenerationRecipe:
             "equation_label_visual_prompt": {
                 EQUATION_LABEL_VISUAL_PROMPT_VERSION
             },
+            "reader_publication_recipe": {READER_PUBLICATION_RECIPE},
             "editorial_proposer_prompt": {
                 EDITORIAL_PROPOSER_PROMPT_VERSION
             },
@@ -344,6 +353,7 @@ def encode_generation_recipe(
         "equation_label_visual_prompt": (
             recipe.equation_label_visual_prompt
         ),
+        "reader_publication_recipe": recipe.reader_publication_recipe,
     }
     if recipe.cross_chapter_editorial_review:
         document.update(
@@ -457,7 +467,16 @@ def decode_generation_recipe(
         "chapter_guide_review_final_round",
     }
     schema_version = document.get("schema_version")
-    editorial = schema_version == EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA
+    current = schema_version in {
+        COMPANION_GENERATION_RECIPE_SCHEMA,
+        EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA,
+    }
+    if current:
+        fields.add("reader_publication_recipe")
+    editorial = schema_version in {
+        EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA,
+        LEGACY_EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA_V18,
+    }
     if editorial:
         fields.update(
             {
@@ -466,7 +485,10 @@ def decode_generation_recipe(
                 "editorial_reviewer_prompt",
             }
         )
-    elif schema_version != COMPANION_GENERATION_RECIPE_SCHEMA:
+    elif schema_version not in {
+        COMPANION_GENERATION_RECIPE_SCHEMA,
+        LEGACY_COMPANION_GENERATION_RECIPE_SCHEMA_V17,
+    }:
         raise ValueError("unsupported Companion generation-recipe schema")
     raw_recipe = _exact(document, fields, "generation recipe")
     if editorial and not _strict_bool(
@@ -512,6 +534,11 @@ def decode_generation_recipe(
         ),
         equation_label_visual_prompt=_string(
             raw_recipe, "equation_label_visual_prompt"
+        ),
+        reader_publication_recipe=(
+            _string(raw_recipe, "reader_publication_recipe")
+            if current
+            else READER_PUBLICATION_RECIPE
         ),
         cross_chapter_editorial_review=editorial,
         editorial_proposer_prompt=(

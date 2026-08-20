@@ -154,6 +154,18 @@ def test_publication_uses_atomic_overlays_and_materializes_directly(
         "The final audit did not bind the proposal."
     )
     assert "Warning:" in editorial["summary"]
+    icon = published.publication.reader_profile["reader_icon"]
+    assert icon["initial"] == "T"
+    assert icon["logical_name"] == "arc-reader-icon.svg"
+    icon_resource = next(
+        item
+        for item in published.publication.resources
+        if item["logical_name"] == "arc-reader-icon.svg"
+    )
+    assert any(
+        item.digest.value == icon_resource["artifact_digest"]
+        for item in published.resource_refs
+    )
     report_resource = next(
         item
         for item in published.publication.resources
@@ -404,7 +416,7 @@ def test_reviewed_supplement_publishes_provenance_resource_and_coverage(
     assert revision.provenance["source_draft_ids"] == ("draft-1",)
     assert revision.provenance["source_unit_ids"] == ("unit-1",)
     assert revision.provenance["source_basis"] == "supplement_units"
-    assert len(published.resource_refs) == 2
+    assert len(published.resource_refs) == 3
     report_ref = next(
         item
         for item in published.resource_refs

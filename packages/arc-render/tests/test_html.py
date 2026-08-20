@@ -38,6 +38,7 @@ from arc_render.html import (
     HTMLRenderError,
     _extract_json_script,
     _extract_reader_payload,
+    _reader_icon_link,
     render_publication_html,
     validate_standalone_html,
 )
@@ -243,6 +244,25 @@ def _boot_payload(html: str) -> dict[str, object]:
     )
     assert match is not None
     return json.loads(match.group(1).replace(r"<\/script", "</script"))
+
+
+def test_reader_icon_link_uses_embedded_resource() -> None:
+    link = _reader_icon_link(
+        {"reader_icon": {"logical_name": "arc-reader-icon.svg"}},
+        {
+            "resources": [
+                {
+                    "logical_name": "arc-reader-icon.svg",
+                    "media_type": "image/svg+xml",
+                    "data_uri": "data:image/svg+xml;base64,PHN2Zy8+",
+                }
+            ]
+        },
+    )
+
+    assert 'rel="icon"' in link
+    assert 'type="image/svg+xml"' in link
+    assert 'href="data:image/svg+xml;base64,PHN2Zy8+"' in link
 
 
 def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
