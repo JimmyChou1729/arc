@@ -32,7 +32,8 @@ from ._json import (
 
 
 FRAGMENT_REVISION_SCHEMA_V1 = "arc.render.fragment_revision.v1"
-FRAGMENT_REVISION_SCHEMA = "arc.render.fragment_revision.v2"
+FRAGMENT_REVISION_SCHEMA_V2 = "arc.render.fragment_revision.v2"
+FRAGMENT_REVISION_SCHEMA = "arc.render.fragment_revision.v3"
 LAYER_SCHEMA = "arc.render.layer.v1"
 PUBLICATION_SCHEMA = "arc.render.publication.v1"
 
@@ -78,6 +79,7 @@ _FRAGMENT_V1_FIELDS = {
     "provenance",
 }
 _FRAGMENT_V2_FIELDS = _FRAGMENT_V1_FIELDS | {"appearance"}
+_FRAGMENT_V3_FIELDS = _FRAGMENT_V2_FIELDS | {"deleted"}
 _APPEARANCE_FIELDS = {"foreground", "background"}
 _REVISION_REF_FIELDS = {
     "path",
@@ -254,10 +256,12 @@ class FragmentRevision:
     markdown_body: str
     schema_version: str = FRAGMENT_REVISION_SCHEMA
     appearance: FragmentAppearance | None = None
+    deleted: bool = False
 
     def __post_init__(self) -> None:
         if self.schema_version not in {
             FRAGMENT_REVISION_SCHEMA_V1,
+            FRAGMENT_REVISION_SCHEMA_V2,
             FRAGMENT_REVISION_SCHEMA,
         }:
             raise ValueError("unsupported fragment revision schema")
@@ -268,6 +272,10 @@ class FragmentRevision:
             self.appearance, FragmentAppearance
         ):
             raise ValueError("appearance must be a FragmentAppearance or null")
+        if not isinstance(self.deleted, bool):
+            raise ValueError("deleted must be a boolean")
+        if self.schema_version != FRAGMENT_REVISION_SCHEMA and self.deleted:
+            raise ValueError("only v3 fragment revisions can be deleted")
         if not isinstance(self.source, SourceIdentity):
             raise ValueError("fragment source must be a SourceIdentity")
         if not isinstance(self.anchor, FragmentAnchor):
@@ -740,12 +748,17 @@ def fragment_revision_to_document(
         "citation_ids": list(revision.citation_ids),
         "provenance": thaw_json(revision.provenance),
     }
-    if revision.schema_version == FRAGMENT_REVISION_SCHEMA:
+    if revision.schema_version in {
+        FRAGMENT_REVISION_SCHEMA_V2,
+        FRAGMENT_REVISION_SCHEMA,
+    }:
         value["appearance"] = (
             None
             if revision.appearance is None
             else fragment_appearance_to_document(revision.appearance)
         )
+    if revision.schema_version == FRAGMENT_REVISION_SCHEMA:
+        value["deleted"] = revision.deleted
     return value
 
 
@@ -758,7 +771,8 @@ def fragment_revision_from_document(
     if schema_version == FRAGMENT_REVISION_SCHEMA_V1:
         item = require_exact(value, _FRAGMENT_V1_FIELDS, "fragment revision")
         appearance = None
-    elif schema_version == FRAGMENT_REVISION_SCHEMA:
+        deleted = False
+    elif schema_version == FRAGMENT_REVISION_SCHEMA_V2:
         item = require_exact(value, _FRAGMENT_V2_FIELDS, "fragment revision")
         raw_appearance = item["appearance"]
         appearance = (
@@ -766,6 +780,18 @@ def fragment_revision_from_document(
             if raw_appearance is None
             else fragment_appearance_from_document(raw_appearance)
         )
+        deleted = False
+    elif schema_version == FRAGMENT_REVISION_SCHEMA:
+        item = require_exact(value, _FRAGMENT_V3_FIELDS, "fragment revision")
+        raw_appearance = item["appearance"]
+        appearance = (
+            None
+            if raw_appearance is None
+            else fragment_appearance_from_document(raw_appearance)
+        )
+        deleted = item["deleted"]
+        if not isinstance(deleted, bool):
+            raise ValueError("deleted must be a boolean")
     else:
         raise ValueError("unsupported fragment revision schema")
     parent = item["parent_semantic_digest"]
@@ -796,6 +822,7 @@ def fragment_revision_from_document(
         markdown_body=markdown_body,
         schema_version=str(schema_version),
         appearance=appearance,
+        deleted=deleted,
     )
 
 
@@ -1084,6 +1111,7 @@ def _relative_path(value: Any, description: str) -> str:
 __all__ = [
     "FRAGMENT_REVISION_SCHEMA",
     "FRAGMENT_REVISION_SCHEMA_V1",
+    "FRAGMENT_REVISION_SCHEMA_V2",
     "LAYER_SCHEMA",
     "PUBLICATION_SCHEMA",
     "AnchorBlock",

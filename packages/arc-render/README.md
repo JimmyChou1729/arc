@@ -74,9 +74,10 @@ HTML. `--browser` requires `--html` and adds a local Chromium behavior check.
 existing HTML bundle; it does not compose or validate an ARC publication.
 
 Fragment revisions use strict JSON front matter between ARC-specific
-delimiters. YAML is not accepted. The v2 contract adds an optional paired
-foreground/background appearance; readers remain compatible with v1
-revisions. Fragment priorities are positive integers; block and section are
+delimiters. YAML is not accepted. The v2 contract added an optional paired
+foreground/background appearance; v3 adds an immutable deletion tombstone.
+Readers remain compatible with v1 and v2 revisions. Fragment priorities are
+positive integers; block and section are
 the only anchor kinds. A publication with no overlay layers is valid, and a
 source plus translation layer can be rendered and exported without a Companion
 layer.
@@ -114,6 +115,9 @@ shows its revision number only when it is greater than 1; inline editing shows t
 priority, and revision. Advanced also offers paired color presets, synchronized
 color pickers and `#RRGGBB` fields, plus a reset to the role default. Notes use
 black with white text by default; any fragment role may store its own colors.
+Advanced includes deletion: it appends a tombstone revision, hides the element,
+and retains earlier immutable revisions. Empty notes are treated as deleted;
+saving a note after clearing both title and Markdown writes the same tombstone.
 Save remains disabled while normalized content is unchanged, and the defensive
 no-op path chooses no directory and creates no revision. Selecting another
 fragment cancels a clean draft immediately. If the active draft has unsaved
@@ -125,6 +129,10 @@ needed, the next time the reader connects to or restores the project directory.
 That refresh enumerates nested fragment directories in bounded concurrent
 batches and reads changed files with bounded concurrency.
 Toolbar status messages clear automatically after ten seconds.
+
+Reader prose uses the browser's strict East Asian line-breaking mode, which
+keeps common Chinese closing punctuation away from line starts without custom
+text segmentation.
 
 The browser toolbar calls the directory action `New save location` until a
 project directory is available and `Change save location` afterwards. Export

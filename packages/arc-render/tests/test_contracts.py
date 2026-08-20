@@ -149,6 +149,11 @@ def test_fragment_appearance_requires_six_digit_hex_colors(
         FragmentAppearance(foreground, background)
 
 
+def test_fragment_deleted_flag_must_be_boolean() -> None:
+    with pytest.raises(ValueError, match="deleted"):
+        FragmentRevision(**{**revision().__dict__, "deleted": 1})
+
+
 def test_fragment_id_is_safe_for_atomic_workspace_paths() -> None:
     item = revision()
     with pytest.raises(ValueError, match="portable identifier"):

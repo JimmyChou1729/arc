@@ -16,6 +16,7 @@ from arc_render import (
     FRONT_MATTER_BEGIN,
     FRAGMENT_REVISION_SCHEMA,
     FRAGMENT_REVISION_SCHEMA_V1,
+    FRAGMENT_REVISION_SCHEMA_V2,
     AnchorBlock,
     FragmentAnchor,
     FragmentAppearance,
@@ -102,11 +103,25 @@ def test_v1_round_trip_retains_original_schema_and_digest() -> None:
     ) == revision
 
 
-def test_v2_appearance_round_trip_is_canonical_and_digest_bound() -> None:
+def test_v2_appearance_round_trip_retains_original_schema() -> None:
+    revision = replace(
+        make_revision(),
+        schema_version=FRAGMENT_REVISION_SCHEMA_V2,
+        appearance=FragmentAppearance("#F9FAFB", "#111827"),
+    )
+    encoded = encode_fragment_revision(revision)
+    metadata = json.loads(encoded.splitlines()[1])
+    assert metadata["schema_version"] == FRAGMENT_REVISION_SCHEMA_V2
+    assert "deleted" not in metadata
+    assert decode_fragment_revision(encoded) == revision
+
+
+def test_v3_appearance_and_deletion_are_canonical_and_digest_bound() -> None:
     plain = make_revision()
     styled = replace(
         plain,
         appearance=FragmentAppearance("#F9FAFB", "#111827"),
+        deleted=True,
     )
     assert styled.appearance == FragmentAppearance("#f9fafb", "#111827")
     assert styled.semantic_digest != plain.semantic_digest

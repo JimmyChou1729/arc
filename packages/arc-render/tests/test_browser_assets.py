@@ -651,6 +651,7 @@ globalThis.window = globalThis;
   globalThis.__arcReaderTest = {
     state: state,
     saveEditor: saveEditor,
+    deleteEditor: deleteEditor,
     installRenderSpies: function (rerender) {
       renderDiagnostics = function () {};
       rerenderChunk = rerender;
@@ -740,6 +741,7 @@ globalThis.document = {
     return nodes[id];
   }
 };
+globalThis.confirm = function () { return true; };
 
 var directoryCalls = [];
 var fileCalls = [];
@@ -1037,6 +1039,24 @@ function prepareDraft(revision) {
     nodes["arc-storage-status"].textContent.includes("current directory revision changed"),
     "known next revision did not report stale editor state"
   );
+  helpers.state.revisions.get(base.fragment_id).pop();
+  prepareDraft(latest);
+  await helpers.deleteEditor({preventDefault: function () {}});
+  var tombstone = helpers.state.selected.get(base.fragment_id);
+  assert(
+    tombstone.revision === latest.revision + 1 && tombstone.deleted === true,
+    "Delete did not select a tombstone revision"
+  );
+  assert(
+    !helpers.state.fragmentGroups.get(anchor.target_id).some(function (item) {
+      return item.fragment_id === base.fragment_id;
+    }),
+    "deleted fragment remained in its render group"
+  );
+  assert(
+    writes[writes.length - 1].includes('"deleted":true'),
+    "persisted deletion omitted its tombstone flag"
+  );
 })().catch(function (error) {
   console.error(error.stack || error);
   process.exitCode = 1;
@@ -1044,6 +1064,50 @@ function prepareDraft(revision) {
 """
     )
 
+    subprocess.run(
+        [node, "-"],
+        input=instrumented,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_reader_hides_tombstones_and_empty_notes_under_node() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        "globalThis.window = globalThis;\n"
+        + javascript[:startup]
+        + """
+  globalThis.__arcReaderTest = {
+    fragmentIsVisible: fragmentIsVisible,
+    emptyNoteState: emptyNoteState
+  };
+}());
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+var helpers = globalThis.__arcReaderTest;
+assert(!helpers.fragmentIsVisible({
+  role: "translation", title: "Text", markdown_body: "body", deleted: true
+}), "tombstone remained visible");
+assert(!helpers.fragmentIsVisible({
+  role: "note", title: null, markdown_body: "  \\n", deleted: false
+}), "legacy empty note remained visible");
+assert(helpers.fragmentIsVisible({
+  role: "note", title: "Title", markdown_body: "", deleted: false
+}), "titled note was hidden");
+assert(helpers.emptyNoteState({
+  role: "note", title: null, markdown_body: "\\n"
+}), "cleared note did not trigger automatic deletion");
+"""
+    )
     subprocess.run(
         [node, "-"],
         input=instrumented,

@@ -310,6 +310,9 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert 'pattern="#[0-9A-Fa-f]{6}"' in text
     assert 'id="arc-editor-background-picker"' in text
     assert 'id="arc-editor-colors-reset"' in text
+    assert 'id="arc-editor-delete"' in text
+    assert 'class="arc-editor-danger-zone"' in text
+    assert "line-break: strict" in text
     assert '<h2 id="arc-editor-heading">Edit</h2>' in text
     assert '<button id="arc-editor-cancel" type="button">Cancel</button>' in text
     assert '<button id="arc-editor-save" type="button">Save</button>' in text

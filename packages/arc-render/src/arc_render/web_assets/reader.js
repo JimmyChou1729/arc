@@ -4,7 +4,8 @@
   var FRONT_BEGIN = "<!-- ARC:FRAGMENT-JSON:BEGIN -->";
   var FRONT_END = "<!-- ARC:FRAGMENT-JSON:END -->";
   var FRAGMENT_SCHEMA_V1 = "arc.render.fragment_revision.v1";
-  var FRAGMENT_SCHEMA = "arc.render.fragment_revision.v2";
+  var FRAGMENT_SCHEMA_V2 = "arc.render.fragment_revision.v2";
+  var FRAGMENT_SCHEMA = "arc.render.fragment_revision.v3";
   var HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
   var COLOR_PRESETS = [
     {name: "Ink", foreground: "#f9fafb", background: "#111827"},
@@ -383,6 +384,10 @@
       save: "保存",
       cancel: "取消",
       close: "关闭",
+      deleteElement: "删除",
+      deleteElementLabel: "删除此元素",
+      deleteConfirm: "删除此元素？旧版本仍会保留。",
+      deleteSuccess: "元素已删除。",
       history: "版本历史",
       source: "原文",
       translation: traditional ? "譯文" : "译文",
@@ -452,6 +457,10 @@
       save: "Save",
       cancel: "Cancel",
       close: "Close",
+      deleteElement: "Delete",
+      deleteElementLabel: "Delete this element",
+      deleteConfirm: "Delete this element? Earlier revisions will be retained.",
+      deleteSuccess: "Element deleted.",
       history: "Revision history",
       source: "Source",
       translation: "Translation",
@@ -820,6 +829,7 @@
   function anchorDiagnostics() {
     var diagnostics = [];
     state.selected.forEach(function (fragment) {
+      if (!fragmentIsVisible(fragment)) return;
       if (!fragmentTargetId(fragment)) {
         diagnostics.push(
           "Fragment " + fragment.fragment_id + " has an unknown anchor."
@@ -1235,7 +1245,7 @@
       return item.fragment_id !== fragmentId;
     });
     var selected = state.selected.get(fragmentId);
-    if (selected) values.push(selected);
+    if (fragmentIsVisible(selected)) values.push(selected);
     values.sort(function (left, right) {
       return left.priority - right.priority ||
         left.fragment_id.localeCompare(right.fragment_id);
@@ -1297,6 +1307,7 @@
   function groupedFragments(documentValue) {
     var groups = new Map();
     state.selected.forEach(function (fragment) {
+      if (!fragmentIsVisible(fragment)) return;
       var target = fragmentTargetId(fragment);
       if (!target) return;
       var values = groups.get(target) || [];
@@ -1310,6 +1321,15 @@
       });
     });
     return groups;
+  }
+
+  function fragmentIsVisible(fragment) {
+    if (!fragment || fragment.deleted === true) return false;
+    return !(
+      fragment.role === "note" &&
+      !String(fragment.title || "").trim() &&
+      !normalizeMarkdown(fragment.markdown_body).trim()
+    );
   }
 
   function fragmentTargetId(fragment) {
@@ -1767,7 +1787,7 @@
     state.roleOrder.forEach(function (role) {
       if (roles.indexOf(role) < 0) roles.push(role);
     });
-    Array.from(state.selected.values()).sort(function (left, right) {
+    Array.from(state.selected.values()).filter(fragmentIsVisible).sort(function (left, right) {
       return left.priority - right.priority ||
         left.fragment_id.localeCompare(right.fragment_id);
     }).forEach(function (fragment) {
@@ -2868,7 +2888,7 @@
   }
 
   function selectedForMarkdown(scope) {
-    var values = Array.from(state.selected.values());
+    var values = Array.from(state.selected.values()).filter(fragmentIsVisible);
     if (scope === "changed") {
       values = values.filter(function (revision) {
         return state.initialSelectedDigests.get(revision.fragment_id) !==
@@ -3142,6 +3162,10 @@
       strings.background;
     document.getElementById("arc-editor-colors-reset").textContent =
       strings.roleDefaultColors;
+    document.getElementById("arc-editor-delete-label").textContent =
+      strings.deleteElementLabel;
+    document.getElementById("arc-editor-delete").textContent =
+      strings.deleteElement;
     document.getElementById("arc-editor-save").textContent = strings.save;
     document.getElementById("arc-editor-cancel").textContent = strings.cancel;
     var close = document.getElementById("arc-editor-close");
@@ -3185,6 +3209,9 @@
     });
     document.getElementById("arc-editor-colors-reset").addEventListener(
       "click", resetDraftAppearance
+    );
+    document.getElementById("arc-editor-delete").addEventListener(
+      "click", deleteEditor
     );
     document.getElementById("arc-editor-save").addEventListener("click", saveEditor);
   }
@@ -3638,6 +3665,8 @@
     document.getElementById("arc-editor-markdown").value = draft.markdown_body || "";
     syncAppearanceControlsFromDraft();
     state.editorPreviewDirty = true;
+    var dangerZone = document.querySelector(".arc-editor-danger-zone");
+    if (dangerZone) dangerZone.hidden = !draft.base;
     renderHistory(draft.base && draft.base.fragment_id);
     updatePreview();
     updateDraftSaveButtons();
@@ -3684,7 +3713,9 @@
     var card = document.querySelector(
       '.arc-fragment[data-fragment-id="' + cssString(fragmentId) + '"]'
     );
-    if (current && card && typeof card.replaceWith === "function") {
+    if (!fragmentIsVisible(current) && card && typeof card.remove === "function") {
+      card.remove();
+    } else if (current && card && typeof card.replaceWith === "function") {
       card.replaceWith(renderFragment(current));
     }
   }
@@ -3803,7 +3834,18 @@
     state.editorPreviewDirty = false;
   }
 
-  async function saveEditor(event) {
+  function saveEditor(event) {
+    return persistEditor(event, false);
+  }
+
+  function deleteEditor(event) {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    if (!state.activeDraft || !state.activeDraft.base) return;
+    if (!window.confirm(labels().deleteConfirm)) return;
+    return persistEditor(event, true);
+  }
+
+  async function persistEditor(event, forceDelete) {
     if (event && typeof event.preventDefault === "function") event.preventDefault();
     if (state.exportInProgress || state.directorySelectionInProgress) {
       setStatus(labels().revisionBusy, "error");
@@ -3836,10 +3878,11 @@
       var editorGeneration = state.editorGeneration;
       var editorAnchor = JSON.parse(JSON.stringify(draft.anchor));
       var editable = editableDraftState(draft);
+      var deleting = Boolean(forceDelete || emptyNoteState(editable));
       assertKnownCitations(editable.citation_ids);
       if (base) assertEditorBaseCurrent(base);
       if (
-        base &&
+        base && !deleting &&
         stableStringify(editable) ===
           stableStringify(editableRevisionState(base))
       ) {
@@ -3855,6 +3898,7 @@
       var metadata = base ? metadataOnly(base) : newNoteMetadata(editorAnchor);
       metadata.schema_version = FRAGMENT_SCHEMA;
       metadata.appearance = editable.appearance;
+      metadata.deleted = deleting;
       metadata.revision = base ? base.revision + 1 : 1;
       metadata.parent_semantic_digest = base ? base.semantic_digest : null;
       metadata.title = editable.title;
@@ -3886,7 +3930,7 @@
         addRevision(revision);
         resolveOne(revision.fragment_id);
         refreshFragmentGroup(revision.fragment_id, revision.anchor);
-        state.hiddenRoles.delete(revision.role);
+        if (!deleting) state.hiddenRoles.delete(revision.role);
         syncVisibilityRoles();
         if (state.visibilityReady) renderVisibilityOptions();
       } catch (error) {
@@ -3920,7 +3964,7 @@
         }
       }
       setStatus(
-        labels().saveSuccess +
+        (deleting ? labels().deleteSuccess : labels().saveSuccess) +
           (uiError ? " " + String(uiError.message || uiError) : "")
       );
     } catch (error) {
@@ -3931,6 +3975,11 @@
         control.disabled = disabledStates[index];
       });
     }
+  }
+
+  function emptyNoteState(editable) {
+    return editable.role === "note" && editable.title === null &&
+      !editable.markdown_body.trim();
   }
 
   function editableDraftState(draft) {
@@ -4086,7 +4135,10 @@
       "parent_semantic_digest", "anchor", "priority", "role", "language",
       "title", "citation_ids", "provenance"
     ];
-    if (revision.schema_version === FRAGMENT_SCHEMA) keys.push("appearance");
+    if ([FRAGMENT_SCHEMA_V2, FRAGMENT_SCHEMA].includes(revision.schema_version)) {
+      keys.push("appearance");
+    }
+    if (revision.schema_version === FRAGMENT_SCHEMA) keys.push("deleted");
     var value = {};
     keys.forEach(function (key) { value[key] = revision[key]; });
     return JSON.parse(JSON.stringify(value));
@@ -4108,6 +4160,7 @@
       title: null,
       citation_ids: [],
       appearance: null,
+      deleted: false,
       provenance: {
         producer: "arc-render-browser",
         created_at: new Date().toISOString()
@@ -4211,11 +4264,16 @@
       "parent_semantic_digest", "priority", "provenance", "revision", "role",
       "schema_version", "source", "title"
     ];
-    if (metadata.schema_version === FRAGMENT_SCHEMA) fields.push("appearance");
+    if ([FRAGMENT_SCHEMA_V2, FRAGMENT_SCHEMA].includes(metadata.schema_version)) {
+      fields.push("appearance");
+    }
+    if (metadata.schema_version === FRAGMENT_SCHEMA) fields.push("deleted");
     requireExactObject(metadata, fields, "fragment revision");
     validateIntegerJson(metadata, "fragment revision");
     if (
-      ![FRAGMENT_SCHEMA_V1, FRAGMENT_SCHEMA].includes(metadata.schema_version) ||
+      ![FRAGMENT_SCHEMA_V1, FRAGMENT_SCHEMA_V2, FRAGMENT_SCHEMA].includes(
+        metadata.schema_version
+      ) ||
       !portableIdentifier(metadata.fragment_id) ||
       !positiveInteger(metadata.revision) ||
       !positiveInteger(metadata.priority) ||
@@ -4252,8 +4310,14 @@
     if (!plainObject(metadata.provenance)) {
       throw new Error("fragment provenance must be an object");
     }
-    if (metadata.schema_version === FRAGMENT_SCHEMA) {
+    if ([FRAGMENT_SCHEMA_V2, FRAGMENT_SCHEMA].includes(metadata.schema_version)) {
       normalizeAppearance(metadata.appearance);
+    }
+    if (
+      metadata.schema_version === FRAGMENT_SCHEMA &&
+      typeof metadata.deleted !== "boolean"
+    ) {
+      throw new Error("fragment deleted flag must be a boolean");
     }
   }
 
