@@ -66,7 +66,7 @@ AUDIT_SCHEMA = "arc.ocr_proofread.audit_request.v1"
 GROUP_ID = "pages"
 BOUNDARY_GROUP_ID = "boundaries"
 BOUNDARY_IMAGE_GROUP_ID = "boundary-page-images"
-BOUNDARY_REVIEW_SCHEMA = "arc.ocr_proofread.boundary_review_request.v1"
+BOUNDARY_REVIEW_SCHEMA = "arc.ocr_proofread.boundary_review_request.v2"
 PROVIDER_IDLE_TIMEOUT_SECONDS = 600
 _IMAGE_LINK = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
@@ -614,7 +614,7 @@ Next-page boundary context:
             if isinstance(unit.value, Mapping)
         ]
         results.sort(key=lambda item: int(item["boundary_index"]))
-        decisions = self._resolve_boundary_review(context, results)
+        decisions = self._resolve_boundary_review(context, results, pages)
         if isinstance(decisions, Paused):
             return decisions
         return _apply_boundary_decisions(pages, results, decisions)
@@ -795,7 +795,10 @@ RIGHT PAGE HEAD:
         )
 
     def _resolve_boundary_review(
-        self, context: RunContext, results: list[dict[str, Any]]
+        self,
+        context: RunContext,
+        results: list[dict[str, Any]],
+        pages: list[dict[str, Any]],
     ) -> dict[str, Mapping[str, Any]] | Paused:
         items = [
             item
@@ -810,6 +813,12 @@ RIGHT PAGE HEAD:
                 {
                     "id": _boundary_id(item),
                     **item,
+                    "left_candidates": _boundary_paragraphs(
+                        str(pages[int(item["left_page_index"])]["corrected_markdown"])
+                    ),
+                    "right_candidates": _boundary_paragraphs(
+                        str(pages[int(item["right_page_index"])]["corrected_markdown"])
+                    ),
                 }
                 for item in items
             ]
@@ -829,7 +838,7 @@ RIGHT PAGE HEAD:
                         key,
                         True,
                         request_ref,
-                        "arc.ocr_proofread.boundary_review_input.v1",
+                        "arc.ocr_proofread.boundary_review_input.v2",
                         {"count": len(request_items)},
                     )
                 )
@@ -1201,6 +1210,13 @@ class BoundaryRepairHandler(ProofreadHandler):
 
 
 def _boundary_paragraph(markdown: str, *, side: str) -> dict[str, Any] | None:
+    paragraphs = _boundary_paragraphs(markdown)
+    if not paragraphs:
+        return None
+    return paragraphs[-1] if side == "left" else paragraphs[0]
+
+
+def _boundary_paragraphs(markdown: str) -> list[dict[str, Any]]:
     payload = markdown.encode("utf-8")
     artifact = SourceArtifact(
         source_format=SourceFormat.MARKDOWN,
@@ -1209,36 +1225,34 @@ def _boundary_paragraph(markdown: str, *, side: str) -> dict[str, Any] | None:
         media_type="text/markdown",
         origin=SourceOrigin(
             kind=SourceOriginKind.LOCAL_IMPORT,
-            locator=f"ocr-boundary-{side}",
+            locator="ocr-boundary-candidates",
         ),
     )
     document = parse_rich_artifact_bytes(artifact, payload).document
-    paragraphs = [
+    paragraph_blocks = [
         block
         for block in document.blocks
         if block.kind is RichBlockKind.PARAGRAPH
     ]
-    if not paragraphs:
-        return None
-    block = paragraphs[-1] if side == "left" else paragraphs[0]
-    line_start = block.locator.line_start
-    line_end = block.locator.line_end
-    if line_start is None or line_end is None:
-        raise ProofreadWorkflowError(
-            "boundary_candidate_invalid", "paragraph has no Markdown line range"
-        )
     lines = markdown.splitlines()
-    return {
-        "block_id": block.block_id,
-        "line_start": line_start,
-        "line_end": line_end,
-        "markdown": "\n".join(lines[line_start - 1 : line_end]),
-        "is_edge": (
-            block.ordinal == len(document.blocks) - 1
-            if side == "left"
-            else block.ordinal == 0
-        ),
-    }
+    result: list[dict[str, Any]] = []
+    for block in paragraph_blocks:
+        line_start = block.locator.line_start
+        line_end = block.locator.line_end
+        if line_start is None or line_end is None:
+            raise ProofreadWorkflowError(
+                "boundary_candidate_invalid", "paragraph has no Markdown line range"
+            )
+        result.append(
+            {
+                "block_id": block.block_id,
+                "line_start": line_start,
+                "line_end": line_end,
+                "markdown": "\n".join(lines[line_start - 1 : line_end]),
+                "is_edge": block.ordinal in {0, len(document.blocks) - 1},
+            }
+        )
+    return result
 
 
 def _split_proofread_pages(markdown: str, expected_pages: int) -> list[str]:
@@ -1361,10 +1375,18 @@ def _validate_boundary_review_input(
     by_id = {str(item["id"]): item for item in items}
     normalized: list[dict[str, Any]] = []
     for item in decisions:
-        if not isinstance(item, Mapping) or item.get("action") not in {
-            "separate",
-            "join",
-        }:
+        if (
+            not isinstance(item, Mapping)
+            or set(item)
+            != {
+                "id",
+                "action",
+                "join_mode",
+                "left_block_id",
+                "right_block_id",
+            }
+            or item.get("action") not in {"separate", "join"}
+        ):
             raise ProofreadWorkflowError(
                 "boundary_review_input_invalid", "boundary action is invalid"
             )
@@ -1372,28 +1394,59 @@ def _validate_boundary_review_input(
             "id": str(item["id"]),
             "action": str(item["action"]),
             "join_mode": item.get("join_mode"),
+            "left_block_id": item.get("left_block_id"),
+            "right_block_id": item.get("right_block_id"),
         }
         candidate = by_id[result["id"]]
         if result["action"] == "join":
-            variants = _boundary_variants(
-                candidate.get("left"), candidate.get("right")
+            left = _candidate_by_id(
+                candidate.get("left_candidates"), result["left_block_id"]
             )
+            right = _candidate_by_id(
+                candidate.get("right_candidates"), result["right_block_id"]
+            )
+            variants = _boundary_variants(left, right)
             if result["join_mode"] not in variants:
                 raise ProofreadWorkflowError(
                     "boundary_review_input_invalid",
                     "joined boundary requires an available safe join mode",
                 )
-        elif result["join_mode"] is not None:
+            result["left"] = left
+            result["right"] = right
+        elif any(
+            result[key] is not None
+            for key in ("join_mode", "left_block_id", "right_block_id")
+        ):
             raise ProofreadWorkflowError(
                 "boundary_review_input_invalid",
-                "separate boundary must use a null join_mode",
+                "separate boundary must use null join fields",
             )
+        else:
+            result["left"] = None
+            result["right"] = None
         normalized.append(result)
     return {
-        "schema_version": "arc.ocr_proofread.boundary_review_decisions.v1",
+        "schema_version": "arc.ocr_proofread.boundary_review_decisions.v2",
         "resume_key": key,
         "decisions": normalized,
     }
+
+
+def _candidate_by_id(value: Any, block_id: Any) -> Mapping[str, Any]:
+    if not isinstance(value, list) or not isinstance(block_id, str):
+        raise ProofreadWorkflowError(
+            "boundary_review_input_invalid", "joined boundary must select paragraph blocks"
+        )
+    matches = [
+        item
+        for item in value
+        if isinstance(item, Mapping) and item.get("block_id") == block_id
+    ]
+    if len(matches) != 1:
+        raise ProofreadWorkflowError(
+            "boundary_review_input_invalid", "selected boundary paragraph is unavailable"
+        )
+    return matches[0]
 
 
 def _apply_boundary_decisions(
@@ -1408,8 +1461,8 @@ def _apply_boundary_decisions(
         )
         if decision["action"] != "join":
             continue
-        left = result.get("left")
-        right = result.get("right")
+        left = decision.get("left", result.get("left"))
+        right = decision.get("right", result.get("right"))
         if not isinstance(left, Mapping) or not isinstance(right, Mapping):
             raise ProofreadWorkflowError(
                 "boundary_join_invalid", "joined boundary has no paragraphs"
@@ -1418,6 +1471,8 @@ def _apply_boundary_decisions(
             {
                 **result,
                 "join_mode": str(decision["join_mode"]),
+                "left": left,
+                "right": right,
             }
         )
     if not joins:

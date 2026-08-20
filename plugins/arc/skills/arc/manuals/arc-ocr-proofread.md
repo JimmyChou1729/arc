@@ -41,10 +41,12 @@ Page correction is followed by model review of every adjacent page pair. Both
 complete page images are attached. Every proposed paragraph join and every
 uncertain result requires a main-agent decision; page-edge position alone does
 not prove that the selected OCR blocks are the prose visible across the page
-turn. A boundary provider that remains interrupted after bounded retries is
-routed through the same main-agent review instead of losing completed boundary
-work. PDF page markers become structured, default-hidden reader notes and never
-translation fragments.
+turn. For an accepted join, select the exact left and right paragraph block IDs
+from the request's candidate lists; this safely handles intervening page
+numbers, figure labels, and sidebars. A boundary provider that remains
+interrupted after bounded retries is routed through the same main-agent review
+instead of losing completed boundary work. PDF page markers become structured,
+default-hidden reader notes and never translation fragments.
 
 ## Review and Resume
 

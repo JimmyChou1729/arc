@@ -32,11 +32,15 @@ After page corrections, review every adjacent page pair using both full-page
 images. Join only a clearly continuous paragraph using one offered exact join
 form. Every proposed join and every uncertain result requires main-agent
 review; page-edge position alone is not enough evidence that the selected OCR
-blocks are the prose visible across the page turn. If a boundary provider
-remains interrupted after its bounded retries, that boundary also becomes
-uncertain so the main agent can inspect it without discarding completed
-boundary work. Page markers remain provenance notes immediately above the
-first block on their page; they are not prose and must not be translated.
+blocks are the prose visible across the page turn. Select the exact left and
+right paragraph block IDs from the supplied candidates for every accepted
+join; this permits a visually confirmed continuation to bypass a trailing page
+number, figure label, or sidebar block without guessing text. If a boundary
+provider remains interrupted after its bounded retries, that boundary also
+becomes uncertain so the main agent can inspect it without discarding
+completed boundary work. Page markers remain provenance notes immediately
+above the first block on their page; they are not prose and must not be
+translated.
 
 ## Phase 3: Main-Agent Review
 
