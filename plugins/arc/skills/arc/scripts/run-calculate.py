@@ -12,7 +12,11 @@ from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 bootstrap_arc_pythonpath()
 
 from arc_llm import HostAuthority, LLMExecutionOptions
-from _arc_workflows.calculate_config import ConfigError, _read_json
+from _arc_workflows.calculate_config import (
+    CALCULATOR_IDS,
+    ConfigError,
+    _read_json,
+)
 from _arc_workflows.calculate_runner import run_calculation
 
 
@@ -22,6 +26,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--config", required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--max-concurrent-calculators",
+        type=int,
+        choices=range(1, len(CALCULATOR_IDS) + 1),
+        default=len(CALCULATOR_IDS),
+        help=(
+            "maximum calculators to run concurrently; defaults to all "
+            "calculators"
+        ),
+    )
     parser.add_argument(
         "--host-authority",
         choices=[authority.value for authority in HostAuthority],
@@ -38,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_calculation(
             payload,
             dry_run=args.dry_run,
+            max_concurrent_calculators=args.max_concurrent_calculators,
             llm_options=LLMExecutionOptions(
                 host_authority=HostAuthority(args.host_authority)
             ),
