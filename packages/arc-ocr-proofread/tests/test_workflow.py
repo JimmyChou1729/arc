@@ -348,20 +348,40 @@ def test_boundary_repair_reuses_verified_delivery(
     audit = _artifact_json(service, snapshot)
     assert len(audit["boundaries"]) == 1
     assert {item["page_index"] for item in audit["pages"]} == {0, 1}
+    audit_input = _pass_audit(audit)
+    page_one = next(item for item in audit_input["pages"] if item["id"] == "page-000001")
+    page_one["edits"] = [
+        {
+            "before": "next page.",
+            "after": "following page.",
+            "occurrence": 1,
+            "kind": "wording",
+            "reason": "Main-agent audit found the scanned wording was mistranscribed.",
+        }
+    ]
     snapshot = service.resume(
         snapshot.run_id,
-        input=_pass_audit(audit),
+        input=audit_input,
         task_service=repair_tasks,
         renderer=Renderer(),
     )
 
     assert snapshot.status is RunStatus.SUCCEEDED
     text = project.markdown.read_text(encoding="utf-8")
-    assert "This paragraph continues on the next page." in text
-    assert text.index("on the next page.") < text.index("<!-- Source PDF page 2 -->")
+    assert "This paragraph continues on the following page." in text
+    assert text.index("on the following page.") < text.index("<!-- Source PDF page 2 -->")
     manifest = service.result()
     assert manifest["page_boundary_repairs"] == 1
-    assert manifest["corrections_per_page"] == 0.5
+    assert manifest["ocr_corrections"] == 1
+    assert manifest["corrections_per_page"] == 1.0
+    ledger = [
+        json.loads(line)
+        for line in project.changes.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [item["category"] for item in ledger] == [
+        "ocr_correction",
+        "page_boundary_repair",
+    ]
     assert service.validate(snapshot.run_id).ok
 
 

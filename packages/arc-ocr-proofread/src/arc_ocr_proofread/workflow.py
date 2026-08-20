@@ -1170,7 +1170,7 @@ class BoundaryRepairHandler(ProofreadHandler):
             f"<!-- Source Markdown SHA-256: {source['markdown_sha256']} -->",
             f"<!-- Source PDF SHA-256: {source['pdf_sha256']} -->",
         ]
-        boundary_changes: list[dict[str, Any]] = []
+        repair_changes: list[dict[str, Any]] = []
         for page in pages:
             if not page.get("suppress_page_marker", False):
                 chunks.append(
@@ -1178,19 +1178,26 @@ class BoundaryRepairHandler(ProofreadHandler):
                 )
             if page["corrected_markdown"]:
                 chunks.append(str(page["corrected_markdown"]))
-            boundary_changes.extend(
-                item
-                for item in page["changes"]
-                if item.get("category") == "page_boundary_repair"
-            )
-        all_changes = [*baseline_changes, *boundary_changes]
+            repair_changes.extend(page["changes"])
+        all_changes = [*baseline_changes, *repair_changes]
         markdown = "\n\n".join(chunks).rstrip() + "\n"
         ledger = b"".join(canonical_json_bytes(item) + b"\n" for item in all_changes)
         manifest = dict(baseline_manifest)
         manifest.update(
             {
                 "run_id": context.run_id,
-                "page_boundary_repairs": len(boundary_changes),
+                "ocr_corrections": sum(
+                    item.get("category") == "ocr_correction"
+                    for item in all_changes
+                ),
+                "approved_source_corrections": sum(
+                    item.get("category") == "approved_source_correction"
+                    for item in all_changes
+                ),
+                "page_boundary_repairs": sum(
+                    item.get("category") == "page_boundary_repair"
+                    for item in all_changes
+                ),
                 "corrections_per_page": len(all_changes) / len(pages),
                 "boundary_audit": audit,
                 "delivery_sha256": {
