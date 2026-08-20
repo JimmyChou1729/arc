@@ -397,7 +397,8 @@
       view: "显示",
       showLayers: "显示内容",
       original: "原文",
-      pdfPages: "PDF 页码",
+      documentData: traditional ? "文件資料" : "文档数据",
+      documentPage: traditional ? "文件頁" : "文档页",
       noVisibleContent: "未选择要显示的内容。",
       export: "导出",
       markdownScope: "Markdown 内容",
@@ -465,7 +466,8 @@
       view: "View",
       showLayers: "Show content",
       original: "Original",
-      pdfPages: "PDF pages",
+      documentData: "Document data",
+      documentPage: "Document page",
       noVisibleContent: "No content is selected for display.",
       export: "Export",
       markdownScope: "Markdown content",
@@ -1155,16 +1157,16 @@
         if (isPdfPageMarkerBlock(block) || isStandaloneHtmlCommentBlock(block)) {
           continue;
         }
-        sourcePageNotesBefore(block.block_id).forEach(function (pageNumber) {
-          content.appendChild(renderSourcePageNote(pageNumber));
+        documentNotesBefore(block.block_id).forEach(function (note) {
+          content.appendChild(renderDocumentNote(note));
         });
         content.appendChild(renderSourceRow(
           block, state.fragmentGroups.get(block.block_id) || []
         ));
       }
       if (chunk.block_end === documentValue.blocks.length) {
-        sourcePageNotesBefore(null).forEach(function (pageNumber) {
-          content.appendChild(renderSourcePageNote(pageNumber));
+        documentNotesBefore(null).forEach(function (note) {
+          content.appendChild(renderDocumentNote(note));
         });
       }
     } else {
@@ -1355,8 +1357,20 @@
     return row;
   }
 
-  function sourcePageNotesBefore(blockId) {
+  function documentNotesBefore(blockId) {
     var metadata = state.payload.publication.source_document.metadata || {};
+    var notes = metadata.document_notes || {};
+    if (
+      notes.schema_version === "arc.paper.document_notes.v1" &&
+      Array.isArray(notes.items)
+    ) {
+      return notes.items.filter(function (item) {
+        return item && item.before_block_id === blockId &&
+          (item.kind === "metadata" ||
+            (item.kind === "source_page" &&
+              Number.isInteger(item.page_number) && item.page_number > 0));
+      });
+    }
     var boundaries = metadata.source_page_boundaries || {};
     if (
       boundaries.schema_version !== "arc.paper.source_page_boundaries.v1" ||
@@ -1365,13 +1379,24 @@
     return boundaries.items.filter(function (item) {
       return item && item.before_block_id === blockId &&
         Number.isInteger(item.page_number) && item.page_number > 0;
-    }).map(function (item) { return item.page_number; });
+    }).map(function (item) {
+      return {
+        kind: "source_page",
+        text: "",
+        page_number: item.page_number,
+        before_block_id: item.before_block_id
+      };
+    });
   }
 
-  function renderSourcePageNote(pageNumber) {
-    var note = element("aside", "arc-page-marker-note", "PDF · " + pageNumber);
-    note.dataset.pageNumber = String(pageNumber);
-    note.setAttribute("aria-label", labels().pdfPages + " " + pageNumber);
+  function renderDocumentNote(item) {
+    var isPage = item.kind === "source_page";
+    var text = isPage ?
+      labels().documentPage + " · " + item.page_number : String(item.text || "");
+    var note = element("aside", "arc-document-data-note", text);
+    note.dataset.documentDataKind = item.kind;
+    if (isPage) note.dataset.pageNumber = String(item.page_number);
+    note.setAttribute("aria-label", labels().documentData);
     return note;
   }
 
@@ -1801,7 +1826,7 @@
     root.replaceChildren();
     root.appendChild(visibilityOption("source", labels().original, state.sourceVisible));
     root.appendChild(visibilityOption(
-      "page-markers", labels().pdfPages, state.pageMarkersVisible
+      "page-markers", labels().documentData, state.pageMarkersVisible
     ));
     state.roleOrder.forEach(function (role) {
       root.appendChild(visibilityOption(

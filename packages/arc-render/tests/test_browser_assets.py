@@ -161,16 +161,18 @@ assert(
     )
 
 
-def test_reader_renders_structured_pdf_page_notes_default_hidden() -> None:
+def test_reader_renders_structured_document_notes_default_hidden() -> None:
     javascript = _text("reader.js")
     stylesheet = _text("reader.css")
 
-    assert "metadata.source_page_boundaries" in javascript
-    assert '"arc.paper.source_page_boundaries.v1"' in javascript
-    assert '"arc-page-marker-note"' in javascript
+    assert "metadata.document_notes" in javascript
+    assert '"arc.paper.document_notes.v1"' in javascript
+    assert '"arc-document-data-note"' in javascript
+    assert 'documentData: traditional ? "文件資料" : "文档数据"' in javascript
+    assert 'documentData: "Document data"' in javascript
     assert '"page-markers"' in javascript
     assert "pageMarkersVisible: false" in javascript
-    assert ".arc-show-page-markers .arc-page-marker-note" in stylesheet
+    assert ".arc-show-page-markers .arc-document-data-note" in stylesheet
 
 
 def test_reader_exposes_lightweight_supplement_coverage_download() -> None:

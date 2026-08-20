@@ -67,6 +67,8 @@ _MARKDOWN_EXTRACTION_SUMMARY_RE = re.compile(
 )
 SOURCE_PAGE_BOUNDARIES_SCHEMA = "arc.paper.source_page_boundaries.v1"
 SOURCE_PAGE_BOUNDARIES_METADATA_KEY = "source_page_boundaries"
+DOCUMENT_NOTES_SCHEMA = "arc.paper.document_notes.v1"
+DOCUMENT_NOTES_METADATA_KEY = "document_notes"
 _MARKDOWN_PAGE_MARKER_RE = re.compile(
     r"^\s*<!--\s*(?:Source PDF page\s+|PDF_PAGE:\s*)([1-9][0-9]*)\s*-->\s*$"
 )
@@ -479,18 +481,25 @@ def _with_markdown_page_boundaries(
 ) -> RichDocument:
     lines = text.splitlines()
     markers: list[tuple[int, int, int]] = []
+    comments: list[tuple[int, int, str, int | None]] = []
     index = 0
     while index < len(lines):
         end = _markdown_standalone_comment_end(lines, index)
         if end is None:
             index += 1
             continue
-        if end == index + 1:
-            match = _MARKDOWN_PAGE_MARKER_RE.fullmatch(lines[index])
-            if match is not None:
-                markers.append((index + 1, end, int(match.group(1))))
+        raw_comment = "\n".join(lines[index:end]).strip()
+        match = (
+            _MARKDOWN_PAGE_MARKER_RE.fullmatch(raw_comment)
+            if end == index + 1
+            else None
+        )
+        page_number = int(match.group(1)) if match is not None else None
+        comments.append((index + 1, end, raw_comment, page_number))
+        if page_number is not None:
+            markers.append((index + 1, end, page_number))
         index = end
-    if not markers:
+    if not comments:
         return document
     page_numbers = [item[2] for item in markers]
     if any(
@@ -508,9 +517,8 @@ def _with_markdown_page_boundaries(
         for block in document.blocks
         if block.locator.line_start is not None
     ]
-    boundary_items: list[dict[str, Any]] = []
-    for _start, end, page_number in markers:
-        following = next(
+    def following_block(end: int) -> RichBlock | None:
+        return next(
             (
                 block
                 for block in positioned
@@ -518,6 +526,10 @@ def _with_markdown_page_boundaries(
             ),
             None,
         )
+
+    boundary_items: list[dict[str, Any]] = []
+    for _start, end, page_number in markers:
+        following = following_block(end)
         boundary_items.append(
             {
                 "page_number": page_number,
@@ -526,6 +538,20 @@ def _with_markdown_page_boundaries(
                 ),
             }
         )
+
+    note_items: list[dict[str, Any]] = []
+    for _start, end, raw_comment, page_number in comments:
+        following = following_block(end)
+        note: dict[str, Any] = {
+            "kind": "source_page" if page_number is not None else "metadata",
+            "text": raw_comment,
+            "before_block_id": (
+                following.block_id if following is not None else None
+            ),
+        }
+        if page_number is not None:
+            note["page_number"] = page_number
+        note_items.append(note)
 
     page_map: list[RichPageMapEntry] = []
     marker_index = 0
@@ -547,10 +573,15 @@ def _with_markdown_page_boundaries(
             )
 
     metadata = dict(document.metadata)
-    metadata[SOURCE_PAGE_BOUNDARIES_METADATA_KEY] = {
-        "schema_version": SOURCE_PAGE_BOUNDARIES_SCHEMA,
-        "items": boundary_items,
+    metadata[DOCUMENT_NOTES_METADATA_KEY] = {
+        "schema_version": DOCUMENT_NOTES_SCHEMA,
+        "items": note_items,
     }
+    if boundary_items:
+        metadata[SOURCE_PAGE_BOUNDARIES_METADATA_KEY] = {
+            "schema_version": SOURCE_PAGE_BOUNDARIES_SCHEMA,
+            "items": boundary_items,
+        }
     return RichDocument(
         source=document.source,
         blocks=document.blocks,
