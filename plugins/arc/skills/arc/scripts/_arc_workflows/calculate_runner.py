@@ -53,13 +53,27 @@ class BatchExecutionError(RuntimeError):
         self.durable_frontier = copy.deepcopy(dict(durable_frontier))
 
 
+def _validate_max_concurrent_calculators(value: int) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value <= len(CALCULATOR_IDS)
+    ):
+        raise ConfigError(
+            "max_concurrent_calculators must be an integer between 1 and "
+            f"{len(CALCULATOR_IDS)}"
+        )
+
+
 def run_calculation(
     config: CalculateConfig | Mapping[str, Any],
     *,
     batch_executor: BatchExecutor | None = None,
     llm_options: LLMExecutionOptions = LLMExecutionOptions(),
+    max_concurrent_calculators: int = len(CALCULATOR_IDS),
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    _validate_max_concurrent_calculators(max_concurrent_calculators)
     calculation = config if isinstance(config, CalculateConfig) else load_calculation_config(config)
     run_root = calculation.run_dir / calculation.run_id
     normalized_config = _jsonable(calculation)
@@ -81,6 +95,7 @@ def run_calculation(
             config_semantic_key_sha256=config_semantic_key_sha256,
             batch_executor=batch_executor,
             llm_options=llm_options,
+            max_concurrent_calculators=max_concurrent_calculators,
         )
 
 
@@ -92,6 +107,7 @@ def _run_calculation_locked(
     config_semantic_key_sha256: str,
     batch_executor: BatchExecutor | None,
     llm_options: LLMExecutionOptions,
+    max_concurrent_calculators: int,
 ) -> dict[str, Any]:
     run_root.mkdir(parents=True, exist_ok=True)
     config_record = {
@@ -122,7 +138,11 @@ def _run_calculation_locked(
 
     executor = batch_executor or (
         lambda request, root, run_id: _execute_public_batch(
-            request, root, run_id, llm_options=llm_options
+            request,
+            root,
+            run_id,
+            llm_options=llm_options,
+            max_concurrent_calculators=max_concurrent_calculators,
         )
     )
     step_results: list[dict[str, Any]] = []
@@ -344,6 +364,7 @@ def _execute_public_batch(
     run_id: str,
     *,
     llm_options: LLMExecutionOptions = LLMExecutionOptions(),
+    max_concurrent_calculators: int = len(CALCULATOR_IDS),
 ) -> CommittedRound:
     """Execute one independent batch and expand only its committed first round."""
 
@@ -353,7 +374,10 @@ def _execute_public_batch(
             request,
             run_root,
             run_id,
-            options=ExecutionOptions(llm=llm_options),
+            options=ExecutionOptions(
+                max_concurrent_workers=max_concurrent_calculators,
+                llm=llm_options,
+            ),
         )
     except Exception as exc:
         return _recover_committed_round_or_raise(
