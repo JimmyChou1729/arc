@@ -75,12 +75,14 @@ existing HTML bundle; it does not compose or validate an ARC publication.
 
 Fragment revisions use strict JSON front matter between ARC-specific
 delimiters. YAML is not accepted. The v2 contract added an optional paired
-foreground/background appearance; v3 adds an immutable deletion tombstone.
-Readers remain compatible with v1 and v2 revisions. Fragment priorities are
-positive integers; block and section are
-the only anchor kinds. A publication with no overlay layers is valid, and a
-source plus translation layer can be rendered and exported without a Companion
-layer.
+foreground/background appearance; the reader treats it as a declaration for
+the fragment's `(role, priority)` group, not as per-fragment styling. A newer
+browser declaration applies to every selected fragment in that group. The v3
+contract adds an immutable deletion tombstone. Readers remain compatible with
+v1 and v2 revisions. Fragment priorities are positive integers; block and
+section are the only anchor kinds. A publication with no overlay layers is
+valid, and a source plus translation layer can be rendered and exported without
+a Companion layer.
 
 The initial public API includes:
 
@@ -114,8 +116,10 @@ preserving the same unsaved values. Browser editing saves from the revision
 snapshot already loaded in the reader. Reading mode shows the fragment role and
 shows its revision number only when it is greater than 1; inline editing shows the role,
 priority, and revision. Advanced also offers paired color presets, synchronized
-color pickers and `#RRGGBB` fields, plus a reset to the role default. Notes use
-black with white text by default; any fragment role may store its own colors.
+color pickers and `#RRGGBB` fields, plus a reset to the role default. One color
+applies to every fragment with the same role and priority; changing priority
+creates or joins a separate color group. Notes use black with white text by
+default.
 Version history appears only after a fragment has more than one revision.
 Advanced places Delete immediately left of Save. Delete appends an empty
 tombstone revision, hides the element, and retains every earlier immutable

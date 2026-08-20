@@ -89,6 +89,8 @@
     hiddenRoles: new Set(),
     roleOrder: [],
     roleSlots: new Map(),
+    appearanceGroups: new Map(),
+    appearanceStyle: null,
     visibilityStyle: null,
     visibilityContentsSignature: null,
     visibilityReady: false,
@@ -249,6 +251,7 @@
           }
         }
       });
+      syncAppearanceGroups();
       state.loadedPayloadChunkIds.add(descriptor.chunk_id);
       publishSelectedRevisionCount();
       rebuildDiagnostics();
@@ -372,7 +375,7 @@
       title: "标题",
       role: "类型",
       priority: "优先级",
-      colors: traditional ? "顏色" : "颜色",
+      colors: traditional ? "同類型與優先級的顏色" : "同类型与优先级的颜色",
       foreground: traditional ? "前景色" : "前景色",
       background: traditional ? "背景色" : "背景色",
       roleDefaultColors: traditional ? "恢復類型預設" : "恢复类型默认",
@@ -445,7 +448,7 @@
       title: "Title",
       role: "Role",
       priority: "Priority",
-      colors: "Colors",
+      colors: "Color for this role and priority",
       foreground: "Foreground",
       background: "Background",
       roleDefaultColors: "Use role default",
@@ -795,11 +798,13 @@
       resolveFragmentInState(fragmentId, values);
     });
     rebuildDiagnostics();
+    syncAppearanceGroups();
   }
 
   function resolveOne(fragmentId) {
     resolveFragmentInState(fragmentId, state.revisions.get(fragmentId) || []);
     rebuildDiagnostics();
+    syncAppearanceGroups();
   }
 
   function resolveFragmentInState(fragmentId, values) {
@@ -1630,6 +1635,84 @@
     };
   }
 
+  function appearanceGroupKey(role, priority) {
+    return String(role) + "\u0000" + String(priority);
+  }
+
+  function appearanceDeclarationRank(fragment) {
+    var provenance = fragment.provenance || {};
+    return {
+      scoped: provenance.appearance_scope === "role_priority" ? 1 : 0,
+      explicit: fragment.appearance ? 1 : 0,
+      timestamp: String(provenance.edited_at || provenance.created_at || ""),
+      revision: Number(fragment.revision || 0),
+      identity: String(fragment.semantic_digest || fragment.fragment_id || "")
+    };
+  }
+
+  function compareAppearanceDeclarations(left, right) {
+    var a = appearanceDeclarationRank(left);
+    var b = appearanceDeclarationRank(right);
+    var scoped = a.scoped - b.scoped;
+    if (scoped) return scoped;
+    if (!a.scoped) {
+      var explicit = a.explicit - b.explicit;
+      if (explicit) return explicit;
+    }
+    return a.timestamp.localeCompare(b.timestamp) ||
+      a.revision - b.revision ||
+      a.identity.localeCompare(b.identity);
+  }
+
+  function syncAppearanceGroups() {
+    var declarations = new Map();
+    state.selected.forEach(function (fragment) {
+      var key = appearanceGroupKey(fragment.role, fragment.priority);
+      var current = declarations.get(key);
+      if (!current || compareAppearanceDeclarations(fragment, current) > 0) {
+        declarations.set(key, fragment);
+      }
+    });
+    state.appearanceGroups = new Map();
+    declarations.forEach(function (fragment, key) {
+      state.appearanceGroups.set(key, {
+        role: fragment.role,
+        priority: fragment.priority,
+        appearance: normalizeAppearance(fragment.appearance)
+      });
+    });
+    renderAppearanceGroups();
+  }
+
+  function appearanceForGroup(role, priority) {
+    var entry = state.appearanceGroups.get(appearanceGroupKey(role, priority));
+    if (!entry || !entry.appearance) return null;
+    return JSON.parse(JSON.stringify(entry.appearance));
+  }
+
+  function renderAppearanceGroups() {
+    if (
+      typeof document === "undefined" || !document.head ||
+      typeof document.createElement !== "function"
+    ) return;
+    if (!state.appearanceStyle) {
+      state.appearanceStyle = element("style");
+      state.appearanceStyle.id = "arc-appearance-groups";
+      document.head.appendChild(state.appearanceStyle);
+    }
+    var rules = [];
+    state.appearanceGroups.forEach(function (entry) {
+      var colors = effectiveAppearance(entry.role, entry.appearance);
+      rules.push(
+        '.arc-fragment[data-role-slot="' + roleSlot(entry.role) + '"]' +
+        '[data-priority="' + entry.priority + '"]{' +
+        "--arc-fragment-foreground:" + colors.foreground + ";" +
+        "--arc-fragment-background:" + colors.background + "}"
+      );
+    });
+    state.appearanceStyle.textContent = rules.join("\n");
+  }
+
   function applyFragmentAppearance(node, role, appearance) {
     var colors = effectiveAppearance(role, appearance);
     if (node.style && typeof node.style.setProperty === "function") {
@@ -1658,7 +1741,9 @@
     card.dataset.role = visual.role;
     card.dataset.roleSlot = String(roleSlot(visual.role));
     card.dataset.priority = String(visual.priority);
-    applyFragmentAppearance(card, visual.role, visual.appearance);
+    if (editing) {
+      applyFragmentAppearance(card, visual.role, visual.appearance);
+    }
     var header = element("header", "arc-fragment-header");
     var title = visual.title ? element("h4", "", visual.title) : element("span");
     decorateGlossary(title, "target");
@@ -3191,14 +3276,14 @@
     );
     document.getElementById("arc-editor-role").addEventListener("change", function () {
       syncDraftAndSaveState();
-      if (state.activeDraft && !state.activeDraft.appearance) {
-        syncAppearanceControlsFromDraft();
-      }
+      rebindDraftAppearanceToGroup();
       markEditorPreviewDirty();
     });
-    document.getElementById("arc-editor-priority").addEventListener(
-      "input", syncDraftAndSaveState
-    );
+    document.getElementById("arc-editor-priority").addEventListener("input", function () {
+      syncDraftAndSaveState();
+      rebindDraftAppearanceToGroup();
+      markEditorPreviewDirty();
+    });
     document.getElementById("arc-editor-markdown").addEventListener("input", function () {
       syncDraftAndSaveState();
       markEditorPreviewDirty();
@@ -3262,6 +3347,17 @@
       controls.text.setCustomValidity("");
       controls.text.removeAttribute("aria-invalid");
     });
+  }
+
+  function rebindDraftAppearanceToGroup() {
+    if (!state.activeDraft) return;
+    var priority = Number(state.activeDraft.priority);
+    if (!Number.isInteger(priority) || priority < 1) return;
+    state.activeDraft.appearance = appearanceForGroup(
+      state.activeDraft.role, priority
+    );
+    syncAppearanceControlsFromDraft();
+    updateDraftSaveButtons();
   }
 
   function setDraftAppearance(appearance) {
@@ -3578,8 +3674,7 @@
       role: fragment.role,
       priority: fragment.priority,
       markdown_body: fragment.markdown_body || "",
-      appearance: fragment.appearance ?
-        JSON.parse(JSON.stringify(fragment.appearance)) : null
+      appearance: appearanceForGroup(fragment.role, fragment.priority)
     };
   }
 
@@ -3659,7 +3754,7 @@
       role: "note",
       priority: 110,
       markdown_body: "",
-      appearance: null
+      appearance: appearanceForGroup("note", 110)
     };
     state.editorBase = null;
     state.editorHistorical = null;
@@ -3828,8 +3923,9 @@
     state.activeDraft.role = revision.role;
     state.activeDraft.priority = revision.priority;
     state.activeDraft.markdown_body = revision.markdown_body;
-    state.activeDraft.appearance = revision.appearance ?
-      JSON.parse(JSON.stringify(revision.appearance)) : null;
+    state.activeDraft.appearance = appearanceForGroup(
+      revision.role, revision.priority
+    );
     document.getElementById("arc-editor-title").value = revision.title || "";
     document.getElementById("arc-editor-role").value = revision.role;
     document.getElementById("arc-editor-priority").value = String(revision.priority);
@@ -3961,7 +4057,8 @@
       metadata.citation_ids = revisionEditable.citation_ids;
       metadata.provenance = Object.assign({}, metadata.provenance || {}, {
         last_editor: "arc-render-browser",
-        edited_at: new Date().toISOString()
+        edited_at: new Date().toISOString(),
+        appearance_scope: "role_priority"
       });
       validateRevisionMetadata(metadata);
       var digest = await semanticDigest(metadata, revisionEditable.markdown_body);
@@ -4060,7 +4157,7 @@
       role: revision.role,
       priority: revision.priority,
       citation_ids: citationIds(markdown),
-      appearance: normalizeAppearance(revision.appearance)
+      appearance: appearanceForGroup(revision.role, revision.priority)
     };
   }
 

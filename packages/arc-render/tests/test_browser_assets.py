@@ -1142,6 +1142,95 @@ assert(helpers.emptyNoteState({
     )
 
 
+def test_reader_groups_colors_by_role_and_priority_under_node() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        "globalThis.window = globalThis;\n"
+        + javascript[:startup]
+        + """
+  globalThis.__arcReaderTest = {
+    state: state,
+    syncAppearanceGroups: syncAppearanceGroups,
+    appearanceForGroup: appearanceForGroup
+  };
+}());
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+function fragment(id, priority, appearance, provenance) {
+  return {
+    fragment_id: id,
+    semantic_digest: id.repeat(64).slice(0, 64),
+    revision: 1,
+    role: "translation",
+    priority: priority,
+    appearance: appearance,
+    provenance: provenance || {}
+  };
+}
+var helpers = globalThis.__arcReaderTest;
+var ocean = {foreground: "#17324d", background: "#e7f0fa"};
+var paper = {foreground: "#3a2e1f", background: "#fff4d6"};
+var plum = {foreground: "#442857", background: "#f2eaf6"};
+helpers.state.selected = new Map([
+  ["a", fragment("a", 50, ocean, {created_at: "2026-01-01T00:00:00Z"})],
+  ["b", fragment("b", 50, null, {created_at: "2026-02-01T00:00:00Z"})],
+  ["c", fragment("c", 60, paper, {created_at: "2026-01-01T00:00:00Z"})]
+]);
+helpers.syncAppearanceGroups();
+assert(
+  JSON.stringify(helpers.appearanceForGroup("translation", 50)) ===
+    JSON.stringify(ocean),
+  "legacy per-fragment colors did not converge on one explicit group color"
+);
+assert(
+  JSON.stringify(helpers.appearanceForGroup("translation", 60)) ===
+    JSON.stringify(paper),
+  "another priority did not retain its independent color"
+);
+
+helpers.state.selected.set("d", fragment("d", 50, null, {
+  appearance_scope: "role_priority",
+  edited_at: "2026-03-01T00:00:00Z"
+}));
+helpers.syncAppearanceGroups();
+assert(
+  helpers.appearanceForGroup("translation", 50) === null,
+  "scoped reset did not restore the role default for the whole group"
+);
+
+helpers.state.selected.set("e", fragment("e", 50, plum, {
+  appearance_scope: "role_priority",
+  edited_at: "2026-04-01T00:00:00Z"
+}));
+helpers.syncAppearanceGroups();
+assert(
+  JSON.stringify(helpers.appearanceForGroup("translation", 50)) ===
+    JSON.stringify(plum),
+  "newest scoped declaration did not recolor the group"
+);
+assert(
+  JSON.stringify(helpers.appearanceForGroup("translation", 60)) ===
+    JSON.stringify(paper),
+  "recoloring one priority changed another priority"
+);
+"""
+    )
+    subprocess.run(
+        [node, "-"],
+        input=instrumented,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_reader_unchanged_save_is_a_normalized_zero_work_noop_under_node() -> None:
     node = shutil.which("node")
     if node is None:
