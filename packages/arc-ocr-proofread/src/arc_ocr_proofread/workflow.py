@@ -823,9 +823,14 @@ RIGHT PAGE HEAD:
                 for item in items
             ]
             key = _key("boundary-review", request_items)
-            if context.resume_input is None:
-                request_ref = context.artifacts.publish_json(
-                    "boundary-review/request",
+            if (
+                context.resume_input is None
+                or context.resume_input.get("resume_key") != key
+            ):
+                request_ref = context.artifacts.find(
+                    "boundary-review/request-v2"
+                ) or context.artifacts.publish_json(
+                    "boundary-review/request-v2",
                     {
                         "schema_version": BOUNDARY_REVIEW_SCHEMA,
                         "resume_key": key,
