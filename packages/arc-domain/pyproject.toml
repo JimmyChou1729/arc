@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arc-domain"
-version = "1.0.4"
+version = "1.0.5"
 description = "Build cached research-field domain artifacts from a seed paper."
 readme = "README.md"
 license = "MIT"

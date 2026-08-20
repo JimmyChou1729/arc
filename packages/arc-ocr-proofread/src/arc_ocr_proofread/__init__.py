@@ -5,7 +5,7 @@ from .service import ProofreadService, ProofreadServiceError
 from .source import MineruSource, ProofreadSourceError, load_mineru_source
 from .workflow import BoundaryRepairHandler, ProofreadHandler
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 
 __all__ = [
     "MineruSource",
