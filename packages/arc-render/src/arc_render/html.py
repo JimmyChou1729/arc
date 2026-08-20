@@ -836,16 +836,16 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
               </label>
             </div>
           </section>
-          <section class="arc-editor-danger-zone" aria-labelledby="arc-editor-delete-label">
-            <span id="arc-editor-delete-label">Delete this element</span>
-            <button id="arc-editor-delete" type="button">Delete</button>
-          </section>
           <div id="arc-editor-history" class="arc-history"></div>
         </div>
       </section>
       <footer class="arc-dialog-footer">
         <button id="arc-editor-cancel" type="button">Cancel</button>
-        <button id="arc-editor-save" type="button">Save</button>
+        <span class="arc-dialog-commit-actions">
+          <button id="arc-editor-delete" class="arc-editor-delete" type="button"
+            aria-label="Delete this element" hidden>Delete</button>
+          <button id="arc-editor-save" type="button">Save</button>
+        </span>
       </footer>
     </div>
   </dialog>

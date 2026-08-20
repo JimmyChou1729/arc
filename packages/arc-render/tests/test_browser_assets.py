@@ -1068,6 +1068,11 @@ function prepareDraft(revision) {
     "Delete did not select a tombstone revision"
   );
   assert(
+    tombstone.title === null && tombstone.markdown_body === "" &&
+      tombstone.citation_ids.length === 0,
+    "Delete did not persist an empty tombstone revision"
+  );
+  assert(
     !helpers.state.fragmentGroups.get(anchor.target_id).some(function (item) {
       return item.fragment_id === base.fragment_id;
     }),
@@ -1372,6 +1377,7 @@ globalThis.window = globalThis;
     updateAppearanceFromPicker: updateAppearanceFromPicker,
     updateAppearanceFromText: updateAppearanceFromText,
     openNewEditorForAnchor: openNewEditorForAnchor,
+    renderHistory: renderHistory,
     openExportPanel: openExportPanel,
     connectDirectory: connectDirectory,
     installDraftSpies: function (calls, render) {
@@ -1496,6 +1502,7 @@ var nodes = {
   "arc-editor-priority": new FakeNode("input"),
   "arc-editor-markdown": new FakeNode("textarea"),
   "arc-editor-save": new FakeNode("button"),
+  "arc-editor-delete": new FakeNode("button"),
   "arc-editor-history": new FakeNode("div"),
   "arc-editor-preview": new FakeNode("div"),
   "arc-editor-foreground-picker": new FakeNode("input"),
@@ -1596,6 +1603,19 @@ helpers.state.selected = new Map([[first.fragment_id, first]]);
   assert(
     firstCard.querySelector(".arc-edit-accessible"),
     "fragment lost its keyboard-accessible edit action"
+  );
+  helpers.renderHistory(historical.fragment_id);
+  assert(
+    nodes["arc-editor-history"].children.length > 0,
+    "multi-revision fragment hid version history"
+  );
+  helpers.state.revisions.set("single", [Object.assign({}, historical, {
+    fragment_id: "single"
+  })]);
+  helpers.renderHistory("single");
+  assert(
+    nodes["arc-editor-history"].children.length === 0,
+    "single-revision fragment showed version history"
   );
   var saved = firstCard.querySelector(".arc-fragment-saved-content");
   assert(
@@ -1780,6 +1800,33 @@ helpers.state.selected = new Map([[first.fragment_id, first]]);
     "blank new-note draft was not treated as clean during a switch"
   );
   helpers.cancelActiveDraft();
+
+  var deleted = Object.assign({}, first, {
+    revision: 3,
+    semantic_digest: "f".repeat(64),
+    anchor: anchor("block-5"),
+    title: null,
+    markdown_body: "",
+    deleted: true
+  });
+  var deletedHistory = [historical, first].map(function (revision) {
+    return Object.assign({}, revision, {anchor: anchor("block-5")});
+  }).concat([deleted]);
+  helpers.state.revisions.set(deleted.fragment_id, deletedHistory);
+  helpers.state.selected.set(deleted.fragment_id, deleted);
+  helpers.openNewEditorForAnchor(anchor("block-5"));
+  assert(
+    helpers.state.activeDraft && helpers.state.activeDraft.base === deleted &&
+      helpers.state.activeDraft.markdown_body === "" &&
+      nodes["arc-editor-dialog"].open,
+    "same-anchor Add did not reopen the deleted fragment"
+  );
+  assert(
+    helpers.state.editorHistorical.revision === 2 &&
+      nodes["arc-editor-history"].children.length > 0 &&
+      nodes["arc-editor-delete"].hidden,
+    "reopened deletion did not expose history or hid its redundant Delete action"
+  );
 })().catch(function (error) {
   console.error(error.stack || error);
   process.exitCode = 1;
@@ -2567,7 +2614,7 @@ def test_reader_enforces_strict_browser_revision_contract() -> None:
     assert "validateIntegerJson(metadata, \"fragment revision\")" in javascript
     assert "Number.isSafeInteger(value)" in javascript
     assert "anchor related block differs from the rich source" in javascript
-    assert "assertKnownCitations(editable.citation_ids)" in javascript
+    assert "assertKnownCitations(revisionEditable.citation_ids)" in javascript
 
 
 def test_reader_uses_low_distraction_controls_and_inline_editor() -> None:

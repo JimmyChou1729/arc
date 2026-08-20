@@ -560,6 +560,11 @@ img.arc-markdown-image {
 .arc-dialog-header { border-bottom: 1px solid var(--arc-line); }
 .arc-dialog-header h2 { margin: 0; font-size: 1.05rem; }
 .arc-dialog-footer { border-top: 1px solid var(--arc-line); }
+.arc-dialog-commit-actions {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+}
 .arc-dialog-fields {
   display: grid;
   gap: .6rem;
@@ -701,20 +706,7 @@ img.arc-markdown-image {
   border-color: #a74848;
   outline-color: #a74848;
 }
-.arc-editor-danger-zone {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: .7rem;
-  margin: 0 1rem .75rem;
-  padding: .7rem;
-  border: 1px solid #e3b8b8;
-  border-radius: .4rem;
-  color: #7b2626;
-  background: #fff7f7;
-  font-size: .78rem;
-}
-.arc-editor-danger-zone button {
+.arc-dialog .arc-editor-delete {
   border-color: #a74848;
   color: white;
   background: #a74848;

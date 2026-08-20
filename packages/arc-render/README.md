@@ -103,8 +103,9 @@ time. Contents links and URL fragments render their target before scrolling;
 printing renders every remaining chunk before the browser creates its preview.
 The reader never unloads a rendered chunk. On desktop, drag the right edge of
 the contents sidebar to resize it between 12rem and the smaller of 32rem or 45%
-of the viewport. Dragging below the minimum collapses it; the contents button
-restores its last width for the current page. The width is not persisted.
+of the viewport. Dragging 2rem past the minimum collapses it; the contents
+button restores its last width for the current page. Dragging right from the
+minimum resizes normally. The width is not persisted.
 
 Clicking a translation, companion, guide, or note body opens its raw Markdown
 inline. The inline controls save or discard the single active draft; Advanced
@@ -115,9 +116,13 @@ shows its revision number only when it is greater than 1; inline editing shows t
 priority, and revision. Advanced also offers paired color presets, synchronized
 color pickers and `#RRGGBB` fields, plus a reset to the role default. Notes use
 black with white text by default; any fragment role may store its own colors.
-Advanced includes deletion: it appends a tombstone revision, hides the element,
-and retains earlier immutable revisions. Empty notes are treated as deleted;
-saving a note after clearing both title and Markdown writes the same tombstone.
+Version history appears only after a fragment has more than one revision.
+Advanced places Delete immediately left of Save. Delete appends an empty
+tombstone revision, hides the element, and retains every earlier immutable
+revision. Empty notes are treated as deleted; saving a note after clearing both
+title and Markdown writes the same tombstone. The Add control at that source
+anchor reopens the latest hidden fragment and its history, so content can be
+restored or replaced without discarding its lineage.
 Save remains disabled while normalized content is unchanged, and the defensive
 no-op path chooses no directory and creates no revision. Selecting another
 fragment cancels a clean draft immediately. If the active draft has unsaved

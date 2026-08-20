@@ -3168,10 +3168,9 @@
       strings.background;
     document.getElementById("arc-editor-colors-reset").textContent =
       strings.roleDefaultColors;
-    document.getElementById("arc-editor-delete-label").textContent =
-      strings.deleteElementLabel;
-    document.getElementById("arc-editor-delete").textContent =
-      strings.deleteElement;
+    var deleteButton = document.getElementById("arc-editor-delete");
+    deleteButton.textContent = strings.deleteElement;
+    deleteButton.setAttribute("aria-label", strings.deleteElementLabel);
     document.getElementById("arc-editor-save").textContent = strings.save;
     document.getElementById("arc-editor-cancel").textContent = strings.cancel;
     var close = document.getElementById("arc-editor-close");
@@ -3642,6 +3641,17 @@
       return;
     }
     if (!prepareForDraftSwitch()) return;
+    var recoverable = recoverableFragmentAtAnchor(anchor);
+    if (recoverable) {
+      state.activeDraft = draftFromFragment(recoverable);
+      state.activeDraft.title = null;
+      state.activeDraft.markdown_body = "";
+      state.editorBase = recoverable;
+      state.editorHistorical = latestEarlierRevision(recoverable);
+      state.editorAnchor = recoverable.anchor;
+      openAdvancedEditor(null, labels().newNote);
+      return;
+    }
     state.activeDraft = {
       base: null,
       anchor: JSON.parse(JSON.stringify(anchor)),
@@ -3655,6 +3665,36 @@
     state.editorHistorical = null;
     state.editorAnchor = anchor;
     openAdvancedEditor(null, labels().newNote);
+  }
+
+  function recoverableFragmentAtAnchor(anchor) {
+    var candidates = Array.from(state.selected.values()).filter(function (fragment) {
+      return !fragmentIsVisible(fragment) && fragment.anchor &&
+        fragment.anchor.kind === anchor.kind &&
+        fragment.anchor.target_id === anchor.target_id;
+    });
+    candidates.sort(function (left, right) {
+      var leftEdited = String((left.provenance || {}).edited_at || "");
+      var rightEdited = String((right.provenance || {}).edited_at || "");
+      return rightEdited.localeCompare(leftEdited) ||
+        right.revision - left.revision ||
+        left.fragment_id.localeCompare(right.fragment_id);
+    });
+    return candidates[0] || null;
+  }
+
+  function latestEarlierRevision(fragment) {
+    var revisions = state.revisions.get(fragment.fragment_id) || [];
+    var parent = revisions.find(function (revision) {
+      return revision.semantic_digest === fragment.parent_semantic_digest;
+    });
+    if (parent) return parent;
+    return revisions.filter(function (revision) {
+      return revision.semantic_digest !== fragment.semantic_digest;
+    }).sort(function (left, right) {
+      return right.revision - left.revision ||
+        left.semantic_digest.localeCompare(right.semantic_digest);
+    })[0] || fragment;
   }
 
   function openAdvancedEditor(event, heading) {
@@ -3671,8 +3711,10 @@
     document.getElementById("arc-editor-markdown").value = draft.markdown_body || "";
     syncAppearanceControlsFromDraft();
     state.editorPreviewDirty = true;
-    var dangerZone = document.querySelector(".arc-editor-danger-zone");
-    if (dangerZone) dangerZone.hidden = !draft.base;
+    var deleteButton = document.getElementById("arc-editor-delete");
+    if (deleteButton) {
+      deleteButton.hidden = !draft.base || draft.base.deleted === true;
+    }
     renderHistory(draft.base && draft.base.fragment_id);
     updatePreview();
     updateDraftSaveButtons();
@@ -3734,6 +3776,7 @@
     var revisions = (state.revisions.get(fragmentId) || []).slice().sort(function (a, b) {
       return a.revision - b.revision;
     });
+    if (revisions.length <= 1) return;
     var toolbar = element("div", "arc-history-toolbar");
     toolbar.appendChild(element("span", "", strings.history + ": "));
     revisions.forEach(function (revision) {
@@ -3885,7 +3928,12 @@
       var editorAnchor = JSON.parse(JSON.stringify(draft.anchor));
       var editable = editableDraftState(draft);
       var deleting = Boolean(forceDelete || emptyNoteState(editable));
-      assertKnownCitations(editable.citation_ids);
+      var revisionEditable = deleting ? Object.assign({}, editable, {
+        title: null,
+        markdown_body: "",
+        citation_ids: []
+      }) : editable;
+      assertKnownCitations(revisionEditable.citation_ids);
       if (base) assertEditorBaseCurrent(base);
       if (
         base && !deleting &&
@@ -3903,27 +3951,27 @@
       if (base) assertEditorBaseCurrent(base);
       var metadata = base ? metadataOnly(base) : newNoteMetadata(editorAnchor);
       metadata.schema_version = FRAGMENT_SCHEMA;
-      metadata.appearance = editable.appearance;
+      metadata.appearance = revisionEditable.appearance;
       metadata.deleted = deleting;
       metadata.revision = base ? base.revision + 1 : 1;
       metadata.parent_semantic_digest = base ? base.semantic_digest : null;
-      metadata.title = editable.title;
-      metadata.role = editable.role;
-      metadata.priority = editable.priority;
-      metadata.citation_ids = editable.citation_ids;
+      metadata.title = revisionEditable.title;
+      metadata.role = revisionEditable.role;
+      metadata.priority = revisionEditable.priority;
+      metadata.citation_ids = revisionEditable.citation_ids;
       metadata.provenance = Object.assign({}, metadata.provenance || {}, {
         last_editor: "arc-render-browser",
         edited_at: new Date().toISOString()
       });
       validateRevisionMetadata(metadata);
-      var digest = await semanticDigest(metadata, editable.markdown_body);
+      var digest = await semanticDigest(metadata, revisionEditable.markdown_body);
       var encoded = FRONT_BEGIN + "\n" + stableStringify(metadata) + "\n" +
-        FRONT_END + "\n" + editable.markdown_body;
+        FRONT_END + "\n" + revisionEditable.markdown_body;
       var filename = revisionFilename(metadata.revision, digest);
       var folder = await fragmentsDirectory(true);
       await writeImmutableRevision(folder, filename, encoded);
       var revision = Object.assign({}, metadata, {
-        markdown_body: editable.markdown_body,
+        markdown_body: revisionEditable.markdown_body,
         semantic_digest: digest,
         _origin: "directory"
       });
