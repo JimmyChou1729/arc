@@ -118,25 +118,45 @@ assert(
     resizer.attrs["aria-valuemax"] === "512",
   "sidebar did not initialize its bounded width"
 );
-resizer.dispatch("pointerdown", {button: 0, preventDefault: function () {}});
+resizer.dispatch("pointerdown", {
+  button: 0, clientX: 288, preventDefault: function () {}
+});
 windowDispatch("pointermove", {clientX: 420, preventDefault: function () {}});
 windowDispatch("pointerup");
 assert(
   shell.style.values["--arc-contents-width"] === "420px",
   "pointer drag did not resize the sidebar"
 );
-resizer.dispatch("pointerdown", {button: 0, preventDefault: function () {}});
+resizer.dispatch("pointerdown", {
+  button: 0, clientX: 420, preventDefault: function () {}
+});
 windowDispatch("pointermove", {clientX: 180, preventDefault: function () {}});
+assert(
+  !shell.classList.contains("contents-collapsed") &&
+    shell.style.values["--arc-contents-width"] === "192px",
+  "sidebar collapsed without enough minimum-width overshoot"
+);
+windowDispatch("pointermove", {clientX: 150, preventDefault: function () {}});
 assert(
   shell.classList.contains("contents-collapsed") &&
     toggle.attrs["aria-expanded"] === "false",
-  "dragging below the minimum did not collapse the sidebar"
+  "dragging beyond the minimum-width overshoot did not collapse the sidebar"
 );
 toggle.onclick();
 assert(
   !shell.classList.contains("contents-collapsed") &&
-    shell.style.values["--arc-contents-width"] === "420px",
+    shell.style.values["--arc-contents-width"] === "192px",
   "contents button did not restore the previous width"
+);
+resizer.dispatch("pointerdown", {
+  button: 0, clientX: 188, preventDefault: function () {}
+});
+windowDispatch("pointermove", {clientX: 220, preventDefault: function () {}});
+windowDispatch("pointerup");
+assert(
+  !shell.classList.contains("contents-collapsed") &&
+    shell.style.values["--arc-contents-width"] === "224px",
+  "right drag from minimum width incorrectly collapsed the sidebar"
 );
 resizer.dispatch("keydown", {key: "Home", preventDefault: function () {}});
 assert(

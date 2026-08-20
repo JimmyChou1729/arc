@@ -2634,6 +2634,9 @@
     var preferredMaximumWidth = 32 * rootFontSize;
     var width = 18 * rootFontSize;
     var dragging = false;
+    var dragStartX = 0;
+    var dragStartWidth = width;
+    var collapseOvershoot = 2 * rootFontSize;
 
     function maximumWidth() {
       return Math.max(
@@ -2671,12 +2674,13 @@
 
     function drag(event) {
       if (!dragging) return;
-      if (event.clientX < minimumWidth) {
+      var next = dragStartWidth + Number(event.clientX) - dragStartX;
+      if (next < minimumWidth - collapseOvershoot) {
         stopDragging();
         setOpen(false);
         return;
       }
-      setWidth(event.clientX);
+      setWidth(next);
       if (typeof event.preventDefault === "function") event.preventDefault();
     }
 
@@ -2685,6 +2689,8 @@
     resizer.addEventListener("pointerdown", function (event) {
       if (mobile.matches || !open || event.button !== 0) return;
       dragging = true;
+      dragStartX = Number(event.clientX);
+      dragStartWidth = width;
       shell.classList.add("is-resizing-contents");
       window.addEventListener("pointermove", drag);
       window.addEventListener("pointerup", stopDragging);
