@@ -58,7 +58,7 @@ def test_cached_document_ref_round_trip_and_cache_only_reads(
         "source_sha256": reference.source_sha256,
         "source_size": len(SOURCE.encode("utf-8")),
         "media_type": "text/markdown",
-        "parser_contract": "arc.document.parser.v5",
+        "parser_contract": "arc.document.parser.v6",
         "parsed_document_sha256": reference.parsed_document_sha256,
     }
 
@@ -103,7 +103,7 @@ def test_cached_document_accepts_repeated_identical_math_on_one_line(
 
     reference = service.cache_document(service.import_source(source_path))
 
-    assert reference.parser_contract == "arc.document.parser.v5"
+    assert reference.parser_contract == "arc.document.parser.v6"
     assert service.get_table_of_contents(_target(reference)).entries
 
 
