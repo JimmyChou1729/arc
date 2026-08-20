@@ -139,7 +139,7 @@ def test_parser_contract_rebuilds_from_legacy_derived_entry_without_removing_sou
         parser_contract=legacy.parser_contract,
         parsed_cache_key=legacy_key,
     )
-    assert PARSER_CONTRACT == "arc.document.parser.v6"
+    assert PARSER_CONTRACT == "arc.document.parser.v7"
 
     current_calls: list[str] = []
     original_parse = parser_service_module.parse_artifact_bytes
