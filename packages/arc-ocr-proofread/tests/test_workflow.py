@@ -8,8 +8,8 @@ import zlib
 
 import pytest
 
-from arc_jobs import ImmutableArtifactStore, RunStatus
-from arc_llm import LLMCompleted
+from arc_jobs import ImmutableArtifactStore, ResumeReason, RunStatus
+from arc_llm import LLMCompleted, LLMPaused
 from arc_paper import RenderedPDFPage
 
 from arc_ocr_proofread import ProofreadProject, ProofreadService, load_mineru_source
@@ -92,6 +92,17 @@ class BoundaryTasks(Tasks):
                 },
             }
         return LLMCompleted(value, "codex", "gpt-5.6-luna", None, None)
+
+
+class InterruptedBoundaryTasks(BoundaryTasks):
+    def execute_or_resume(self, context, request, *, options):
+        if "boundary_prompt" in request.task_id:
+            self.calls += 1
+            return LLMPaused(
+                ResumeReason.EXECUTION_INTERRUPTED,
+                "provider-retry-exhausted",
+            )
+        return super().execute_or_resume(context, request, options=options)
 
 
 def _bundle(tmp_path: Path, monkeypatch, *, pages: int = 1):
@@ -391,6 +402,47 @@ def test_llm_reviewed_boundary_join_moves_marker_below_merged_paragraph(
     manifest = service.result()
     assert manifest["page_boundary_repairs"] == 1
     assert manifest["corrections_per_page"] == 0.5
+
+
+def test_interrupted_boundary_review_routes_to_main_agent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _two_page_bundle(tmp_path / "source", monkeypatch)
+    project = ProofreadProject.open(tmp_path / "project")
+    service = ProofreadService(project)
+    snapshot = service.prepare(source)
+    tasks = InterruptedBoundaryTasks()
+
+    snapshot = service.execute(
+        snapshot.run_id, task_service=tasks, renderer=Renderer()
+    )
+
+    assert snapshot.status is RunStatus.PAUSED
+    review = _artifact_json(service, snapshot)
+    assert review["schema_version"] == "arc.ocr_proofread.boundary_review_request.v1"
+    assert review["items"][0]["action"] == "uncertain"
+    assert review["items"][0]["provider"] is None
+
+    snapshot = service.resume(
+        snapshot.run_id,
+        input={
+            "resume_key": review["resume_key"],
+            "decisions": [
+                {
+                    "id": review["items"][0]["id"],
+                    "action": "separate",
+                    "join_mode": None,
+                }
+            ],
+        },
+        task_service=tasks,
+        renderer=Renderer(),
+    )
+
+    assert snapshot.status is RunStatus.PAUSED
+    assert _artifact_json(service, snapshot)["schema_version"] == (
+        "arc.ocr_proofread.audit_request.v1"
+    )
 
 
 def test_audit_can_apply_exact_page_corrections(tmp_path: Path, monkeypatch) -> None:

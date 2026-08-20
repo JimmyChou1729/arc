@@ -670,6 +670,29 @@ Next-page boundary context:
                 context, current, options=options
             )
             if isinstance(outcome, LLMPaused):
+                if outcome.reason is ResumeReason.EXECUTION_INTERRUPTED:
+                    return UnitResult(
+                        unit_id,
+                        "succeeded",
+                        {
+                            "schema_version": "arc.ocr_proofread.boundary_result.v1",
+                            "boundary_index": item["boundary_index"],
+                            "left_page_index": item["left_page_index"],
+                            "right_page_index": item["right_page_index"],
+                            "left": item["left"],
+                            "right": item["right"],
+                            "action": "uncertain",
+                            "join_mode": None,
+                            "reason": (
+                                "The provider was interrupted before returning a "
+                                "usable boundary decision; main-agent review is required."
+                            ),
+                            "provider": None,
+                            "model": None,
+                            "left_image_artifact": left_page["image_artifact"],
+                            "right_image_artifact": right_page["image_artifact"],
+                        },
+                    )
                 return Paused(
                     Awaiting(
                         outcome.reason,

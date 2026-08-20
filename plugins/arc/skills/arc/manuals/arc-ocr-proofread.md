@@ -39,7 +39,9 @@ page. Hourly checks are normally enough; do not busy-poll.
 
 Page correction is followed by model review of every adjacent page pair. Both
 complete page images are attached. Clear paragraph continuations are joined;
-uncertain or structurally unsafe joins require main-agent decisions. PDF page
+uncertain or structurally unsafe joins require main-agent decisions. A boundary
+provider that remains interrupted after bounded retries is routed through the
+same main-agent review instead of losing completed boundary work. PDF page
 markers become structured, default-hidden reader notes and never translation
 fragments.
 
