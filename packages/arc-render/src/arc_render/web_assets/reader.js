@@ -1386,7 +1386,7 @@
     var metadata = state.payload.publication.source_document.metadata || {};
     var notes = metadata.document_notes || {};
     if (
-      notes.schema_version === "arc.paper.document_notes.v1" &&
+      notes.schema_version === "arc.document.document_notes.v1" &&
       Array.isArray(notes.items)
     ) {
       return notes.items.filter(function (item) {
@@ -1398,7 +1398,7 @@
     }
     var boundaries = metadata.source_page_boundaries || {};
     if (
-      boundaries.schema_version !== "arc.paper.source_page_boundaries.v1" ||
+      boundaries.schema_version !== "arc.document.source_page_boundaries.v1" ||
       !Array.isArray(boundaries.items)
     ) return [];
     return boundaries.items.filter(function (item) {

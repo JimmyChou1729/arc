@@ -304,11 +304,11 @@ def test_weighted_chapter_recipe_uses_distinct_cache_lineage() -> None:
     )
     old_lineage = replace(
         lineage,
-        discovery_contract="arc.paper.keyword_chapter_prompt.v2",
+        discovery_contract="arc.document.keyword_chapter_prompt.v2",
     )
     assert (
         KEYWORD_CHAPTER_PROMPT_CONTRACT
-        == "arc.paper.keyword_chapter_prompt.v3"
+        == "arc.document.keyword_chapter_prompt.v3"
     )
     assert lineage.key != old_lineage.key
 

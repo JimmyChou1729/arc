@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -23,11 +24,15 @@ from arc_paper import (
 )
 from arc_paper._full_text_catalog import FullTextCatalog
 from arc_paper._parsed_document_cache import PARSER_CONTRACT, ParsedDocumentCache
-from arc_paper.parse import service as parser_service_module
 from arc_paper.parse.parser import ParseError, parse_artifact_bytes
 from arc_paper.providers import Ar5ivProvider
 from arc_paper.providers.base import ProviderError
 from arc_paper.rich_document import RichDocumentParserService
+
+
+parser_service_module = importlib.import_module(
+    "arc_document.parse.service"
+)
 
 
 class FakePDFTextExtractor:
@@ -115,7 +120,7 @@ def test_parser_contract_rebuilds_from_legacy_derived_entry_without_removing_sou
     source = _store(repository, payload, SourceFormat.HTML)
     legacy = ParsedDocumentCache(
         repository=repository,
-        parser_contract="arc.paper.parser.v3",
+        parser_contract="arc.document.parser.v3",
     )
     legacy_document, _ = legacy.get_or_parse(
         source,
@@ -134,7 +139,7 @@ def test_parser_contract_rebuilds_from_legacy_derived_entry_without_removing_sou
         parser_contract=legacy.parser_contract,
         parsed_cache_key=legacy_key,
     )
-    assert PARSER_CONTRACT == "arc.paper.parser.v5"
+    assert PARSER_CONTRACT == "arc.document.parser.v5"
 
     current_calls: list[str] = []
     original_parse = parser_service_module.parse_artifact_bytes

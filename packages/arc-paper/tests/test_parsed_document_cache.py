@@ -110,19 +110,19 @@ def test_cache_round_trip_preserves_canonical_projection_bytes(
     )
     entry_dir = first_cache._entry_dir(first_cache.cache_key(source))
     expected_document = (
-        b'{"document_digest":"29c9105bed159fa0c2f0ee7bb0487dec298f0ea73d314c6d47d1434bae2b3749",'
+        b'{"document_digest":"14f568c549a5d4bb781f10b7be4de4a2b336b8946d1b910c397b60779d9c5e70",'
         b'"math_spans":[],"metadata":{"format":"html"},"pages":[],"schema_version":'
-        b'"arc.paper.parsed_document.v2","sections":[{"level":1,"ordinal":0,"page_end":'
+        b'"arc.document.parsed_document.v2","sections":[{"level":1,"ordinal":0,"page_end":'
         b'null,"page_start":null,"section_id":"sec-c9d2ced32b55836bc942","text":"text",'
         b'"title":"Intro"}],"source":{"artifact_digest":'
         b'"bf364f6117c7bb6b0512a27500a0b274850ed6265389117f508a12da1d9023ba",'
         b'"media_type":"text/html","size":25,"source_format":"html"},"warnings":[]}'
     )
     expected_manifest = (
-        b'{"document_digest":"29c9105bed159fa0c2f0ee7bb0487dec298f0ea73d314c6d47d1434bae2b3749",'
-        b'"parser_contract":"arc.paper.parser.v5","payload_digest":'
-        b'"49378479c7b892a1387ed983035c53d43a6d5ce8d40230cd3c07985631096318",'
-        b'"payload_size":499,"schema_version":"arc.paper.parsed_document_cache.v1",'
+        b'{"document_digest":"14f568c549a5d4bb781f10b7be4de4a2b336b8946d1b910c397b60779d9c5e70",'
+        b'"parser_contract":"arc.document.parser.v5","payload_digest":'
+        b'"91edd3666be2481c146f48379751bbc67143dac8020e66a1e6395aa83749cbf8",'
+        b'"payload_size":502,"schema_version":"arc.document.parsed_document_cache.v1",'
         b'"source_identity":{"artifact_digest":'
         b'"bf364f6117c7bb6b0512a27500a0b274850ed6265389117f508a12da1d9023ba",'
         b'"media_type":"text/html","size":25,"source_format":"html"}}'
@@ -180,7 +180,7 @@ def test_cache_key_changes_for_source_content_and_parser_contract(tmp_path: Path
     cache.get_or_parse(second_source, _parser(repository, calls))
     alternate = ParsedDocumentCache(
         repository=repository,
-        parser_contract="arc.paper.parser.alternate",
+        parser_contract="arc.document.parser.alternate",
     )
     alternate.get_or_parse(first_source, _parser(repository, calls))
 

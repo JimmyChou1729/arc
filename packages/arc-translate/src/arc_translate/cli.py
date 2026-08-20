@@ -24,7 +24,7 @@ from arc_jobs import (
     snapshot_data,
 )
 from arc_llm import HostAuthority, LLMExecutionOptions, ModelSelection
-from arc_paper import ArcPaperService
+from arc_document import ArcDocumentService
 
 from .contracts import (
     BlocksRequest,
@@ -77,7 +77,7 @@ def _parser() -> _Parser:
         help="detect source language and bind a target language",
         description="Detect a verified source language and record the target language.",
     )
-    language.add_argument("source", help="paper identifier or local source")
+    language.add_argument("source", help="local source")
     language.add_argument("--target-language", required=True, help="requested target language")
     _project_argument(language)
     _generation_arguments(language)
@@ -87,7 +87,7 @@ def _parser() -> _Parser:
         help="build a bilingual glossary",
         description="Build a reviewed bilingual glossary for the verified source.",
     )
-    glossary.add_argument("source", help="same paper identifier or source used for detection")
+    glossary.add_argument("source", help="same local source used for detection")
     glossary.add_argument(
         "--approx-term-count", type=int, default=50, help="target term count (default: 50)"
     )
@@ -99,7 +99,7 @@ def _parser() -> _Parser:
         help="translate source blocks with the selected glossary",
         description="Translate verified source blocks using the selected language and glossary.",
     )
-    blocks.add_argument("source", help="same paper identifier or source used for detection")
+    blocks.add_argument("source", help="same local source used for detection")
     _project_argument(blocks)
     _generation_arguments(blocks)
 
@@ -121,7 +121,7 @@ def _parser() -> _Parser:
     )
     _project_argument(resume)
     resume.add_argument("--input", help="JSON object or a path to one")
-    _paper_cache_argument(resume)
+    _document_cache_argument(resume)
     _host_authority_argument(resume)
 
     get_result = commands.add_parser(
@@ -148,15 +148,15 @@ def _generation_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", help="provider-specific model name")
     parser.add_argument("--refresh", action="store_true", help="refresh cached source data")
     _host_authority_argument(parser)
-    _paper_cache_argument(parser)
+    _document_cache_argument(parser)
 
 
-def _paper_cache_argument(parser: argparse.ArgumentParser) -> None:
+def _document_cache_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--paper-cache-root",
+        "--document-cache-root",
         help=(
-            "arc-paper cache root; defaults to ARC_PAPER_CACHE or "
-            "<current-directory>/.arc/cache/arc-paper"
+            "arc-document cache root; defaults to ARC_DOCUMENT_CACHE or "
+            "<current-directory>/.arc/cache/arc-document"
         ),
     )
 
@@ -268,7 +268,7 @@ def _detect_language(args: argparse.Namespace) -> CommandResult:
     if not args.target_language.strip():
         raise _UsageError("--target-language must be non-empty")
     project = TranslationProject.open(args.project_dir)
-    paper = ArcPaperService(cache_root=args.paper_cache_root)
+    paper = ArcDocumentService(cache_root=args.document_cache_root)
     source = resolve_translation_source(
         paper, args.source, refresh=args.refresh
     )
@@ -293,7 +293,7 @@ def _build_glossary(args: argparse.Namespace) -> CommandResult:
         raise TranslationServiceError(
             "prerequisite_invalid", "language prerequisite has the wrong type"
         )
-    paper = ArcPaperService(cache_root=args.paper_cache_root)
+    paper = ArcDocumentService(cache_root=args.document_cache_root)
     source = resolve_translation_source(
         paper, args.source, refresh=args.refresh
     )
@@ -330,7 +330,7 @@ def _translate_blocks(args: argparse.Namespace) -> CommandResult:
         raise TranslationServiceError(
             "prerequisite_invalid", "translation prerequisites have wrong types"
         )
-    paper = ArcPaperService(cache_root=args.paper_cache_root)
+    paper = ArcDocumentService(cache_root=args.document_cache_root)
     source = resolve_translation_source(
         paper, args.source, refresh=args.refresh
     )
@@ -401,7 +401,7 @@ def _resume(args: argparse.Namespace) -> CommandResult:
     service = TranslationService(project.jobs_root)
     keyword_provider = None
     if project.current_step == "glossary":
-        paper = ArcPaperService(cache_root=args.paper_cache_root)
+        paper = ArcDocumentService(cache_root=args.document_cache_root)
         keyword_provider = _keyword_provider(paper)
     snapshot = service.resume(
         run_id,
@@ -616,15 +616,15 @@ def _recipe(args: argparse.Namespace) -> GenerationRecipe:
     )
 
 
-def _keyword_provider(paper: ArcPaperService) -> Any:
+def _keyword_provider(paper: ArcDocumentService) -> Any:
     try:
-        from arc_paper import KeywordInventoryService
+        from arc_document import KeywordInventoryService
 
         return KeywordInventoryService(paper.term_inventory_store)
     except (ImportError, AttributeError) as exc:
         raise TranslationServiceError(
             "keyword_provider_unavailable",
-            "installed arc-paper does not expose KeywordInventoryService",
+            "installed arc-document does not expose KeywordInventoryService",
         ) from exc
 
 

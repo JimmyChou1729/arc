@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 
-from arc_paper import (
+from arc_document import (
     RichDocument,
     SourceArtifact,
     SourceFormat,

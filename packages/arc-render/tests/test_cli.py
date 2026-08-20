@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from arc_paper import (
+from arc_document import (
     RichDocument,
     RichDocumentParserService,
     SourceRepository,

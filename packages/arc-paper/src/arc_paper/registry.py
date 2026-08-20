@@ -434,7 +434,7 @@ _KEYWORD_TERM_SCHEMA = _object(
 )
 _KEYWORD_RESULT_SCHEMA = _object(
     {
-        "schema_version": {"const": "arc.paper.keyword_result.v1"},
+        "schema_version": {"const": "arc.document.keyword_result.v1"},
         "document_digest": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$",
@@ -526,7 +526,7 @@ _PARSED_DOCUMENT_SCHEMA = _object(
         },
         "warnings": _STRING_ARRAY,
         "metadata": {"type": "object"},
-        "schema_version": {"const": "arc.paper.parsed_document.v2"},
+        "schema_version": {"const": "arc.document.parsed_document.v2"},
         "document_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     },
     required=(

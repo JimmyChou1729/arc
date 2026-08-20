@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from arc_llm import LLMExecutionOptions, ModelSelection
-from arc_paper import (
+from arc_document import (
     CachedDocumentStructureRef,
     EQUATION_LABEL_VISUAL_PROMPT_VERSION,
     RichDocument,
@@ -280,7 +280,7 @@ class CompanionExecutionOptions:
 
     workers: int = 16
     llm: LLMExecutionOptions = field(default_factory=LLMExecutionOptions)
-    paper_cache_root: Path | None = None
+    document_cache_root: Path | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.workers, bool) or not isinstance(
@@ -291,9 +291,9 @@ class CompanionExecutionOptions:
             raise ValueError("workers must be between 1 and 24")
         if not isinstance(self.llm, LLMExecutionOptions):
             raise ValueError("llm must be LLMExecutionOptions")
-        if self.paper_cache_root is not None:
+        if self.document_cache_root is not None:
             object.__setattr__(
-                self, "paper_cache_root", Path(self.paper_cache_root)
+                self, "document_cache_root", Path(self.document_cache_root)
             )
 
 

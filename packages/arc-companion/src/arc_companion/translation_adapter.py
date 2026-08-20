@@ -13,7 +13,7 @@ from arc_llm import (
     ModelSelection,
     ResumeInput,
 )
-from arc_paper import CachedDocumentStructureRef, RichDocument
+from arc_document import CachedDocumentStructureRef, RichDocument
 
 
 TranslationStep = Mapping[str, Any] | Paused | RunError
@@ -101,12 +101,12 @@ class ArcTranslateAdapter:
         self,
         task_service: LLMTaskService | None = None,
         *,
-        paper_cache_root: str | Path | None = None,
+        document_cache_root: str | Path | None = None,
     ) -> None:
         self.task_service = task_service
-        self.paper_cache_root = (
-            Path(paper_cache_root)
-            if paper_cache_root is not None
+        self.document_cache_root = (
+            Path(document_cache_root)
+            if document_cache_root is not None
             else None
         )
 
@@ -147,12 +147,12 @@ class ArcTranslateAdapter:
         resume_input: ResumeInput | None,
     ) -> TranslationStep:
         service, translation_source = self._service_and_source(source)
-        from arc_paper import DocumentStructureCache, TermInventoryStore
+        from arc_document import DocumentStructureCache, TermInventoryStore
         from arc_translate import LanguageResult
 
         keyword_structure = (
             DocumentStructureCache(
-                self.paper_cache_root or TermInventoryStore().root
+                self.document_cache_root or TermInventoryStore().root
             ).read(structure_ref)
             if structure_ref is not None
             else None
@@ -208,13 +208,13 @@ class ArcTranslateAdapter:
         # arc-translate is intentionally imported only through its public root
         # facade. Companion does not depend on its handlers, prompts, or codecs.
         from arc_translate import TranslationSource, TranslationWorkflowService
-        from arc_paper import KeywordInventoryService, TermInventoryStore
+        from arc_document import KeywordInventoryService, TermInventoryStore
 
         return (
             TranslationWorkflowService(
                 task_service=self.task_service,
                 keyword_provider=KeywordInventoryService(
-                    TermInventoryStore(self.paper_cache_root),
+                    TermInventoryStore(self.document_cache_root),
                     task_service=self.task_service,
                 ),
             ),

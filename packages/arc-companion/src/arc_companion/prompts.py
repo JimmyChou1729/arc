@@ -252,16 +252,14 @@ Translate English excerpts or quotations into the target language while
 preserving and citing the source's English title and URL. English Wikipedia is
 an optional ordinary source; only `en.wikipedia.org` is allowed.
 
-Research when it materially improves the Companion. Prefer a source already
-available through the shared paper cache. There is no reference-count limit,
-and no minimum. If acquisition is required, use any currently available and
-authorized capability-matching tool; do not assume one exists or insist on
-authorization that was not granted.
+Use only the verified document, frozen translation, and any reviewed
+supplements supplied with this build. External academic research is an
+optional host-level workflow and is not performed by arc-companion itself.
 
 When `arc_commands.availability` is `exact`, the source body is not embedded
 in the loop context: run the supplied commands for exact numbered parts,
 complete current sections, the complete current chapter, search, and
-research. Read the complete original chapter once before drafting. When
+source inspection. Read the complete original chapter once before drafting. When
 `arc_commands.translation.availability` is `exact`, also run its
 `complete-current-chapter` command and read the complete frozen translation
 before drafting. For every local companion, confirm its placement and wording
@@ -554,7 +552,7 @@ def _source_input_manifest(
         ],
         "instructions": (
             "Inspect companion-source-index first. In direct mode, prefer the "
-            "exact cache-only arc-paper operations listed there and pass its "
+            "exact cache-only arc-document operations listed there and pass its "
             "cached document reference unchanged. For chapter tasks, use the "
             "task's block_access line ranges and selectors first. If those "
             "excerpts are insufficient, the agent may inspect the complete "

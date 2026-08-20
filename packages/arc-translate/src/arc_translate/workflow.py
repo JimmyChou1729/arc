@@ -39,7 +39,7 @@ from arc_llm import (
     decode_resume_input,
     resume_input_matches,
 )
-from arc_paper import RichBlockKind, literal_term_occurs, rich_block_to_document
+from arc_document import RichBlockKind, literal_term_occurs, rich_block_to_document
 from arc_render import (
     AnchorKind,
     FragmentAnchor,
@@ -493,7 +493,7 @@ class TranslationWorkflowService:
             if self.keyword_provider is None:
                 return RunError(
                     "keyword_provider_missing",
-                    "glossary generation requires an arc-paper keyword provider",
+                    "glossary generation requires an arc-document keyword provider",
                 )
             try:
                 keyword_options: dict[str, Any] = {}
@@ -1272,7 +1272,7 @@ def _validate_keyword_inventory(
     }
     _require_fields(value, fields, "keyword inventory")
     if (
-        _string(value, "schema_version") != "arc.paper.keyword_result.v1"
+        _string(value, "schema_version") != "arc.document.keyword_result.v1"
         or _string(value, "document_digest") != source.document_digest
         or _string(value, "source_digest") != source.source_digest
         or _integer(value, "approx_count") != approx_count

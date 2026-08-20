@@ -39,15 +39,15 @@ def test_help_has_no_obsolete_json_flag(
     assert "--json" not in output
 
 
-def test_only_paper_access_commands_accept_a_paper_cache_root(
+def test_only_document_access_commands_accept_a_document_cache_root(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     for command in ("build", "resume"):
         assert main([command, "--help"]) == 0
-        assert "--paper-cache-root" in capsys.readouterr().out
+        assert "--document-cache-root" in capsys.readouterr().out
     for command in ("render", "revise", "validate"):
         assert main([command, "--help"]) == 0
-        assert "--paper-cache-root" not in capsys.readouterr().out
+        assert "--document-cache-root" not in capsys.readouterr().out
 
 
 def test_build_and_resume_expose_explicit_host_authority(
@@ -99,4 +99,4 @@ def test_missing_local_build_source_returns_typed_error(
     assert code == 1
     result = json.loads(capsys.readouterr().out)
     assert result["error"]["code"] == "source_not_found"
-    assert "valid arXiv ID" in result["error"]["message"]
+    assert "existing local file" in result["error"]["message"]

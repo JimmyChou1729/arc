@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from arc_jobs import ArcJobsError, RunContext
-from arc_paper import RichBlock, RichBlockKind, RichDocument
+from arc_document import RichBlock, RichBlockKind, RichDocument
 from arc_render import (
     AnchorKind,
     FragmentRevision,

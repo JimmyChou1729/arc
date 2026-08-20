@@ -186,7 +186,7 @@ def test_reader_renders_structured_document_notes_default_hidden() -> None:
     stylesheet = _text("reader.css")
 
     assert "metadata.document_notes" in javascript
-    assert '"arc.paper.document_notes.v1"' in javascript
+    assert '"arc.document.document_notes.v1"' in javascript
     assert '"arc-document-data-note"' in javascript
     assert 'documentData: traditional ? "文件資料" : "文档数据"' in javascript
     assert 'documentData: "Document data"' in javascript

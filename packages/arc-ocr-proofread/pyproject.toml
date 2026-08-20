@@ -19,7 +19,7 @@ classifiers = [
 dependencies = [
   "arc-jobs>=1.0,<1.1",
   "arc-llm>=1.0,<1.1",
-  "arc-paper>=1.0,<1.1",
+  "arc-document>=1.0,<1.1",
 ]
 
 [project.optional-dependencies]

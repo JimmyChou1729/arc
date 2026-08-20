@@ -17,7 +17,7 @@ import re
 import tempfile
 from typing import Any
 
-from arc_paper import RichDocument
+from arc_document import RichDocument
 
 from .contracts import (
     FragmentRevision,

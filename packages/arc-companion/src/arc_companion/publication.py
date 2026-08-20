@@ -17,8 +17,8 @@ from arc_jobs import (
     atomic_write_bytes,
     decode_artifact_ref,
 )
-from arc_paper import (
-    ArcPaperService,
+from arc_document import (
+    ArcDocumentService,
     RichBlockKind,
     RichDocument,
     SourceRepositoryError,
@@ -102,7 +102,7 @@ def publish_companion(
     bibliography: Sequence[Mapping[str, Any]],
     reviewed_supplements: Sequence[ReviewedCompanionSupplement] = (),
     editorial_review: Mapping[str, Any] | None = None,
-    paper_cache_root: str | Path | None = None,
+    document_cache_root: str | Path | None = None,
 ) -> PublishedCompanion:
     """Publish immutable overlay revisions, their layers, and one publication."""
 
@@ -269,7 +269,7 @@ def publish_companion(
         )
         layers.append((artifact_id.removeprefix("publication/"), layer, layer_ref))
 
-    paper = ArcPaperService(cache_root=paper_cache_root)
+    paper = ArcDocumentService(cache_root=document_cache_root)
     resource_artifacts: list[ArtifactRef] = []
     resources: list[dict[str, Any]] = []
     source_payloads: dict[str, bytes] = {}

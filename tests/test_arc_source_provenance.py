@@ -41,6 +41,7 @@ def _make_fake_repo(tmp_path: Path, label: str) -> Path:
     for package, module in (
         ("arc-jobs", "arc_jobs"),
         ("arc-llm", "arc_llm"),
+        ("arc-document", "arc_document"),
         ("arc-proposer-reviewer", "arc_proposer_reviewer"),
         ("arc-paper", "arc_paper"),
         ("arc-render", "arc_render"),

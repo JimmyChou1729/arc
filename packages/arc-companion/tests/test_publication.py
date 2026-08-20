@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 from arc_jobs import ImmutableArtifactStore, RunContext, RunRepository, RunSpec
-from arc_paper import (
-    ArcPaperService,
+from arc_document import (
+    ArcDocumentService,
     RichDocumentParserService,
     SourceFormat,
     SourceOrigin,
@@ -72,7 +72,7 @@ def _illustrated_source(tmp_path: Path):
         "# Illustrated\n\nBody.\n\n![Figure](figure.svg)\n",
         encoding="utf-8",
     )
-    service = ArcPaperService(cache_root=tmp_path / "paper")
+    service = ArcDocumentService(cache_root=tmp_path / "paper")
     artifact = service.import_source(source_path)
     return RichDocumentParserService(service.repository).parse_source(
         artifact
@@ -142,7 +142,7 @@ def test_publication_uses_atomic_overlays_and_materializes_directly(
             "findings": [],
             "changes": [],
         },
-        paper_cache_root=tmp_path / "paper",
+        document_cache_root=tmp_path / "paper",
     )
     result = build_result_document(published)
     assert result["schema_version"] == "arc.companion.build_result.v2"
@@ -283,7 +283,7 @@ def test_materialization_validates_resource_size_bytes(tmp_path: Path) -> None:
         ),
         glossary=(),
         bibliography=(),
-        paper_cache_root=tmp_path / "paper",
+        document_cache_root=tmp_path / "paper",
     )
 
     assert published.resource_refs
@@ -403,7 +403,7 @@ def test_reviewed_supplement_publishes_provenance_resource_and_coverage(
         glossary=(),
         bibliography=(),
         reviewed_supplements=(supplement,),
-        paper_cache_root=tmp_path / "paper",
+        document_cache_root=tmp_path / "paper",
     )
 
     assert published.publication.source_document.assets == ()
@@ -502,7 +502,7 @@ def test_changed_companion_content_gets_a_distinct_fragment_identity(
             chapters=(chapter,),
             glossary=(),
             bibliography=(),
-            paper_cache_root=tmp_path / "paper",
+            document_cache_root=tmp_path / "paper",
         )
         revisions = [
             decode_fragment_revision(
@@ -658,7 +658,7 @@ def test_publication_outline_uses_program_chapters_and_subsections(
         ),
         glossary=(),
         bibliography=(),
-        paper_cache_root=tmp_path / "paper",
+        document_cache_root=tmp_path / "paper",
     )
 
     assert [item.title for item in published.publication.outline] == [

@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from arc_paper import _file_lock
+from arc_document import _file_lock
 from arc_paper import (
     ParseOutcome,
     ReconciliationReport,
@@ -361,7 +361,7 @@ def test_two_processes_publish_same_content_with_one_valid_manifest(tmp_path):
         assert json.loads(manifest_path.read_text(encoding="utf-8")) == {
             "artifact_digest": artifact.artifact_digest,
             "media_type": media_type,
-            "schema_version": "arc.paper.source_repository.v1",
+            "schema_version": "arc.document.source_repository.v1",
             "size": size,
             "source_format": "markdown",
         }

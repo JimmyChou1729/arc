@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from arc_jobs import JsonValue, RunStatus
 from arc_llm import HostAuthority, LLMExecutionOptions, ModelSelection
+from arc_document import ArcDocumentService
 
 from ._cache_admin import (
     CacheAdministrator,
@@ -146,7 +147,7 @@ def default_cache_root() -> Path:
     return resolve_cache_root()
 
 
-class ArcPaperService:
+class ArcPaperService(ArcDocumentService):
     """Injectable facade over package-owned deterministic and workflow services."""
 
     def __init__(
@@ -167,8 +168,15 @@ class ArcPaperService:
             raise PaperInputError(
                 "cache_root must match the injected SourceRepository root"
             ) from exc
-        self.repository = repository or SourceRepository(root)
-        self.cache_root = root
+        super().__init__(
+            cache_root=root,
+            repository=repository,
+            pdf_text_extractor=pdf_text_extractor,
+            keyword_task_service=keyword_task_service,
+        )
+        self.parser = PaperParserService(
+            self.repository, pdf_text_extractor=pdf_text_extractor
+        )
         self.cache_index = PaperCacheIndex(root)
         self.cache_administrator = CacheAdministrator(root)
         self.inspire = inspire or InspireProvider(cache_root=root)
@@ -181,15 +189,8 @@ class ArcPaperService:
         self.arxiv_pdf = arxiv_pdf or ArxivPdfProvider(
             cache_root=root, source_repository=self.repository
         )
-        self.parser = PaperParserService(
-            self.repository,
-            pdf_text_extractor=pdf_text_extractor,
-        )
         self._cached_full_text_searcher = CachedFullTextSearcher(root)
-        self._document_structure_cache = DocumentStructureCache(root)
         self._reference_acquisition_service: ReferenceAcquisitionService | None = None
-        self._keyword_task_service = keyword_task_service
-        self._term_inventory_store: Any | None = None
 
     def import_source(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import subprocess
 from collections.abc import Mapping
 
@@ -155,7 +156,8 @@ def test_standard_html_does_not_invent_unavailable_source_positions(
         SourceFormat.HTML,
     )
     monkeypatch.setattr(
-        "arc_paper.parse.parser.html_source_position",
+        importlib.import_module("arc_document.parse.parser"),
+        "html_source_position",
         lambda node: (None, None, None, None),
     )
 
@@ -405,9 +407,9 @@ def test_standard_markdown_projection_has_canonical_encoded_output(tmp_path):
     document = PaperParserService(repository).parse_source(artifact)
 
     assert parsed_document_to_document(document) == {
-        "schema_version": "arc.paper.parsed_document.v2",
+        "schema_version": "arc.document.parsed_document.v2",
         "document_digest": (
-            "6f529e23d1613ef632466871ff79938ff4bc11ca96a69b8a31d22a74e0d3f8b7"
+                "79451751b16fdffb70f2e65a736b3fc8b6d3403d4e9a9c9e42633221bf0944d4"
         ),
         "source": {
             "source_format": "markdown",
@@ -1380,7 +1382,7 @@ def test_parsed_document_codec_round_trips_and_rejects_unknown_fields(tmp_path):
     encoded = parsed_document_to_document(parsed)
     decoded = parsed_document_from_document(encoded)
 
-    assert encoded["schema_version"] == "arc.paper.parsed_document.v2"
+    assert encoded["schema_version"] == "arc.document.parsed_document.v2"
     assert encoded["math_spans"][0]["source_column_start"] is None
     assert decoded.math_spans[0].source_column_start is None
     assert decoded.document_digest == parsed.document_digest
@@ -1398,7 +1400,7 @@ def test_parsed_document_codec_round_trips_and_rejects_unknown_fields(tmp_path):
         parsed_document_from_document(corrupt)
     with pytest.raises(ValueError, match="unsupported parsed document schema"):
         parsed_document_from_document(
-            {**encoded, "schema_version": "arc.paper.parsed_document.v1"}
+            {**encoded, "schema_version": "arc.document.parsed_document.v1"}
         )
 
 

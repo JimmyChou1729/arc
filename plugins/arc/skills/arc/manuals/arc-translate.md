@@ -2,9 +2,8 @@
 
 `arc-translate` owns reusable scientific language detection, bilingual
 glossary generation, source-block translation, and translation review. Use it
-when these steps must run independently of a Companion build. A source may be
-a verified local Markdown, HTML, or flattened TeX document, or a paper
-identifier resolved through `arc-paper`.
+when these steps must run independently of a Companion build. A source is a
+verified local Markdown, HTML, or flattened TeX document.
 
 The three generation commands use `arc-llm`; `get-result`, status, and
 validation only read existing project state.
@@ -33,16 +32,16 @@ package internals for another executable.
 
 ## Run the Three Translation Steps
 
-This concrete example translates arXiv:0911.3380 into Chinese in one stable
-project directory.
+This concrete example translates `paper.md` into Chinese in one stable project
+directory.
 
 ### 1. Detect the Source Language
 
 ```bash
-arc-translate detect-language arXiv:0911.3380 \
+arc-translate detect-language paper.md \
   --target-language zh-CN \
   --project-dir local/quasi-single-field-translation \
-  --paper-cache-root local/cache/arc-paper \
+  --document-cache-root local/cache/arc-document \
   --host-authority unknown
 
 arc-translate get-result \
@@ -72,9 +71,9 @@ assume a universal broker.
 ### 2. Build and Inspect the Glossary
 
 ```bash
-arc-translate build-glossary arXiv:0911.3380 \
+arc-translate build-glossary paper.md \
   --project-dir local/quasi-single-field-translation \
-  --paper-cache-root local/cache/arc-paper \
+  --document-cache-root local/cache/arc-document \
   --host-authority unknown \
   --approx-term-count 50
 
@@ -93,9 +92,9 @@ definitions or explanations.
 ### 3. Translate and Inspect All Blocks
 
 ```bash
-arc-translate translate-blocks arXiv:0911.3380 \
+arc-translate translate-blocks paper.md \
   --project-dir local/quasi-single-field-translation \
-  --paper-cache-root local/cache/arc-paper \
+  --document-cache-root local/cache/arc-document \
   --host-authority unknown
 
 arc-translate get-result \
@@ -116,7 +115,7 @@ under `<project-dir>/fragments/`. Language and glossary steps publish durable
 prerequisites but no reader. Compose the Layer with `arc-render` to produce
 standalone HTML; `arc-translate` itself does not publish a translation HTML
 file. Follow `manuals/arc-render.md`: export the same source with
-`arc-paper export-rich-document`, then copy both `translation.layer.json` and
+`arc-document export-rich-document`, then copy both `translation.layer.json` and
 the complete `fragments/` tree below that publication root before composing.
 The Layer binds the exact rich source, so a different parse is rejected rather
 than silently misanchoring translations.
@@ -128,7 +127,7 @@ arc-translate status --project-dir local/quasi-single-field-translation
 arc-translate validate --project-dir local/quasi-single-field-translation
 arc-translate resume \
   --project-dir local/quasi-single-field-translation \
-  --paper-cache-root local/cache/arc-paper \
+  --document-cache-root local/cache/arc-document \
   --host-authority unknown
 arc-translate stop --project-dir local/quasi-single-field-translation \
   --reason "operator requested stop"
@@ -163,8 +162,8 @@ and other debatable choices belong to review; do not classify them as
 machine-invalid output.
 
 Use the same project directory for every step. Durable translation state lives
-only below `<project-dir>/.arc/translate/`. Without `--paper-cache-root`, paper
-data uses `ARC_PAPER_CACHE` when set and otherwise `.arc/cache/arc-paper` below
+only below `<project-dir>/.arc/translate/`. Without `--document-cache-root`, document
+data uses `ARC_DOCUMENT_CACHE` when set and otherwise `.arc/cache/arc-document` below
 the launch directory. Keep the working directory stable or pass the same
 explicit local cache to every source-reading or resume command.
 

@@ -41,7 +41,7 @@ from arc_llm import (
     ModelSelection,
     ProviderGateOptions,
 )
-from arc_paper import (
+from arc_document import (
     PdftoppmFullPageRenderer,
     RichBlockKind,
     SourceArtifact,

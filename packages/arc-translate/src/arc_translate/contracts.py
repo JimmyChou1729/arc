@@ -14,7 +14,7 @@ from arc_jobs import (
     encode_artifact_digest,
 )
 from arc_llm import LLMExecutionOptions, ModelSelection
-from arc_paper import (
+from arc_document import (
     RichDocument,
     rich_document_from_document,
     rich_document_to_document,

@@ -12,7 +12,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from arc_jobs import canonical_json_bytes
-from arc_paper import RichDocument, rich_block_to_document
+from arc_document import RichDocument, rich_block_to_document
 
 from .rich_text import parse_markdown
 

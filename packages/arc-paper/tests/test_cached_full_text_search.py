@@ -628,7 +628,7 @@ def test_stale_parser_contract_cache_is_skipped_without_reparsing(
     source = _store(repository, b"# Old projection\nstale-only phrase\n")
     legacy = ParsedDocumentCache(
         repository=repository,
-        parser_contract="arc.paper.parser.v2",
+        parser_contract="arc.document.parser.v2",
     )
     document, _ = legacy.get_or_parse(
         source,
@@ -657,7 +657,7 @@ def test_stale_parser_contract_cache_is_skipped_without_reparsing(
     assert legacy_path.read_bytes() == legacy_bytes
     assert (
         catalog.current_entries()[0].representations[0].parser_contract
-        == "arc.paper.parser.v2"
+        == "arc.document.parser.v2"
     )
 
 
@@ -689,7 +689,7 @@ def test_current_pdf_falls_back_when_html_catalog_projection_is_stale(
     )
     legacy = ParsedDocumentCache(
         repository=repository,
-        parser_contract="arc.paper.parser.v2",
+        parser_contract="arc.document.parser.v2",
     )
     legacy_document, _ = legacy.get_or_parse(
         html,

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from urllib.parse import unquote, urlsplit
 
-from arc_paper import RichBlockKind, RichDocument
+from arc_document import RichBlockKind, RichDocument
 
 
 _AUTHOR_BASES = {

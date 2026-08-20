@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from arc_jobs import canonical_json_bytes
-from arc_paper import (
+from arc_document import (
     DocumentStructureNodeKind,
     DocumentStructureOverlay,
     RichBlock,
@@ -111,7 +111,7 @@ def plan_structured_source_chapters(
     *,
     companion_section_ids: Sequence[str] | None = None,
 ) -> tuple[SourceChapter, ...]:
-    """Partition a source using an arc-paper structure overlay.
+    """Partition a source using an arc-document structure overlay.
 
     Structure chooses display and generation boundaries without changing any
     rich block identity. Unselected gaps remain deterministic display chapters

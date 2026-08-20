@@ -48,7 +48,7 @@ def test_help_has_no_obsolete_json_flag(
     assert "--json" not in output
 
 
-def test_only_paper_access_commands_accept_a_paper_cache_root(
+def test_only_paper_access_commands_accept_a_document_cache_root(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     for command in (
@@ -58,10 +58,10 @@ def test_only_paper_access_commands_accept_a_paper_cache_root(
         "resume",
     ):
         assert main([command, "--help"]) == 0
-        assert "--paper-cache-root" in capsys.readouterr().out
+        assert "--document-cache-root" in capsys.readouterr().out
     for command in ("status", "stop", "validate", "get-result"):
         assert main([command, "--help"]) == 0
-        assert "--paper-cache-root" not in capsys.readouterr().out
+        assert "--document-cache-root" not in capsys.readouterr().out
 
 
 def test_usage_error_points_to_contextual_help(

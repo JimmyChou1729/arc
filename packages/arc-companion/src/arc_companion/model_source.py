@@ -6,7 +6,7 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from arc_paper import RichBlock, RichBlockKind, RichDocument
+from arc_document import RichBlock, RichBlockKind, RichDocument
 
 from .source_planning import SourceChapter, equation_label_provenance
 
@@ -99,11 +99,11 @@ def model_source_index(
         "cache_operations": (
             {
                 "table_of_contents": (
-                    "arc-paper get-table-of-contents"
+                    "arc-document get-table-of-contents"
                 ),
-                "section": "arc-paper get-section",
-                "source_range": "arc-paper read-cached-source-range",
-                "search": "arc-paper search-full-text",
+                "section": "arc-document get-section",
+                "source_range": "arc-document read-cached-source-range",
+                "search": "arc-document search-full-text",
             }
             if cache_document is not None
             else {}

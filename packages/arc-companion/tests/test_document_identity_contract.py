@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from arc_paper import (
+from arc_document import (
     RichDocumentParserService,
     SourceFormat,
     SourceOrigin,
@@ -76,9 +76,9 @@ def test_current_request_and_recipe_round_trip_only(tmp_path: Path) -> None:
         ),
         "chapter_guide_max_rounds": 3,
         "chapter_guide_review_final_round": False,
-        "equation_label_visual_prompt": (
-            "arc.paper.equation_label_visual_prompt.v1"
-        ),
+            "equation_label_visual_prompt": (
+                "arc.document.equation_label_visual_prompt.v1"
+            ),
         "reader_publication_recipe": "arc.companion.reader_publication.v1",
     }
     decoded_request = decode_build_request(request_document)

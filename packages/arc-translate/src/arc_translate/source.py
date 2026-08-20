@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from arc_jobs import canonical_json_bytes
-from arc_paper import (
-    ArcPaperService,
+from arc_document import (
+    ArcDocumentService,
     ParseError,
     RichBlock,
     RichBlockKind,
@@ -52,19 +52,17 @@ class TranslationSourceError(RuntimeError):
 
 
 def resolve_translation_source(
-    paper: ArcPaperService,
+    document: ArcDocumentService,
     source: str | Path,
     *,
     refresh: bool = False,
 ) -> TranslationSource:
-    """Resolve a local path or paper ID through public ``arc-paper`` APIs."""
+    """Resolve an existing local source through public arc-document APIs."""
 
     source_text = str(source)
     try:
-        artifact = paper.resolve_local_or_arxiv_source(
-            source_text, refresh=refresh
-        )
-        rich = RichDocumentParserService(paper.repository).parse_source(
+        artifact = document.resolve_local_source(source_text)
+        rich = RichDocumentParserService(document.repository).parse_source(
             artifact
         )
     except (

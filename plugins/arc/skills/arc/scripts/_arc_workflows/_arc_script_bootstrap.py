@@ -17,6 +17,7 @@ sys.dont_write_bytecode = True
 ARC_PACKAGE_MODULES = (
     ("arc-jobs", "arc_jobs"),
     ("arc-llm", "arc_llm"),
+    ("arc-document", "arc_document"),
     ("arc-proposer-reviewer", "arc_proposer_reviewer"),
     ("arc-paper", "arc_paper"),
     ("arc-render", "arc_render"),

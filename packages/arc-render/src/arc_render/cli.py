@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from arc_paper import rich_document_from_document
+from arc_document import rich_document_from_document
 
 from .contracts import Publication, source_identity_from_rich_document
 from .browser_validation import validate_reader_in_browser

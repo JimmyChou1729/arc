@@ -1,6 +1,3 @@
-"""Private lexical and source-location primitives shared by ARC parsers."""
+"""Compatibility facade for :mod:`arc_document._parsing`."""
 
-from .errors import ParseError
-from .tex_lex import normalize_tex
-
-__all__ = ["ParseError", "normalize_tex"]
+from arc_document._parsing import *  # noqa: F401,F403

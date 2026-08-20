@@ -1,7 +1,7 @@
 # arc-companion
 
 `arc-companion` generates source-anchored translation and guide overlays for
-an `arc-paper` `RichDocument`. Its durable output is an `arc-render`
+an `arc-document` `RichDocument`. Its durable output is an `arc-render`
 publication: atomic Markdown fragment revisions, producer layers, the complete
 rich source, bibliography and glossary metadata, and run-owned source
 resources.
@@ -43,22 +43,13 @@ arc-companion render --project-dir local/example
 arc-companion validate --project-dir local/example
 ```
 
-Build from arXiv, optionally fetching a PDF validator:
-
-```bash
-arc-companion build arXiv:0911.3380 \
-  --pdf fetch \
-  --project-dir local/0911.3380-companion \
-  --target-language zh-CN \
-  --user-intent "Connect the main results to their assumptions." \
-  --host-authority unknown
-```
-
 Markdown, HTML, or flattened single-file TeX is authoritative. For local
 sources, `--pdf note.pdf` supplies an optional validator; PDF is never the
 reader source or output. Use `unrestricted` only when the host explicitly
 grants it. Otherwise use `unknown`, or `restricted` when known, and preserve the
-same authority on resume.
+same authority on resume. Remote academic acquisition belongs to `arc-paper`
+or another host-level research workflow, which must first materialize a local
+source for Companion.
 
 Every command prints an `arc.command_result.v2` envelope. For `build` and
 `resume`, read the selected durable identity at top-level `run.id`, lifecycle at
@@ -89,7 +80,7 @@ has no `data.delivery`. A valid promoted reader is reported as an artifact with
 role `web`. On a pause, inspect top-level `resume.input_required` and
 `resume.request_artifact`; `--input` accepts inline JSON or a JSON file and may
 be omitted when no input is required. Resume replays verified completed work in
-the same durable run. Keep the original paper-cache root and host authority.
+the same durable run. Keep the original document-cache root and host authority.
 After an explicit render, use `data.delivery.html`; an empty delivery with
 `publication_not_selected` means a different run won selection before
 promotion.
@@ -122,9 +113,9 @@ the base publication; `edition_digest` identifies that publication plus its
 ordered current fragment heads.
 
 Use `arc-companion --help` and each subcommand's `--help` for the complete
-durable-control and publication options. `--paper-cache-root` overrides paper
-storage; otherwise the command uses `ARC_PAPER_CACHE` or
-`<launch-directory>/.arc/cache/arc-paper`. This cache is separate from durable
+durable-control and publication options. `--document-cache-root` overrides document
+storage; otherwise the command uses `ARC_DOCUMENT_CACHE` or
+`<launch-directory>/.arc/cache/arc-document`. This cache is separate from durable
 project state.
 
 A successful build writes its immutable artifacts under

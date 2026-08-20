@@ -37,16 +37,14 @@ from arc_llm import (
     LLMRequest,
     LLMTaskService,
 )
-from arc_paper import (
-    ArcPaperService,
+from arc_document import (
+    ArcDocumentService,
     CachedDocumentError,
     CachedDocumentStructureRef,
     DocumentStructureCache,
     EquationLabelReviewService,
     PdftoppmFullPageRenderer,
     RichDocument,
-    ReferenceMaterialCache,
-    ReferenceCacheError,
     SourceFormat,
     SourceOrigin,
     SourceOriginKind,
@@ -56,8 +54,6 @@ from arc_paper import (
     literal_term_occurs,
     cached_document_ref_to_document,
     cached_document_structure_ref_to_document,
-    cached_reference_material_from_document,
-    cached_reference_material_to_document,
     rich_document_from_document,
     rich_document_to_document,
 )
@@ -192,7 +188,7 @@ class CompanionBuildHandler:
         self.task_service = task_service or LLMTaskService()
         self.translation_adapter = translation_adapter or ArcTranslateAdapter(
             self.task_service,
-            paper_cache_root=self.execution.paper_cache_root,
+            document_cache_root=self.execution.document_cache_root,
         )
 
     def semantic_input(self) -> dict[str, Any]:
@@ -224,8 +220,8 @@ class CompanionBuildHandler:
             if self.request.structure_ref is None:
                 chapters = plan_source_chapters(source)
             else:
-                paper = ArcPaperService(
-                    cache_root=self.execution.paper_cache_root
+                paper = ArcDocumentService(
+                    cache_root=self.execution.document_cache_root
                 )
                 overlay = DocumentStructureCache(paper.cache_root).read(
                     self.request.structure_ref
@@ -375,7 +371,7 @@ class CompanionBuildHandler:
                 bibliography=bibliography,
                 reviewed_supplements=self.request.reviewed_supplements,
                 editorial_review=editorial_report,
-                paper_cache_root=self.execution.paper_cache_root,
+                document_cache_root=self.execution.document_cache_root,
             )
             result_ref = context.artifacts.publish_json(
                 _RESULT_ARTIFACT, build_result_document(published)
@@ -409,7 +405,7 @@ class CompanionBuildHandler:
     ) -> tuple[LLMInputArtifact, ...]:
         """Freeze body-free index plus text-only source fallback."""
 
-        paper = ArcPaperService(cache_root=self.execution.paper_cache_root)
+        paper = ArcDocumentService(cache_root=self.execution.document_cache_root)
         cached_document: Mapping[str, Any] | None = None
         try:
             source_bytes = paper.repository.read_bytes(source.source)
@@ -517,8 +513,8 @@ class CompanionBuildHandler:
             ).view_records
             for chapter in chapters
         }
-        paper = ArcPaperService(
-            cache_root=self.execution.paper_cache_root
+        paper = ArcDocumentService(
+            cache_root=self.execution.document_cache_root
         )
         inputs: list[LLMInputArtifact] = []
         indexes: dict[str, Mapping[str, Any]] = {}
@@ -766,8 +762,8 @@ class CompanionBuildHandler:
             )
         else:
             digest = self.request.validator_digests[0]
-            repository = ArcPaperService(
-                cache_root=self.execution.paper_cache_root
+            repository = ArcDocumentService(
+                cache_root=self.execution.document_cache_root
             ).repository
             try:
                 pdf = repository.get(SourceFormat.PDF, digest)
@@ -1042,14 +1038,6 @@ class CompanionBuildHandler:
                     ),
                     section_block_ids=chapter.section_block_ids,
                 )
-                empty_guide = _attach_cached_reference_materials(
-                    empty_guide,
-                    cache_root=self.execution.paper_cache_root,
-                )
-                _verify_cached_reference_materials(
-                    empty_guide,
-                    cache_root=self.execution.paper_cache_root,
-                )
                 if existing is None:
                     context.artifacts.publish_json(artifact_id, empty_guide)
                 elif read_json(
@@ -1250,14 +1238,6 @@ class CompanionBuildHandler:
                             chapter.display_anchor_block_id
                         ),
                         section_block_ids=chapter.section_block_ids,
-                    )
-                    accepted_guide = _attach_cached_reference_materials(
-                        accepted_guide,
-                        cache_root=self.execution.paper_cache_root,
-                    )
-                    _verify_cached_reference_materials(
-                        accepted_guide,
-                        cache_root=self.execution.paper_cache_root,
                     )
                 except CompanionContentError as exc:
                     return Failed(
@@ -1499,13 +1479,13 @@ class CompanionBuildHandler:
             context,
             chapter,
             access,
-            cache_root=self.execution.paper_cache_root,
+            cache_root=self.execution.document_cache_root,
             structure_ref=self.request.structure_ref,
         )
         arc_commands["translation"] = _chapter_translation_commands(
             chapter,
             translation_index,
-            cache_root=self.execution.paper_cache_root,
+            cache_root=self.execution.document_cache_root,
         )
         return {
             "target_language": self.request.target_language,
@@ -1598,7 +1578,7 @@ def _chapter_arc_commands(
     cache_root: Path | None,
     structure_ref: CachedDocumentStructureRef | None,
 ) -> dict[str, Any]:
-    """Return filled, executable source commands plus research syntax."""
+    """Return filled, executable document-source commands."""
 
     index_ref = context.artifacts.find(_MODEL_SOURCE_INDEX_ARTIFACT)
     if index_ref is None:
@@ -1625,9 +1605,9 @@ def _chapter_arc_commands(
                 "single_term": None,
                 "alternative_terms": [],
             },
-            "research_examples": _research_command_examples(),
+            "research_examples": [],
         }
-    paper = ArcPaperService(cache_root=cache_root)
+    document = ArcDocumentService(cache_root=cache_root)
     document_json = json.dumps(
         dict(cached),
         ensure_ascii=False,
@@ -1647,12 +1627,12 @@ def _chapter_arc_commands(
 
     def source_range(start: int, end: int) -> list[str]:
         return [
-            "arc-paper",
+            "arc-document",
             "read-cached-source-range",
             "--document-ref",
             document_json,
             "--cache-root",
-            str(paper.cache_root),
+            str(document.cache_root),
             "--text-only",
             str(start),
             str(end),
@@ -1719,12 +1699,12 @@ def _chapter_arc_commands(
             )
         )
     toc_argv = [
-        "arc-paper",
+        "arc-document",
         "get-table-of-contents",
         "--document-ref",
         document_json,
         "--cache-root",
-        str(paper.cache_root),
+        str(document.cache_root),
     ]
     if structure_json is not None:
         toc_argv.extend(["--structure-ref", structure_json])
@@ -1737,12 +1717,12 @@ def _chapter_arc_commands(
             _command(
                 "search-current-title",
                 [
-                    "arc-paper",
+                    "arc-document",
                     "search-full-text",
                     "--document-ref",
                     document_json,
                     "--cache-root",
-                    str(paper.cache_root),
+                    str(document.cache_root),
                     "--term",
                     chapter.title,
                 ],
@@ -1754,12 +1734,12 @@ def _chapter_arc_commands(
         return _command(
             command_id,
             [
-                "arc-paper",
+                "arc-document",
                 "search-full-text",
                 "--document-ref",
                 document_json,
                 "--cache-root",
-                str(paper.cache_root),
+                str(document.cache_root),
                 "--term",
                 query,
             ],
@@ -1793,7 +1773,7 @@ def _chapter_arc_commands(
                 ),
             ],
         },
-        "research_examples": _research_command_examples(),
+        "research_examples": [],
     }
 
 
@@ -1842,7 +1822,7 @@ def _chapter_translation_commands(
             "model_translation_chapter_mismatch",
             "Frozen translation part order differs from the source chapter.",
         )
-    paper = ArcPaperService(cache_root=cache_root)
+    document = ArcDocumentService(cache_root=cache_root)
     document_json = json.dumps(
         cached,
         ensure_ascii=False,
@@ -1852,12 +1832,12 @@ def _chapter_translation_commands(
 
     def translated_range(start: int, end: int) -> list[str]:
         return [
-            "arc-paper",
+            "arc-document",
             "read-cached-source-range",
             "--document-ref",
             document_json,
             "--cache-root",
-            str(paper.cache_root),
+            str(document.cache_root),
             "--text-only",
             str(start),
             str(end),
@@ -1945,125 +1925,6 @@ def _command(
         "shell": shlex.join(argv),
         "part_numbers": list(part_numbers),
     }
-
-
-def _research_command_examples() -> list[dict[str, Any]]:
-    return [
-        _command(
-            "lookup-reference-by-doi",
-            ["arc-paper", "lookup-reference", "--doi", "<doi>"],
-        ),
-        _command(
-            "acquire-reference-by-url",
-            ["arc-paper", "acquire-reference", "--url", "<url>"],
-        ),
-        _command(
-            "admit-downloaded-reference",
-            [
-                "arc-paper",
-                "admit-reference",
-                "<downloaded-file>",
-                "--url",
-                "<url>",
-            ],
-        ),
-        _command(
-            "materialize-cached-reference",
-            [
-                "arc-paper",
-                "materialize-reference",
-                "--resource-ref",
-                "<CachedResourceRef JSON>",
-                "--output",
-                "<agent-workspace-file>",
-            ],
-        ),
-    ]
-
-
-def _verify_cached_reference_materials(
-    guide: Mapping[str, Any],
-    *,
-    cache_root: Path | None,
-) -> None:
-    cache = ReferenceMaterialCache(cache_root)
-    for reference in mapping_list(
-        guide.get("references"), "chapter references"
-    ):
-        raw = reference.get("cached_material")
-        if raw is None:
-            continue
-        try:
-            material = cached_reference_material_from_document(
-                mapping(raw, "cached reference material")
-            )
-            for resource in material.resources:
-                cache.read_resource(resource)
-            identity = material.identity
-            if identity.dois:
-                resolved = cache.lookup(doi=identity.dois[0])
-            elif identity.arxiv_id:
-                resolved = cache.lookup(arxiv_id=identity.arxiv_id)
-            elif identity.urls:
-                resolved = cache.lookup(url=identity.urls[0])
-            else:
-                resolved = cache.lookup(title=identity.title)
-        except (OSError, ReferenceCacheError, TypeError, ValueError) as exc:
-            raise CompanionContentError(
-                "chapter_reference_cache_invalid",
-                "cached_material is not present and readable in the configured "
-                f"shared cache: {exc}",
-            ) from exc
-        if (
-            resolved is None
-            or cached_reference_material_to_document(resolved)
-            != cached_reference_material_to_document(material)
-        ):
-            raise CompanionContentError(
-                "chapter_reference_cache_invalid",
-                "cached_material does not match the material admitted to the "
-                "configured shared cache",
-            )
-
-
-def _attach_cached_reference_materials(
-    guide: Mapping[str, Any],
-    *,
-    cache_root: Path | None,
-) -> dict[str, Any]:
-    """Attach an already-admitted shared handle without model bookkeeping."""
-
-    cache = ReferenceMaterialCache(cache_root)
-    value = dict(guide)
-    references: list[dict[str, Any]] = []
-    for raw in mapping_list(
-        guide.get("references"), "chapter references"
-    ):
-        reference = dict(raw)
-        material = None
-        try:
-            dois = reference.get("dois") or []
-            arxiv_ids = reference.get("arxiv_ids") or []
-            urls = _reference_urls(str(reference.get("source") or ""))
-            if dois:
-                material = cache.lookup(doi=str(dois[0]))
-            elif arxiv_ids:
-                material = cache.lookup(arxiv_id=str(arxiv_ids[0]))
-            elif urls:
-                material = cache.lookup(url=urls[0])
-            else:
-                material = cache.lookup(title=str(reference["title"]))
-        except (OSError, ReferenceCacheError, TypeError, ValueError):
-            # Cache reuse is an optimization. A valid citation remains
-            # publishable when no shared material is available.
-            material = None
-        if material is not None:
-            reference["cached_material"] = (
-                cached_reference_material_to_document(material)
-            )
-        references.append(reference)
-    value["references"] = references
-    return value
 
 
 def _reference_urls(source: str) -> list[str]:
@@ -2468,18 +2329,18 @@ def _chapter_translation_input_id(chapter_id: str) -> str:
 def _companion_llm_options(
     execution: CompanionExecutionOptions,
 ):
-    """Expose the exact paper cache and installed CLI to direct workers."""
+    """Expose the exact document cache and installed CLI to direct workers."""
 
     values = dict(execution.llm.runtime_environment.values)
-    cache_root = ArcPaperService(
-        cache_root=execution.paper_cache_root
+    cache_root = ArcDocumentService(
+        cache_root=execution.document_cache_root
     ).cache_root
-    values["ARC_PAPER_CACHE"] = str(cache_root)
+    values["ARC_DOCUMENT_CACHE"] = str(cache_root)
     path_value = values.get("PATH") or ""
-    command = shutil.which("arc-paper", path=path_value)
+    command = shutil.which("arc-document", path=path_value)
     if command is None:
         executable_name = (
-            "arc-paper.exe" if os.name == "nt" else "arc-paper"
+            "arc-document.exe" if os.name == "nt" else "arc-document"
         )
         candidate = Path(sys.executable).resolve().parent / executable_name
         if candidate.is_file():

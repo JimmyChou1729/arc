@@ -5,7 +5,7 @@ import json
 from dataclasses import replace
 
 import pytest
-from arc_paper import (
+from arc_document import (
     RichDocument,
     SourceArtifact,
     SourceFormat,

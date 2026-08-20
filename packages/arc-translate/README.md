@@ -2,7 +2,7 @@
 
 `arc-translate` owns reusable scientific language detection, LLM-reviewed
 bilingual glossary generation, source-block translation, and translation
-review over verified `arc-paper.RichDocument` sources. It uses `arc-jobs` for
+review over verified `arc-document.RichDocument` sources. It uses `arc-jobs` for
 durable execution, `arc-llm` for model calls, and publishes native
 `arc-render` fragment revisions plus a translation Layer.
 
@@ -15,7 +15,7 @@ virtual environment is a direct development fallback:
 ```bash
 arc-translate --help
 <skill-dir>/scripts/arc-runtime arc-translate --help
-packages/arc-paper/.venv/bin/arc-translate --help
+packages/arc-document/.venv/bin/arc-translate --help
 ```
 
 Use the first available launcher consistently in later commands.
@@ -28,7 +28,7 @@ Detect whether a verified source needs translation:
 arc-translate detect-language note.md \
   --target-language zh-CN \
   --project-dir local/example/translation \
-  --paper-cache-root local/cache/arc-paper \
+  --document-cache-root local/cache/arc-document \
   --host-authority unknown
 
 arc-translate get-result --project-dir local/example/translation \
@@ -42,12 +42,12 @@ Read `data.result.language_tag`, `data.result.target_language`, and
 ```bash
 arc-translate build-glossary note.md \
   --project-dir local/example/translation \
-  --paper-cache-root local/cache/arc-paper \
+  --document-cache-root local/cache/arc-document \
   --host-authority unknown --approx-term-count 50
 
 arc-translate translate-blocks note.md \
   --project-dir local/example/translation \
-  --paper-cache-root local/cache/arc-paper \
+  --document-cache-root local/cache/arc-document \
   --host-authority unknown
 
 arc-translate get-result --project-dir local/example/translation \
@@ -58,9 +58,9 @@ The three commands are separately durable stages and verify their selected
 prerequisites. The final command returns the canonical result at `data.result`
 and the Layer handoff at `data.delivery.layer`.
 
-`--paper-cache-root` is optional. Without it, source access uses
-`ARC_PAPER_CACHE` when set, otherwise
-`<launch-directory>/.arc/cache/arc-paper`. Durable state is project-local under
+`--document-cache-root` is optional. Without it, source access uses
+`ARC_DOCUMENT_CACHE` when set, otherwise
+`<launch-directory>/.arc/cache/arc-document`. Durable state is project-local under
 `<project-dir>/.arc/translate/`.
 The final translation step publishes immutable revisions below
 `<project-dir>/fragments/` and

@@ -20,7 +20,7 @@ from arc_jobs import (
     canonical_json_bytes,
 )
 from arc_llm import LLMCompleted
-from arc_paper import ArcPaperService, RichDocumentParserService
+from arc_document import ArcDocumentService, RichDocumentParserService
 from arc_render import decode_fragment_revision
 
 from arc_translate import (
@@ -244,7 +244,7 @@ class FakeKeywords:
         self.calls += 1
         payload = canonical_json_bytes(self.terms)
         return {
-            "schema_version": "arc.paper.keyword_result.v1",
+            "schema_version": "arc.document.keyword_result.v1",
             "document_digest": source.document_digest,
             "source_digest": source.source.artifact_digest,
             "approx_count": approx_count,
@@ -285,7 +285,7 @@ def _source(tmp_path: Path) -> TranslationSource:
         "```python\nprint('fixed')\n```\n",
         encoding="utf-8",
     )
-    paper = ArcPaperService(cache_root=tmp_path / "paper-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "document-cache")
     artifact = paper.import_source(markdown)
     rich = RichDocumentParserService(paper.repository).parse_source(artifact)
     return TranslationSource(rich)
@@ -316,7 +316,7 @@ def test_equation_translation_round_trips_through_fragment_markdown(
         f"# Equation\n\n$$\n{tex}\n$$\n",
         encoding="utf-8",
     )
-    paper = ArcPaperService(cache_root=tmp_path / "equation-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "equation-cache")
     rich = RichDocumentParserService(paper.repository).parse_source(
         paper.import_source(markdown)
     )
@@ -385,7 +385,7 @@ def test_equation_is_reinjected_after_review_supervision(tmp_path: Path) -> None
         f"# Intro\n\nSource prose.\n\n$$\n{tex}\n$$\n",
         encoding="utf-8",
     )
-    paper = ArcPaperService(cache_root=tmp_path / "equation-supervision-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "equation-supervision-cache")
     source = TranslationSource(
         RichDocumentParserService(paper.repository).parse_source(
             paper.import_source(markdown)
@@ -1056,7 +1056,7 @@ def test_structural_figures_bypass_models_and_keep_ordered_coverage(tmp_path):
         "The surrounding prose remains translatable.\n",
         encoding="utf-8",
     )
-    paper = ArcPaperService(cache_root=tmp_path / "figure-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "figure-cache")
     artifact = paper.import_source(markdown)
     source = TranslationSource(
         RichDocumentParserService(paper.repository).parse_source(artifact)
@@ -1242,7 +1242,7 @@ def test_failed_review_can_accept_validated_pre_review_translation(tmp_path):
 def test_oversized_single_block_review_requests_supervision(tmp_path):
     markdown = tmp_path / "long.md"
     markdown.write_text("# Long\n\n" + ("source prose " * 180), encoding="utf-8")
-    paper = ArcPaperService(cache_root=tmp_path / "long-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "long-cache")
     artifact = paper.import_source(markdown)
     source = TranslationSource(
         RichDocumentParserService(paper.repository).parse_source(artifact)
@@ -1316,7 +1316,7 @@ def test_oversized_review_block_does_not_skip_neighbor_reviews(tmp_path):
         "small before\n\nmiddle expands\n\nsmall after",
         encoding="utf-8",
     )
-    paper = ArcPaperService(cache_root=tmp_path / "mixed-review-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "mixed-review-cache")
     artifact = paper.import_source(markdown)
     source = TranslationSource(
         RichDocumentParserService(paper.repository).parse_source(artifact)
@@ -1397,7 +1397,7 @@ def test_translation_windows_reserve_space_for_review(tmp_path):
         "# Long\n\n" + "\n\n".join(["source prose " * 40] * 6),
         encoding="utf-8",
     )
-    paper = ArcPaperService(cache_root=tmp_path / "review-windows-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "review-windows-cache")
     artifact = paper.import_source(markdown)
     source = TranslationSource(
         RichDocumentParserService(paper.repository).parse_source(artifact)
@@ -1438,7 +1438,7 @@ def test_actual_translation_expansion_splits_review_windows(tmp_path):
         "# Long\n\n" + "\n\n".join(["source prose " * 8] * 6),
         encoding="utf-8",
     )
-    paper = ArcPaperService(cache_root=tmp_path / "expanded-review-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "expanded-review-cache")
     artifact = paper.import_source(markdown)
     source = TranslationSource(
         RichDocumentParserService(paper.repository).parse_source(artifact)
@@ -1485,7 +1485,7 @@ def test_split_review_supervision_progresses_across_subwindows(tmp_path):
         "# Long\n\n" + "\n\n".join(["source prose " * 8] * 4),
         encoding="utf-8",
     )
-    paper = ArcPaperService(cache_root=tmp_path / "split-supervision-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "split-supervision-cache")
     artifact = paper.import_source(markdown)
     source = TranslationSource(
         RichDocumentParserService(paper.repository).parse_source(artifact)
@@ -1544,7 +1544,7 @@ def test_split_review_supervision_progresses_across_subwindows(tmp_path):
 def test_non_rich_pdf_source_is_rejected(tmp_path):
     path = tmp_path / "scan.pdf"
     path.write_bytes(b"%PDF-fake")
-    paper = ArcPaperService(cache_root=tmp_path / "pdf-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "pdf-cache")
 
     try:
         resolve_translation_source(paper, path)
@@ -1555,7 +1555,7 @@ def test_non_rich_pdf_source_is_rejected(tmp_path):
 
 
 def test_missing_local_source_is_not_misrouted_to_arxiv(tmp_path):
-    paper = ArcPaperService(cache_root=tmp_path / "cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "cache")
 
     with pytest.raises(TranslationSourceError) as exc_info:
         resolve_translation_source(paper, tmp_path / "missing.md")

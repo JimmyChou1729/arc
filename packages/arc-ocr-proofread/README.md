@@ -2,7 +2,7 @@
 
 `arc-ocr-proofread` compares MinerU page-mapped OCR with complete PDF page
 images. It uses `arc-jobs` for durable page work, `arc-llm` for bounded model
-calls, and the public `arc-paper` PDF renderer.
+calls, and the public `arc-document` PDF renderer.
 
 ```bash
 arc-ocr-proofread --help

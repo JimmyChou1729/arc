@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from arc_paper import (
+from arc_document import (
     RichDocument,
     SourceArtifact,
     SourceFormat,

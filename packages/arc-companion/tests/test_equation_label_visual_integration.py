@@ -8,7 +8,9 @@ from types import SimpleNamespace
 import pytest
 from arc_jobs import Awaiting, Paused, ResumeReason, RunStatus
 from arc_llm import LLMCompleted, LLMPaused
-from arc_paper import (
+from arc_document import (
+    ArcDocumentService,
+    PDFTextLayer,
     RichBlockKind,
     RichDocument,
     RichDocumentParserService,
@@ -19,7 +21,6 @@ from arc_paper import (
 )
 
 import arc_companion.build as build_module
-import arc_companion.cli as cli_module
 from arc_companion.generation_validation import CompanionContentError
 from arc_companion.cli import _build_warnings, _resolve_source
 from arc_companion.request_contracts import (
@@ -214,7 +215,7 @@ def _visual_outcome(*, complete: bool, warnings: tuple[str, ...] = ()):
         complete=complete,
         warnings=warnings,
         diagnostics_document={
-            "schema_version": "arc.paper.equation_label_diagnostics.v1",
+            "schema_version": "arc.document.equation_label_diagnostics.v1",
             "complete": complete,
         },
     )
@@ -245,7 +246,7 @@ def test_complete_visual_mapping_becomes_the_effective_build_source(
             source, validator_digests=(pdf.artifact_digest,)
         ),
         execution=CompanionExecutionOptions(
-            paper_cache_root=repository.root
+            document_cache_root=repository.root
         ),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=_Translation(),  # type: ignore[arg-type]
@@ -293,7 +294,7 @@ def test_incomplete_visual_mapping_warns_and_keeps_all_web_labels(
             source, validator_digests=(pdf.artifact_digest,)
         ),
         execution=CompanionExecutionOptions(
-            paper_cache_root=repository.root
+            document_cache_root=repository.root
         ),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=_Translation(),  # type: ignore[arg-type]
@@ -345,7 +346,7 @@ def test_visual_pause_propagates_and_resume_continues_the_build(
     request = CompanionBuildRequest(
         source, validator_digests=(pdf.artifact_digest,)
     )
-    execution = CompanionExecutionOptions(paper_cache_root=repository.root)
+    execution = CompanionExecutionOptions(document_cache_root=repository.root)
 
     prepared = service.prepare(request)
     paused = service.execute(
@@ -392,7 +393,7 @@ def test_effective_source_replays_after_a_later_build_pause(
     request = CompanionBuildRequest(
         source, validator_digests=(pdf.artifact_digest,)
     )
-    execution = CompanionExecutionOptions(paper_cache_root=repository.root)
+    execution = CompanionExecutionOptions(document_cache_root=repository.root)
 
     prepared = service.prepare(request)
     paused = service.execute(
@@ -416,173 +417,34 @@ def test_effective_source_replays_after_a_later_build_pause(
     assert not _ScriptedReviewer.outcomes
 
 
-class _Paper:
-    def __init__(
-        self,
-        repository: SourceRepository,
-        initial,
-        refreshed,
-        pdf,
-        *,
-        pdf_error: Exception | None = None,
-    ) -> None:
-        self.repository = repository
-        self.initial = initial
-        self.refreshed = refreshed
-        self.pdf = pdf
-        self.pdf_error = pdf_error
-        self.html_refreshes: list[bool] = []
-        self.pdf_calls = 0
-        self.pdf_refreshes: list[bool] = []
-
-    def fetch_arxiv_auto(self, _source: str, *, refresh: bool = False):
-        self.html_refreshes.append(refresh)
-        return self.refreshed if refresh else self.initial
-
-    def resolve_local_or_arxiv_source(
-        self, source: str, *, refresh: bool = False
-    ):
-        return self.fetch_arxiv_auto(source, refresh=refresh)
-
-    def fetch_arxiv_pdf(self, _source: str, *, refresh: bool = False):
-        self.pdf_calls += 1
-        self.pdf_refreshes.append(refresh)
-        if self.pdf_error is not None:
-            raise self.pdf_error
-        return self.pdf
-
-
-def test_remote_suspicion_refreshes_html_before_deciding_about_pdf(
+def test_local_source_accepts_an_explicit_local_pdf_validator(
     tmp_path: Path,
 ) -> None:
-    repository = SourceRepository(tmp_path / "paper")
-    suspicious = _html_document(repository, ("1", "3")).source
-    corrected = _html_document(repository, ("1", "2")).source
-    paper = _Paper(repository, suspicious, corrected, _pdf(repository))
+    repository = SourceRepository(tmp_path / "documents")
+    source_path = tmp_path / "source.html"
+    source_path.write_bytes(repository.read_bytes(_html_document(repository, ("1", "3")).source))
+    pdf_path = tmp_path / "source.pdf"
+    pdf_path.write_bytes(repository.read_bytes(_pdf(repository)))
+    class Extractor:
+        contract_id = "arc.companion.tests.pdf_text.v1"
+
+        def extract(self, _payload: bytes) -> PDFTextLayer:
+            return PDFTextLayer(("Source x_1 = 1 (1) x_2 = 2 (3)",))
+
+    document_service = ArcDocumentService(
+        cache_root=repository.root,
+        pdf_text_extractor=Extractor(),
+    )
 
     document, validators, _warnings = _resolve_source(
-        paper,  # type: ignore[arg-type]
-        "2205.10527",
-        pdf=None,
+        document_service,
+        str(source_path),
+        pdf=str(pdf_path),
         refresh=False,
     )
 
-    assert paper.html_refreshes == [False, True]
-    assert paper.pdf_calls == 0
-    assert validators == ()
-    assert [
-        block.payload["label"]
-        for block in document.blocks
-        if block.kind is RichBlockKind.EQUATION
-    ] == ["1", "2"]
-
-
-def test_remote_suspicion_auto_fetches_pdf_only_after_refresh(
-    tmp_path: Path,
-) -> None:
-    repository = SourceRepository(tmp_path / "paper")
-    suspicious = _html_document(repository, ("1", "3")).source
-    pdf = _pdf(repository)
-    paper = _Paper(repository, suspicious, suspicious, pdf)
-
-    _document, validators, warnings = _resolve_source(
-        paper,  # type: ignore[arg-type]
-        "2205.10527",
-        pdf=None,
-        refresh=False,
-    )
-
-    assert paper.html_refreshes == [False, True]
-    assert paper.pdf_calls == 1
-    assert paper.pdf_refreshes == [True]
-    assert validators == (pdf.artifact_digest,)
-    assert not any("no PDF validator" in item for item in warnings)
-
-
-def test_user_refresh_checks_html_once_and_refreshes_the_auto_pdf(
-    tmp_path: Path,
-) -> None:
-    repository = SourceRepository(tmp_path / "paper")
-    suspicious = _html_document(repository, ("1", "3")).source
-    pdf = _pdf(repository)
-    paper = _Paper(repository, suspicious, suspicious, pdf)
-
-    _document, validators, _warnings = _resolve_source(
-        paper,  # type: ignore[arg-type]
-        "2205.10527",
-        pdf=None,
-        refresh=True,
-    )
-
-    assert paper.html_refreshes == [True]
-    assert paper.pdf_refreshes == [True]
-    assert validators == (pdf.artifact_digest,)
-
-
-def test_explicit_pdf_fetch_uses_the_forced_html_refresh_boundary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    repository = SourceRepository(tmp_path / "paper")
-    suspicious = _html_document(repository, ("1", "3")).source
-    pdf = _pdf(repository)
-    paper = _Paper(repository, suspicious, suspicious, pdf)
-    real_parser = RichDocumentParserService
-
-    class ParserWithoutDeterministicPDF:
-        def __init__(self, source_repository) -> None:
-            self.delegate = real_parser(source_repository)
-
-        def parse(self, bundle):
-            return self.delegate.parse(
-                type(bundle)(primary=bundle.primary)
-            )
-
-    monkeypatch.setattr(
-        cli_module,
-        "RichDocumentParserService",
-        ParserWithoutDeterministicPDF,
-    )
-
-    _document, validators, _warnings = _resolve_source(
-        paper,  # type: ignore[arg-type]
-        "2205.10527",
-        pdf="fetch",
-        refresh=False,
-    )
-
-    assert paper.html_refreshes == [False, True]
-    assert paper.pdf_refreshes == [True]
-    assert validators == (pdf.artifact_digest,)
-
-
-def test_auto_pdf_failure_is_a_warning_not_a_source_failure(
-    tmp_path: Path,
-) -> None:
-    repository = SourceRepository(tmp_path / "paper")
-    suspicious = _html_document(repository, ("1", "3")).source
-    class TransportFailure(Exception):
-        pass
-
-    error = TransportFailure("offline")
-    error.code = "pdf_offline"  # type: ignore[attr-defined]
-    paper = _Paper(
-        repository,
-        suspicious,
-        suspicious,
-        _pdf(repository),
-        pdf_error=error,
-    )
-
-    document, validators, warnings = _resolve_source(
-        paper,  # type: ignore[arg-type]
-        "2205.10527",
-        pdf=None,
-        refresh=False,
-    )
-
-    assert validators == ()
-    assert document.source.artifact_digest == suspicious.artifact_digest
-    assert any("pdf_offline" in item for item in warnings)
+    assert validators
+    assert document.source.source_format is SourceFormat.HTML
 
 
 def test_build_diagnostics_validator_rejects_replay_identity_drift() -> None:

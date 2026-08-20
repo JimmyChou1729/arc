@@ -21,22 +21,19 @@ from arc_jobs import (
     semantic_key,
 )
 from arc_llm import LLMCompleted
-from arc_paper import (
-    ArcPaperService,
+from arc_document import (
+    ArcDocumentService,
     CachedDocumentRef,
     DocumentStructureCache,
     DocumentStructureEntry,
     DocumentStructureNodeKind,
     DocumentStructureOverlay,
-    ReferenceIdentity,
-    ReferenceMaterialCache,
     RichDocumentParserService,
     SourceFormat,
     SourceOrigin,
     SourceOriginKind,
     SourceRepository,
     cached_document_ref_from_document,
-    cached_reference_material_to_document,
 )
 from arc_render import (
     AnchorKind,
@@ -56,11 +53,9 @@ from arc_translate import TranslationResult, TranslationRevisionArtifact
 from arc_companion.build import (
     COMPANION_BUILD_HANDLER,
     CompanionBuildHandler,
-    _attach_cached_reference_materials,
     _canonicalize_references,
     _glossary_contracts,
     _literal_glossary_entries,
-    _verify_cached_reference_materials,
 )
 from arc_companion.generation_validation import CompanionContentError
 from arc_companion.prompts import (
@@ -563,7 +558,7 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
         prepared.run_id,
         execution=CompanionExecutionOptions(
             workers=2,
-            paper_cache_root=tmp_path / "paper",
+            document_cache_root=tmp_path / "paper",
         ),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=translation,
@@ -606,7 +601,7 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
             for item in commands["source"]
         )
         assert all(
-            item["shell"] and item["argv"][0] == "arc-paper"
+            item["shell"] and item["argv"][0] == "arc-document"
             for item in commands["source"]
         )
         ranged = [
@@ -649,13 +644,13 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
         assert all(
             item["shell"]
             and item["argv"][0:2]
-            == ["arc-paper", "read-cached-source-range"]
+            == ["arc-document", "read-cached-source-range"]
             and "--text-only" in item["argv"]
             for item in translated["parts"]
         )
     assert tasks.runtime_environments
     assert {
-        item["ARC_PAPER_CACHE"] for item in tasks.runtime_environments
+        item["ARC_DOCUMENT_CACHE"] for item in tasks.runtime_environments
     } == {str(tmp_path / "paper")}
     run_store = ImmutableArtifactStore(
         service.repository.run_directory(completed.run_id),
@@ -707,7 +702,7 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     ) == len(planned_chapters)
     first_index = translation_indexes[0]
     first_part = first_index["chapters"][0]["parts"][0]
-    translated_range = ArcPaperService(
+    translated_range = ArcDocumentService(
         cache_root=tmp_path / "paper"
     ).read_cached_source_range(
         cached_document_ref_from_document(
@@ -831,7 +826,7 @@ def test_structural_display_chapter_skips_loop_but_translates_and_augments(
     tmp_path: Path,
 ) -> None:
     document = _document(tmp_path)
-    paper = ArcPaperService(cache_root=tmp_path / "paper")
+    paper = ArcDocumentService(cache_root=tmp_path / "paper")
     cached = paper.cache_document(document.source)
     pdf = CachedDocumentRef(
         SourceFormat.PDF,
@@ -893,7 +888,7 @@ def test_structural_display_chapter_skips_loop_but_translates_and_augments(
             request,
             execution=CompanionExecutionOptions(
                 workers=1,
-                paper_cache_root=tmp_path / "paper",
+                document_cache_root=tmp_path / "paper",
             ),
             task_service=tasks,  # type: ignore[arg-type]
             translation_adapter=translation,
@@ -1177,7 +1172,7 @@ def test_minimal_reference_contract_does_not_accept_model_cache_handles(
         CompanionBuildRequest(_document(tmp_path), target_language="en"),
         execution=CompanionExecutionOptions(
             workers=1,
-            paper_cache_root=tmp_path / "paper-cache",
+            document_cache_root=tmp_path / "paper-cache",
         ),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=FakeTranslationAdapter(mode="skipped"),
@@ -1186,99 +1181,13 @@ def test_minimal_reference_contract_does_not_accept_model_cache_handles(
     assert failed.status is RunStatus.SUCCEEDED
 
 
-def test_cached_material_rejects_mismatched_identity_and_resources(
-    tmp_path: Path,
-) -> None:
-    cache = ReferenceMaterialCache(tmp_path / "paper-cache")
-    first_resource = cache.store_resource(
-        b"first",
-        media_type="text/plain",
-    )
-    second_resource = cache.store_resource(
-        b"second",
-        media_type="text/plain",
-    )
-    first = cache.store_material(
-        ReferenceIdentity(dois=("10.1000/first",)),
-        (first_resource,),
-        readable_resource=first_resource,
-    )
-    cache.store_material(
-        ReferenceIdentity(dois=("10.1000/second",)),
-        (second_resource,),
-        readable_resource=second_resource,
-    )
-    forged = cached_reference_material_to_document(first)
-    forged["resources"] = [
-        {
-            "resource_sha256": second_resource.resource_sha256,
-            "resource_size": second_resource.resource_size,
-            "media_type": second_resource.media_type,
-            "source_locator": second_resource.source_locator,
-            "filename": second_resource.filename,
-        }
-    ]
-    forged["readable_resource"] = forged["resources"][0]
-
-    with pytest.raises(
-        CompanionContentError,
-        match="does not match",
-    ):
-        _verify_cached_reference_materials(
-            {
-                "references": [
-                    {"cached_material": forged}
-                ]
-            },
-            cache_root=tmp_path / "paper-cache",
-        )
-
-
-def test_program_attaches_already_admitted_reference_material(
-    tmp_path: Path,
-) -> None:
-    cache = ReferenceMaterialCache(tmp_path / "paper-cache")
-    resource = cache.store_resource(
-        b"reference",
-        media_type="text/plain",
-        source_locator="https://example.test/reference",
-    )
-    cache.store_material(
-        ReferenceIdentity(
-            dois=("10.1000/fixture",),
-            title="Fixture",
-        ),
-        (resource,),
-        readable_resource=resource,
-    )
-
-    attached = _attach_cached_reference_materials(
-        {
-            "references": [
-                {
-                    "reference_id": "reference-fixture",
-                    "title": "Fixture",
-                    "source": "doi:10.1000/fixture",
-                    "dois": ["10.1000/fixture"],
-                    "arxiv_ids": [],
-                    "cached_document": None,
-                    "cached_material": None,
-                }
-            ]
-        },
-        cache_root=tmp_path / "paper-cache",
-    )
-
-    assert attached["references"][0]["cached_material"] is not None
-
-
 def test_cached_document_parse_failure_is_not_downgraded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     document = _document(tmp_path)
     monkeypatch.setattr(
-        "arc_companion.build.ArcPaperService.cache_document",
+        "arc_companion.build.ArcDocumentService.cache_document",
         lambda _self, _source: (_ for _ in ()).throw(
             ValueError("parsed document contains duplicate math span IDs")
         ),
@@ -1289,7 +1198,7 @@ def test_cached_document_parse_failure_is_not_downgraded(
         CompanionBuildRequest(document, target_language="en"),
         execution=CompanionExecutionOptions(
             workers=1,
-            paper_cache_root=tmp_path / "paper",
+            document_cache_root=tmp_path / "paper",
         ),
         task_service=FakeGuideTasks(),  # type: ignore[arg-type]
         translation_adapter=FakeTranslationAdapter(mode="skipped"),
@@ -1606,13 +1515,13 @@ def test_guide_identity_does_not_depend_on_translation_output(
 def test_default_adapter_wires_keyword_provider_to_companion_cache(
     tmp_path: Path,
 ) -> None:
-    from arc_paper import KeywordInventoryService, TermInventoryStore
+    from arc_document import KeywordInventoryService, TermInventoryStore
     from arc_translate import TranslationWorkflowService
 
     tasks = FakeGuideTasks()
     adapter = ArcTranslateAdapter(
         tasks,  # type: ignore[arg-type]
-        paper_cache_root=tmp_path / "paper-cache",
+        document_cache_root=tmp_path / "paper-cache",
     )
 
     service, source = adapter._service_and_source(_document(tmp_path))
@@ -1629,7 +1538,7 @@ def test_default_adapter_resolves_shared_cache_for_structure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import arc_paper
+    import arc_document
     from arc_llm import LLMExecutionOptions, ModelSelection
 
     captured = {}
@@ -1655,8 +1564,8 @@ def test_default_adapter_resolves_shared_cache_for_structure(
             return FakeResult()
 
     adapter = ArcTranslateAdapter()
-    monkeypatch.setattr(arc_paper, "DocumentStructureCache", FakeStructureCache)
-    monkeypatch.setattr(arc_paper, "TermInventoryStore", FakeTermInventoryStore)
+    monkeypatch.setattr(arc_document, "DocumentStructureCache", FakeStructureCache)
+    monkeypatch.setattr(arc_document, "TermInventoryStore", FakeTermInventoryStore)
     monkeypatch.setattr(
         adapter,
         "_service_and_source",

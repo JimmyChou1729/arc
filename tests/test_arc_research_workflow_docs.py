@@ -957,28 +957,23 @@ def test_translate_docs_define_standalone_approximate_workflows() -> None:
     assert "glossary size is approximate" in companion
 
 
-def test_companion_docs_define_on_demand_unbounded_reference_research() -> None:
+def test_companion_docs_keep_academic_research_at_the_skill_boundary() -> None:
     manual = (SKILL / "manuals/arc-companion.md").read_text(encoding="utf-8")
     workflow = (WF / "companion.md").read_text(encoding="utf-8")
     compact_manual = " ".join(manual.split())
     compact_workflow = " ".join(workflow.split())
 
-    assert "does not run a document-wide literature survey" in compact_manual
-    assert "no minimum or maximum reference count" in compact_manual
-    assert "each chapter proposer and reviewer may research" in compact_manual
-    assert "currently available, authorized host research or download tools" in (
-        compact_manual
-    )
+    assert "does not run academic research or depend on `arc-paper`" in compact_manual
+    assert "Optional ALC enrichment may call ARC before the build" in compact_manual
+    assert "ask whether to install it or proceed without enrichment" in compact_manual
     assert "every chapter enters it even when the initial proposal is empty" in (
         compact_workflow
     )
-    assert "Both proposer and reviewer may research during their own turns" in (
+    assert "optional host-level ALC step" in compact_workflow
+    assert "never install it silently" in compact_workflow
+    assert "neither imports `arc-paper` nor acquires or admits references" in (
         compact_workflow
     )
-    assert "requiring installation, connection, or additional authority" in (
-        compact_workflow
-    )
-    assert "not copies of whole works" in compact_workflow
 
 
 def test_companion_docs_describe_html_only_run_owned_publication() -> None:

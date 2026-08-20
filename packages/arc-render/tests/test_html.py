@@ -8,7 +8,7 @@ import shutil
 import subprocess
 
 import pytest
-from arc_paper import (
+from arc_document import (
     RichAsset,
     RichBlock,
     RichBlockKind,

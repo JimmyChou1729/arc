@@ -4,7 +4,7 @@ import copy
 import hashlib
 
 import pytest
-from arc_paper import (
+from arc_document import (
     RichBlock,
     RichBlockKind,
     RichDocument,
@@ -225,7 +225,7 @@ def test_layer_only_accepts_initial_revisions() -> None:
 
 
 def test_anchor_block_adapter_preserves_rich_block_provenance() -> None:
-    from arc_paper import RichBlock, RichBlockKind, SourceLocator
+    from arc_document import RichBlock, RichBlockKind, SourceLocator
 
     block = RichBlock(
         block_id="block-1",

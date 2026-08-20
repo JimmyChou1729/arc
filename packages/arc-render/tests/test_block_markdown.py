@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 
 import pytest
-from arc_paper import (
+from arc_document import (
     RichBlock,
     RichBlockKind,
     SourceFormat,

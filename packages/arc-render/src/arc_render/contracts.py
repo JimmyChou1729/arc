@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any
 
-from arc_paper import (
+from arc_document import (
     RichBlock,
     RichDocument,
     rich_block_to_document,

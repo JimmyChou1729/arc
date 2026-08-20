@@ -7,11 +7,11 @@ on an unrecorded caller-supplied source.
 
 ## Quick start
 
-When `arc-paper` and `arc-render` are installed on `PATH`, build a source-only
+When `arc-document` and `arc-render` are installed on `PATH`, build a source-only
 reader with:
 
 ```bash
-arc-paper export-rich-document note.md --output-dir publication
+arc-document export-rich-document note.md --output-dir publication
 
 arc-render compose \
   --source publication/rich-source.json \
@@ -42,21 +42,19 @@ enough.
 If bare commands are unavailable in an installed ARC Skill, use its runtime:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-paper export-rich-document --help
+<skill-dir>/scripts/arc-runtime arc-document export-rich-document --help
 <skill-dir>/scripts/arc-runtime arc-render --help
 ```
 
 From this source checkout, the development fallback is:
 
 ```bash
-packages/arc-paper/.venv/bin/arc-paper export-rich-document --help
+packages/arc-paper/.venv/bin/arc-document export-rich-document --help
 packages/arc-paper/.venv/bin/arc-render --help
 ```
 
-`arc-paper export-rich-document` prints an `arc.command_result.v2` envelope.
-Check top-level `status`, `warnings`, and `error`; successful paths and identity
-are at `data.source`, `data.metadata`, `data.resources[]`, and
-`data.document_digest`, with parse warnings at `data.warnings[]`.
+`arc-document export-rich-document` prints a JSON object containing the
+exported source, metadata, resources, document digest, and parse warnings.
 
 Successful `arc-render` commands print flat JSON objects with these exact
 fields:

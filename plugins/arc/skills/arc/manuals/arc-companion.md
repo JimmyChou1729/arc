@@ -62,26 +62,13 @@ a stable ignored path under `local/`. Companion claims only
 `<project-dir>/.arc/companion/` and `<project-dir>/companion.html`; unrelated
 files remain untouched.
 
-## Build from arXiv
-
-Pass an arXiv identifier directly. `--pdf fetch` acquires a validator; it does
-not make PDF a source or output format:
-
-```bash
-arc-companion build arXiv:0911.3380 \
-  --pdf fetch \
-  --project-dir local/0911.3380-companion \
-  --target-language zh-CN \
-  --user-intent "Connect the main results to their assumptions." \
-  --host-authority unknown
-```
-
-Use `--refresh` only when fresh upstream source bytes are required. If the user
-explicitly supplies authors, repeat `--author <name>`; otherwise let Companion
+Remote academic acquisition belongs to an optional host-level ARC research
+workflow. It must materialize a local rich source before this command. If the
+user explicitly supplies authors, repeat `--author <name>`; otherwise let Companion
 verify source-derived candidates. Unsupported reader-interface languages need
 one complete `--reader-labels <json-file>` map.
 
-## Authority and Paper Cache
+## Authority and Document Cache
 
 Choose `--host-authority` once per run. Use `unrestricted` only when the host
 explicitly grants it; otherwise use `unknown` (or `restricted` when known).
@@ -89,9 +76,9 @@ Reuse the same value on resume. Under `restricted` or `unknown`, follow
 `manuals/arc-llm.md`; without an authorized broker, a required host model turn
 becomes a durable pause.
 
-`--paper-cache-root <path>` overrides the paper cache for build or resume.
-Without it, Companion uses `ARC_PAPER_CACHE` when set, otherwise
-`<launch-directory>/.arc/cache/arc-paper`. Durable Companion state always stays
+`--document-cache-root <path>` overrides the document cache for build or resume.
+Without it, Companion uses `ARC_DOCUMENT_CACHE` when set, otherwise
+`<launch-directory>/.arc/cache/arc-document`. Durable Companion state always stays
 under `<project-dir>/.arc/companion/`; it is not a shared cache. Keep the same
 launch directory, environment value, or explicit cache root across build and
 resume.
@@ -250,12 +237,11 @@ and at most two full revisions are requested. Add
 `--cross-chapter-editorial-review` only when the user requests the optional
 document-wide redundancy audit.
 
-Companion does not run a document-wide literature survey before guide
-generation. Research is need-driven: each chapter proposer and reviewer may
-research for a concrete need, with no minimum or maximum reference count.
-They may use currently available, authorized host research or download tools.
-There is no guide-unit quota. Prefer cached or admitted sources, retain
-provenance, and remove generic summary, paraphrase, or repetition.
+Companion itself does not run academic research or depend on `arc-paper`.
+Optional ALC enrichment may call ARC before the build and supply reviewed
+local supplements. If ARC is unavailable, ask whether to install it or proceed
+without enrichment. There is no guide-unit quota. Retain provenance and remove
+generic summary, paraphrase, or repetition.
 Paragraph-local and cross-paragraph explanations have equal status. Without an
 explicit audience, popular writing targets a generally educated adult,
 research papers target students with relevant foundations, and textbooks assume

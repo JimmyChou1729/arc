@@ -140,7 +140,7 @@ def _document(
 
 def _response(page: int, mappings: list[tuple[str, str]]) -> dict[str, Any]:
     return {
-        "schema_version": "arc.paper.equation_label_page_review.v1",
+        "schema_version": "arc.document.equation_label_page_review.v1",
         "page_number": page,
         "mappings": [
             {

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from arc_paper import (
+from arc_document import (
     RichAsset,
     RichBlock,
     RichBlockKind,
@@ -130,7 +130,7 @@ def test_model_source_index_has_identity_and_no_body_or_asset_metadata() -> None
         "source_sha256": document.source.artifact_digest,
         "source_size": document.source.size,
         "media_type": document.source.media_type,
-        "parser_contract": "arc.paper.rich-parse.v1",
+        "parser_contract": "arc.document.rich-parse.v1",
         "parsed_document_sha256": "b" * 64,
     }
     index = model_source_index(
@@ -152,10 +152,10 @@ def test_model_source_index_has_identity_and_no_body_or_asset_metadata() -> None
     assert index["chapter_count"] == len(chapters)
     assert index["block_count"] == len(document.blocks)
     assert index["cache_operations"] == {
-        "table_of_contents": "arc-paper get-table-of-contents",
-        "section": "arc-paper get-section",
-        "source_range": "arc-paper read-cached-source-range",
-        "search": "arc-paper search-full-text",
+        "table_of_contents": "arc-document get-table-of-contents",
+        "section": "arc-document get-section",
+        "source_range": "arc-document read-cached-source-range",
+        "search": "arc-document search-full-text",
     }
     equation = next(
         item
@@ -221,7 +221,7 @@ def test_model_translation_view_aligns_parts_without_body_in_index() -> None:
         "source_sha256": "c" * 64,
         "source_size": len(view.encode("utf-8")),
         "media_type": "text/markdown",
-        "parser_contract": "arc.paper.rich-parse.v1",
+        "parser_contract": "arc.document.rich-parse.v1",
         "parsed_document_sha256": "d" * 64,
     }
     index = model_translation_index(

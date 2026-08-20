@@ -9,7 +9,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from arc_paper import RichBlock, RichBlockKind
+from arc_document import RichBlock, RichBlockKind
 
 from ._json import canonical_json_bytes
 from .contracts import (

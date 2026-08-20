@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 from arc_jobs import ArtifactDigest, ArtifactRef
-from arc_paper import ArcPaperService, RichDocumentParserService
+from arc_document import ArcDocumentService, RichDocumentParserService
 from arc_render import (
     AnchorKind,
     FragmentAnchor,
@@ -39,7 +39,7 @@ def test_translation_runtime_is_hidden_and_can_share_an_arc_project(tmp_path) ->
     assert project.runtime_root == root / ".arc" / "translate"
     assert project.marker == project.runtime_root / "project.json"
     assert not (root / "arc-translate-project.json").exists()
-    assert not (project.runtime_root / "paper-cache").exists()
+    assert not (project.runtime_root / "document-cache").exists()
 
 
 def test_successful_translation_delivery_is_native_layer_and_revision(
@@ -47,7 +47,7 @@ def test_successful_translation_delivery_is_native_layer_and_revision(
 ) -> None:
     source_path = tmp_path / "paper.md"
     source_path.write_text("# Source\n\nSource paragraph.\n", encoding="utf-8")
-    paper = ArcPaperService(cache_root=tmp_path / "cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "cache")
     artifact = paper.import_source(source_path)
     document = RichDocumentParserService(paper.repository).parse_source(
         artifact
@@ -201,7 +201,7 @@ def _delivery_fixture(
 ) -> tuple[TranslationProject, TranslationResult, bytes]:
     source_path = tmp_path / "fixture-source.md"
     source_path.write_text("# Source\n\nSource paragraph.\n", encoding="utf-8")
-    paper = ArcPaperService(cache_root=tmp_path / "fixture-cache")
+    paper = ArcDocumentService(cache_root=tmp_path / "fixture-cache")
     artifact = paper.import_source(source_path)
     document = RichDocumentParserService(paper.repository).parse_source(
         artifact

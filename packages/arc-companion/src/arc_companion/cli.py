@@ -24,15 +24,12 @@ from arc_jobs import (
     snapshot_data,
 )
 from arc_llm import HostAuthority, LLMExecutionOptions, ModelSelection
-from arc_paper import (
-    ArcPaperService,
-    PDF_VALIDATOR_MISSING_WARNING,
+from arc_document import (
+    ArcDocumentService,
     RichDocumentParserService,
     RichDocumentValidationError,
     SourceBundle,
     SourceRepositoryError,
-    arxiv_path_id,
-    detect_suspicious_equation_labels,
 )
 from arc_render import (
     HTMLRenderError,
@@ -100,13 +97,13 @@ def _parser() -> _Parser:
     build = commands.add_parser(
         "build",
         help="build a source-anchored Companion",
-        description="Build a durable Companion from a verified paper or local source.",
+        description="Build a durable Companion from a verified local document.",
     )
-    build.add_argument("source", help="paper identifier or local source")
+    build.add_argument("source", help="local source path")
     build.add_argument("--project-dir", required=True, help="Companion project directory")
     build.add_argument(
         "--pdf",
-        help="local PDF validator path, or 'fetch' for a remote paper source",
+        help="optional local PDF validator path",
     )
     build.add_argument(
         "--target-language",
@@ -144,7 +141,7 @@ def _parser() -> _Parser:
         ),
     )
     _host_authority_argument(build)
-    _paper_cache_argument(build)
+    _document_cache_argument(build)
 
     status = commands.add_parser(
         "status",
@@ -169,7 +166,7 @@ def _parser() -> _Parser:
         default=16,
         help="parallel workers (default: 16)",
     )
-    _paper_cache_argument(resume)
+    _document_cache_argument(resume)
     _host_authority_argument(resume)
 
     stop = commands.add_parser(
@@ -247,12 +244,12 @@ def _help_command(arguments: list[str]) -> str:
     )
 
 
-def _paper_cache_argument(parser: argparse.ArgumentParser) -> None:
+def _document_cache_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--paper-cache-root",
+        "--document-cache-root",
         help=(
-            "arc-paper cache root; defaults to ARC_PAPER_CACHE or "
-            "<current-directory>/.arc/cache/arc-paper"
+            "arc-document cache root; defaults to ARC_DOCUMENT_CACHE or "
+            "<current-directory>/.arc/cache/arc-document"
         ),
     )
 
@@ -269,7 +266,7 @@ def _host_authority_argument(parser: argparse.ArgumentParser) -> None:
 def _execution_options(args: argparse.Namespace) -> CompanionExecutionOptions:
     return CompanionExecutionOptions(
         workers=args.workers,
-        paper_cache_root=args.paper_cache_root,
+        document_cache_root=args.document_cache_root,
         llm=LLMExecutionOptions(host_authority=HostAuthority(args.host_authority)),
     )
 
@@ -386,9 +383,9 @@ def _build(args: argparse.Namespace) -> CommandResult:
     require_translation_runtime()
     # Unknown project state is refused before source/cache writes.
     paths = CompanionProjectPaths.open(args.project_dir)
-    paper = ArcPaperService(cache_root=args.paper_cache_root)
+    document = ArcDocumentService(cache_root=args.document_cache_root)
     rich, validators, warnings = _resolve_source(
-        paper,
+        document,
         args.source,
         pdf=args.pdf,
         refresh=args.refresh,
@@ -870,90 +867,31 @@ def _snapshot_result(
 
 
 def _resolve_source(
-    paper: ArcPaperService,
+    document: ArcDocumentService,
     source: str,
     *,
     pdf: str | None,
     refresh: bool,
 ) -> tuple[Any, tuple[str, ...], tuple[str, ...]]:
-    is_arxiv = bool(arxiv_path_id(source))
-    primary = paper.resolve_local_or_arxiv_source(source, refresh=refresh)
-    if not is_arxiv:
-        if pdf == "fetch":
-            raise _UsageError("--pdf fetch is only valid for a paper ID")
-        validators = (
-            (paper.import_source(Path(pdf)),) if pdf is not None else ()
-        )
-        outcome = RichDocumentParserService(paper.repository).parse(
-            SourceBundle(primary=primary, validators=validators)
-        )
-        return (
-            outcome.document,
-            tuple(item.artifact_digest for item in validators),
-            tuple(outcome.warnings),
-        )
-
-    parser = RichDocumentParserService(paper.repository)
-    probe = parser.parse(SourceBundle(primary=primary))
-    reasons = detect_suspicious_equation_labels(probe.document)
-    forced_html_refresh = False
-    if reasons and not refresh:
-        primary = paper.fetch_arxiv_auto(source, refresh=True)
-        forced_html_refresh = True
-        probe = parser.parse(SourceBundle(primary=primary))
-        reasons = detect_suspicious_equation_labels(probe.document)
-
-    explicit_validator = pdf is not None
-    validators: tuple[Any, ...]
-    acquisition_warnings: list[str] = []
     if pdf == "fetch":
-        validators = (
-            paper.fetch_arxiv_pdf(
-                source,
-                refresh=refresh or forced_html_refresh,
-            ),
+        raise _UsageError(
+            "--pdf fetch is unavailable in arc-companion; provide a local PDF"
         )
-    elif pdf is not None:
-        pdf_path = Path(pdf)
-        if not pdf_path.is_file():
-            raise _UsageError("--pdf must be an existing path or 'fetch'")
-        validators = (paper.import_source(pdf_path),)
-    elif reasons:
-        try:
-            validators = (
-                paper.fetch_arxiv_pdf(
-                    source,
-                    refresh=refresh or forced_html_refresh,
-                ),
-            )
-        except Exception as exc:
-            code = getattr(exc, "code", "pdf_fetch_failed")
-            acquisition_warnings.append(
-                "PDF visual equation-label review could not acquire the PDF "
-                f"({code}): {exc}; retaining web equation labels."
-            )
-            validators = ()
-    else:
-        validators = ()
-
-    if explicit_validator:
-        outcome = parser.parse(
-            SourceBundle(primary=primary, validators=validators)
-        )
-    else:
-        outcome = probe
-    warnings = list(outcome.warnings)
-    if reasons and not explicit_validator:
-        warnings = [
-            item
-            for item in warnings
-            if item != PDF_VALIDATOR_MISSING_WARNING
-        ]
-    warnings.extend(acquisition_warnings)
+    del refresh  # Local content-addressed imports need no provider refresh.
+    primary = document.resolve_local_source(source)
+    validators = (
+        (document.import_source(Path(pdf)),) if pdf is not None else ()
+    )
+    outcome = RichDocumentParserService(
+        document.repository,
+        pdf_text_extractor=document.parser.pdf_text_extractor,
+    ).parse(
+        SourceBundle(primary=primary, validators=validators)
+    )
     return (
         outcome.document,
         tuple(item.artifact_digest for item in validators),
-        tuple(dict.fromkeys(warnings)),
+        tuple(outcome.warnings),
     )
 
 

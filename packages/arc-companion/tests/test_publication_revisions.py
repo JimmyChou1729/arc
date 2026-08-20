@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from arc_jobs import ImmutableArtifactStore, RunContext, RunRepository, RunSpec
-from arc_paper import (
+from arc_document import (
     RichDocumentParserService,
     SourceFormat,
     SourceOrigin,
@@ -87,7 +87,7 @@ def _fixture(tmp_path: Path):
         ),
         glossary=(),
         bibliography=({"evidence_id": "ref-1", "title": "Reference"},),
-        paper_cache_root=tmp_path / "paper",
+        document_cache_root=tmp_path / "paper",
     )
     paths = CompanionProjectPaths.open(tmp_path / "project")
     paths.select_run("run")

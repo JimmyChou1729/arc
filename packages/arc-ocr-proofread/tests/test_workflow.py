@@ -10,7 +10,7 @@ import pytest
 
 from arc_jobs import ImmutableArtifactStore, ResumeReason, RunStatus
 from arc_llm import LLMCompleted, LLMPaused
-from arc_paper import RenderedPDFPage
+from arc_document import RenderedPDFPage
 
 from arc_ocr_proofread import ProofreadProject, ProofreadService, load_mineru_source
 from arc_ocr_proofread.workflow import (

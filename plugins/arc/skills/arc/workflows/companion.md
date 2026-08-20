@@ -33,9 +33,11 @@ installation.
 
 ### Step 2: Resolve source and intent
 
-Choose a rich Markdown, HTML, or flattened single-file TeX source, or a paper
-identifier that `arc-paper` can resolve to rich source. A PDF is optional and
-is used only for validation and page mapping. Preserve the user's exact
+Choose a local rich Markdown, HTML, or flattened single-file TeX source. A PDF
+is optional and is used only for validation and page mapping. `arc-companion`
+does not resolve remote paper identifiers. When the input is remote, use an
+available host-level acquisition workflow to materialize a local rich source
+first. Preserve the user's exact
 `user_intent`; when absent, Companion uses its neutral textbook intent.
 
 When the user explicitly requests OCR proofreading and supplies source
@@ -59,7 +61,7 @@ language, supply one complete label map with `--reader-labels <json>`.
 ### Step 1: Start the durable build
 
 ```bash
-arc-companion build <source-path-or-paper-id> \
+arc-companion build <source-path> \
   --project-dir <project-dir> \
   --target-language <language-tag> \
   --approx-term-count <estimate> \
@@ -84,9 +86,8 @@ identical value when resuming this run. Under `restricted` or `unknown`, follow
 `manuals/arc-llm.md`: without an explicitly supplied broker, a model host
 request becomes a durable manual pause.
 
-Add `--pdf <path>` only for a local PDF input validator or `--pdf fetch` only
-to fetch a remote paper's validator. It is never a Companion output.
-Use `--refresh` only when fresh remote source bytes were requested.
+Add `--pdf <path>` only for a local PDF input validator. It is never a
+Companion output. `--pdf fetch` and remote refresh are not Companion features.
 Command JSON may be redirected to an unrelated path inside `<project-dir>`;
 Companion does not treat unrelated files as project-state conflicts. Do not
 redirect to a managed Companion path.
@@ -98,7 +99,7 @@ from source headings, and cover every source block exactly once.
 
 Model tasks receive a small cache-identity manifest, while each chapter task
 receives that chapter's block locators in its task payload. With an exact
-`arc-paper` cached document, agents should prefer cache-only reads of the
+`arc-document` cached document, agents should prefer cache-only reads of the
 precise line ranges or search results they need. They may read a complete
 current chapter when narrower excerpts are insufficient; discourage
 whole-book reads when chapter-scoped access is enough, but do not prohibit
@@ -110,7 +111,7 @@ semantic JSON, while Companion injects routing identities such as chapter IDs.
 
 All required chapter translations finish and freeze before any guide loop
 starts. Companion materializes the complete frozen translation as a separate
-content-addressed `arc-paper` document and gives each proposer and reviewer
+content-addressed `arc-document` document and gives each proposer and reviewer
 direct commands for the complete current original chapter, complete current
 translation, and matching exact parts and sections. Both roles must inspect
 the original and translation together and preserve the translation's
@@ -119,30 +120,23 @@ Translation bodies remain outside loop-context JSON; a modified translation
 gets a new immutable cache identity, so searches for the selected translation
 never mix old and new versions.
 
-Do not run a document-wide literature survey before guide generation.
-References are discovered on demand while each chapter is proposed and
-reviewed. Both roles may inspect the source, search cached references, suggest
-new references, and use currently visible and authorized host research or
-download tools. Prefer an existing `arc-paper` cache entry. When a DOI, arXiv
-record, ordinary URL, local file, book, or other acquired resource is new,
-admit it to `arc-paper` so later roles and projects can reuse it; use a
-child-workspace file only when cache admission is unavailable.
+Academic enrichment is an optional host-level ALC step, not a Companion code
+capability. When the user wants academic research for a Companion, first check
+whether the ARC Skill and `arc-paper` are available. If either is absent, tell
+the user that academic enrichment is optional and ask whether to install it or
+continue without it; never install it silently. When available and authorized,
+ALC may call ARC, review the resulting evidence, and pass only explicit local
+reviewed supplements into the Companion build. `arc-companion` itself neither
+imports `arc-paper` nor acquires or admits references.
 
 Do not impose a reference target, minimum, or maximum, and do not criticize a
 proposal merely for having few references. Keep only sources that improve a
-specific anchored explanation. If the host exposes no suitable acquisition
-tool or permission, continue with the resources that are available rather than
-requiring installation, connection, or additional authority. Under
-`restricted` or `unknown`, any model-requested host action uses the ordinary
-`arc-llm` host-turn/broker contract; Companion has no separate evidence input
-or resume contract.
+specific anchored explanation. If enrichment is declined or unavailable,
+continue with the verified source, translation, and already supplied reviewed
+supplements.
 
-Reference bodies remain in the cache or text-only workspace and are read
-through tools; model requests and responses carry stable handles and semantic
-reference metadata, not copies of whole works. English Wikipedia is an
-optional ordinary source; reject other language editions. Reference prose and
-translated excerpts use the target language while English page titles and URLs
-retain source identity.
+Reviewed supplement prose and translated excerpts use the target language
+while source titles and URLs retain source identity.
 
 Treat paragraph-local notes and chapter-level or cross-paragraph notes as
 equally legitimate. Choose placement from the explanatory need, with no quota
@@ -189,8 +183,8 @@ it even when the initial proposal is empty. The reviewer must not criticize
 merely to fill a round: it stops immediately when the proposal satisfies the
 reader needs and has no concrete improvement path. Otherwise it gives
 constructive feedback, including good new anchored, well-supported ideas and
-useful references, for up to two complete revisions. Both proposer and reviewer
-may research during their own turns. The maximum sequence is
+useful references already present in reviewed supplements, for up to two
+complete revisions. The maximum sequence is
 proposer-reviewer-proposer-reviewer-proposer; the last proposal is validated
 directly, without an unused final review. Companion injects `chapter_id` into
 the final candidate as caller-owned routing data.

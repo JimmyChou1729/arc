@@ -135,7 +135,7 @@ not optional.
 
 ## CLI Resolution
 
-Use `arc-paper`, `arc-render`, `arc-domain`, `arc-llm`, `arc-ocr-proofread`,
+Use `arc-document`, `arc-paper`, `arc-render`, `arc-domain`, `arc-llm`, `arc-ocr-proofread`,
 `arc-translate`, `arc-companion`, and `arc-jobs` directly when the host plugin
 exposes them on
 `PATH`. In DeepSeek Harness, prefer the trusted launcher exported as
@@ -178,11 +178,12 @@ installs or starts MCP.
 
 The launcher defaults `ARC_HOME` to `$HOME/.arc`; other hosts may set an
 explicit portable location. It keeps reusable runtime installations under
-`runtimes/`. The paper cache defaults to `.arc/cache/arc-paper/` below the
-launch directory; source-checkout development uses ignored
-`local/cache/arc-paper/`. Set `ARC_PAPER_CACHE` for an explicit portable
-location. Durable workflow state belongs in each project's hidden `.arc/`
-directory. `doctor` reports resolved source, runtime, and paper-cache paths.
+`runtimes/`. Document and paper caches default to `.arc/cache/arc-document/`
+and `.arc/cache/arc-paper/` below the launch directory; source-checkout
+development uses the matching ignored `local/cache/` paths. Set
+`ARC_DOCUMENT_CACHE` or `ARC_PAPER_CACHE` for explicit portable locations.
+Durable workflow state belongs in each project's hidden `.arc/` directory.
+`doctor` reports both cache paths.
 Provider selection remains owned by the installed `arc-llm` package.
 
 ## Workflow
