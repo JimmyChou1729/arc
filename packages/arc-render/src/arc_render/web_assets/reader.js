@@ -52,11 +52,6 @@
     chunkNodes: new Map(),
     chunkByTargetId: new Map(),
     chunkObserver: null,
-    laneObserver: null,
-    laneObservedRoot: null,
-    laneObservedWidth: null,
-    laneResizeFrame: null,
-    laneFallbackListener: null,
     idleRenderHandle: null,
     idleRenderUsesCallback: false,
     idleRenderGeneration: 0,
@@ -76,6 +71,9 @@
     pageMarkersVisible: false,
     hiddenRoles: new Set(),
     roleOrder: [],
+    roleSlots: new Map(),
+    visibilityStyle: null,
+    visibilityContentsSignature: null,
     visibilityReady: false,
     visibilityEmptyRoot: null
   };
@@ -1102,7 +1100,6 @@
     node.classList.add("is-rendered");
     node.setAttribute("aria-busy", "false");
     state.renderedChunkIds.add(chunk.chunk_id);
-    setupLaneResponsiveness(node);
     updateRenderComplete();
     recalibrateHashTarget();
     return node;
@@ -1111,9 +1108,7 @@
   function rerenderChunk(chunk) {
     if (!chunk || !state.renderedChunkIds.has(chunk.chunk_id)) return;
     var node = state.chunkNodes.get(chunk.chunk_id);
-    teardownLaneResponsiveness(node);
     renderChunkBody(chunk, node);
-    setupLaneResponsiveness(node);
   }
 
   function renderChunkBody(chunk, node) {
@@ -1310,7 +1305,6 @@
     }).forEach(function (item) {
       lanes.appendChild(renderFragment(item));
     });
-    lanes.style.setProperty("--arc-lane-count", String(lanes.children.length));
     row.appendChild(lanes);
 
     var full = fragments.filter(function (item) {
@@ -1542,6 +1536,7 @@
     card.dataset.fragmentId = fragment.fragment_id;
     card.dataset.revision = String(fragment.revision);
     card.dataset.role = fragment.role;
+    card.dataset.roleSlot = String(roleSlot(fragment.role));
     card.dataset.priority = String(fragment.priority);
     var header = element("header", "arc-fragment-header");
     var title = fragment.title ? element("h4", "", fragment.title) : element("span");
@@ -1660,6 +1655,13 @@
     return strings[role] || role;
   }
 
+  function roleSlot(role) {
+    if (!state.roleSlots.has(role)) {
+      state.roleSlots.set(role, state.roleSlots.size);
+    }
+    return state.roleSlots.get(role);
+  }
+
   function syncVisibilityRoles() {
     var roles = [];
     (state.payload.selected_roles || []).forEach(function (role) {
@@ -1680,6 +1682,7 @@
       return state.roleOrder[index] !== role;
     });
     state.roleOrder = roles;
+    roles.forEach(roleSlot);
     if (!state.visibilityReady) return;
     if (changed) renderVisibilityOptions();
     applyVisibility();
@@ -1766,59 +1769,73 @@
 
   function applyVisibility(scope) {
     if (!state.visibilityReady) return;
-    var root = scope && scope.querySelectorAll ? scope : document;
     var channels = (state.sourceVisible ? 1 : 0) + visibleRoleCount();
     document.body.classList.toggle("arc-focused-reading", channels === 1);
     document.body.classList.toggle("arc-no-visible-content", channels === 0);
+    document.body.classList.toggle("arc-source-hidden", !state.sourceVisible);
     document.body.classList.toggle(
       "arc-show-page-markers", state.pageMarkersVisible
     );
     if (state.visibilityEmptyRoot) state.visibilityEmptyRoot.hidden = channels !== 0;
-    Array.prototype.forEach.call(
-      root.querySelectorAll(".arc-source-row"),
-      function (row) { applyRowVisibility(row, channels); }
-    );
+    updateVisibilityStyles(channels);
     if (!scope) {
-      updateContentsTitles();
-      scheduleLaneResponsiveness();
+      var signature = state.sourceVisible ? "source" : Array.from(
+        state.hiddenRoles
+      ).sort().join("\u0000");
+      if (signature !== state.visibilityContentsSignature) {
+        state.visibilityContentsSignature = signature;
+        updateContentsTitles();
+      }
     }
   }
 
-  function applyRowVisibility(row, channels) {
-    var source = row.querySelector(".arc-source-card");
-    var fragments = Array.prototype.slice.call(
-      row.querySelectorAll(".arc-fragment")
-    );
-    fragments.forEach(function (card) {
-      card.hidden = state.hiddenRoles.has(card.dataset.role);
-    });
-    var visibleFragments = fragments.filter(function (card) { return !card.hidden; });
-    var sharedMedia = !state.sourceVisible && channels > 0 &&
-      row.dataset.blockKind === "figure";
-    source.hidden = !(state.sourceVisible || sharedMedia);
-    source.classList.toggle("arc-shared-media", sharedMedia);
-    var caption = source.querySelector("figcaption");
-    if (caption) {
-      caption.hidden = sharedMedia && visibleFragments.some(function (card) {
-        return card.dataset.role === "translation";
-      });
+  function updateVisibilityStyles(channels) {
+    if (!state.visibilityStyle) {
+      state.visibilityStyle = element("style");
+      state.visibilityStyle.id = "arc-visibility-state";
+      document.head.appendChild(state.visibilityStyle);
     }
-    var lanes = row.querySelector(".arc-lanes");
-    var visibleLanes = Array.prototype.filter.call(
-      lanes.children, function (child) { return !child.hidden; }
-    );
-    lanes.hidden = visibleLanes.length === 0;
-    lanes.style.setProperty("--arc-lane-count", String(Math.max(1, visibleLanes.length)));
-    var fullRows = row.querySelector(".arc-full-rows");
-    if (fullRows) {
-      fullRows.hidden = !Array.prototype.some.call(
-        fullRows.children, function (child) { return !child.hidden; }
+    var rules = [];
+    state.hiddenRoles.forEach(function (role) {
+      rules.push(
+        '.arc-fragment[data-role-slot="' + roleSlot(role) + '"]{display:none}'
       );
+    });
+    if (!state.sourceVisible) {
+      rules.push(".arc-source-card{display:none}");
+      if (channels > 0) {
+        rules.push(
+          '.arc-source-row[data-block-kind="figure"] .arc-source-card{display:block}'
+        );
+      }
+      var visibleSlots = state.roleOrder.filter(function (role) {
+        return !state.hiddenRoles.has(role);
+      }).map(function (role) {
+        return '.arc-fragment[data-role-slot="' + roleSlot(role) + '"]';
+      });
+      if (visibleSlots.length) {
+        rules.push(
+          '.arc-source-row:not([data-block-kind="figure"]):not(:has(' +
+          visibleSlots.join(",") + ")){display:none}"
+        );
+      } else {
+        rules.push(
+          '.arc-source-row:not([data-block-kind="figure"]){display:none}'
+        );
+      }
+      var translationSlot = state.roleSlots.get("translation");
+      if (
+        translationSlot !== undefined &&
+        !state.hiddenRoles.has("translation")
+      ) {
+        rules.push(
+          '.arc-source-row[data-block-kind="figure"]:has(' +
+          '.arc-fragment[data-role-slot="' + translationSlot + '"]) ' +
+          ".arc-source-card figcaption{display:none}"
+        );
+      }
     }
-    var hasContent = !lanes.hidden || Boolean(fullRows && !fullRows.hidden);
-    row.hidden = !hasContent;
-    var note = row.querySelector(".arc-note-button");
-    if (note) note.hidden = !hasContent;
+    state.visibilityStyle.textContent = rules.join("\n");
   }
 
   function renderContents(list, sections, strings) {
@@ -2264,64 +2281,6 @@
     });
   }
 
-  function updateLaneResponsiveness(lanes) {
-    var count = Number(lanes.style.getPropertyValue("--arc-lane-count")) || 1;
-    var horizontal = window.innerWidth >= 900 &&
-      lanes.getBoundingClientRect().width / count >= 275;
-    lanes.classList.toggle("lanes-horizontal", horizontal);
-  }
-
-  function setupLaneResponsiveness(root) {
-    var scope = root && root.querySelectorAll ? root : document;
-    var lanes = Array.prototype.slice.call(
-      scope.querySelectorAll(".arc-lanes")
-    );
-    lanes.forEach(updateLaneResponsiveness);
-    if ("ResizeObserver" in window) {
-      if (!state.laneObserver) {
-        state.laneObserver = new ResizeObserver(function (entries) {
-          var entry = entries[entries.length - 1];
-          var width = entry ? Math.round(entry.contentRect.width) : null;
-          if (width === null || width === state.laneObservedWidth) return;
-          state.laneObservedWidth = width;
-          scheduleLaneResponsiveness();
-        });
-      }
-      var observedRoot = document.getElementById("arc-document");
-      if (observedRoot && state.laneObservedRoot !== observedRoot) {
-        if (state.laneObservedRoot) {
-          state.laneObserver.unobserve(state.laneObservedRoot);
-        }
-        state.laneObservedRoot = observedRoot;
-        state.laneObservedWidth = null;
-        state.laneObserver.observe(observedRoot);
-      }
-    } else if (!state.laneFallbackListener) {
-      state.laneFallbackListener = function () {
-        Array.prototype.forEach.call(
-          document.querySelectorAll(".arc-lanes"),
-          updateLaneResponsiveness
-        );
-      };
-      window.addEventListener("resize", state.laneFallbackListener);
-    }
-  }
-
-  function scheduleLaneResponsiveness() {
-    if (state.laneResizeFrame !== null) return;
-    state.laneResizeFrame = window.requestAnimationFrame(function () {
-      state.laneResizeFrame = null;
-      Array.prototype.forEach.call(
-        document.querySelectorAll(".arc-lanes:not([hidden])"),
-        updateLaneResponsiveness
-      );
-    });
-  }
-
-  function teardownLaneResponsiveness(root) {
-    /* One stable document-width observer replaces per-lane observation. */
-  }
-
   function startProgressiveRendering() {
     setupChunkObserver();
     setupHydrationActivity();
@@ -2449,12 +2408,6 @@
     if (state.chunkObserver) state.chunkObserver.disconnect();
     state.chunkObserver = null;
     cancelIdleHydration();
-    if (state.laneObserver) state.laneObserver.disconnect();
-    state.laneObserver = null;
-    if (state.laneFallbackListener) {
-      window.removeEventListener("resize", state.laneFallbackListener);
-      state.laneFallbackListener = null;
-    }
     state.readerShellReady = false;
   }
 

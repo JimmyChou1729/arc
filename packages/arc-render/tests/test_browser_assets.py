@@ -2325,8 +2325,12 @@ def test_reader_visibility_is_dynamic_ephemeral_and_book_focused() -> None:
     assert "localStorage" not in javascript
     assert 'visibilityOption("source", labels().original' in javascript
     assert "roleLabel(role)" in javascript
-    assert 'card.dataset.role === "translation"' in javascript
-    assert 'row.dataset.blockKind === "figure"' in javascript
+    assert "function updateVisibilityStyles(channels)" in javascript
+    assert "data-role-slot" in javascript
+    apply_visibility = javascript[javascript.index("function applyVisibility") :]
+    apply_visibility = apply_visibility[: apply_visibility.index("function updateVisibilityStyles")]
+    assert "querySelectorAll" not in apply_visibility
+    assert "getBoundingClientRect" not in apply_visibility
     assert "loadAllPayload(false);" not in javascript[
         javascript.index("function setupVisibility()") :
         javascript.index("function renderContents(")
@@ -2337,7 +2341,7 @@ def test_reader_visibility_is_dynamic_ephemeral_and_book_focused() -> None:
     assert ".arc-visibility-empty" in stylesheet
 
 
-def test_reader_equation_rows_and_single_resize_observer_are_bounded() -> None:
+def test_reader_equation_rows_and_css_lanes_are_bounded() -> None:
     javascript = _text("reader.js")
     stylesheet = _text("reader.css")
 
@@ -2347,10 +2351,8 @@ def test_reader_equation_rows_and_single_resize_observer_are_bounded() -> None:
     assert "effectiveEquationLabel(block, block.payload || {})" in javascript
     assert "grid-template-columns: minmax(0, 1fr) max-content" in stylesheet
     assert "white-space: nowrap" in stylesheet
-    observer = javascript[javascript.index("function setupLaneResponsiveness") :]
-    observer = observer[: observer.index("function startProgressiveRendering")]
-    assert "state.laneObserver.observe(observedRoot)" in observer
-    assert "lanes.forEach(function (item)" not in observer
+    assert "function setupLaneResponsiveness" not in javascript
+    assert "repeat(auto-fit, minmax(min(100%, 275px), 1fr))" in stylesheet
 
 
 def test_matching_overlay_equation_inherits_effective_label_under_node() -> None:
@@ -2365,8 +2367,7 @@ def test_matching_overlay_equation_inherits_effective_label_under_node() -> None
         + r'''
   globalThis.__arcReaderTest = {
     state: state,
-    decorateOverlayEquation: decorateOverlayEquation,
-    applyRowVisibility: applyRowVisibility
+    decorateOverlayEquation: decorateOverlayEquation
   };
 }());
 function FakeNode(tag, className) {
@@ -2448,59 +2449,6 @@ var changed = renderedEquation("x = z");
 helpers.decorateOverlayEquation(changed, fragment);
 if (!changed.children[0].classList.contains("math-display")) {
   throw new Error("changed overlay equation inherited a source number");
-}
-function visibilityCard(role) {
-  return {
-    dataset: {role: role},
-    hidden: false,
-    classList: {toggle: function (_name, enabled) { this.enabled = enabled; }}
-  };
-}
-var sourceCard = visibilityCard("source");
-var translatedCard = visibilityCard("translation");
-var companionCard = visibilityCard("companion");
-var figureCaption = {hidden: false};
-sourceCard.querySelector = function (selector) {
-  return selector === "figcaption" ? figureCaption : null;
-};
-var lanes = {
-  children: [sourceCard, translatedCard, companionCard],
-  hidden: false,
-  style: {
-    value: null,
-    setProperty: function (_name, value) { this.value = value; }
-  }
-};
-var noteButton = {hidden: false};
-var figureRow = {
-  dataset: {blockKind: "figure"},
-  hidden: false,
-  querySelectorAll: function (selector) {
-    return selector === ".arc-fragment" ? [translatedCard, companionCard] : [];
-  },
-  querySelector: function (selector) {
-    return {
-      ".arc-source-card": sourceCard,
-      ".arc-lanes": lanes,
-      ".arc-full-rows": null,
-      ".arc-note-button": noteButton
-    }[selector];
-  }
-};
-helpers.state.sourceVisible = false;
-helpers.state.hiddenRoles = new Set(["companion"]);
-helpers.applyRowVisibility(figureRow, 1);
-if (
-  sourceCard.hidden || !sourceCard.classList.enabled ||
-  figureCaption.hidden !== true || translatedCard.hidden ||
-  !companionCard.hidden || lanes.style.value !== "2" || figureRow.hidden
-) {
-  throw new Error("translation-only figure visibility is inconsistent");
-}
-helpers.state.hiddenRoles.add("translation");
-helpers.applyRowVisibility(figureRow, 0);
-if (!sourceCard.hidden || !figureRow.hidden || !noteButton.hidden) {
-  throw new Error("all-hidden figure row remained visible");
 }
 '''
     )
