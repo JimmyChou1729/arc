@@ -43,10 +43,13 @@ uncertain result requires a main-agent decision; page-edge position alone does
 not prove that the selected OCR blocks are the prose visible across the page
 turn. For an accepted join, select the exact left and right paragraph block IDs
 from the request's candidate lists; this safely handles intervening page
-numbers, figure labels, and sidebars. A boundary provider that remains
-interrupted after bounded retries is routed through the same main-agent review
-instead of losing completed boundary work. PDF page markers become structured,
-default-hidden reader notes and never translation fragments.
+numbers, figure labels, and sidebars. If a page contains no paragraph, the
+candidate list reaches only to the nearest nonempty page in that direction;
+accepted text can span a full-page plate while page notes and non-text blocks
+stay in source order. A boundary provider that remains interrupted after
+bounded retries is routed through the same main-agent review instead of losing
+completed boundary work. PDF page markers become structured, default-hidden
+reader notes and never translation fragments.
 
 ## Review and Resume
 
@@ -57,8 +60,10 @@ Accept an obvious printed typo only after visual confirmation; reject uncertain
 cases. An accepted uncertainty must provide an exact edit.
 
 The next pause requests deterministic samples of up to 10 changes, 10 boundary
-repairs, and 10 whole pages. Inspect every sample and submit `pass` or `fail`
-for every listed ID:
+repairs, and 10 whole pages. Pages from rejected or uncertain proposed joins
+come first so missed OCR at a suspicious page turn can be corrected with an
+exact page edit. Inspect every sample and submit `pass` or `fail` for every
+listed ID:
 
 ```bash
 arc-ocr-proofread resume --project-dir project --input decisions.json

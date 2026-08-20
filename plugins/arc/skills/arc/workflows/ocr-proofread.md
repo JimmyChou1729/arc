@@ -35,7 +35,10 @@ review; page-edge position alone is not enough evidence that the selected OCR
 blocks are the prose visible across the page turn. Select the exact left and
 right paragraph block IDs from the supplied candidates for every accepted
 join; this permits a visually confirmed continuation to bypass a trailing page
-number, figure label, or sidebar block without guessing text. If a boundary
+number, figure label, or sidebar block without guessing text. When an
+intervening page has no paragraph, candidates extend only to the nearest
+nonempty page in the relevant direction; an accepted continuation keeps all
+intervening page notes and non-text blocks in source order. If a boundary
 provider remains interrupted after its bounded retries, that boundary also
 becomes uncertain so the main agent can inspect it without discarding
 completed boundary work. Page markers remain provenance notes immediately
@@ -59,9 +62,11 @@ alter correct source text. For each page, compare the complete corrected
 Markdown with the complete image for uncovered errors. When a sampled page has
 a safely anchored omission or OCR artifact, include exact `edits` in that
 page's audit decision and mark `pass` only after the corrected page has been
-inspected. A failed sampled change, or a page that cannot be corrected
-confidently, prevents publication; diagnose and correct any general package or
-prompt defect before rerunning.
+inspected. Pages from a proposed or uncertain join that the main agent rejected
+are sampled first, followed by pages from accepted boundary repairs. A failed
+sampled change, or a page that cannot be corrected confidently, prevents
+publication; diagnose and correct any general package or prompt defect before
+rerunning.
 
 For a verified delivery created before boundary review was available, run:
 

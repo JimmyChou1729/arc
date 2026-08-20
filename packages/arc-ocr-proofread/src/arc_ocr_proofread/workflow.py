@@ -66,7 +66,7 @@ AUDIT_SCHEMA = "arc.ocr_proofread.audit_request.v1"
 GROUP_ID = "pages"
 BOUNDARY_GROUP_ID = "boundaries"
 BOUNDARY_IMAGE_GROUP_ID = "boundary-page-images"
-BOUNDARY_REVIEW_SCHEMA = "arc.ocr_proofread.boundary_review_request.v2"
+BOUNDARY_REVIEW_SCHEMA = "arc.ocr_proofread.boundary_review_request.v3"
 PROVIDER_IDLE_TIMEOUT_SECONDS = 600
 _IMAGE_LINK = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
@@ -813,11 +813,11 @@ RIGHT PAGE HEAD:
                 {
                     "id": _boundary_id(item),
                     **item,
-                    "left_candidates": _boundary_paragraphs(
-                        str(pages[int(item["left_page_index"])]["corrected_markdown"])
+                    "left_candidates": _nearest_boundary_candidates(
+                        pages, int(item["left_page_index"]), step=-1
                     ),
-                    "right_candidates": _boundary_paragraphs(
-                        str(pages[int(item["right_page_index"])]["corrected_markdown"])
+                    "right_candidates": _nearest_boundary_candidates(
+                        pages, int(item["right_page_index"]), step=1
                     ),
                 }
                 for item in items
@@ -828,9 +828,9 @@ RIGHT PAGE HEAD:
                 or context.resume_input.get("resume_key") != key
             ):
                 request_ref = context.artifacts.find(
-                    "boundary-review/request-v2"
+                    "boundary-review/request-v3"
                 ) or context.artifacts.publish_json(
-                    "boundary-review/request-v2",
+                    "boundary-review/request-v3",
                     {
                         "schema_version": BOUNDARY_REVIEW_SCHEMA,
                         "resume_key": key,
@@ -843,7 +843,7 @@ RIGHT PAGE HEAD:
                         key,
                         True,
                         request_ref,
-                        "arc.ocr_proofread.boundary_review_input.v2",
+                        "arc.ocr_proofread.boundary_review_input.v3",
                         {"count": len(request_items)},
                     )
                 )
@@ -1260,6 +1260,25 @@ def _boundary_paragraphs(markdown: str) -> list[dict[str, Any]]:
     return result
 
 
+def _nearest_boundary_candidates(
+    pages: list[dict[str, Any]], page_index: int, *, step: int
+) -> list[dict[str, Any]]:
+    if step not in {-1, 1}:
+        raise ValueError("boundary candidate step must be -1 or 1")
+    current = page_index
+    while 0 <= current < len(pages):
+        candidates = _boundary_paragraphs(
+            str(pages[current]["corrected_markdown"])
+        )
+        if candidates:
+            return [
+                {**candidate, "page_index": current}
+                for candidate in candidates
+            ]
+        current += step
+    return []
+
+
 def _split_proofread_pages(markdown: str, expected_pages: int) -> list[str]:
     marker = re.compile(r"(?m)^<!-- Source PDF page ([1-9][0-9]*) -->[ \t]*$")
     matches = list(marker.finditer(markdown))
@@ -1431,7 +1450,7 @@ def _validate_boundary_review_input(
             result["right"] = None
         normalized.append(result)
     return {
-        "schema_version": "arc.ocr_proofread.boundary_review_decisions.v2",
+        "schema_version": "arc.ocr_proofread.boundary_review_decisions.v3",
         "resume_key": key,
         "decisions": normalized,
     }
@@ -1465,6 +1484,13 @@ def _apply_boundary_decisions(
             _boundary_id(result), result
         )
         if decision["action"] != "join":
+            if result["action"] in {"join", "uncertain"}:
+                pages[int(result["left_page_index"])][
+                    "boundary_review_rejected"
+                ] = True
+                pages[int(result["right_page_index"])][
+                    "boundary_review_rejected"
+                ] = True
             continue
         left = decision.get("left", result.get("left"))
         right = decision.get("right", result.get("right"))
@@ -1475,6 +1501,12 @@ def _apply_boundary_decisions(
         joins.append(
             {
                 **result,
+                "left_page_index": int(
+                    left.get("page_index", result["left_page_index"])
+                ),
+                "right_page_index": int(
+                    right.get("page_index", result["right_page_index"])
+                ),
                 "join_mode": str(decision["join_mode"]),
                 "left": left,
                 "right": right,
@@ -1535,7 +1567,9 @@ def _apply_boundary_decisions(
                 str(right_block["markdown"]),
                 str(edge["join_mode"]),
             )
-            markers.append(right_page + 1)
+            left_page, _ = node_values[left_node]
+            if right_page == left_page + 1:
+                markers.append(right_page + 1)
         replacement = merged + "".join(
             f"\n\n<!-- Source PDF page {page_number} -->"
             for page_number in markers
@@ -1559,7 +1593,9 @@ def _apply_boundary_decisions(
         )
     for repair_index, join in enumerate(joins):
         right_page = int(join["right_page_index"])
-        pages[right_page]["suppress_page_marker"] = True
+        left_page = int(join["left_page_index"])
+        if right_page == left_page + 1:
+            pages[right_page]["suppress_page_marker"] = True
         left_text = str(join["left"]["markdown"])
         right_text = str(join["right"]["markdown"])
         record = {
@@ -1568,7 +1604,7 @@ def _apply_boundary_decisions(
                 f"{repair_index + 1:04d}"
             ),
             "page_index": right_page,
-            "left_page_index": int(join["left_page_index"]),
+            "left_page_index": left_page,
             "category": "page_boundary_repair",
             "kind": "paragraph_join",
             "before": left_text + "\n\n--- PAGE BREAK ---\n\n" + right_text,
@@ -1756,15 +1792,24 @@ def _audit_request(pages: list[dict[str, Any]]) -> dict[str, Any]:
         int(item["left_page_index"])
         for item in boundary_sample
     }
-    page_pool = (
-        [page for page in pages if int(page["page_index"]) in affected]
-        if affected
-        else pages
-    )
-    page_sample = sorted(
-        page_pool,
-        key=lambda item: hashlib.sha256(f"page-{item['page_index']}".encode()).hexdigest(),
-    )[:10]
+    rejected = [page for page in pages if page.get("boundary_review_rejected")]
+    affected_pages = [
+        page
+        for page in pages
+        if int(page["page_index"]) in affected
+        and not page.get("boundary_review_rejected")
+    ]
+    page_sample = []
+    for group in (rejected, affected_pages) if rejected or affected else (pages,):
+        page_sample.extend(
+            sorted(
+                group,
+                key=lambda item: hashlib.sha256(
+                    f"page-{item['page_index']}".encode()
+                ).hexdigest(),
+            )
+        )
+    page_sample = page_sample[:10]
     return {
         "schema_version": AUDIT_SCHEMA,
         "changes": change_sample,

@@ -105,6 +105,25 @@ class InterruptedBoundaryTasks(BoundaryTasks):
         return super().execute_or_resume(context, request, options=options)
 
 
+class PlateBoundaryTasks(BoundaryTasks):
+    def execute_or_resume(self, context, request, *, options):
+        if "boundary_prompt" in request.task_id:
+            self.calls += 1
+            action = "separate" if request.task_id.endswith("000001") else "uncertain"
+            return LLMCompleted(
+                {
+                    "action": action,
+                    "join_mode": None,
+                    "reason": "The plate has no paragraph candidate.",
+                },
+                "codex",
+                "gpt-5.6-luna",
+                None,
+                None,
+            )
+        return super().execute_or_resume(context, request, options=options)
+
+
 def _bundle(tmp_path: Path, monkeypatch, *, pages: int = 1):
     tmp_path.mkdir(parents=True, exist_ok=True)
     markdown = tmp_path / "book.md"
@@ -207,6 +226,41 @@ def _two_page_footer_bundle(tmp_path: Path, monkeypatch):
     return load_mineru_source(markdown, pdf, content)
 
 
+def _three_page_plate_bundle(tmp_path: Path, monkeypatch):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    markdown = tmp_path / "book.md"
+    pdf = tmp_path / "book_origin.pdf"
+    content = tmp_path / "book_content_list.json"
+    markdown.write_text("fixture\n", encoding="utf-8")
+    pdf.write_bytes(b"%PDF fixture")
+    content.write_text(
+        json.dumps(
+            [
+                {
+                    "type": "text",
+                    "text": "The answer cannot be particularly",
+                    "page_idx": 0,
+                    "bbox": [0, 0, 1, 1],
+                },
+                {
+                    "type": "text",
+                    "text": "cheerful one.",
+                    "page_idx": 2,
+                    "bbox": [0, 0, 1, 1],
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **_kwargs):
+        assert command[0] == "pdfinfo"
+        return subprocess.CompletedProcess(command, 0, "Pages: 3\n", "")
+
+    monkeypatch.setattr("arc_ocr_proofread.source.subprocess.run", fake_run)
+    return load_mineru_source(markdown, pdf, content)
+
+
 def _artifact_json(service: ProofreadService, snapshot) -> dict:
     assert snapshot.awaiting is not None and snapshot.awaiting.request_ref is not None
     store = ImmutableArtifactStore(
@@ -283,7 +337,7 @@ def test_boundary_repair_reuses_verified_delivery(
     )
     assert snapshot.status is RunStatus.PAUSED
     review = _artifact_json(service, snapshot)
-    assert review["schema_version"] == "arc.ocr_proofread.boundary_review_request.v2"
+    assert review["schema_version"] == "arc.ocr_proofread.boundary_review_request.v3"
     snapshot = service.resume(
         snapshot.run_id,
         input=_accept_boundary_joins(review),
@@ -448,7 +502,7 @@ def test_llm_reviewed_boundary_join_moves_marker_below_merged_paragraph(
 
     assert snapshot.status is RunStatus.PAUSED
     review = _artifact_json(service, snapshot)
-    assert review["schema_version"] == "arc.ocr_proofread.boundary_review_request.v2"
+    assert review["schema_version"] == "arc.ocr_proofread.boundary_review_request.v3"
     snapshot = service.resume(
         snapshot.run_id,
         input=_accept_boundary_joins(review),
@@ -494,7 +548,7 @@ def test_interrupted_boundary_review_routes_to_main_agent(
 
     assert snapshot.status is RunStatus.PAUSED
     review = _artifact_json(service, snapshot)
-    assert review["schema_version"] == "arc.ocr_proofread.boundary_review_request.v2"
+    assert review["schema_version"] == "arc.ocr_proofread.boundary_review_request.v3"
     assert review["items"][0]["action"] == "uncertain"
     assert review["items"][0]["provider"] is None
 
@@ -517,9 +571,9 @@ def test_interrupted_boundary_review_routes_to_main_agent(
     )
 
     assert snapshot.status is RunStatus.PAUSED
-    assert _artifact_json(service, snapshot)["schema_version"] == (
-        "arc.ocr_proofread.audit_request.v1"
-    )
+    audit = _artifact_json(service, snapshot)
+    assert audit["schema_version"] == "arc.ocr_proofread.audit_request.v1"
+    assert {item["page_index"] for item in audit["pages"]} == {0, 1}
 
 
 def test_main_agent_can_replace_a_trailing_footer_boundary_candidate(
@@ -581,6 +635,63 @@ def test_main_agent_can_replace_a_trailing_footer_boundary_candidate(
     assert "apparent motion along the ecliptic; the sentence continues." in delivered
     assert "32" in delivered
     assert "32 the ecliptic" not in delivered
+
+
+def test_boundary_join_can_span_an_empty_plate_page(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _three_page_plate_bundle(tmp_path / "source", monkeypatch)
+    project = ProofreadProject.open(tmp_path / "project")
+    service = ProofreadService(project)
+    snapshot = service.prepare(source)
+    tasks = PlateBoundaryTasks()
+
+    snapshot = service.execute(
+        snapshot.run_id, task_service=tasks, renderer=Renderer()
+    )
+
+    assert snapshot.status is RunStatus.PAUSED
+    review = _artifact_json(service, snapshot)
+    item = review["items"][0]
+    assert item["id"] == "boundary-000002-000003"
+    left = item["left_candidates"][0]
+    right = item["right_candidates"][0]
+    assert left["page_index"] == 0
+    assert right["page_index"] == 2
+    snapshot = service.resume(
+        snapshot.run_id,
+        input={
+            "resume_key": review["resume_key"],
+            "decisions": [
+                {
+                    "id": item["id"],
+                    "action": "join",
+                    "join_mode": "space",
+                    "left_block_id": left["block_id"],
+                    "right_block_id": right["block_id"],
+                }
+            ],
+        },
+        task_service=tasks,
+        renderer=Renderer(),
+    )
+
+    assert snapshot.status is RunStatus.PAUSED
+    audit = _artifact_json(service, snapshot)
+    snapshot = service.resume(
+        snapshot.run_id,
+        input=_pass_audit(audit),
+        task_service=tasks,
+        renderer=Renderer(),
+    )
+
+    assert snapshot.status is RunStatus.SUCCEEDED
+    delivered = project.markdown.read_text(encoding="utf-8")
+    merged = delivered.index("The answer cannot be particularly cheerful one.")
+    page_two = delivered.index("<!-- Source PDF page 2 -->")
+    page_three = delivered.index("<!-- Source PDF page 3 -->")
+    assert merged < page_two < page_three
+    assert service.result()["page_boundary_repairs"] == 1
 
 
 def test_audit_can_apply_exact_page_corrections(tmp_path: Path, monkeypatch) -> None:
