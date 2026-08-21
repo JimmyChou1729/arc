@@ -360,7 +360,7 @@ def _appendix_section(entry: dict[str, Any]) -> list[str]:
         "",
         "#### Referee Marks by Round",
         "",
-        _round_marks_table(entry),
+        _compact_round_marks_table(entry),
         "",
         "#### Scientific Readiness and Caveats",
         "",
@@ -597,29 +597,6 @@ def _legacy_scientific_context_lines(
                 if str(value).strip()
             )
     return lines
-
-
-def _round_marks_table(entry: dict[str, Any]) -> str:
-    columns = report_columns(entry["marking_scheme"])
-    mark_headers = " | ".join(column["label"] for column in columns)
-    mark_separator = "|".join("---:" for _ in columns)
-    lines = [
-        f"| Loop | Round | {mark_headers} |",
-        f"|---|---:|{mark_separator}|",
-    ]
-    for round_entry in entry.get("rounds", []):
-        marks = round_entry["marks"]
-        mark_values = " | ".join(
-            _format_mark(marks.get(column["field"])) for column in columns
-        )
-        lines.append(
-            "| {loop_id} | {round} | {mark_values} |".format(
-                loop_id=round_entry["loop_id"],
-                round=round_entry["round"],
-                mark_values=mark_values,
-            )
-        )
-    return "\n".join(lines)
 
 
 def _format_mark(value: Any) -> str:

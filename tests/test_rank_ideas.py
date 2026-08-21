@@ -573,6 +573,8 @@ def test_ranker_uses_committed_review_payload_and_best_completed_round(
     assert "Proposer artifact:" in markdown
     assert "Review artifact:" in markdown
     assert "#### Scientific Taste Review" in markdown
+    assert markdown.count("| Round | IR | N | CN | SV | PL | WD | T |") == 2
+    assert "| Loop | Round |" not in markdown
     assert "The proposal has one coherent core" in markdown
     assert "Compute the same invariant in the minimal controlled model." in markdown
     assert neighborhood_evidence in markdown
