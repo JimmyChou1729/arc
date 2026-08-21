@@ -131,3 +131,9 @@ def test_build_outputs_are_checkout_local() -> None:
     build = (ROOT / "scripts/build-packages.sh").read_text(encoding="utf-8")
     assert "$root/local/dist" in build
     assert "packages/arc-*" in build
+
+
+def test_ci_exports_the_foundation_checkout_to_source_mode() -> None:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "AC_FOUNDATION_REPO_ROOT: ${{ github.workspace }}/local/ac-foundation" in workflow
+    assert "git clone https://github.com/tririver/ac-foundation.git local/ac-foundation" in workflow

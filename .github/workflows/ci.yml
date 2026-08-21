@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      AC_FOUNDATION_REPO_ROOT: ${{ github.workspace }}/local/ac-foundation
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,7 +24,7 @@ jobs:
           echo "sha=$(python -c 'import json; p=json.load(open("plugins/arc/skills/arc/scripts/runtime-sources.json")); print(next(s["commit"] for s in p["sources"] if s["id"] == "foundation"))')" >> "$GITHUB_OUTPUT"
       - run: git clone https://github.com/tririver/ac-foundation.git local/ac-foundation
       - run: git -C local/ac-foundation checkout ${{ steps.foundation.outputs.sha }}
-      - run: AC_FOUNDATION_REPO_ROOT="$PWD/local/ac-foundation" python scripts/check-generated-foundation.py
+      - run: python scripts/check-generated-foundation.py
       - run: >-
           python -m pip install
           -e local/ac-foundation/packages/ac-jobs
