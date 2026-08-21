@@ -28,7 +28,7 @@ def test_root_and_subcommand_help_is_human_readable(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out.startswith("usage: arc-domain")
-    assert "arc.command_result.v2" not in captured.out
+    assert "ac.command_result.v2" not in captured.out
 
 
 def test_usage_error_points_to_contextual_help(

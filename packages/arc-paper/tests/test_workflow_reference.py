@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from arc_jobs import Failed, RunContext, RunRepository, RunSpec
-from arc_llm import LLMCompleted, ModelSelection, ProviderUsage
+from ac_jobs import Failed, RunContext, RunRepository, RunSpec
+from ac_llm import LLMCompleted, ModelSelection, ProviderUsage
 
 from arc_paper.workflows.reference import (
     ReferenceInferenceCompleted,
@@ -235,7 +235,7 @@ def test_reference_resume_decode_uses_reference_error_code(tmp_path: Path) -> No
     context = RunContext(
         repository,
         snapshot,
-        resume_input={"not": "an arc.llm resume input"},
+        resume_input={"not": "an ac.llm resume input"},
     )
 
     outcome = handler.execute(context)

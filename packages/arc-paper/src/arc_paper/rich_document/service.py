@@ -1,6 +1,6 @@
 """Compatibility rich-document parser names."""
 
-from arc_document import RichDocumentParserService as _DocumentRichDocumentParserService
+from ac_document import RichDocumentParserService as _DocumentRichDocumentParserService
 
 
 class RichDocumentParserService(_DocumentRichDocumentParserService):

@@ -1,4 +1,4 @@
-"""Compatibility facade for :mod:`arc_document.parse`."""
+"""Compatibility facade for :mod:`ac_document.parse`."""
 
-from arc_document.parse import *  # noqa: F401,F403
+from ac_document.parse import *  # noqa: F401,F403
 from .service import PaperParserService  # noqa: F401

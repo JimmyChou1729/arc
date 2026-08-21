@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from arc_jobs import (
+from ac_jobs import (
     ImmutableArtifactStore,
     ResumeReason,
     RunContext,
@@ -18,7 +18,7 @@ from arc_jobs import (
     RunStatus,
     StoppedError,
 )
-from arc_llm import (
+from ac_llm import (
     FailureCategory,
     HostAuthority,
     IsolationMode,
@@ -38,7 +38,7 @@ from arc_llm import (
     StructuredOutputMode,
     UsageAvailability,
 )
-from arc_llm.output import CandidateMaterial
+from ac_llm.output import CandidateMaterial
 from arc_paper import (
     PDFTextLayer,
     PageMathVerdict,
@@ -157,7 +157,7 @@ class ManifestAwareAdapter:
             else []
         )
         value = {
-            "schema_version": "arc.document.visual_page_review.v1",
+            "schema_version": "ac.document.visual_page_review.v1",
             "page_number": page_number,
             "reviewed_span_ids": [item["span_id"] for item in reviews],
             "reviews": reviews,
@@ -326,7 +326,7 @@ def test_visual_aggregation_marks_mismatch_duplicate_missing_and_unexpected(
     parsed_pdf = parser.parse_source(pdf)
     a, b, c = [item.span_id for item in primary.math_spans]
     first = {
-        "schema_version": "arc.document.visual_page_review.v1",
+        "schema_version": "ac.document.visual_page_review.v1",
         "page_number": 1,
         "reviewed_span_ids": [a, b],
         "reviews": [
@@ -347,7 +347,7 @@ def test_visual_aggregation_marks_mismatch_duplicate_missing_and_unexpected(
         "notes": "",
     }
     second = {
-        "schema_version": "arc.document.visual_page_review.v1",
+        "schema_version": "ac.document.visual_page_review.v1",
         "page_number": 2,
         "reviewed_span_ids": [b],
         "reviews": [
@@ -408,7 +408,7 @@ def test_paused_page_is_unreviewed_and_later_pages_continue(tmp_path: Path) -> N
             ),
             LLMCompleted(
                 {
-                    "schema_version": "arc.document.visual_page_review.v1",
+                    "schema_version": "ac.document.visual_page_review.v1",
                     "page_number": 2,
                     "reviewed_span_ids": [],
                     "reviews": [],
@@ -582,7 +582,7 @@ def test_corrupt_existing_page_terminal_is_unreviewed_without_rerun(
     )
     completed = LLMCompleted(
         {
-            "schema_version": "arc.document.visual_page_review.v1",
+            "schema_version": "ac.document.visual_page_review.v1",
             "page_number": 1,
             "reviewed_span_ids": [],
             "reviews": [],
@@ -620,7 +620,7 @@ def test_corrupt_existing_page_terminal_is_unreviewed_without_rerun(
             return b"{not-json"
         return json.dumps(
             {
-                "schema_version": "arc.document.visual_page_terminal.v999",
+                "schema_version": "ac.document.visual_page_terminal.v999",
                 "page_number": 1,
                 "status": "unreviewed",
                 "review": None,
@@ -726,7 +726,7 @@ def test_public_runner_reaches_default_markdown_pdf_full_page_review(
         [
             LLMCompleted(
                 {
-                    "schema_version": "arc.document.visual_page_review.v1",
+                    "schema_version": "ac.document.visual_page_review.v1",
                     "page_number": 1,
                     "reviewed_span_ids": [],
                     "reviews": [],
@@ -766,7 +766,7 @@ def test_public_runner_reaches_default_markdown_pdf_full_page_review(
         .read_bytes(snapshot.result_ref)
         .decode("utf-8")
     )
-    assert result["schema_version"] == "arc.document.parse_outcome.v1"
+    assert result["schema_version"] == "ac.document.parse_outcome.v1"
     assert result["report"]["policy"] == "visual_all_pages"
 
 
@@ -855,7 +855,7 @@ def test_explicit_deterministic_and_tex_pdf_defaults_do_not_call_visual_service(
 
 def test_visual_output_codec_rejects_unknown_and_duplicate_span_ids() -> None:
     value = {
-        "schema_version": "arc.document.visual_page_review.v1",
+        "schema_version": "ac.document.visual_page_review.v1",
         "page_number": 1,
         "reviewed_span_ids": ["known", "known"],
         "reviews": [

@@ -1,4 +1,4 @@
-"""Typed paper-summary service and its arc-jobs batch handler."""
+"""Typed paper-summary service and its ac-jobs batch handler."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping, TypeAlias
 
-from arc_jobs import (
+from ac_jobs import (
     ArtifactSourceRef,
     StoppedError,
     Failed,
@@ -27,7 +27,7 @@ from arc_jobs import (
     WorkUnit,
     canonical_json_bytes,
 )
-from arc_llm import (
+from ac_llm import (
     JsonOutput,
     LLMStopped,
     LLMCompleted,

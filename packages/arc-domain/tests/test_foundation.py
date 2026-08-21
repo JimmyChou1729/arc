@@ -337,5 +337,5 @@ def test_foundation_core_has_no_io_or_private_cross_package_imports() -> None:
 
     assert "arc_paper" in imported
     assert not any(name.startswith("arc_paper.") for name in imported)
-    assert not any(name in {"arc_llm", "arc_domain.paper", "arc_domain.cache"} for name in imported)
+    assert not any(name in {"ac_llm", "arc_domain.paper", "arc_domain.cache"} for name in imported)
     assert not any(name in {"os", "pathlib", "subprocess", "threading"} for name in imported)

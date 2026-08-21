@@ -21,7 +21,7 @@ from arc_domain.contracts import (
     decode_domain_build_result,
     encode_domain_build_request,
 )
-from arc_jobs import (
+from ac_jobs import (
     EventWriter,
     ImmutableArtifactStore,
     ResumeReason,
@@ -29,7 +29,7 @@ from arc_jobs import (
     RunSpec,
     RunStatus,
 )
-from arc_llm import (
+from ac_llm import (
     FailureCategory,
     LLMCompleted,
     LLMFailed,

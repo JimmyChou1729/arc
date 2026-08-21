@@ -4,9 +4,9 @@
 metadata, references, citers, paper-cache administration, and paper-specific
 LLM workflows. Provider-neutral source storage, HTML/Markdown/TeX/PDF parsing,
 rich-document contracts, document structure, full-text and equation search,
-and approximate keyword inventory come from `arc-document` and remain exposed
+and approximate keyword inventory come from `ac-document` and remain exposed
 through the compatible `arc-paper` API. Generic model execution and durable-run
-mechanics remain in `arc-llm` and `arc-jobs`.
+mechanics remain in `ac-llm` and `ac-jobs`.
 
 ## Running the CLI
 
@@ -34,13 +34,13 @@ Replace the quoted placeholder with an arXiv, INSPIRE, or DOI identifier.
 Use `arc-paper --help` and `arc-paper get-metadata --help` for the current
 paper, source, search, workflow, and cache commands.
 
-Provider-neutral export belongs to `arc-document`; use its output for direct
+Provider-neutral export belongs to `ac-document`; use its output for direct
 `arc-render` composition:
 
 ```bash
-arc-document export-rich-document ./note.md \
+ac-document export-rich-document ./note.md \
   --output-dir ./render-input \
-  --cache-root ./.arc/cache/arc-document
+  --cache-root ./.arc/cache/ac-document
 
 arc-render compose \
   --source ./render-input/rich-source.json \

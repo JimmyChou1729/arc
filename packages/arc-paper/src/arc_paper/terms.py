@@ -1,3 +1,3 @@
-"""Compatibility facade for :mod:`arc_document.terms`."""
+"""Compatibility facade for :mod:`ac_document.terms`."""
 
-from arc_document.terms import *  # noqa: F401,F403
+from ac_document.terms import *  # noqa: F401,F403

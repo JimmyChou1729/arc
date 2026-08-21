@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 import pytest
-from arc_jobs import (
+from ac_jobs import (
     ArtifactDigest,
     ArtifactSourceRef,
     FailureMode,
@@ -15,7 +15,7 @@ from arc_jobs import (
     RunSpec,
     RunStatus,
 )
-from arc_llm import (
+from ac_llm import (
     InvalidRequestError,
     JsonOutput,
     LLMCompleted,
@@ -28,7 +28,7 @@ from arc_llm import (
     ResumeReason,
     resume_input_to_document,
 )
-from arc_llm.identity import semantic_key as llm_semantic_key
+from ac_llm.identity import semantic_key as llm_semantic_key
 
 from arc_paper.parse import ParsedDocument, ParsedSection, parsed_document_to_document
 from arc_paper.sources import (

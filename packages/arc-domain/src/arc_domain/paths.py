@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from arc_jobs import InvalidRunIdError, canonical_json_bytes, validate_simple_id
+from ac_jobs import InvalidRunIdError, canonical_json_bytes, validate_simple_id
 from arc_paper import normalize_paper_id
 
 

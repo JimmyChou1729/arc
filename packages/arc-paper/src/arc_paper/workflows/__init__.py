@@ -1,4 +1,4 @@
-"""Durable arc-jobs workflows built on the shared arc-llm task service."""
+"""Durable ac-jobs workflows built on the shared ac-llm task service."""
 
 from .parse import (
     MARKDOWN_PDF_VISUAL_HANDLER,

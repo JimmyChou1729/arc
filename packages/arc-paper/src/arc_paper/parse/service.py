@@ -1,6 +1,6 @@
 """Compatibility parser names over the document-owned implementation."""
 
-from arc_document import DocumentParserService
+from ac_document import DocumentParserService
 
 
 class PaperParserService(DocumentParserService):

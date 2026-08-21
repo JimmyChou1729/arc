@@ -1,3 +1,3 @@
-"""Compatibility facade for :mod:`arc_document.source_repository`."""
+"""Compatibility facade for :mod:`ac_document.source_repository`."""
 
-from arc_document.source_repository import *  # noqa: F401,F403
+from ac_document.source_repository import *  # noqa: F401,F403

@@ -12,8 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from arc_document import DocumentCacheAdministrator
-from arc_jobs import canonical_json_bytes as _canonical_json_bytes
+from ac_document import DocumentCacheAdministrator
+from ac_jobs import canonical_json_bytes as _canonical_json_bytes
 
 from ._cache_root import resolve_cache_root
 from ._durable_io import atomic_write_bytes

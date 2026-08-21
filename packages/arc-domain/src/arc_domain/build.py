@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from arc_jobs import (
+from ac_jobs import (
     ArtifactRef,
     ArtifactSourceRef,
     Awaiting,
@@ -31,7 +31,7 @@ from arc_jobs import (
     WorkUnit,
     canonical_json_bytes,
 )
-from arc_llm import (
+from ac_llm import (
     JsonOutput,
     LLMStopped,
     LLMCompleted,

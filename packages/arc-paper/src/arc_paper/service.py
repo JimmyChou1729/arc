@@ -1,8 +1,8 @@
 """Typed facade for deterministic paper access and explicit workflows.
 
 Deterministic methods own no run state. ``extract_keywords`` is a convenience
-wrapper over the package's explicit :mod:`arc_jobs` workflow; LLM execution
-remains owned by :mod:`arc_llm`.
+wrapper over the package's explicit :mod:`ac_jobs` workflow; LLM execution
+remains owned by :mod:`ac_llm`.
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from arc_jobs import JsonValue
-from arc_llm import HostAuthority, LLMExecutionOptions, ModelSelection
-from arc_document import ArcDocumentService
+from ac_jobs import JsonValue
+from ac_llm import HostAuthority, LLMExecutionOptions, ModelSelection
+from ac_document import AcDocumentService
 
 from ._cache_admin import (
     CacheAdministrator,
@@ -126,7 +126,7 @@ def default_cache_root() -> Path:
     return resolve_cache_root()
 
 
-class ArcPaperService(ArcDocumentService):
+class ArcPaperService(AcDocumentService):
     """Injectable facade over package-owned deterministic and workflow services."""
 
     def __init__(

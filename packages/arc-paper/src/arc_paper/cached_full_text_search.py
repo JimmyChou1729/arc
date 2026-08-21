@@ -1,4 +1,4 @@
-"""Paper-named facade over :mod:`arc_document` cached full-text search."""
+"""Paper-named facade over :mod:`ac_document` cached full-text search."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from arc_document import (
+from ac_document import (
     CachedFullTextDocument as _DocumentFullTextDocument,
     CachedFullTextOccurrence as _DocumentFullTextOccurrence,
     CachedFullTextSearchError as _DocumentFullTextSearchError,

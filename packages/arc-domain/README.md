@@ -4,7 +4,7 @@
 scientific intent. It owns foundation and domain-paper selection, citation
 graphs, evidence and paper packs, domain summaries, HTML rendering, and
 published domain generations. It calls `arc-paper` for paper data and
-`arc-llm` for model work. Project-level package relationships and manifest
+`ac-llm` for model work. Project-level package relationships and manifest
 publication remain in the ARC Skill, where relationship evidence is advisory
 and does not determine a scientific route.
 

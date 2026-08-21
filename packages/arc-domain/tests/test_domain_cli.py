@@ -10,8 +10,8 @@ from arc_domain import cli
 from arc_domain.catalog import publish_domain_result
 from arc_domain.contracts import DomainBuildResult, decode_domain_build_result, encode_domain_build_result
 from arc_domain.paths import DomainPaths
-from arc_llm import ResumeAction, ResumeInput, resume_input_to_document
-from arc_jobs import (
+from ac_llm import ResumeAction, ResumeInput, resume_input_to_document
+from ac_jobs import (
     Awaiting,
     CommandResult,
     CommandStatus,
@@ -97,7 +97,7 @@ class _StoppedDomainHandler:
     name = "arc.domain.build.v2"
 
     def execute(self, _context):
-        from arc_jobs import StoppedError
+        from ac_jobs import StoppedError
 
         raise StoppedError("stopped for CLI test")
 
@@ -145,7 +145,7 @@ def _envelope(capsys) -> dict:
     lines = captured.out.splitlines()
     assert len(lines) == 1
     value = json.loads(lines[0])
-    assert value["schema_version"] == "arc.command_result.v2"
+    assert value["schema_version"] == "ac.command_result.v2"
     return value
 
 
@@ -262,7 +262,7 @@ def test_build_streams_only_live_progress_to_stderr(
             del run_id, paper_access, llm, max_workers
             event_sink(
                 {
-                    "schema_version": "arc.jobs.event.v1",
+                    "schema_version": "ac.jobs.event.v1",
                     "run_id": snapshot.run_id,
                     "sequence": 7,
                     "event_id": "event-id",
@@ -297,12 +297,12 @@ def test_build_streams_only_live_progress_to_stderr(
     stderr_lines = captured.err.splitlines()
     assert len(stdout_lines) == 1
     assert json.loads(stdout_lines[0])["schema_version"] == (
-        "arc.command_result.v2"
+        "ac.command_result.v2"
     )
     assert len(stderr_lines) == 1
     progress = json.loads(stderr_lines[0])
     assert progress == {
-        "schema_version": "arc.progress_event.v1",
+        "schema_version": "ac.progress_event.v1",
         "run_id": "live-progress-run",
         "sequence": 7,
         "at": "2026-07-26T12:00:00+00:00",

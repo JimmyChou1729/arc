@@ -344,7 +344,7 @@ def test_two_processes_publish_same_content_with_one_valid_manifest(tmp_path):
         assert json.loads(manifest_path.read_text(encoding="utf-8")) == {
             "artifact_digest": artifact.artifact_digest,
             "media_type": media_type,
-            "schema_version": "arc.document.source_repository.v1",
+            "schema_version": "ac.document.source_repository.v1",
             "size": size,
             "source_format": "markdown",
         }

@@ -306,9 +306,9 @@ def test_rich_markdown_projection_has_canonical_encoded_output(tmp_path):
     document = RichDocumentParserService(repository).parse_source(artifact)
 
     assert rich_document_to_document(document) == {
-        "schema_version": "arc.document.rich_document.v2",
+        "schema_version": "ac.document.rich_document.v2",
         "document_digest": (
-                "1fdcd3fdc6926c541c1c7d2c299bdbdf278928e4206f450b38d6b7e1a65d881b"
+                "aad05574886cdf6e004efa9157f133ceeae8aae55a3c9e80ecc6fee6793dbd08"
         ),
         "source": {
             "source_format": "markdown",
@@ -475,7 +475,7 @@ Body three.
         document.blocks[2].block_id: 3,
     }
     assert document.metadata["source_page_boundaries"] == {
-        "schema_version": "arc.document.source_page_boundaries.v1",
+        "schema_version": "ac.document.source_page_boundaries.v1",
         "items": (
             {
                 "page_number": 1,
@@ -492,7 +492,7 @@ Body three.
         ),
     }
     assert document.metadata["document_notes"] == {
-            "schema_version": "arc.document.document_notes.v1",
+            "schema_version": "ac.document.document_notes.v1",
         "items": (
             {
                 "kind": "metadata",

@@ -1,3 +1,3 @@
-"""Compatibility facade for :mod:`arc_document.epub`."""
+"""Compatibility facade for :mod:`ac_document.epub`."""
 
-from arc_document.epub import *  # noqa: F401,F403
+from ac_document.epub import *  # noqa: F401,F403

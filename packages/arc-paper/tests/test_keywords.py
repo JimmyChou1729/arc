@@ -8,8 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from arc_jobs import RunStatus
-from arc_llm import LLMCompleted, ModelSelection
+from ac_jobs import RunStatus
+from ac_llm import LLMCompleted, ModelSelection
 
 from arc_paper import (
     ArcPaperService,
@@ -304,11 +304,11 @@ def test_weighted_chapter_recipe_uses_distinct_cache_lineage() -> None:
     )
     old_lineage = replace(
         lineage,
-        discovery_contract="arc.document.keyword_chapter_prompt.v2",
+        discovery_contract="ac.document.keyword_chapter_prompt.v2",
     )
     assert (
         KEYWORD_CHAPTER_PROMPT_CONTRACT
-        == "arc.document.keyword_chapter_prompt.v3"
+        == "ac.document.keyword_chapter_prompt.v3"
     )
     assert lineage.key != old_lineage.key
 
@@ -739,18 +739,18 @@ def test_second_invalid_explicit_review_degrades_once_and_replays(
 def test_keyword_llm_resume_ignores_foreign_parent_response() -> None:
     assert _llm_resume_input(
         {
-            "schema_version": "arc.companion.evidence_response.v1",
+            "schema_version": "foreign.workflow.response.v1",
             "resume_key": "evidence-example",
             "responses": [],
         }
     ) is None
 
 
-def test_keyword_llm_resume_rejects_malformed_claimed_arc_llm_input() -> None:
+def test_keyword_llm_resume_rejects_malformed_claimed_ac_llm_input() -> None:
     with pytest.raises(KeywordExtractionError) as exc_info:
         _llm_resume_input(
             {
-                "schema_version": "arc.llm.resume_input.v3",
+                "schema_version": "ac.llm.resume_input.v3",
                 "resume_key": "missing-action",
             }
         )

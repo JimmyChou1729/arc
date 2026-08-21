@@ -19,7 +19,7 @@ from arc_domain.contracts import (
 )
 from arc_domain.package_view import DomainPackageValidationError
 from arc_domain.paths import domain_id_for
-from arc_jobs import (
+from ac_jobs import (
     ImmutableArtifactStore,
     ResumeReason,
     RunContext,
@@ -27,7 +27,7 @@ from arc_jobs import (
     RunSpec,
     RunStatus,
 )
-from arc_llm import (
+from ac_llm import (
     FailureCategory,
     HostAuthority,
     IsolationMode,
@@ -47,7 +47,7 @@ from arc_llm import (
     StructuredOutputMode,
     UsageAvailability,
 )
-from arc_llm.output import CandidateMaterial
+from ac_llm.output import CandidateMaterial
 from arc_paper import ReferenceInferenceCompleted, ReferenceInferenceResult
 
 

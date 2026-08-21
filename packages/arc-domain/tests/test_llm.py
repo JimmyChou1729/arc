@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from arc_domain import _llm
-from arc_jobs import ResumeReason
-from arc_llm import (
+from ac_jobs import ResumeReason
+from ac_llm import (
     FailureCategory,
     LLMFailed,
     LLMPaused,

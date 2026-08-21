@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from arc_jobs import (
-    ArcJobsError,
+from ac_jobs import (
+    AcJobsError,
     ArtifactRef,
     CommandArtifact,
     CommandError,
@@ -31,7 +31,7 @@ from arc_jobs import (
     run_control_main,
     snapshot_data,
 )
-from arc_llm import (
+from ac_llm import (
     HostAuthority,
     InvalidRequestError,
     LLMExecutionOptions,
@@ -482,7 +482,7 @@ def _active_export_bytes(
         ):
             raise ValueError("active export does not match its manifest digest")
         return catalog.active, content, artifact
-    except (ArcJobsError, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (AcJobsError, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise DomainPublicationError(
             f"active {filename} export is unavailable for domain {domain_id!r}"
         ) from exc
@@ -584,7 +584,7 @@ def _run_control(args: argparse.Namespace, *, command: str) -> int:
     argv = [command, "--run-root", str(paths.root), "--run-id", args.run_id]
     if command == "stop" and args.reason is not None:
         argv.extend(["--reason", args.reason])
-    # arc-jobs owns these controls and writes the sole command envelope itself.
+    # ac-jobs owns these controls and writes the sole command envelope itself.
     return run_control_main(argv)
 
 
@@ -651,7 +651,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             exit_code=2,
         )
-    except (ArcJobsError, DomainPublicationError, OSError, ValueError) as exc:
+    except (AcJobsError, DomainPublicationError, OSError, ValueError) as exc:
         code = {
             "RunNotFoundError": "run_not_found",
             "RunBusyError": "run_busy",

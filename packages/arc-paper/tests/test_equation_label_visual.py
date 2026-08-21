@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from arc_jobs import ResumeReason, RunContext, RunRepository, RunSpec, StoppedError
-from arc_llm import (
+from ac_jobs import ResumeReason, RunContext, RunRepository, RunSpec, StoppedError
+from ac_llm import (
     FailureCategory,
     LLMCompleted,
     LLMFailed,
@@ -19,7 +19,7 @@ from arc_llm import (
     ResumeAction,
     ResumeInput,
 )
-from arc_llm.identity import semantic_key
+from ac_llm.identity import semantic_key
 from arc_paper import (
     EquationLabelReviewService,
     RenderedPDFPage,
@@ -140,7 +140,7 @@ def _document(
 
 def _response(page: int, mappings: list[tuple[str, str]]) -> dict[str, Any]:
     return {
-        "schema_version": "arc.document.equation_label_page_review.v1",
+        "schema_version": "ac.document.equation_label_page_review.v1",
         "page_number": page,
         "mappings": [
             {

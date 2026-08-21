@@ -4,8 +4,8 @@ from copy import deepcopy
 
 import pytest
 
-from arc_jobs import ArtifactDigest, ArtifactRef
-from arc_llm import ModelSelection
+from ac_jobs import ArtifactDigest, ArtifactRef
+from ac_llm import ModelSelection
 from arc_domain.contracts import (
     DOMAIN_BUILD_POLICY_SCHEMA_VERSION,
     DOMAIN_BUILD_REQUEST_SCHEMA_VERSION,

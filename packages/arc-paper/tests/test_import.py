@@ -1,4 +1,4 @@
 def test_package_imports():
     import arc_paper
 
-    assert arc_paper.__version__ == "1.1.1"
+    assert arc_paper.__version__ == "2.0.0"

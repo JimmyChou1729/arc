@@ -8,7 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from arc_document import (
+from ac_document import (
     FULL_TEXT_CATALOG_ADMIN_SCHEMA,
     FULL_TEXT_CATALOG_SCHEMA,
     FullTextCatalog as _DocumentFullTextCatalog,

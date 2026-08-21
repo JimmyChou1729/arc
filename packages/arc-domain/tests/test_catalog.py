@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from arc_jobs import (
+from ac_jobs import (
     ImmutableArtifactStore,
     RevisionConflictError,
     RunEngine,
@@ -335,7 +335,7 @@ def test_existing_pointer_io_and_unsupported_schema_errors_are_not_repaired(
     monkeypatch.setattr(repository, "inspect", original_inspect)
     snapshot_path = repository.run_directory("old-run") / "snapshot.json"
     document = json.loads(snapshot_path.read_text(encoding="utf-8"))
-    document["schema_version"] = "arc.jobs.run_snapshot.v999"
+    document["schema_version"] = "ac.jobs.run_snapshot.v999"
     snapshot_path.write_text(json.dumps(document), encoding="utf-8")
     with pytest.raises(UnsupportedSchemaError):
         register_domain_run(

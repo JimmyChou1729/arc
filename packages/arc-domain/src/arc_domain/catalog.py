@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Mapping
 
-from arc_jobs import (
+from ac_jobs import (
     AtomicStateStore,
     ArtifactRef,
     CorruptStateError,
@@ -311,7 +311,7 @@ def _export_manifest(
     result: DomainBuildResult,
     exported: Mapping[str, ArtifactRef],
 ) -> dict[str, JsonValue]:
-    from arc_jobs import encode_artifact_ref
+    from ac_jobs import encode_artifact_ref
 
     files: dict[str, JsonValue] = {}
     for filename, value in exported.items():

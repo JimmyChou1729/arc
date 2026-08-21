@@ -5,9 +5,9 @@ import json
 from pathlib import Path
 
 import pytest
-from arc_document.operation_registry import OperationSpec as DocumentOperationSpec
-from arc_document import ArcDocumentService
-from arc_jobs import RunRepository, RunSpec
+from ac_document.operation_registry import OperationSpec as DocumentOperationSpec
+from ac_document import AcDocumentService
+from ac_jobs import RunRepository, RunSpec
 
 from arc_paper import (
     DEFAULT_EXCLUDED_EFFECTS,
@@ -25,7 +25,7 @@ from arc_paper import ArcPaperService
 
 def test_paper_registry_reuses_document_operation_contract() -> None:
     assert PaperOperationSpec is DocumentOperationSpec
-    assert ArcPaperService.extract_keywords is ArcDocumentService.extract_keywords
+    assert ArcPaperService.extract_keywords is AcDocumentService.extract_keywords
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -173,7 +173,7 @@ def test_cli_stdout_is_exactly_one_command_result(
 
     assert len(lines) == 1
     value = json.loads(lines[0])
-    assert value["schema_version"] == "arc.command_result.v2"
+    assert value["schema_version"] == "ac.command_result.v2"
     assert value["status"] == expected_status
 
 
@@ -579,7 +579,7 @@ def test_cli_root_subcommand_and_nested_cache_help_is_human_readable(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out.startswith("usage: arc-")
-    assert "arc.command_result.v2" not in captured.out
+    assert "ac.command_result.v2" not in captured.out
 
 
 def test_cached_search_help_guides_specific_multi_term_queries(
@@ -646,7 +646,7 @@ def test_cli_import_and_parse_local_use_content_addressed_repository(
     assert len(parsed["data"]["document"]["math_spans"]) == 1
 
 
-def test_cli_delegates_generic_run_status_to_arc_jobs(
+def test_cli_delegates_generic_run_status_to_ac_jobs(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -657,7 +657,7 @@ def test_cli_delegates_generic_run_status_to_arc_jobs(
         ["status", "--run-root", str(tmp_path), "--run-id", "paper-run"]
     ) == 0
     value = json.loads(capsys.readouterr().out)
-    assert value["schema_version"] == "arc.command_result.v2"
+    assert value["schema_version"] == "ac.command_result.v2"
     assert value["run"]["id"] == "paper-run"
 
 
@@ -670,7 +670,7 @@ def test_delegated_run_controls_keep_arc_paper_help_and_usage_labels(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out.startswith(f"usage: arc-paper {command}")
-    assert "usage: arc-jobs" not in captured.out
+    assert "usage: ac-jobs" not in captured.out
 
     assert main([command]) == 2
     captured = capsys.readouterr()
@@ -721,7 +721,7 @@ def test_source_has_no_private_queue_thread_pool_or_detached_process_owner() -> 
         "queue",
         "threading",
         "concurrent.futures",
-        "arc_llm.runner",
+        "ac_llm.runner",
         "arc_paper.cache",
         "arc_paper.capabilities",
         "arc_paper.execution",

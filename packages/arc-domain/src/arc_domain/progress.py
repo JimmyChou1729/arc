@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from arc_jobs import ArcJobsError, EventWriter, RunRepository, RunSnapshot, RunStatus
+from ac_jobs import AcJobsError, EventWriter, RunRepository, RunSnapshot, RunStatus
 
 
 _ACTIVITY_EVENTS = {
@@ -48,7 +48,7 @@ def project_domain_progress(
                 incomplete_tail = handle.read(1) not in {b"\n", b"\r"}
         writer = EventWriter(path, run_id=snapshot.run_id)
         events = writer.read_all()
-    except (ArcJobsError, ValueError):
+    except (AcJobsError, ValueError):
         progress["diagnostic_code"] = "domain_progress_integrity_error"
         return progress
     except OSError:

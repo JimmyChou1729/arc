@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Iterable, Mapping, Sequence
 
-from arc_document import FullTextCatalogAdminEntry
-from arc_jobs import canonical_json_bytes as _canonical_json_bytes
+from ac_document import FullTextCatalogAdminEntry
+from ac_jobs import canonical_json_bytes as _canonical_json_bytes
 
 from ._cache_admin import CACHE_INDEX_SCHEMA, CacheAdministrator, CacheEntry
 from ._cache_root import resolve_cache_root

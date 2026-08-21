@@ -110,19 +110,19 @@ def test_cache_round_trip_preserves_canonical_projection_bytes(
     )
     entry_dir = first_cache._entry_dir(first_cache.cache_key(source))
     expected_document = (
-        b'{"document_digest":"14f568c549a5d4bb781f10b7be4de4a2b336b8946d1b910c397b60779d9c5e70",'
+        b'{"document_digest":"490faaf343248bf4697d03dc01cf2c4f65eac5cba11c3115b421de991469b360",'
         b'"math_spans":[],"metadata":{"format":"html"},"pages":[],"schema_version":'
-        b'"arc.document.parsed_document.v2","sections":[{"level":1,"ordinal":0,"page_end":'
+        b'"ac.document.parsed_document.v2","sections":[{"level":1,"ordinal":0,"page_end":'
         b'null,"page_start":null,"section_id":"sec-c9d2ced32b55836bc942","text":"text",'
         b'"title":"Intro"}],"source":{"artifact_digest":'
         b'"bf364f6117c7bb6b0512a27500a0b274850ed6265389117f508a12da1d9023ba",'
         b'"media_type":"text/html","size":25,"source_format":"html"},"warnings":[]}'
     )
     expected_manifest = (
-        b'{"document_digest":"14f568c549a5d4bb781f10b7be4de4a2b336b8946d1b910c397b60779d9c5e70",'
-        b'"parser_contract":"arc.document.parser.v7","payload_digest":'
-        b'"91edd3666be2481c146f48379751bbc67143dac8020e66a1e6395aa83749cbf8",'
-        b'"payload_size":502,"schema_version":"arc.document.parsed_document_cache.v1",'
+        b'{"document_digest":"490faaf343248bf4697d03dc01cf2c4f65eac5cba11c3115b421de991469b360",'
+        b'"parser_contract":"ac.document.parser.v7","payload_digest":'
+        b'"fe0d2d7f37da2d44e0b9fc68315d30a603a9ca999e4d92e4b5a5766e129afb1c",'
+        b'"payload_size":501,"schema_version":"ac.document.parsed_document_cache.v1",'
         b'"source_identity":{"artifact_digest":'
         b'"bf364f6117c7bb6b0512a27500a0b274850ed6265389117f508a12da1d9023ba",'
         b'"media_type":"text/html","size":25,"source_format":"html"}}'
@@ -180,7 +180,7 @@ def test_cache_key_changes_for_source_content_and_parser_contract(tmp_path: Path
     cache.get_or_parse(second_source, _parser(repository, calls))
     alternate = ParsedDocumentCache(
         repository=repository,
-        parser_contract="arc.document.parser.alternate",
+        parser_contract="ac.document.parser.alternate",
     )
     alternate.get_or_parse(first_source, _parser(repository, calls))
 

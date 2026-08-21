@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Mapping, cast
 
-from arc_jobs import ArtifactRef, decode_artifact_ref, encode_artifact_ref
-from arc_llm import InvalidRequestError, ModelSelection
+from ac_jobs import ArtifactRef, decode_artifact_ref, encode_artifact_ref
+from ac_llm import InvalidRequestError, ModelSelection
 from arc_paper import normalize_paper_id
 
 

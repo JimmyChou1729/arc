@@ -84,7 +84,7 @@ def _documents(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[ArcPaperService, object, object]:
     monkeypatch.setattr(
-        "arc_document.document_structure.QpdfOutlineExtractor", _Qpdf
+        "ac_document.document_structure.QpdfOutlineExtractor", _Qpdf
     )
     source = tmp_path / "book.md"
     source.write_text(MARKDOWN, encoding="utf-8")
@@ -142,7 +142,7 @@ def test_structure_overlay_cache_hit_does_not_reinvoke_qpdf(
             raise AssertionError("valid cached overlay should be reused")
 
     monkeypatch.setattr(
-        "arc_document.document_structure.QpdfOutlineExtractor", _FailQpdf
+        "ac_document.document_structure.QpdfOutlineExtractor", _FailQpdf
     )
     assert service.reconstruct_cached_structure(document, outline) == first
 
@@ -174,7 +174,7 @@ def test_explicit_structure_ambiguity_fails_instead_of_flat_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "arc_document.document_structure.QpdfOutlineExtractor",
+        "ac_document.document_structure.QpdfOutlineExtractor",
         lambda: _DuplicateQpdf(),
     )
     source = tmp_path / "ambiguous.md"

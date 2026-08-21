@@ -1,3 +1,3 @@
-"""Compatibility facade for :mod:`arc_document.rich_document.parser`."""
+"""Compatibility facade for :mod:`ac_document.rich_document.parser`."""
 
-from arc_document.rich_document.parser import *  # noqa: F401,F403
+from ac_document.rich_document.parser import *  # noqa: F401,F403

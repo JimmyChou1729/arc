@@ -9,7 +9,7 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
-from arc_jobs import (
+from ac_jobs import (
     CommandError,
     CommandResult,
     CommandStatus,
@@ -478,9 +478,9 @@ def _parser() -> _Parser:
     cache_import.add_argument("--cache-root", help="override the paper cache directory")
 
     for name, summary in {
-        "status": "inspect a durable keyword run through arc-jobs",
-        "stop": "request a durable keyword run stop through arc-jobs",
-        "validate": "validate a durable keyword run through arc-jobs",
+        "status": "inspect a durable keyword run through ac-jobs",
+        "stop": "request a durable keyword run stop through ac-jobs",
+        "validate": "validate a durable keyword run through ac-jobs",
     }.items():
         commands.add_parser(name, help=summary, description=summary.capitalize() + ".")
 
@@ -854,7 +854,7 @@ def _help_command(arguments: list[str]) -> str:
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] in {"status", "stop", "validate"}:
-        # arc-jobs is the sole implementation of generic durable-run controls.
+        # ac-jobs is the sole implementation of generic durable-run controls.
         return run_control_main(arguments, prog="arc-paper")
     parser = _parser()
     try:

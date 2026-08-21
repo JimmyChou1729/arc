@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from arc_jobs import canonical_json_bytes as _jobs_canonical_json_bytes
+from ac_jobs import canonical_json_bytes as _jobs_canonical_json_bytes
 
 from .._cache_root import resolve_cache_root
 from .._durable_io import atomic_write_bytes, payload_matches

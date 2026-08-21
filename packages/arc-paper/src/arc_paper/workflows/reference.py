@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, TypeAlias
 
-from arc_jobs import (
+from ac_jobs import (
     StoppedError,
     Failed,
     JsonValue,
@@ -20,7 +20,7 @@ from arc_jobs import (
     Succeeded,
     canonical_json_bytes,
 )
-from arc_llm import (
+from ac_llm import (
     JsonOutput,
     LLMStopped,
     LLMCompleted,
