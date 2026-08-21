@@ -373,7 +373,7 @@ def _write_raw_archive(
     output: Path, path: str, payload: bytes, *, digest: str | None = None
 ) -> None:
     manifest = {
-        "schema_version": "arc.paper.cache_archive.v1",
+        "schema_version": "arc.paper.cache_archive.v2",
         "selection": {"mode": "all", "entry_ids": []},
         "files": [
             {

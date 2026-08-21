@@ -114,15 +114,15 @@ def test_v1_remote_layout_is_ignored(
     assert CacheAdministrator(tmp_path).list().entries == ()
 
 
-def test_v1_cache_index_layout_is_ignored(tmp_path: Path) -> None:
+def test_old_cache_index_layout_is_ignored(tmp_path: Path) -> None:
     index = PaperCacheIndex(tmp_path)
     index.record_paper_component(
         "0911.3380",
         "inspire-record",
         cached_at="2026-07-25T12:00:00Z",
     )
-    current_root = tmp_path / "cache-admin" / "v2"
-    current_root.rename(current_root.with_name("v1"))
+    current_root = tmp_path / "cache-admin" / "v3"
+    current_root.rename(current_root.with_name("v2"))
 
     assert index.entries() == ()
     assert CacheAdministrator(tmp_path).list().entries == ()
@@ -314,7 +314,7 @@ def test_local_remove_previews_then_removes_locator_and_cache_objects(
     service = ArcPaperService(cache_root=tmp_path / "cache")
     source = service.import_source(source_path)
     entry = service.list_cache().entries[0]
-    assert {item.name for item in entry.components} == {"full-text", "full-text:markdown"}
+    assert {item.name for item in entry.components} == {"full-text"}
     cached_at = entry.cached_at
 
     service.parser.parse_source(source)

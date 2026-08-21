@@ -12,21 +12,20 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from arc_document import DocumentCacheAdministrator
+
 from ._cache_root import resolve_cache_root
 from ._durable_io import atomic_write_bytes
 from ._file_lock import exclusive_file_lock
 from .ids import normalize_paper_id
 from .providers.remote_cache import RemoteCacheAdminEntry, RemoteRequestCache
-from .sources import SourceArtifact
 
 
-CACHE_INDEX_SCHEMA = "arc.paper.cache_index.v2"
+CACHE_INDEX_SCHEMA = "arc.paper.cache_index.v3"
 _INDEX_FIELDS = {
     "schema_version",
     "entry_id",
-    "kind",
     "paper_id",
-    "local_source_identity",
     "components",
 }
 _COMPONENT_FIELDS = {
@@ -104,40 +103,14 @@ class PaperCacheIndex:
         entry_id = f"paper:{normalized}"
         return self._record_component(
             entry_id,
-            kind="paper",
             paper_id=normalized,
-            local_source_identity=None,
             component=component,
             cached_at=cached_at,
             storage_entry_ids=storage_entry_ids,
         )
 
-    def record_local(
-        self,
-        source: SourceArtifact,
-        *,
-        cached_at: str,
-    ) -> CacheEntry:
-        identity = {
-            "source_format": source.source_format.value,
-            "media_type": source.media_type,
-            "artifact_digest": source.artifact_digest,
-            "size": source.size,
-        }
-        entry_id = (
-            f"local:{source.source_format.value}:{source.artifact_digest}"
-        )
-        return self._record_component(
-            entry_id,
-            kind="local",
-            paper_id=None,
-            local_source_identity=identity,
-            component=f"full-text:{source.source_format.value}",
-            cached_at=cached_at,
-        )
-
     def entries(self) -> tuple[CacheEntry, ...]:
-        entries_root = self.root / "cache-admin" / "v2" / "entries"
+        entries_root = self.root / "cache-admin" / "v3" / "entries"
         if not entries_root.is_dir():
             return ()
         entries: list[CacheEntry] = []
@@ -164,9 +137,7 @@ class PaperCacheIndex:
         self,
         entry_id: str,
         *,
-        kind: str,
-        paper_id: str | None,
-        local_source_identity: Mapping[str, Any] | None,
+        paper_id: str,
         component: str,
         cached_at: str,
         storage_entry_ids: Sequence[str] = (),
@@ -206,9 +177,9 @@ class PaperCacheIndex:
             )
             entry = _make_entry(
                 entry_id=entry_id,
-                kind=kind,
+                kind="paper",
                 paper_id=paper_id,
-                local_source_identity=local_source_identity,
+                local_source_identity=None,
                 components=tuple(by_name.values()),
             )
             atomic_write_bytes(path, _canonical_json_bytes(_entry_document(entry)))
@@ -219,7 +190,7 @@ class PaperCacheIndex:
         return (
             self.root
             / "cache-admin"
-            / "v2"
+            / "v3"
             / "entries"
             / digest[:2]
             / digest
@@ -230,22 +201,19 @@ class PaperCacheIndex:
     def _entry_lock(self, entry_id: str) -> Iterator[None]:
         digest = hashlib.sha256(entry_id.encode("utf-8")).hexdigest()
         with exclusive_file_lock(
-            self.root / "cache-admin" / "v2" / "locks" / f"{digest}.lock"
+            self.root / "cache-admin" / "v3" / "locks" / f"{digest}.lock"
         ):
             yield
 
 
 class CacheAdministrator:
     def __init__(self, root: str | Path | None = None) -> None:
-        from ._full_text_catalog import FullTextCatalog
-
         self.root = resolve_cache_root(root)
         self.index = PaperCacheIndex(self.root)
         self.remote = RemoteRequestCache(self.root)
-        self.catalog = FullTextCatalog(self.root)
-        from .terms import TermInventoryStore
-
-        self.term_inventory = TermInventoryStore(self.root)
+        self.document = DocumentCacheAdministrator(self.root)
+        self.catalog = self.document.catalog
+        self.term_inventory = self.document.term_inventory
 
     def list(
         self,
@@ -275,33 +243,22 @@ class CacheAdministrator:
             for storage_id in component.storage_entry_ids
         }
 
-        for item in self.catalog.admin_entries():
-            merged[item.entry_id] = _merge_component(
-                merged.get(item.entry_id),
-                entry_id=item.entry_id,
-                kind="paper" if item.entry.kind == "arxiv" else "local",
-                paper_id=item.entry.paper_ids[0] if item.entry.paper_ids else None,
-                local_source_identity=item.entry.local_source_identity,
-                component=CacheComponent(
-                    "full-text",
-                    item.cached_at,
-                    (item.entry_id,),
-                ),
-            )
-
-        for item in self.term_inventory.admin_entries():
-            merged[item.entry_id] = _merge_component(
-                merged.get(item.entry_id),
-                entry_id=item.entry_id,
-                kind="local",
-                paper_id=None,
-                local_source_identity=item.source_identity,
-                component=CacheComponent(
-                    "term-inventory",
-                    item.cached_at,
-                    (item.entry_id,),
-                ),
-            )
+        for item in self.document.list().entries:
+            paper_id = item.document_ids[0] if item.document_ids else None
+            entry_id = f"paper:{paper_id}" if paper_id is not None else item.entry_id
+            for component in item.components:
+                merged[entry_id] = _merge_component(
+                    merged.get(entry_id),
+                    entry_id=entry_id,
+                    kind="paper" if paper_id is not None else "local",
+                    paper_id=paper_id,
+                    local_source_identity=item.local_source_identity,
+                    component=CacheComponent(
+                        component.name,
+                        component.cached_at,
+                        component.storage_entry_ids,
+                    ),
+                )
 
         for item in self.remote.admin_entries():
             if item.entry_id in claimed_remote_ids:
@@ -449,13 +406,7 @@ def _entry_document(entry: CacheEntry) -> dict[str, Any]:
     return {
         "schema_version": CACHE_INDEX_SCHEMA,
         "entry_id": entry.entry_id,
-        "kind": entry.kind,
         "paper_id": entry.paper_id,
-        "local_source_identity": (
-            dict(entry.local_source_identity)
-            if entry.local_source_identity is not None
-            else None
-        ),
         "components": {
             item.name: {
                 "cached_at": item.cached_at,
@@ -472,16 +423,12 @@ def _entry_from_document(value: object) -> CacheEntry:
     if value.get("schema_version") != CACHE_INDEX_SCHEMA:
         raise ValueError("cache index entry has unsupported schema")
     entry_id = value.get("entry_id")
-    kind = value.get("kind")
     paper_id = value.get("paper_id")
-    local_identity = value.get("local_source_identity")
     components = value.get("components")
-    if not isinstance(entry_id, str) or kind not in {"paper", "local"}:
+    if not isinstance(entry_id, str) or not entry_id.startswith("paper:"):
         raise ValueError("cache index identity is invalid")
-    if paper_id is not None and not isinstance(paper_id, str):
+    if not isinstance(paper_id, str) or not paper_id:
         raise ValueError("cache index paper_id is invalid")
-    if local_identity is not None and not isinstance(local_identity, Mapping):
-        raise ValueError("cache index local identity is invalid")
     if not isinstance(components, Mapping) or not components:
         raise ValueError("cache index components are invalid")
     decoded: list[CacheComponent] = []
@@ -508,9 +455,9 @@ def _entry_from_document(value: object) -> CacheEntry:
         )
     return _make_entry(
         entry_id=entry_id,
-        kind=kind,
+        kind="paper",
         paper_id=paper_id,
-        local_source_identity=local_identity,
+        local_source_identity=None,
         components=decoded,
     )
 

@@ -472,12 +472,6 @@ class ArcPaperService(ArcDocumentService):
         warnings: list[str] = []
         for entry in selected:
             changed = False
-            changed = (
-                self.cache_administrator.term_inventory.remove_admin_entry(
-                    entry.entry_id
-                )
-                or changed
-            )
             for component in entry.components:
                 for storage_entry_id in component.storage_entry_ids:
                     if storage_entry_id.startswith("remote:"):
@@ -487,10 +481,13 @@ class ArcPaperService(ArcDocumentService):
                             )
                             or changed
                         )
-            changed = (
-                self.cache_administrator.catalog.remove_admin_entry(entry.entry_id)
-                or changed
-            )
+                    else:
+                        document_result = (
+                            self.cache_administrator.document.remove(
+                                entry_ids=(storage_entry_id,), dry_run=False
+                            )
+                        )
+                        changed = bool(document_result.removed_entry_ids) or changed
             changed = self.cache_index.remove(entry.entry_id) or changed
             if changed:
                 removed.append(entry.entry_id)

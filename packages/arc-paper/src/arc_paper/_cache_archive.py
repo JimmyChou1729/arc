@@ -13,15 +13,16 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Iterable, Mapping, Sequence
 
+from arc_document import FullTextCatalogAdminEntry
+
 from ._cache_admin import CACHE_INDEX_SCHEMA, CacheAdministrator, CacheEntry
 from ._cache_root import resolve_cache_root
 from ._durable_io import payload_matches
-from ._full_text_catalog import FullTextCatalogAdminEntry
 from .source_repository import SourceRepository
 from .sources import SourceFormat
 
 
-CACHE_ARCHIVE_SCHEMA = "arc.paper.cache_archive.v1"
+CACHE_ARCHIVE_SCHEMA = "arc.paper.cache_archive.v2"
 _ARCHIVE_ROOT = "arc-paper-cache"
 _MANIFEST_NAME = f"{_ARCHIVE_ROOT}/manifest.json"
 _CACHE_PREFIX = f"{_ARCHIVE_ROOT}/cache/"
@@ -225,19 +226,19 @@ def _selected_cache_files(
         )
     selected = tuple(available[item] for item in requested)
     paths: set[str] = set()
-    catalog = {item.entry_id: item for item in administrator.catalog.admin_entries()}
+    catalog = {
+        item.entry_id: item for item in administrator.catalog.admin_entries()
+    }
     for entry in selected:
         _add_index_entry(root, entry, paths)
         for component in entry.components:
             for storage_id in component.storage_entry_ids:
                 if storage_id.startswith("remote:"):
                     _add_remote_entry(root, storage_id, paths)
-        if entry.entry_id in catalog:
-            _add_catalog_entry(root, catalog[entry.entry_id], paths)
-        if entry.entry_id.startswith("term-inventory:"):
-            _add_term_inventory(root, entry, paths)
-        elif entry.local_source_identity is not None:
-            _add_source_object(root, entry.local_source_identity, paths)
+                elif storage_id in catalog:
+                    _add_catalog_entry(root, catalog[storage_id], paths)
+                elif storage_id.startswith("term-inventory:"):
+                    _add_term_inventory(root, storage_id, entry, paths)
     if not paths:
         raise CacheArchiveError(
             "cache_archive_entry_incomplete",
@@ -248,7 +249,7 @@ def _selected_cache_files(
 
 def _add_index_entry(root: Path, entry: CacheEntry, paths: set[str]) -> None:
     digest = hashlib.sha256(entry.entry_id.encode("utf-8")).hexdigest()
-    directory = root / "cache-admin" / "v2" / "entries" / digest[:2] / digest
+    directory = root / "cache-admin" / "v3" / "entries" / digest[:2] / digest
     path = directory / "entry.json"
     if path.is_file():
         value = _read_json_object(path)
@@ -314,7 +315,9 @@ def _add_catalog_entry(
 ) -> None:
     entry = admin.entry
     identities: Iterable[str | Mapping[str, Any]] = (
-        entry.paper_ids if entry.kind == "arxiv" else (entry.local_source_identity or {},)
+        entry.document_ids
+        if entry.kind == "identified"
+        else (entry.local_source_identity or {},)
     )
     for identity in identities:
         key = hashlib.sha256(
@@ -327,7 +330,14 @@ def _add_catalog_entry(
                 }
             )
         ).hexdigest()
-        directory = root / "full-text-catalog" / "v2" / "entries" / key[:2] / key
+        directory = (
+            root
+            / "document-full-text-catalog"
+            / "v2"
+            / "entries"
+            / key[:2]
+            / key
+        )
         if not (directory / "locator.json").is_file() or not (directory / "admin.json").is_file():
             raise CacheArchiveError(
                 "cache_archive_dependency_missing",
@@ -360,16 +370,20 @@ def _add_catalog_entry(
         _add_directory_files(root, directory, paths)
 
 
-def _add_term_inventory(root: Path, entry: CacheEntry, paths: set[str]) -> None:
-    key = entry.entry_id.removeprefix("term-inventory:")
+def _add_term_inventory(
+    root: Path, storage_entry_id: str, entry: CacheEntry, paths: set[str]
+) -> None:
+    key = storage_entry_id.removeprefix("term-inventory:")
     if not _is_sha256(key):
         raise CacheArchiveError(
-            "cache_archive_dependency_invalid", f"invalid term inventory ID: {entry.entry_id}"
+            "cache_archive_dependency_invalid",
+            f"invalid term inventory ID: {storage_entry_id}",
         )
     directory = root / "term-inventory" / "v1" / "lineages" / key[:2] / key
     if not (directory / "current.json").is_file():
         raise CacheArchiveError(
-            "cache_archive_dependency_missing", f"term inventory is missing: {entry.entry_id}"
+            "cache_archive_dependency_missing",
+            f"term inventory is missing: {storage_entry_id}",
         )
     _add_directory_files(root, directory, paths)
     if entry.local_source_identity is not None:

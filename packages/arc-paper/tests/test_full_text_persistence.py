@@ -69,7 +69,14 @@ def _store(
                 else SourceOriginKind.LOCAL_IMPORT
             ),
             provider="fixture" if arxiv_id else "",
-            metadata={"arxiv_id": arxiv_id} if arxiv_id else {},
+            metadata=(
+                {
+                    "arxiv_id": arxiv_id,
+                    "document_id": f"arXiv:{arxiv_id}",
+                }
+                if arxiv_id
+                else {}
+            ),
         ),
     )
 
@@ -342,7 +349,7 @@ def test_catalog_refreshes_format_pointer_and_keeps_arxiv_representations_separa
     assert by_format["html"].document_digest != stale_document.document_digest
     assert by_format["pdf"].document_digest == pdf_document.document_digest
     locator_text = next(
-        (repository.root / "full-text-catalog" / "v2").glob(
+        (repository.root / "document-full-text-catalog" / "v2").glob(
             "entries/*/*/locator.json"
         )
     ).read_text(encoding="utf-8")
@@ -360,7 +367,7 @@ def test_v1_catalog_layout_is_ignored(tmp_path: Path) -> None:
         SourceFormat.MARKDOWN,
     )
     PaperParserService(repository).parse_source(source)
-    current_root = repository.root / "full-text-catalog" / "v2"
+    current_root = repository.root / "document-full-text-catalog" / "v2"
     current_root.rename(current_root.with_name("v1"))
 
     catalog = FullTextCatalog(repository.root)
@@ -380,7 +387,7 @@ def test_current_catalog_requires_admin_and_parse_repairs_it(
     service = PaperParserService(repository)
     service.parse_source(source)
     locator = next(
-        (repository.root / "full-text-catalog" / "v2").glob(
+        (repository.root / "document-full-text-catalog" / "v2").glob(
             "entries/*/*/locator.json"
         )
     )
