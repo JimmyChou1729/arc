@@ -627,18 +627,6 @@ def _assessment_output_schema(candidate_ids: list[str]) -> dict[str, Any]:
     note_id = notes["items"]["properties"]["candidate_id"]
     note_id.clear()
     note_id["enum"] = list(candidate_ids)
-    notes["allOf"] = [
-        {
-            "contains": {
-                "type": "object",
-                "required": ["candidate_id"],
-                "properties": {"candidate_id": {"const": candidate_id}},
-            },
-            "minContains": 0,
-            "maxContains": 1,
-        }
-        for candidate_id in candidate_ids
-    ]
     return schema
 
 

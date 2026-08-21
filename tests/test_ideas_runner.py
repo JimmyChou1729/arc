@@ -743,7 +743,7 @@ def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(
     assert output_properties["candidate_notes"]["items"]["properties"][
         "candidate_id"
     ]["enum"] == ["general_idea_001", "general_idea_002"]
-    assert len(output_properties["candidate_notes"]["allOf"]) == 2
+    assert "allOf" not in output_properties["candidate_notes"]
     candidate_ids = ["general_idea_001", "general_idea_002"]
     invalid_unknown = _portfolio_value(candidate_ids)
     invalid_unknown["candidate_notes"][0]["candidate_id"] = "unknown"
@@ -757,9 +757,14 @@ def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(
             "note": "A distinct note must not bypass ID uniqueness.",
         }
     )
-    assert not Draft202012Validator(request.output.schema).is_valid(
-        invalid_duplicate
-    )
+    assert Draft202012Validator(request.output.schema).is_valid(invalid_duplicate)
+    portfolio_module = sys.modules[
+        "_arc_workflows.ideas_portfolio_assessment"
+    ]
+    assert portfolio_module._assessment_validation_error(
+        invalid_duplicate,
+        candidate_ids=set(candidate_ids),
+    ) == "duplicate_candidate_note"
     assert json.dumps(config["user_intent"]) in request.prompt
     assert '"candidate_id": "general_idea_001"' in request.prompt
     assert request.prompt.index(
@@ -780,9 +785,6 @@ def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(
     )
 
     ranked = runner.rank_run(Path(config["run_dir"]), config["run_id"])
-    portfolio_module = sys.modules[
-        "_arc_workflows.ideas_portfolio_assessment"
-    ]
     loaded = portfolio_module.load_portfolio_assessment(
         config["run_dir"],
         ranked,
