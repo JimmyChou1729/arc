@@ -14,7 +14,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from arc_jobs import JsonValue, RunStatus
+from arc_jobs import JsonValue
 from arc_llm import HostAuthority, LLMExecutionOptions, ModelSelection
 from arc_document import ArcDocumentService
 
@@ -50,7 +50,6 @@ from .cached_document import (
 )
 from .document_structure import (
     CachedDocumentStructureRef,
-    DocumentStructureOverlay,
     cached_document_structure_ref_from_document,
 )
 from .document_access import (
@@ -109,8 +108,7 @@ from .sources import (
 )
 
 if TYPE_CHECKING:
-    from .rich_document import RichDocument
-    from .terms import KeywordResult, TermInventoryStore
+    from .terms import KeywordResult
 
 
 class PaperInputError(ValueError):
@@ -607,107 +605,6 @@ class ArcPaperService(ArcDocumentService):
             if item.status == "failed"
         )
         return CacheUpdateResult(tuple(records), tuple(warnings))
-
-    @property
-    def term_inventory_store(self) -> TermInventoryStore:
-        """Return the lazily constructed keyword cache component."""
-
-        from .terms import TermInventoryStore
-
-        if self._term_inventory_store is None:
-            self._term_inventory_store = TermInventoryStore(self.cache_root)
-        return self._term_inventory_store
-
-    def extract_keywords(
-        self,
-        source: SourceArtifact | ParsedDocument | RichDocument,
-        *,
-        project_dir: str | Path,
-        structure: (
-            CachedDocumentStructureRef | DocumentStructureOverlay | None
-        ) = None,
-        section_ids: Sequence[str] | None = None,
-        approx_count: int = 50,
-        model: ModelSelection = ModelSelection(tier="medium"),
-        run_id: str | None = None,
-        resume_input: Mapping[str, JsonValue] | None = None,
-        options: LLMExecutionOptions = LLMExecutionOptions(),
-    ) -> KeywordResult:
-        """Extract a cache-aware approximate keyword view.
-
-        ``SourceArtifact`` values must belong to this service's repository.
-        ``ParsedDocument`` and ``RichDocument`` values cross the semantic seam
-        directly and are never re-opened through a path.
-        """
-
-        from .rich_document import RichDocument, RichDocumentParserService
-        from .terms import KeywordResult
-        from .workflows.keywords import (
-            KeywordExtractionError,
-            KeywordExtractionPaused,
-            KeywordExtractionRunner,
-        )
-
-        if isinstance(source, SourceArtifact):
-            document: ParsedDocument | RichDocument
-            if structure is None:
-                document = self.parser.parse_source(source)
-            else:
-                document = RichDocumentParserService(self.repository).parse(
-                    SourceBundle(primary=source)
-                ).document
-        elif isinstance(source, (ParsedDocument, RichDocument)):
-            document = source
-        else:
-            raise PaperInputError(
-                "keyword source must be a repository SourceArtifact, ParsedDocument, or RichDocument"
-            )
-        overlay: DocumentStructureOverlay | None
-        if isinstance(structure, CachedDocumentStructureRef):
-            overlay = self._resolve_cached_structure(
-                structure.document,
-                structure,
-            )
-        elif isinstance(structure, DocumentStructureOverlay):
-            overlay = structure
-        elif structure is None:
-            overlay = None
-        else:
-            raise PaperInputError(
-                "structure must be a cached structure reference or overlay"
-            )
-        if overlay is not None and isinstance(document, ParsedDocument):
-            raise PaperInputError(
-                "structured keyword extraction requires a rich text document"
-            )
-        runner = KeywordExtractionRunner(
-            project_dir,
-            store=self.term_inventory_store,
-            task_service=self._keyword_task_service,
-        )
-        snapshot = runner.execute(
-            document,
-            structure=overlay,
-            section_ids=section_ids,
-            approx_count=approx_count,
-            model=model,
-            run_id=run_id,
-            resume_input=resume_input,
-            options=options,
-        )
-        if snapshot.status is RunStatus.SUCCEEDED:
-            result: KeywordResult = runner.read_result(snapshot)
-            return result
-        if snapshot.status is RunStatus.PAUSED:
-            raise KeywordExtractionPaused(snapshot)
-        if snapshot.status is RunStatus.FAILED and snapshot.error is not None:
-            raise KeywordExtractionError(
-                snapshot.error.code, snapshot.error.message
-            )
-        raise KeywordExtractionError(
-            "keyword_extraction_incomplete",
-            "keyword extraction ended without a terminal result",
-        )
 
     def search_full_text_targets(
         self,

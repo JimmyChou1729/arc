@@ -67,8 +67,7 @@ from arc_proposer_reviewer import (
     RevisionContextMode,
     WorkerSpec,
 )
-from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
-from arc_proposer_reviewer.protocol import decode_batch_result
+from arc_proposer_reviewer import BATCH_SCHEMA_VERSION, decode_batch_result
 
 from ._build_support import (
     mapping,

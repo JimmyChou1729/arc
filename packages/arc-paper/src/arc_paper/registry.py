@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from arc_document.operation_registry import (
+from arc_document import (
     DEFAULT_EXCLUDED_EFFECTS,
     JsonCodec,
     JsonOutputCodec,

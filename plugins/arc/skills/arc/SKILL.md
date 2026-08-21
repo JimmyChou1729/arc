@@ -1,6 +1,6 @@
 ---
 name: arc
-description: Use for any `arc-paper` task, including paper metadata and search, arXiv full text, INSPIRE references and citers, local paper parsing, paper sections and equations, cache operations, keyword extraction, and LLM paper summaries or summary batches. Also use when the user explicitly asks to use ARC or `$arc`; after explicit invocation, route only the requested ARC capability.
+description: Use for academic-paper access through `arc-paper`, including metadata search, arXiv full text, INSPIRE references and citers, paper sections and equations, and summaries. Also use when the user explicitly asks to use ARC or `$arc`; then route only the requested ARC capability, including neutral local-document work through `arc-document`.
 ---
 
 # Agent Research Copilot  (ARC)
@@ -15,8 +15,8 @@ Choose one entry path before any ARC CLI call:
 
 - **Implicit paper entry:** activate for any task owned by `arc-paper`, even
   when the user does not name ARC. This includes its complete paper-access,
-  parsing, search, citation, cache, keyword, and summary surfaces. LLM-backed
-  paper summaries, summary batches, and keyword extraction remain eligible for
+  acquisition, search, citation, paper-cache, and summary surfaces. LLM-backed
+  paper summaries and summary batches remain eligible for
   implicit activation; whether an `arc-paper` operation uses an LLM is not a
   trigger boundary.
 - **Explicit ARC entry:** require the user to name ARC, invoke `$arc`, or make
@@ -56,8 +56,8 @@ Direct ARC tool tasks use the same default-auto and explicit-review policy.
 Implicitly activated direct tasks stay within `arc-paper`. These include
 bounded paper facts such as title, authors, abstract, citation count, section
 text, or equation context, plus paper-tool orchestration such as collecting
-citers or references, filtering papers by date, generating paper summaries or
-summary batches, extracting keywords, or combining those steps into a
+  citers or references, filtering papers by date, generating paper summaries or
+  summary batches, or combining those steps into a
 non-evaluative paper-data output. An explicit ARC request may instead select a
 direct tool from another ARC package. Direct tasks must not produce
 recommendations, research directions, scientific rankings, ARC reports, or
@@ -110,6 +110,9 @@ not optional.
 - Single-paper metadata, full text, sections, equations, citers, references,
   paper summaries, or summary batches: read
   `manuals/arc-paper.md`.
+- Local source import/parsing, exact cached-document reads, neutral text or
+  equation search, keyword inventories, rich-document export, or document-cache
+  administration: read `manuals/arc-document.md`.
 - Research field/domain construction, foundation-paper selection, domain
   networks, evidence packs, graph HTML, or field briefings: read
   `manuals/arc-domain.md`.

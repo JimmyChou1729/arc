@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from arc_document.operation_registry import OperationSpec as DocumentOperationSpec
+from arc_document import ArcDocumentService
 from arc_jobs import RunRepository, RunSpec
 
 from arc_paper import (
@@ -19,10 +20,12 @@ from arc_paper import (
 )
 from arc_paper.cli import main
 from arc_paper.registry import OperationRequestError, OperationSpec as PaperOperationSpec
+from arc_paper import ArcPaperService
 
 
 def test_paper_registry_reuses_document_operation_contract() -> None:
     assert PaperOperationSpec is DocumentOperationSpec
+    assert ArcPaperService.extract_keywords is ArcDocumentService.extract_keywords
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]

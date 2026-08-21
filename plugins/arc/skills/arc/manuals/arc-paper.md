@@ -1,11 +1,17 @@
 # ARC Paper Quick Start
 
 `arc-paper` is ARC's deterministic paper-reading layer. Use it to identify a
-paper, inspect its structure, read sections, search prose or equations, follow
-citations, parse local sources, and build keyword inventories. Commands return
+paper, inspect its structure, read sections, search prose or equations, and
+follow citations. Commands return
 a typed JSON envelope. Always check `status`, top-level `warnings`, `error`, and
 the relevant fields under `data`; an empty result is not enough to diagnose why
 nothing was found.
+
+Provider-neutral local import, deterministic parsing, frozen document reads,
+keyword inventories, rich-document export, and document-cache administration
+belong to `arc-document`; see `arc-document.md`. `arc-paper` may expose
+compatibility commands for these operations, but new neutral workflows should
+call their owning package.
 
 The paper cache defaults to `.arc/cache/arc-paper` below the current directory.
 Use the same working directory or set `ARC_PAPER_CACHE` consistently across

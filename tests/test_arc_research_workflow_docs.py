@@ -104,14 +104,12 @@ def test_arc_skill_implicitly_exposes_all_arc_paper_and_only_arc_paper() -> None
     required_flat = " ".join(required.split())
 
     for phrase in (
-        "paper metadata and search",
+        "academic-paper access",
+        "metadata search",
         "arXiv full text",
         "INSPIRE references and citers",
-        "local paper parsing",
         "paper sections and equations",
-        "cache operations",
-        "keyword extraction",
-        "LLM paper summaries or summary batches",
+        "summaries",
     ):
         assert phrase in frontmatter
 
@@ -131,7 +129,7 @@ def test_arc_skill_implicitly_exposes_all_arc_paper_and_only_arc_paper() -> None
     ):
         assert phrase not in frontmatter
 
-    assert "any `arc-paper` task" in frontmatter
+    assert "academic-paper access through `arc-paper`" in frontmatter
     assert "explicitly asks to use ARC or `$arc`" in frontmatter
     assert "Implicit paper entry" in preflight
     assert "Explicit ARC entry" in preflight
@@ -144,6 +142,7 @@ def test_arc_skill_implicitly_exposes_all_arc_paper_and_only_arc_paper() -> None
     assert "Durable state and outputs owned by the selected `arc-paper` operation remain allowed" in preflight_flat
     assert "Do not read or start a managed workflow" in required_flat
     assert "only when the selected `arc-paper` operation requires that topic" in required_flat
+    assert "manuals/arc-document.md" in required
     assert "Do not preload unrelated capability documents" in required_flat
 
 
@@ -377,6 +376,7 @@ def test_manuals_do_not_hardcode_checkout_cache_paths() -> None:
 
 def test_package_manuals_are_self_contained_quick_starts() -> None:
     expected = {
+        "arc-document.md": "`arc-document`",
         "arc-paper.md": "`arc-paper`",
         "arc-domain.md": "`arc-domain`",
         "arc-jobs.md": "`arc-jobs`",
@@ -435,7 +435,7 @@ def test_peer_manuals_define_new_public_handoffs() -> None:
     assert "arc-domain materialize-export" in domain
     assert "arc-translate get-result" in translate
     assert "--step language" in translate
-    assert "arc-paper export-rich-document" in render
+    assert "arc-document export-rich-document" in render
     assert "publication/rich-source.json" in render
     assert "publication/metadata.json" in render
     assert "complete `fragments/` tree" in render
@@ -451,6 +451,7 @@ def test_package_readmes_match_peer_manual_handoffs() -> None:
             "domain",
             "jobs",
             "llm",
+            "document",
             "paper",
             "proposer-reviewer",
             "render",
@@ -464,7 +465,8 @@ def test_package_readmes_match_peer_manual_handoffs() -> None:
     assert "shared `arc-paper` cache" not in readmes["domain"]
     assert "data.run.working_state" in readmes["jobs"]
     assert "data.run.result.path" in readmes["llm"]
-    assert "arc-paper export-rich-document" in readmes["paper"]
+    assert "arc-document export-rich-document" in readmes["document"]
+    assert "arc-document export-rich-document" in readmes["paper"]
     assert "arc-proposer-reviewer trace" in readmes["proposer-reviewer"]
     assert "arc-render validate" in readmes["render"]
     assert "arc-translate get-result" in readmes["translate"]
@@ -501,6 +503,7 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         "arc-jobs",
         "arc-llm",
         "arc-proposer-reviewer",
+        "arc-document",
         "arc-paper",
         "arc-render",
         "arc-domain",
@@ -513,6 +516,7 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
     modules = {
         name: importlib.import_module(module)
         for name, module in {
+            "document": "arc_document.cli",
             "paper": "arc_paper.cli",
             "domain": "arc_domain.cli",
             "jobs": "arc_jobs.cli",
@@ -525,6 +529,7 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
         }.items()
     }
     parsers = {
+        "document": modules["document"]._parser(),
         "paper": modules["paper"]._parser(),
         "domain": modules["domain"]._parser(),
         "jobs": modules["jobs"]._parser(),
@@ -550,10 +555,16 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
             ["get-section", "--reference", "1234.5678", "Introduction"],
         ),
         (
-            "arc-paper.md",
-            "arc-paper parse-local",
-            "paper",
+            "arc-document.md",
+            "arc-document parse-local",
+            "document",
             ["parse-local", "chapter.tex", "--validator", "book.pdf"],
+        ),
+        (
+            "arc-document.md",
+            "arc-document extract-keywords",
+            "document",
+            ["extract-keywords", "source.md", "--project-dir", "run/keywords"],
         ),
         (
             "arc-paper.md",
@@ -605,15 +616,9 @@ def test_manual_quick_start_argv_match_current_cli_parsers() -> None:
             ],
         ),
         (
-            "arc-paper.md",
-            "arc-paper extract-keywords",
-            "paper",
-            ["extract-keywords", "source.md", "--project-dir", "run/keywords"],
-        ),
-        (
             "arc-render.md",
-            "arc-paper export-rich-document",
-            "paper",
+            "arc-document export-rich-document",
+            "document",
             ["export-rich-document", "source.md", "--output-dir", "publication"],
         ),
         (
@@ -2668,7 +2673,7 @@ def test_readme_documents_trigger_boundary_and_human_release_flow() -> None:
     ):
         assert example in text
     assert "naming ARC is optional" in text_flat
-    assert "LLM-backed paper summaries and keyword extraction" in text_flat
+    assert "LLM-backed paper summaries" in text_flat
     assert "Explicitly name ARC for other capabilities" in text_flat
     assert "### Source checkout" not in text
     assert "pip install -e" not in text

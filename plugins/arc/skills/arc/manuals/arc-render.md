@@ -1,22 +1,22 @@
 # ARC Render Quick Start
 
-`arc-render` composes a frozen `arc-paper` `RichDocument` and optional
+`arc-render` composes a frozen `arc-document` `RichDocument` and optional
 source-bound overlay Layers into a standalone HTML reader. It does not discover
 or parse a source itself.
 
 ## Run ARC Render
 
-Use `arc-paper` and `arc-render` directly when they are on `PATH`. Check once:
+Use `arc-document` and `arc-render` directly when they are on `PATH`. Check once:
 
 ```bash
-arc-paper export-rich-document --help
+arc-document export-rich-document --help
 arc-render --help
 ```
 
 If a bare command is unavailable, use the portable Skill runtime:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-paper export-rich-document --help
+<skill-dir>/scripts/arc-runtime arc-document export-rich-document --help
 <skill-dir>/scripts/arc-runtime arc-render --help
 ```
 
@@ -24,7 +24,7 @@ Inside an ARC source checkout, the package virtual environment is the direct
 development fallback:
 
 ```bash
-packages/arc-paper/.venv/bin/arc-paper export-rich-document --help
+packages/arc-paper/.venv/bin/arc-document export-rich-document --help
 packages/arc-paper/.venv/bin/arc-render --help
 ```
 
@@ -37,7 +37,7 @@ First export a local Markdown, HTML, or flattened single-file TeX source into a
 new or empty publication directory:
 
 ```bash
-arc-paper export-rich-document note.md --output-dir publication
+arc-document export-rich-document note.md --output-dir publication
 ```
 
 Add `--validator note.pdf` when a PDF should validate fidelity or page mapping.
@@ -98,7 +98,7 @@ publications can both be rendered and exported as standalone HTML.
 
 ## Read Command Results
 
-`arc-paper export-rich-document` returns the typed ARC command envelope. Check
+`arc-document export-rich-document` returns the typed ARC command envelope. Check
 top-level `status`, `warnings`, and `error`. On success, use:
 
 - `data.source`: absolute `rich-source.json` path;
@@ -205,5 +205,5 @@ durability guarantees for it.
 ```bash
 arc-render --help
 arc-render <command> --help
-arc-paper export-rich-document --help
+arc-document export-rich-document --help
 ```

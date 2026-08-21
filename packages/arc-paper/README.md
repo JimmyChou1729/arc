@@ -34,13 +34,13 @@ Replace the quoted placeholder with an arXiv, INSPIRE, or DOI identifier.
 Use `arc-paper --help` and `arc-paper get-metadata --help` for the current
 paper, source, search, workflow, and cache commands.
 
-Export a local rich source and its verified assets for direct `arc-render`
-composition:
+Provider-neutral export belongs to `arc-document`; use its output for direct
+`arc-render` composition:
 
 ```bash
-arc-paper export-rich-document ./note.md \
+arc-document export-rich-document ./note.md \
   --output-dir ./render-input \
-  --cache-root ./.arc/cache/arc-paper
+  --cache-root ./.arc/cache/arc-document
 
 arc-render compose \
   --source ./render-input/rich-source.json \
