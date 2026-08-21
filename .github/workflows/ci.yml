@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install build pytest
+      - name: Read Foundation SHA
+        id: foundation
+        run: |
+          echo "sha=$(python -c 'import json; p=json.load(open("plugins/arc/skills/arc/scripts/runtime-sources.json")); print(next(s["commit"] for s in p["sources"] if s["id"] == "foundation"))')" >> "$GITHUB_OUTPUT"
+      - run: git clone https://github.com/tririver/ac-foundation.git local/ac-foundation
+      - run: git -C local/ac-foundation checkout ${{ steps.foundation.outputs.sha }}
+      - run: AC_FOUNDATION_REPO_ROOT="$PWD/local/ac-foundation" python scripts/check-generated-foundation.py
+      - run: >-
+          python -m pip install
+          -e local/ac-foundation/packages/ac-jobs
+          -e local/ac-foundation/packages/ac-llm
+          -e local/ac-foundation/packages/ac-document
+          -e local/ac-foundation/packages/ac-proposer-reviewer
+          -e packages/arc-paper
+          -e packages/arc-domain
+      - run: python -m pytest --import-mode=importlib packages/*/tests tests
+      - run: node tests/test_dsh_llm_bridge.mjs
+      - run: scripts/build-packages.sh

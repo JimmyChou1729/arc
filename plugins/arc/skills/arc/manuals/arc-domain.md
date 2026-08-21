@@ -43,7 +43,7 @@ arc-domain build arXiv:0911.3380 \
 Set `--host-authority` once per run. Use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
 identical value on resume. For `restricted` or `unknown` host requests, follow
-`manuals/arc-llm.md`; do not assume a universal broker.
+`manuals/ac-llm.md`; do not assume a universal broker.
 
 On a completed, published build, retain these exact values:
 

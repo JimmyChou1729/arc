@@ -9,7 +9,7 @@ from threading import Event, Lock, Thread
 from types import SimpleNamespace
 from typing import Any
 
-from arc_jobs import (
+from ac_jobs import (
     Awaiting,
     Failed,
     ImmutableArtifactStore,
@@ -21,7 +21,7 @@ from arc_jobs import (
     RunSpec,
     canonical_json_bytes,
 )
-from arc_llm import (
+from ac_llm import (
     HostAuthority,
     InvalidRequestError,
     LLMCompleted,
@@ -29,8 +29,8 @@ from arc_llm import (
     LLMFailed,
     LLMPaused,
 )
-from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
-from arc_proposer_reviewer.protocol import decode_batch_request
+from ac_proposer_reviewer.models import BATCH_SCHEMA_VERSION
+from ac_proposer_reviewer.protocol import decode_batch_request
 from jsonschema import Draft202012Validator
 
 
@@ -227,7 +227,7 @@ class _FakeLLM:
         active_ids = request.output.schema["properties"]["feedback"]["required"]
         return LLMCompleted(
             {
-                "schema_version": "arc.proposer_reviewer.review.v1",
+                "schema_version": "ac.proposer_reviewer.review.v1",
                 "action": "stop",
                 "reason": "sufficient",
                 "feedback": {worker_id: "sharpen the calculation" for worker_id in active_ids},

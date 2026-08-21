@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
-from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
+from ac_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,7 +47,7 @@ def load_calculate_modules():
             "_arc_workflows.calculate_reviewer_schema"
         ),
         runner=importlib.import_module("_arc_workflows.calculate_runner"),
-        proposer_protocol=importlib.import_module("arc_proposer_reviewer.protocol"),
+        proposer_protocol=importlib.import_module("ac_proposer_reviewer.protocol"),
     )
 
 
@@ -125,7 +125,7 @@ def review(
         },
     }
     return {
-        "schema_version": "arc.proposer_reviewer.review.v1",
+        "schema_version": "ac.proposer_reviewer.review.v1",
         "action": "continue",
         "reason": "review complete",
         "feedback": {
@@ -907,9 +907,9 @@ def test_reviewer_template_and_schema_use_public_payload_contract(tmp_path: Path
     )
     schema = request.loops[0].reviewer.output_schema
 
-    assert "arc_llm_call_record" not in template
-    assert "arc.llm.review_envelope.v1" not in template
-    assert "arc.proposer_reviewer.review.v1" in template
+    assert "ac_llm_call_record" not in template
+    assert "ac.llm.review_envelope.v1" not in template
+    assert "ac.proposer_reviewer.review.v1" in template
     assert schema["required"] == [
         "calculator_assessments",
         "review_reasoning",
@@ -1436,8 +1436,8 @@ def test_runner_has_no_retired_llm_or_private_artifact_dependencies() -> None:
         ]
     )
 
-    assert "arc_llm.proposers_reviewer" not in source
-    assert "arc_llm.paper_access_policy" not in source
+    assert "ac_llm.proposers_reviewer" not in source
+    assert "ac_llm.paper_access_policy" not in source
     assert "RunPaths" not in source
     assert "attempt_paths" not in source
     assert "read_proposer_outputs" not in source

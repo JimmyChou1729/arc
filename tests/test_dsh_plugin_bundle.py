@@ -45,8 +45,8 @@ def test_dsh_adapter_registers_existing_arc_skill() -> None:
       import { join } from 'node:path'
       import { apply, inject } from './plugins/arc/dsh/index.js'
       const root = mkdtempSync(join(tmpdir(), 'arc-dsh-plugin-'))
-      process.env.DSH_ARC_LLM_SOCKET = join(root, 'bridge.sock')
-      process.env.DSH_ARC_LLM_TOKEN_FILE = join(root, 'bridge.token')
+      process.env.DSH_AC_LLM_SOCKET = join(root, 'bridge.sock')
+      process.env.DSH_AC_LLM_TOKEN_FILE = join(root, 'bridge.token')
       let captured
       let contributor
       let cleanup
@@ -63,7 +63,7 @@ def test_dsh_adapter_registers_existing_arc_skill() -> None:
         if (!captured?.content?.includes('# Agent Research Copilot')) process.exit(4)
         if (!captured?.content?.includes('arc-runtime')) process.exit(5)
         const variables = contributor?.resolve()
-        if (variables?.DSH_ARC_LLM_SOCKET !== process.env.DSH_ARC_LLM_SOCKET) process.exit(6)
+        if (variables?.DSH_AC_LLM_SOCKET !== process.env.DSH_AC_LLM_SOCKET) process.exit(6)
         if (!variables?.DSH_ARC_RUNTIME?.endsWith('/scripts/arc-runtime')) process.exit(7)
       } finally {
         await cleanup?.()

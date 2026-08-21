@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from arc_jobs import FileLease, canonical_json_bytes
+from ac_jobs import FileLease, canonical_json_bytes
 
 from _arc_workflows.domain_relationships import (
     RELATIONSHIP_LLM_RUN_DIRNAME,

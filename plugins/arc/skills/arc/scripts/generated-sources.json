@@ -1,0 +1,18 @@
+{
+  "schema_version": "ac.generated_sources.v1",
+  "foundation_commit": "cc39c41d74f4583c8f0d56ea58971ee1b19997e3",
+  "files": {
+    "ac_runtime.py": {
+      "source": "runtime/ac_runtime.py",
+      "sha256": "b8dca3308c5704c6904314e954505db2d65d492804e68794e4198ea787da6f60"
+    },
+    "arc-runtime": {
+      "source": "runtime/ac-runtime",
+      "sha256": "5d06cd95ff40130416cde1b12d97640ad79b7e4b591765f4554666c1d5ec1c03"
+    },
+    "../../../dsh/llm-bridge.js": {
+      "source": "dsh/llm-bridge.js",
+      "sha256": "18130bbdc8bff171da34632e9cad50fb934c95f1a0378e7c1787e96396f78f78"
+    }
+  }
+}

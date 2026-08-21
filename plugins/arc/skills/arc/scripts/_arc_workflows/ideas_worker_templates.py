@@ -6,8 +6,8 @@ import copy
 from pathlib import Path
 from typing import Any, Mapping
 
-from arc_llm import ModelSelection
-from arc_proposer_reviewer import (
+from ac_llm import ModelSelection
+from ac_proposer_reviewer import (
     LoopSpec,
     ProposerFailurePolicy,
     WorkerSpec,

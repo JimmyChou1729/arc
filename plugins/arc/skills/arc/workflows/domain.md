@@ -68,7 +68,7 @@ only when its field has no explicit paper anchor.
   the requested program can override either prior.
 
 Step 5: For every unresolved field, select one canonical origin with one
-durable, closed ARC-LLM task. Build a separate `arc.llm.request.v4` document
+durable, closed ARC-LLM task. Build a separate `ac.llm.request.v4` document
 at `<project-dir>/.arc/domain/origin-selection-<field-id>-request.json`.
 Set its JSON output schema to the exact contents of
 `<skill-dir>/workflows/json/domain-origin-selection.schema.json`, set `repair`
@@ -80,7 +80,7 @@ soft evidence only. Use the template at
 field guide, not as an unfilled request.
 
 ```bash
-arc-llm generate \
+ac-llm generate \
   --request <project-dir>/.arc/domain/origin-selection-<field-id>-request.json \
   --run-root <project-dir>/.arc/domain/origin-selection-llm \
   --host-authority <host-authority> \
@@ -90,7 +90,7 @@ arc-llm generate \
 Choose `<host-authority>` once for each run: use `unrestricted` only when the
 host explicitly reports unrestricted authority; otherwise use `unknown`. Reuse
 the identical value for any resume of that run. Under `restricted` or
-`unknown`, follow `manuals/arc-llm.md`: without an explicitly supplied broker,
+`unknown`, follow `manuals/ac-llm.md`: without an explicitly supplied broker,
 a model host request becomes a durable manual pause, not a call to an assumed
 universal broker.
 
@@ -164,7 +164,7 @@ descriptor requires input, pass the matching document with
 `arc-domain stop <run-id> --project-dir <project-dir>`, and validate with
 `arc-domain validate <run-id> --project-dir <project-dir>`.
 
-Step 3: Inspect every `arc.command_result.v2` body. Do not treat an exit code
+Step 3: Inspect every `ac.command_result.v2` body. Do not treat an exit code
 alone as success. Continue only when every build has succeeded and published an
 active export generation. A stop pauses its current attempt and must be
 resumed with the same run ID. For a failed attempt, inspect the returned
@@ -295,7 +295,7 @@ For the hidden domain summary Markdown, follow `rules/math_typeset.md` for
 math and TeX snippets. Do not publish it as a visible Markdown report.
 
 After writing each hidden domain summary Markdown report, follow
-`manuals/arc-jobs.md` Markdown Report Export for
+`manuals/ac-jobs.md` Markdown Report Export for
 `<project-dir>/.arc/domain/packages/<seed-safe>_domain_summary.md` and publish
 `<project-dir>/domain/<seed-safe>_domain_summary.pdf`. If it fails, record a
 `WARNING:` with the exact blocker, preserve the hidden machine package, and do

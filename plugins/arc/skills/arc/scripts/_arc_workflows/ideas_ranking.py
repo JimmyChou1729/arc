@@ -6,15 +6,15 @@ import math
 from pathlib import Path
 from typing import Any, Mapping
 
-from arc_jobs import RunRepository
-from arc_proposer_reviewer import (
+from ac_jobs import RunRepository
+from ac_proposer_reviewer import (
     BatchRequest,
     LoopSpec,
     inspect_batch,
     read_batch_round,
     read_batch_trace,
 )
-from arc_proposer_reviewer.protocol import decode_batch_request
+from ac_proposer_reviewer.protocol import decode_batch_request
 
 from _arc_workflows.ideas_marking import (
     normalized_marks,

@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from arc_jobs import canonical_json_bytes
+from ac_jobs import canonical_json_bytes
 from arc_paper import normalize_paper_id
 from jsonschema import Draft202012Validator
 

@@ -13,9 +13,9 @@ from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 
 bootstrap_arc_pythonpath()
 
-from arc_jobs import EventSink, RunEngine, RunRepository, RunSnapshot, RunSpec
-from arc_llm import HostAuthority, LLMExecutionOptions, LLMTaskService
-from arc_proposer_reviewer import (
+from ac_jobs import EventSink, RunEngine, RunRepository, RunSnapshot, RunSpec
+from ac_llm import HostAuthority, LLMExecutionOptions, LLMTaskService
+from ac_proposer_reviewer import (
     BatchInputPayload,
     BatchRunner,
     ProposerReviewerHandler,

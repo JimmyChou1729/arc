@@ -3,9 +3,5 @@
   "private": true,
   "type": "module",
   "main": "./plugins/arc/dsh/index.js",
-  "dsh": {
-    "bundle": {
-      "patch": "./plugins/arc/dsh/cordis.patch.yml"
-    }
-  }
+  "dsh": {"bundle": {"patch": "./plugins/arc/dsh/cordis.patch.yml"}}
 }

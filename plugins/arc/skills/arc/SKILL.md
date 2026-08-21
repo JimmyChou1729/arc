@@ -1,6 +1,6 @@
 ---
 name: arc
-description: Use for academic-paper access through `arc-paper`, including metadata search, arXiv full text, INSPIRE references and citers, paper sections and equations, and summaries. Also use when the user explicitly asks to use ARC or `$arc`; then route only the requested ARC capability, including neutral local-document work through `arc-document`.
+description: Use for academic-paper access through `arc-paper`, including metadata search, arXiv full text, INSPIRE references and citers, paper sections and equations, and summaries. Also use when the user explicitly asks to use ARC or `$arc`; then route the requested research workflow or AC Foundation capability.
 ---
 
 # Agent Research Copilot  (ARC)
@@ -21,7 +21,7 @@ Choose one entry path before any ARC CLI call:
   trigger boundary.
 - **Explicit ARC entry:** require the user to name ARC, invoke `$arc`, or make
   an unambiguous continuation of an already-started explicit ARC task before
-  selecting a capability owned by another ARC package or a managed workflow.
+  selecting an AC Foundation capability or a managed ARC workflow.
   Supporting calls that `arc-paper` explicitly requires remain part of the
   selected paper task; they do not authorize an independent non-paper
   capability. Do not infer broader opt-in from a general research request, a
@@ -37,8 +37,7 @@ manual, step-by-step, or major-step review or confirmation. A request to
 discuss before running creates a pre-run pause rather than a third mode.
 
 Managed workflow runs follow `workflows/domain.md`, `workflows/ideas.md`,
-`workflows/check.md`, `workflows/plan.md`, `workflows/calculate.md`, or
-`workflows/ocr-proofread.md`, or `workflows/companion.md`, and
+`workflows/check.md`, `workflows/plan.md`, or `workflows/calculate.md`, and
 create project-local workflow artifacts such as domain references, ranked
 ideas, work notes, note-check records, calculation records, reports, rankings,
 recommendations, research directions, or follow-up project directories. They
@@ -59,7 +58,7 @@ text, or equation context, plus paper-tool orchestration such as collecting
   citers or references, filtering papers by date, generating paper summaries or
   summary batches, or combining those steps into a
 non-evaluative paper-data output. An explicit ARC request may instead select a
-direct tool from another ARC package. Direct tasks must not produce
+direct AC Foundation tool. Direct tasks must not produce
 recommendations, research directions, scientific rankings, ARC reports, or
 managed-workflow artifacts; route those through the owning managed workflow.
 Durable state and outputs owned by the selected `arc-paper` operation remain
@@ -69,7 +68,7 @@ cited 0911.3380 since 2024 and create a full summary of these papers` may
 implicitly activate direct `arc-paper` orchestration; it is not a managed
 workflow mode prompt.
 
-ARC LLM calls have no default runtime or inactivity timeout. A caller may set
+AC model calls have no default runtime or inactivity timeout. A caller may set
 an explicit positive idle timeout through the owning command when operationally
 needed. Use the owning package's status command or the host's
 background-command facility for long-running work. Do not stop merely because
@@ -100,8 +99,7 @@ not optional.
   `workflows/check.md` before any parse, section read, or equation extraction call.
 - When an explicit ARC request selects a workflow-specific file
   (`workflows/check.md`, `workflows/domain.md`, `workflows/ideas.md`,
-  `workflows/plan.md`, `workflows/calculate.md`, `workflows/ocr-proofread.md`,
-  or `workflows/companion.md`),
+  `workflows/plan.md`, or `workflows/calculate.md`),
   read that workflow file
   and follow its steps. Reading the workflow file is a blocking requirement
   before any workflow CLI call.
@@ -112,40 +110,31 @@ not optional.
   `manuals/arc-paper.md`.
 - Local source import/parsing, exact cached-document reads, neutral text or
   equation search, keyword inventories, rich-document export, or document-cache
-  administration: read `manuals/arc-document.md`.
+  administration: read `manuals/ac-document.md`.
 - Research field/domain construction, foundation-paper selection, domain
   networks, evidence packs, graph HTML, or field briefings: read
   `manuals/arc-domain.md`.
 - Durable run inspection, validation, live work-group concurrency adjustment,
   or stop requests: read
-  `manuals/arc-jobs.md`.
+  `manuals/ac-jobs.md`.
 - Host LLM/provider detection, model choice, direct prompt tests, or provider
-  troubleshooting: read `manuals/arc-llm.md`.
-- Standalone language detection, bilingual glossary generation, or block
-  translation: read `manuals/arc-translate.md`.
-- OCR proofreading against PDF page images: read
-  `workflows/ocr-proofread.md` and `manuals/arc-ocr-proofread.md` before any
-  proofreading command or main-agent review.
-- Renderable source publications or standalone HTML readers: read
-  `manuals/arc-render.md`.
+  troubleshooting: read `manuals/ac-llm.md`.
 - Typed proposer-reviewer batch construction, resume, or safe observation of
-  committed rounds: read `manuals/arc-proposer-reviewer.md`.
-- Companion standalone HTML generation: read `workflows/companion.md` and
-  `manuals/arc-companion.md` before fetching a paper or starting LLM work.
+  committed rounds: read `manuals/ac-proposer-reviewer.md`.
 - User-facing Markdown report export: use the ordinary blocking
   Pandoc/XeLaTeX command in `rules/math_typeset.md`; see
-  `manuals/arc-jobs.md` for the workflow failure boundary.
+  `manuals/ac-jobs.md` for the workflow failure boundary.
 
 ## CLI Resolution
 
-Use `arc-document`, `arc-paper`, `arc-render`, `arc-domain`, `arc-llm`, `arc-ocr-proofread`,
-`arc-translate`, `arc-companion`, and `arc-jobs` directly when the host plugin
+Use `ac-document`, `arc-paper`, `arc-domain`, `ac-llm`, and `ac-jobs` directly
+when the host plugin
 exposes them on
 `PATH`. In DeepSeek Harness, prefer the trusted launcher exported as
 `$DSH_ARC_RUNTIME` when it is present; this avoids assuming that a plugin's
 package-local `bin/` directory has already been added to the model shell's
 `PATH`. The core-only
-`arc-proposer-reviewer` tool deliberately has no plugin-bin wrapper; invoke it
+`ac-proposer-reviewer` tool deliberately has no plugin-bin wrapper; invoke it
 through the runtime launcher. For a standalone Skill install, or when a bare
 command is unavailable, invoke the same command through:
 
@@ -162,7 +151,7 @@ Within DeepSeek Harness, the equivalent portable form is:
 For example:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer trace \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer trace \
   --run-root <run-root> --run-id <run-id>
 ```
 
@@ -173,21 +162,20 @@ committed-round refs and revision vectors; `show-round` alone expands a
 committed proposal/review JSON payload. Never read durable loop or artifact
 layout to substitute for these queries.
 
-The first real CLI call lazily installs the immutable core runtime. Managed,
+The first real CLI call lazily installs the immutable locked runtime. Managed,
 CI, or offline-preparation environments may prewarm it with
-`<skill-dir>/scripts/arc-runtime setup --profile core`; diagnose it with
-`<skill-dir>/scripts/arc-runtime doctor --profile core`. The base Skill never
+`<skill-dir>/scripts/arc-runtime setup`; diagnose it with
+`<skill-dir>/scripts/arc-runtime doctor`. The base Skill never
 installs or starts MCP.
 
-The launcher defaults `ARC_HOME` to `$HOME/.arc`; other hosts may set an
-explicit portable location. It keeps reusable runtime installations under
-`runtimes/`. Document and paper caches default to `.arc/cache/arc-document/`
-and `.arc/cache/arc-paper/` below the launch directory; source-checkout
-development uses the matching ignored `local/cache/` paths. Set
-`ARC_DOCUMENT_CACHE` or `ARC_PAPER_CACHE` for explicit portable locations.
+The launcher defaults `AC_HOME` to `$HOME/.ac`; set `AC_RUNTIME_HOME` for an
+explicit portable runtime location. Neutral document cache defaults to
+`.ac/cache/ac-document/`, while paper cache defaults to
+`.arc/cache/arc-paper/` below the launch directory. Set `AC_DOCUMENT_CACHE` or
+`ARC_PAPER_CACHE` for explicit portable locations.
 Durable workflow state belongs in each project's hidden `.arc/` directory.
-`doctor` reports both cache paths.
-Provider selection remains owned by the installed `arc-llm` package.
+`doctor` reports the resolved runtime identity and environment.
+Provider selection remains owned by the installed `ac-llm` package.
 
 ## Workflow
 
@@ -232,7 +220,7 @@ canonical origin, then use the date window for its citers as specified in
 `workflows/domain.md`. Keep the candidate evidence and origin-selection result
 separately; only each selected/explicit foundation becomes an entry in
 `seed_paper_list` for its domain build. See `manuals/arc-paper.md` for paper
-identifier inference and `manuals/arc-jobs.md` for background jobs.
+identifier inference and `manuals/ac-jobs.md` for background jobs.
 
 Step 4: Resolve `<project-dir>`.
 Capture `<arc-run-root>` by running `pwd -P` in the directory where the user
@@ -275,7 +263,7 @@ between `as_of_date` and the corresponding calendar date two years earlier.
 Set `provider` to `auto` unless the user pins a provider. Set `model_tier` to
 `medium` unless the user explicitly asks otherwise. Never select the `max`
 model tier automatically; use it only when the user explicitly requests the
-`max` model tier. See `manuals/arc-llm.md` for model tiers.
+`max` model tier. See `manuals/ac-llm.md` for model tiers.
 
 Use a stable safe `run_id`: lowercase ASCII letters, digits, and underscores,
 for example a short intent slug plus UTC timestamp. Set `skill_dir` to the ARC
@@ -342,21 +330,6 @@ in `Rough Steps For Later Planning`: promote and execute it, remove or mark it
 obsolete/not triggered, or record an explicit stop condition in `Open Questions`
 or `Calculation Status`. Only stop when requested calculation coverage is
 complete and no triggered rough/pending item remains.
-
-Case 5: Proofread page-mapped OCR.
-Use only when the user explicitly requests OCR proofreading and supplies the
-source Markdown, original PDF, and MinerU content-list JSON. Read and execute
-`workflows/ocr-proofread.md`. The page map is mandatory; do not infer alignment
-or start model work without it.
-
-Case 6: Generate a Companion reader.
-Use only when the user explicitly requests a companion reading or asks for the
-original paper to be split into semantic units with interleaved translation
-and commentary.
-Read and execute `workflows/companion.md`. The default deliverable is a
-standalone HTML reader. If a PDF copy is requested, the user may open the HTML
-in Chrome and use Print / Save as PDF. That user-side derivative is not an ARC
-release artifact.
 
 ### Phase 3: Self-Reflection
 

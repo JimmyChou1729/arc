@@ -1,18 +1,18 @@
-# ARC Proposer-Reviewer Quick Start
+# AC Proposer-Reviewer Quick Start
 
-`arc-proposer-reviewer` runs typed proposer and reviewer batches and exposes
+`ac-proposer-reviewer` runs typed proposer and reviewer batches and exposes
 verified committed rounds. Use it for bounded idea comparison or blind
-multi-agent review. It delegates model calls to `arc-llm` and durable execution
-to `arc-jobs`.
+multi-agent review. It delegates model calls to `ac-llm` and durable execution
+to `ac-jobs`.
 
-## Run ARC Proposer-Reviewer
+## Run AC Proposer-Reviewer
 
 This is a core-only command: the ARC plugin has no standalone bin wrapper.
 Invoke it through the Skill runtime launcher and use that launcher in every
 example below:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer --help
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer --help
 ```
 
 `<skill-dir>` means the directory containing the active ARC Skill.
@@ -25,7 +25,7 @@ one proposer, one reviewer, one loop, and one round:
 
 ```json
 {
-  "schema_version": "arc.proposer_reviewer.batch.v7",
+  "schema_version": "ac.proposer_reviewer.batch.v7",
   "batch_id": "comparison-1",
   "loops": [
     {
@@ -92,7 +92,7 @@ feedback contract.
 Validation is local and makes no provider call:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer validate \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer validate \
   --request <batch-request.json>
 ```
 
@@ -100,13 +100,13 @@ Check `data.valid`, `data.schema_version`, `data.batch_id`, and
 `data.loop_count`. Then start the durable batch:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer run \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer run \
   --request <batch-request.json> \
   --run-root <project-dir>/proposer-reviewer \
   --run-id <stable-run-id>
 ```
 
-All non-help commands emit one `arc.command_result.v2` envelope. Always inspect
+All non-help commands emit one `ac.command_result.v2` envelope. Always inspect
 top-level `status`, `warnings`, `error`, and `resume`. Persist the exact batch
 identity at `run.id`; `run.revision` is the returned durable revision. During
 execution, `data.run.status` is the durable lifecycle,
@@ -121,7 +121,7 @@ results from provider sessions, partial files, or physical durable-state paths.
 Inspect batch and loop lifecycle:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer inspect \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer inspect \
   --run-root <project-dir>/proposer-reviewer \
   --run-id <stable-run-id>
 ```
@@ -142,7 +142,7 @@ Important paths are:
 Read only verified committed-round references with `trace`:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer trace \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer trace \
   --run-root <project-dir>/proposer-reviewer \
   --run-id <stable-run-id>
 ```
@@ -154,7 +154,7 @@ entry has `loop_id` and committed `rounds[]`. For each round, inspect
 Expand one committed round through the public reader:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer show-round \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer show-round \
   --run-root <project-dir>/proposer-reviewer \
   --run-id <stable-run-id> \
   --loop-id <loop-id> \
@@ -179,12 +179,12 @@ inspection also exposes worker pauses under
 `data.inspection.loops[].pause.entries[]`, including `reason`, `input_required`,
 `resume_key`, `response_contract`, `request_ref`, and `resume_action`.
 
-When input is required under `arc.llm.resume_input.v3`, begin with this closed
+When input is required under `ac.llm.resume_input.v3`, begin with this closed
 skeleton:
 
 ```json
 {
-  "schema_version": "arc.llm.resume_input.v3",
+  "schema_version": "ac.llm.resume_input.v3",
   "resume_key": "copy-from-resume.resume_key",
   "action": "continue",
   "host_response": null,
@@ -202,7 +202,7 @@ unrelated fields as `null`.
 Resume the same batch so committed rounds and completed model calls are reused:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer resume \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer resume \
   --run-root <project-dir>/proposer-reviewer \
   --run-id <stable-run-id> \
   --input <resume-input.json>
@@ -215,7 +215,7 @@ by that condition.
 ## Request a Cooperative Stop
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer stop \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer stop \
   --run-root <project-dir>/proposer-reviewer \
   --run-id <stable-run-id> \
   --reason "<specific observed reason>"
@@ -237,8 +237,8 @@ configurable; do not continue merely because configured rounds remain.
 ## Help
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer --help
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer <command> --help
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer --help
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer <command> --help
 ```
 
 Help describes current commands and flags. Use the complete v7 batch and v3

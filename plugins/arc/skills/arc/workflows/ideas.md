@@ -96,7 +96,7 @@ task reasonably suggests, or if several loops fail, inspect the public
 snapshot:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer inspect \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer inspect \
   --run-root <project-dir>/.arc/ideas \
   --run-id <run-id>
 ```
@@ -108,7 +108,7 @@ successive snapshots show the same recurring errors or repeated interaction
 without a concrete contribution toward the requested scientific objective:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer stop \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer stop \
   --run-root <project-dir>/.arc/ideas \
   --run-id <run-id> \
   --reason "<specific observed reason>"
@@ -149,7 +149,7 @@ contains at least one complete committed proposer-reviewer round,
 real batch lifecycle. The partial report does not resume work, adopt
 uncommitted provider files, or alter scientific scores, ranks, or candidate
 visibility. For loop concurrency and durable pause/resume behavior, see
-`manuals/arc-proposer-reviewer.md`.
+`manuals/ac-proposer-reviewer.md`.
 
 ### Research Tools
 
@@ -289,7 +289,7 @@ This writes editable Markdown only under
 `<project-dir>/.arc/ideas/reports/<run-id>/` and atomically publishes
 `<project-dir>/ideas/<run-id>/ranked-ideas.pdf` plus
 `<project-dir>/ranked-ideas.pdf`. The PDF paths are the human delivery.
-Follow the `manuals/arc-jobs.md` Markdown report export procedure: if PDF
+Follow the `manuals/ac-jobs.md` Markdown report export procedure: if PDF
 rendering fails, print a `WARNING:` and do not claim that a ranked-ideas
 delivery was published.
 

@@ -12,7 +12,7 @@ from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 
 bootstrap_arc_pythonpath()
 
-from arc_llm import ExecutionLimits, HostAuthority, LLMExecutionOptions
+from ac_llm import ExecutionLimits, HostAuthority, LLMExecutionOptions
 from _arc_workflows.calculate_config import (
     CALCULATOR_IDS,
     ConfigError,
@@ -57,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "provider idle timeout in seconds; disabled by default and "
-            "enforced by arc-llm when supported"
+            "enforced by ac-llm when supported"
         ),
     )
     parser.add_argument(

@@ -8,14 +8,14 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
-from arc_jobs import (
+from ac_jobs import (
     FileLease,
     ImmutableArtifactStore,
     RunRepository,
     RunStatus,
     canonical_json_bytes,
 )
-from arc_llm import (
+from ac_llm import (
     JsonOutput,
     LLMClient,
     LLMCompleted,
@@ -27,7 +27,7 @@ from arc_llm import (
     LLMTaskService,
     ModelSelection,
 )
-from arc_proposer_reviewer import (
+from ac_proposer_reviewer import (
     BatchInspection,
     BatchTrace,
     inspect_batch,

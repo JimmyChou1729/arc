@@ -106,7 +106,7 @@ displayed formulas, or accepted prior derivations sufficient for proposers to
 perform the check without reading the original source.
 
 After writing `<project-dir>/.arc/calculate/<run-id>/initial-note-check.md`, follow
-`manuals/arc-jobs.md` Markdown Report Export for
+`manuals/ac-jobs.md` Markdown Report Export for
 `<project-dir>/.arc/calculate/<run-id>/initial-note-check.md` and publish
 `<project-dir>/initial-note-check.pdf`. If rendering fails, record a `WARNING:`
 with the exact blocker and preserve the check state, but do not claim PDF

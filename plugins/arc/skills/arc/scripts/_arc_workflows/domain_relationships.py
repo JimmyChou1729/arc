@@ -27,7 +27,7 @@ class RelationshipLLMOutcomeError(RuntimeError):
 
 
 def _default_relationship_runner(request: Any, run_root: Path) -> Any:
-    from arc_llm import LLMClient
+    from ac_llm import LLMClient
 
     return LLMClient().generate(request, run_root=run_root)
 
@@ -39,7 +39,7 @@ def _llm_relationships(
     run_root: Path,
     runner: RelationshipRunner,
 ) -> dict[str, Any]:
-    from arc_llm import (
+    from ac_llm import (
         JsonOutput,
         LLMCompleted,
         LLMFailed,

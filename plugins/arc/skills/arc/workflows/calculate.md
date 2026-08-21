@@ -34,7 +34,7 @@ The default template uses high reasoning effort and medium verbosity because the
 The runner reads worker prompt/schema templates from `workflows/json/calculate-proposer.template.json`, `workflows/json/calculate-reviewer.template.json`, and `workflows/json/calculate-reviewer-output.schema.json`.
 
 Keep the retry budget finite. A retry always starts two fresh, independent calculators; neither receives the other calculator's answer, a prior answer, or a reviewer-only reference. Both receive the same answer-free, method-focused instruction from the referee. Per-calculator feedback remains audit-only and is not reused. A retry needs a concrete new hypothesis, algorithm, or recovery path; do not use an unbounded retry loop. On the final allowed attempt the referee must choose `replan` or `pause_for_human`, not `retry`; the runner rejects a final `retry` as an invalid action contract.
-Each ready step and attempt creates one deterministic, independent public `arc_proposer_reviewer.BatchRequest`: one loop, one committed round, exactly two active calculators, and one referee. Attempts do not reuse a private workflow session or artifact layout. The runner executes that request through `arc-jobs` and `arc-proposer-reviewer`, then reads proposal and review JSON only from the public committed round. A returned attempt records its public batch run ID and loop ID; use those identities rather than constructing artifact paths.
+Each ready step and attempt creates one deterministic, independent public `ac_proposer_reviewer.BatchRequest`: one loop, one committed round, exactly two active calculators, and one referee. Attempts do not reuse a private workflow session or artifact layout. The runner executes that request through `ac-jobs` and `ac-proposer-reviewer`, then reads proposal and review JSON only from the public committed round. A returned attempt records its public batch run ID and loop ID; use those identities rather than constructing artifact paths.
 
 ## Phase 2: Build Step Packets
 
@@ -98,11 +98,11 @@ the host's background-command facility instead of frequent manual polling.
 When a completed attempt needs durable inspection, use only the public proposer-reviewer inspection surface with the returned batch run ID:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer inspect \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer inspect \
   --run-root <attempt-batch-run-root> --run-id <batch-run-id>
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer trace \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer trace \
   --run-root <attempt-batch-run-root> --run-id <batch-run-id>
-<skill-dir>/scripts/arc-runtime arc-proposer-reviewer show-round \
+<skill-dir>/scripts/arc-runtime ac-proposer-reviewer show-round \
   --run-root <attempt-batch-run-root> \
   --run-id <batch-run-id> --loop-id <loop-id> --round 1
 ```
@@ -213,7 +213,7 @@ Write an immutable next work-note version at
 `<project-dir>/.arc/calculate/<run-id>/work-notes/work-note-vNNN.md`, then
 mirror it to `<project-dir>/.arc/calculate/<run-id>/work-note.md`. After
 writing the hidden current work note, follow
-`manuals/arc-jobs.md` Markdown Report Export for
+`manuals/ac-jobs.md` Markdown Report Export for
 `<project-dir>/.arc/calculate/<run-id>/work-note.md` and atomically replace
 `<project-dir>/work-note.pdf`. If rendering fails, record a `WARNING:` with the
 exact blocker and preserve calculation state, but do not claim PDF delivery or

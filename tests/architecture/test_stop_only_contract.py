@@ -42,7 +42,7 @@ def test_public_docs_use_current_control_contract_schemas() -> None:
         if path.suffix != ".md":
             continue
         text = path.read_text(encoding="utf-8")
-        for legacy in ("arc.command_result.v1", "arc.llm.resume_input.v1"):
+        for legacy in ("ac.command_result.v1", "ac.llm.resume_input.v1"):
             if legacy in text:
                 offenders.append(f"{path.relative_to(ROOT)}: {legacy}")
     assert offenders == []

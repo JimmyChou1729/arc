@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Mapping
 
-from arc_proposer_reviewer import (
+from ac_proposer_reviewer import (
     BatchFailurePolicy,
     BatchRequest,
     LoopSpec,
     ProposerFailurePolicy,
 )
-from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
+from ac_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 
 from _arc_workflows.calculate_config import (
     CALCULATOR_IDS,

@@ -406,7 +406,7 @@ def test_manifest_publishes_normalized_closed_seed_provenance(
     ]
     context_path.write_text(json.dumps(context), encoding="utf-8")
 
-    from arc_llm import LLMCompleted
+    from ac_llm import LLMCompleted
 
     def relationship_runner(_request, _run_root):
         return SimpleNamespace(
@@ -856,7 +856,7 @@ def test_manifest_requires_companion_artifacts(tmp_path: Path) -> None:
 def test_write_manifest_uses_injected_typed_relationship_runner(
     tmp_path: Path,
 ) -> None:
-    from arc_llm import LLMCompleted
+    from ac_llm import LLMCompleted
 
     project = tmp_path / "project"
     project.mkdir()
@@ -1122,8 +1122,8 @@ def test_custom_manifest_output_keeps_project_relative_provenance(
 def test_write_manifest_warns_for_incomplete_typed_llm_outcomes(
     tmp_path: Path,
 ) -> None:
-    from arc_jobs import ResumeReason
-    from arc_llm import (
+    from ac_jobs import ResumeReason
+    from ac_llm import (
         InvalidRequestError,
         LLMFailed,
         LLMPaused,

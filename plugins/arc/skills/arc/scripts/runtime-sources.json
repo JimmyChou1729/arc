@@ -1,0 +1,43 @@
+{
+  "schema_version": "ac.runtime_sources.v1",
+  "profile": "arc",
+  "sources": [
+    {
+      "id": "foundation",
+      "repository": "https://github.com/tririver/ac-foundation.git",
+      "commit": "cc39c41d74f4583c8f0d56ea58971ee1b19997e3",
+      "version": ">=2,<3",
+      "packages": [
+        "ac-jobs",
+        "ac-llm",
+        "ac-document",
+        "ac-proposer-reviewer"
+      ],
+      "tools": [
+        "ac-jobs",
+        "ac-llm",
+        "ac-document",
+        "ac-proposer-reviewer"
+      ],
+      "local_root_env": "AC_FOUNDATION_REPO_ROOT"
+    },
+    {
+      "id": "product",
+      "repository": "https://github.com/tririver/arc.git",
+      "commit": "29c6af66197cccfc38d541bbaecae6f0af9b8610",
+      "version": ">=2,<3",
+      "packages": [
+        "arc-paper",
+        "arc-domain"
+      ],
+      "tools": [
+        "arc-paper",
+        "arc-domain"
+      ],
+      "local_root_env": "AC_PRODUCT_REPO_ROOT"
+    }
+  ],
+  "environment_defaults": {
+    "ARC_PAPER_CACHE": "{cwd}/.arc/cache/arc-paper"
+  }
+}

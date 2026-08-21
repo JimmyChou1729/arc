@@ -9,7 +9,7 @@ commands live in the package-specific references.
 - Use structured CLI output when available.
 - Paper IDs may omit the `arXiv:` prefix.
 - For slow or large work, use the owning package's durable controls and the
-  host's background-command facility; see `manuals/arc-jobs.md`.
+  host's background-command facility; see `manuals/ac-jobs.md`.
 - Use the package CLI with structured output by default.
 - The `arc` plugin is CLI-only and does not register or ship an MCP server.
 - For user choices and confirmations, use
@@ -30,9 +30,9 @@ Step 2: For domain or research-field work, read
 `manuals/arc-domain.md`.
 Step 3: For durable run inspection, live work-group concurrency adjustment,
 or stop requests, read
-`manuals/arc-jobs.md`.
+`manuals/ac-jobs.md`.
 Step 4: For provider/model/runtime diagnosis, read
-`manuals/arc-llm.md`.
+`manuals/ac-llm.md`.
 
 ### Phase 2: Execute through ARC.
 Step 1: Use ARC package tools instead of scraping arXiv/INSPIRE directly.

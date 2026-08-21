@@ -5,14 +5,14 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping
 
-from arc_jobs import RunRepository
-from arc_proposer_reviewer import (
+from ac_jobs import RunRepository
+from ac_proposer_reviewer import (
     BatchInspection,
     BatchRequest,
     BatchTrace,
     read_batch_round,
 )
-from arc_proposer_reviewer.protocol import encode_batch_request
+from ac_proposer_reviewer.protocol import encode_batch_request
 
 from _arc_workflows.ideas_config import IdeasConfig
 from _arc_workflows.ideas_marking import load_marking_scheme

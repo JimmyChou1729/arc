@@ -1,8 +1,9 @@
 # ARC Development Guidance
 
-ARC is a theoretical-physics research toolkit built from reusable Python
-packages and thin agent-facing adapters. Keep package behavior independent of
-any particular agent host or checked-out Skill.
+ARC is the academic-research layer of the AC ecosystem. Keep its two Python
+packages independent of any particular agent host or checked-out Skill. Shared
+jobs, model, document, and proposer-reviewer infrastructure belongs to AC
+Foundation; learning and publication workflows belong to ALC.
 
 ## Governing Philosophy: Infrastructure for Model-Led Science
 
@@ -65,19 +66,16 @@ Workflows:
 - `plan.md`: evidence-based calculation planning.
 - `calculate.md`: premise checks and calculations.
 - `check.md`: research-note claim checks.
-- `companion.md`: translated source-anchored Companion.
 
 Packages:
 
-- `arc-jobs`: durable job execution.
-- `arc-llm`: provider and model calls.
-- `arc-proposer-reviewer`: proposal and review orchestration.
-- `arc-document`: provider-neutral source storage, parsing, search, and rich-document contracts.
 - `arc-paper`: paper access, caching, and summaries.
 - `arc-domain`: domain discovery, typed summaries, package views, and
   evidence-bearing domain artifacts.
-- `arc-translate`: bilingual translation and review.
-- `arc-companion`: guide assembly and Companion releases.
+
+Foundation dependencies are `ac-jobs`, `ac-llm`, `ac-document`, and
+`ac-proposer-reviewer`. ARC may use their public APIs, but must not copy their
+implementation into this repository.
 
 ## Research Principles
 
@@ -141,8 +139,9 @@ Packages:
 
 ## State and Deliverables
 
-- ARC-owned shared storage is limited to runtimes under `~/.arc/runtimes`.
-  `arc-paper` cache data defaults to `<current-directory>/.arc/cache/arc-paper`;
+- AC Foundation owns reusable runtimes under `~/.ac/runtimes` and neutral
+  document cache under `.ac/cache/ac-document`. `arc-paper` cache data defaults
+  to `<current-directory>/.arc/cache/arc-paper`;
   inside this checkout it belongs under ignored `local/cache/arc-paper`.
   Explicit shared caches require documented cross-project identity,
   validity/invalidation, concurrent-access, and lifecycle rules.

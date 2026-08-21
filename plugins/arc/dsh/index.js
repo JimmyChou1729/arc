@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { startArcLlmBridge } from './llm-bridge.js'
+import { startAcLlmBridge } from './llm-bridge.js'
 
 export const name = 'arc-dsh'
 export const inject = ['skills', 'llm', 'shellEnv']
@@ -46,17 +46,17 @@ export async function apply(ctx) {
     resourceBase: { kind: 'directory', path: skillDir },
   })
 
-  const bridge = startArcLlmBridge({ llm: ctx.llm })
+  const bridge = startAcLlmBridge({ llm: ctx.llm })
   try {
     await bridge.ready
     ctx.shellEnv.register({
       name: 'arc-dsh',
       variables: {
-        DSH_ARC_LLM_SOCKET: {
-          description: 'Unix socket used by ARC to call the native DSH model runtime.',
+        DSH_AC_LLM_SOCKET: {
+          description: 'Unix socket used by ac-llm to call the native DSH model runtime.',
         },
-        DSH_ARC_LLM_TOKEN_FILE: {
-          description: '0600 token file used to authenticate ARC to the DSH model bridge.',
+        DSH_AC_LLM_TOKEN_FILE: {
+          description: '0600 token file used to authenticate the AC LLM bridge.',
         },
         DSH_ARC_RUNTIME: {
           description: 'Absolute ARC runtime launcher path for DSH model shell commands.',
@@ -64,8 +64,8 @@ export async function apply(ctx) {
       },
       resolve() {
         return {
-          DSH_ARC_LLM_SOCKET: bridge.socketPath,
-          DSH_ARC_LLM_TOKEN_FILE: bridge.tokenPath,
+          DSH_AC_LLM_SOCKET: bridge.socketPath,
+          DSH_AC_LLM_TOKEN_FILE: bridge.tokenPath,
           DSH_ARC_RUNTIME: join(skillDir, 'scripts', 'arc-runtime'),
         }
       },

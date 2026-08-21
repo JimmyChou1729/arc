@@ -1,20 +1,20 @@
-# ARC Jobs Quick Start
+# AC Jobs Quick Start
 
-`arc-jobs` inspects and controls durable runs created by another ARC package.
+`ac-jobs` inspects and controls durable runs created by an AC or ARC package.
 Use it when an owning workflow exposes a generic run root and run ID but does
 not offer a more specific status, validation, or stop command. For a direct-root
-owner such as `arc-llm`, retain the exact `--run-root` you supplied and the
-`run.id` it returned. Project-based owners such as `arc-domain`,
-`arc-translate`, and `arc-companion` already expose project-aware lifecycle
-commands; use those instead of inferring their internal job roots. `arc-jobs`
+owner such as `ac-llm`, retain the exact `--run-root` you supplied and the
+`run.id` it returned. Project-based owners such as `arc-domain` already expose
+project-aware lifecycle
+commands; use those instead of inferring their internal job roots. `ac-jobs`
 does not create or resume package work.
 
-## Run ARC Jobs
+## Run AC Jobs
 
-Examples below assume `arc-jobs` is on `PATH`. Check once with:
+Examples below assume `ac-jobs` is on `PATH`. Check once with:
 
 ```bash
-arc-jobs --help
+ac-jobs --help
 ```
 
 If the command is unavailable, use the portable Skill runtime launcher. Inside
@@ -22,12 +22,12 @@ an ARC source checkout, the shared package virtual environment is a direct
 development fallback:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-jobs --help
-packages/arc-paper/.venv/bin/arc-jobs --help
+<skill-dir>/scripts/arc-runtime ac-jobs --help
+packages/arc-paper/.venv/bin/ac-jobs --help
 ```
 
 `<skill-dir>` means the directory containing the active ARC Skill.
-Use the selected launcher in place of `arc-jobs` in later examples. Do not
+Use the selected launcher in place of `ac-jobs` in later examples. Do not
 search package internals for another executable.
 
 ## Inspect or Validate an Existing Run
@@ -35,15 +35,15 @@ search package internals for another executable.
 Keep the exposed run root and returned run ID together, then run:
 
 ```bash
-arc-jobs status --run-root <run-root> --run-id <run-id>
-arc-jobs validate --run-root <run-root> --run-id <run-id>
+ac-jobs status --run-root <run-root> --run-id <run-id>
+ac-jobs validate --run-root <run-root> --run-id <run-id>
 ```
 
 Prefer the owning package's status or validation command when it exposes the
-package-specific information needed for the task. Use `arc-jobs` for the
+package-specific information needed for the task. Use `ac-jobs` for the
 generic durable-run view or when no owning command exists.
 
-All non-help commands emit one `arc.command_result.v2` JSON envelope. Always
+All non-help commands emit one `ac.command_result.v2` JSON envelope. Always
 check top-level `status`, `warnings`, and `error`. The most useful result paths
 are:
 
@@ -72,12 +72,12 @@ When an owning workflow exposes a work-group ID, inspect or change its target
 without stopping the run:
 
 ```bash
-arc-jobs workers get \
+ac-jobs workers get \
   --run-root <run-root> \
   --run-id <run-id> \
   --group-id <group-id>
 
-arc-jobs workers set \
+ac-jobs workers set \
   --run-root <run-root> \
   --run-id <run-id> \
   --group-id <group-id> \
@@ -101,7 +101,7 @@ a group has no control record before it starts.
 Request a stop only when the user or owning workflow intends to pause work:
 
 ```bash
-arc-jobs stop \
+ac-jobs stop \
   --run-root <run-root> \
   --run-id <run-id> \
   --reason "<reason>"
@@ -116,7 +116,7 @@ Outside an explicit user stop, compare successive public snapshots and request
 a stop only for a recorded recurring error or repeated lack of goal-directed
 progress.
 
-`arc-jobs` has no resume command. Resume through the owning package with the
+`ac-jobs` has no resume command. Resume through the owning package with the
 same run root, run ID, and any input required by its pause descriptor.
 
 ## Failed-Run Recovery
@@ -144,13 +144,13 @@ immutable objects, recovery snapshots, indexes, and locks. When changing an
 upstream file, delete downstream editable files that must be recomputed. ARC
 warns about possible stale state but does not maintain a dependency
 invalidation graph or retry automatically. After correction, resume through
-the owning package; `arc-jobs` remains the generic inspector.
+the owning package; `ac-jobs` remains the generic inspector.
 
 ## Markdown Report Export
 
 For user-facing Markdown, run the project-aware PDF renderer described in
 `rules/math_typeset.md` as an ordinary blocking command instead of routing it
-through `arc-jobs`. The Markdown remains editable workflow source and the PDF
+through `ac-jobs`. The Markdown remains editable workflow source and the PDF
 is the visible human delivery. On failure, print `WARNING:` with the exact
 error and preserve workflow state, but do not claim PDF delivery. Rendering
 failure does not change scientific status or handoff eligibility. Do not debug
@@ -160,9 +160,9 @@ for typesetting diagnosis.
 ## Help
 
 ```bash
-arc-jobs --help
-arc-jobs <command> --help
-arc-jobs workers <get|set> --help
+ac-jobs --help
+ac-jobs <command> --help
+ac-jobs workers <get|set> --help
 ```
 
 Help describes current flags. Keep the run root and ID exposed by the owning

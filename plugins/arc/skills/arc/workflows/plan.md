@@ -205,7 +205,7 @@ Step 2: Build final content before writing files and note planned PDF export in 
 Step 3: Write the next immutable version, starting with `work-note-v001.md`;
 never overwrite an old version.
 Step 4: Mirror it to `<project-dir>/.arc/calculate/<run-id>/work-note.md`.
-Step 5: Follow `manuals/arc-jobs.md` Markdown Report Export for
+Step 5: Follow `manuals/ac-jobs.md` Markdown Report Export for
 `<project-dir>/.arc/calculate/<run-id>/work-note.md` and publish
 `<project-dir>/work-note.pdf`. The
 Markdown remains editable source, but the PDF is the human delivery. If
@@ -221,7 +221,7 @@ perform the same review.
 Step 2: Check that foundations are separated from derived results, accepted derived results were actually accepted, agent-added foundations have two-calculator support, referee trust, validity scope, and the `[foundation added by agent]` marker, validation-only references and Calculation Remarks are not premises, every ready-step free-text prompt explicitly gives its quantity, required representation in named quantities, conventions/regime/approximation order, and completion/agreement standard without leaking a target formula, new derivations have no implicit terminal variables, formal setup steps have a downstream reduction task or explicit stop condition, rough steps are not executable, target secrecy is preserved, no `status: accepted` entry remains in `## Detailed Steps Ready To Calculate`, no accepted/ready/blocked step is duplicated in `## Rough Steps For Later Planning`, all rough-step triggers are adjudicated, every parsed equation id is represented in the Equation Coverage Ledger, ready steps with disabled source tools have enough proposer-visible source excerpt or exact formula context, special PDF color markers are not inside code spans, math and TeX snippets follow `rules/math_typeset.md`, and source coverage is enough for the task.
 Step 3: If review finds gaps, build final content with the planned PDF export noted in
 the Journal, write a new immutable work-note version, mirror it to the hidden current source, and follow
-`manuals/arc-jobs.md` Markdown Report Export and replace
+`manuals/ac-jobs.md` Markdown Report Export and replace
 `<project-dir>/work-note.pdf`. If rendering fails, record a `WARNING:` with the
 exact blocker, preserve the reviewed Markdown and durable state, and do not
 claim PDF delivery. Continue to calculation from that reviewed state when it is

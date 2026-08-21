@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
-from arc_llm import ModelSelection
-from arc_proposer_reviewer import WorkerSpec
+from ac_llm import ModelSelection
+from ac_proposer_reviewer import WorkerSpec
 
 from _arc_workflows.calculate_config import (
     CalculateConfig,

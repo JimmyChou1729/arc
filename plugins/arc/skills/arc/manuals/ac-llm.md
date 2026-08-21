@@ -1,16 +1,16 @@
-# ARC LLM Quick Start
+# AC LLM Quick Start
 
-`arc-llm` runs one durable, structured host-model task. Most research work
-should call its owning ARC package or workflow instead. Use `arc-llm` directly
+`ac-llm` runs one durable, structured host-model task. Most research work
+should call its owning ARC package or workflow instead. Use `ac-llm` directly
 for provider diagnosis, one bounded structured request, or same-run recovery.
-Proposer-reviewer orchestration belongs to `arc-proposer-reviewer`.
+Proposer-reviewer orchestration belongs to `ac-proposer-reviewer`.
 
-## Run ARC LLM
+## Run AC LLM
 
-Examples below assume `arc-llm` is on `PATH`. Check once with:
+Examples below assume `ac-llm` is on `PATH`. Check once with:
 
 ```bash
-arc-llm --help
+ac-llm --help
 ```
 
 If the command is unavailable, use the portable Skill runtime launcher. Inside
@@ -18,19 +18,19 @@ an ARC source checkout, the shared package virtual environment is a direct
 development fallback:
 
 ```bash
-<skill-dir>/scripts/arc-runtime arc-llm --help
-packages/arc-paper/.venv/bin/arc-llm --help
+<skill-dir>/scripts/arc-runtime ac-llm --help
+packages/arc-paper/.venv/bin/ac-llm --help
 ```
 
 `<skill-dir>` means the directory containing the active ARC Skill.
-Use the selected launcher in place of `arc-llm` below. Do not search package
+Use the selected launcher in place of `ac-llm` below. Do not search package
 internals for another executable.
 
 When ARC is running inside DeepSeek Harness, the DSH adapter exports
-`$DSH_ARC_RUNTIME`; prefer `"$DSH_ARC_RUNTIME" arc-llm ...` if a bare
-`arc-llm` command is not found. The `dsh` provider uses the local authenticated
+`$DSH_ARC_RUNTIME`; prefer `"$DSH_ARC_RUNTIME" ac-llm ...` if a bare
+`ac-llm` command is not found. The `dsh` provider uses the local authenticated
 bridge started by the DSH plugin and delegates the actual model call to DSH's
-native `ctx.llm` service. Set `ARC_DSH_PROVIDER` when the desired DSH route is
+native `ctx.llm` service. Set `AC_DSH_PROVIDER` when the desired DSH route is
 not `deepseek-official`.
 The native bridge turns ARC's verified workspace control into a self-contained
 prompt and supports UTF-8 text-family inputs. It rejects binary inputs such as
@@ -39,14 +39,14 @@ PDF or images; first use the owning ARC tool to extract or render a text form.
 ## Check the Provider
 
 ```bash
-arc-llm doctor --provider auto
+ac-llm doctor --provider auto
 ```
 
 The diagnostic reports safe availability and selection facts without printing
 credentials. Inspect `data.provider`, `data.available`, `data.executable`, and
 `data.details`. `auto` chooses a supported host-native provider when one is
 available. In a DSH model shell, the bridge is detected through
-`DSH_SESSION_ID` or `DSH_ARC_LLM_SOCKET` and resolves to the `dsh` provider.
+`DSH_SESSION_ID` or `DSH_AC_LLM_SOCKET` and resolves to the `dsh` provider.
 
 ## Prepare a Structured Request
 
@@ -55,7 +55,7 @@ prompt, or output schema as needed:
 
 ```json
 {
-  "schema_version": "arc.llm.request.v4",
+  "schema_version": "ac.llm.request.v4",
   "task_id": "bounded_assessment",
   "prompt": "Return a concise structured assessment.",
   "output": {
@@ -83,14 +83,14 @@ data; ARC copies each accepted input into the provider workspace.
 Use a caller-owned durable root, not a temporary directory:
 
 ```bash
-arc-llm generate \
+ac-llm generate \
   --request <request.json> \
   --run-root <project-dir>/.arc/llm \
   --host-authority <host-authority> \
   --run-id <stable-run-id>
 ```
 
-All non-help commands emit one `arc.command_result.v2` envelope. Always inspect
+All non-help commands emit one `ac.command_result.v2` envelope. Always inspect
 top-level `status`, `warnings`, `error`, and `resume`. Persist the exact run
 identity at `run.id`; `run.revision` is the returned durable revision.
 
@@ -127,7 +127,7 @@ earlier workflow results. Raw candidates and formatter records remain durable.
 ## Inspect Status and Pauses
 
 ```bash
-arc-llm status \
+ac-llm status \
   --run-root <project-dir>/.arc/llm \
   --run-id <stable-run-id>
 ```
@@ -151,11 +151,11 @@ run ID. Do not search durable state for a plausible request.
 ## Resume or Stop
 
 When `resume.input_required` is true and `resume.input_schema` is
-`arc.llm.resume_input.v3`, start from this closed skeleton:
+`ac.llm.resume_input.v3`, start from this closed skeleton:
 
 ```json
 {
-  "schema_version": "arc.llm.resume_input.v3",
+  "schema_version": "ac.llm.resume_input.v3",
   "resume_key": "copy-from-resume.resume_key",
   "action": "continue",
   "host_response": null,
@@ -173,7 +173,7 @@ a non-empty `reason`, and `accept_candidate` requires one returned
 Then resume the same durable run:
 
 ```bash
-arc-llm resume \
+ac-llm resume \
   --run-root <project-dir>/.arc/llm \
   --run-id <stable-run-id> \
   --host-authority <host-authority> \
@@ -187,7 +187,7 @@ by that external condition. Do not start an unrelated retry under a new run ID.
 Request a cooperative stop only when intended:
 
 ```bash
-arc-llm stop \
+ac-llm stop \
   --run-root <project-dir>/.arc/llm \
   --run-id <stable-run-id> \
   --reason "<reason>"
@@ -218,16 +218,16 @@ provider limit applies, or the provider circuit opens after failures or rate
 limiting. On Linux, cgroup admission treats `memory.stat`'s inactive file cache
 as reclaimable; active cache and reclaimable slab remain counted as used.
 
-If the caller exposes an `arc-jobs` work-group ID, use `arc-jobs workers set`
-to change its pending-work target without restarting; see `manuals/arc-jobs.md`.
+If the caller exposes an `ac-jobs` work-group ID, use `ac-jobs workers set`
+to change its pending-work target without restarting; see `manuals/ac-jobs.md`.
 That operation changes caller demand only. It does not raise or bypass the
 provider gate, memory guard, or circuit breaker.
 
 ## Help
 
 ```bash
-arc-llm --help
-arc-llm <command> --help
+ac-llm --help
+ac-llm <command> --help
 ```
 
 Help describes current commands and flags. Use the complete request and resume

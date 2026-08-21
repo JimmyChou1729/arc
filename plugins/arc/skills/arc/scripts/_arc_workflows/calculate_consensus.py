@@ -49,7 +49,7 @@ def _review_decision(
     if len(active_proposer_ids) != 2 or len(set(active_proposer_ids)) != 2:
         raise ValueError("calculate review requires exactly two calculator ids")
     _require_exact_fields(review, _PUBLIC_REVIEW_FIELDS, "review")
-    if review.get("schema_version") != "arc.proposer_reviewer.review.v1":
+    if review.get("schema_version") != "ac.proposer_reviewer.review.v1":
         raise ValueError(
             "review must use the public proposer-reviewer review envelope"
         )

@@ -1,12 +1,10 @@
 {
   "name": "arc",
-  "version": "1.1.1",
-  "description": "CLI-first ARC paper, research-domain, and report typesetting tools.",
-  "author": {
-    "name": "ARC"
-  },
+  "version": "2.0.0",
+  "description": "Agent Research Copilot for academic papers and theoretical-physics research workflows.",
+  "author": {"name": "ARC"},
   "homepage": "https://github.com/tririver/arc",
   "repository": "https://github.com/tririver/arc",
   "license": "MIT",
-  "keywords": ["arc", "papers", "arxiv", "inspire", "research", "typesetting", "pdf", "translation"]
+  "keywords": ["arc", "papers", "arxiv", "inspire", "research"]
 }

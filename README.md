@@ -1,166 +1,100 @@
 # ARC
 
-Agent Research Copilot (ARC) is a research toolkit for theoretical
-physics. It supports paper discovery and analysis, research-domain
-construction, proposer-reviewer loops, translation, companion readers, and
-source-aware calculation workflows.
+Agent Research Copilot (ARC) is the research layer for theoretical-physics
+papers. It provides academic-paper access and source-aware research-domain,
+idea, planning, calculation, and checking workflows.
 
-ARC is designed for coding-agent hosts such as Codex, Claude Code, and similar
-agents.
+ARC v2 depends on [AC Foundation](https://github.com/tririver/ac-foundation)
+for durable jobs, model calls, neutral documents, and proposer-reviewer
+orchestration. OCR proofreading, translation, Companion readers, and HTML
+publication belong to [ALC](https://github.com/tririver/alc).
 
-## Who ARC is for
+## Packages
 
-Use ARC when you need to:
+- `arc-paper`: arXiv, INSPIRE, DOI, paper caching, structural reads, citation
+  traversal, and summaries.
+- `arc-domain`: evidence-bearing research-domain construction and exports.
 
-- acquire, parse, search, or summarize research papers;
-- construct a source-aware research domain from seed literature;
-- run proposer-reviewer idea or calculation loops;
-- translate scientific sources or build chapter-aware companion readers; or
-- use durable, inspectable research workflows instead of ad hoc
-  prompts.
-
-## Citation
-
-If ARC has played a role in your research, please consider citing the ARC manual.
-
-Yanjiao Ma, Yi Wang, and Xingkai Zhang. _ARC: An LLM-Native Agent
-Workflow for Theoretical Physics Research_. ChinaXiv:202606.00234, 2026.
-https://chinaxiv.org/abs/202606.00234
-
-```bibtex
-@misc{ma2026arc,
-  title         = {{ARC}: An {LLM}-Native Agent Workflow for Theoretical Physics Research},
-  author        = {Ma, Yanjiao and Wang, Yi and Zhang, Xingkai},
-  year          = {2026},
-  month         = jun,
-  publisher     = {ChinaXiv},
-  eprint        = {202606.00234},
-  archivePrefix = {ChinaXiv},
-  url           = {https://chinaxiv.org/abs/202606.00234},
-  note          = {Version 1}
-}
-```
+The public `arc-paper` API is unchanged by the v2 repository split. Foundation
+commands remain available through `arc-runtime`; the plugin exposes only the
+`arc-runtime`, `arc-paper`, and `arc-domain` wrappers.
 
 ## Install
 
-### Remarks:
+ARC is distributed as an agent plugin with a lazy, SHA-locked private runtime.
+The runtime installs exact Git revisions of AC Foundation and ARC; no PyPI
+publication is assumed.
 
-- Permission: the same as many heavy skills/plugins, ARC will need permissions to run Python scripts. Accepting permissions could be annoying. We recommend installing ARC within docker or a virtual machine, and allow all permissions in that virtual environment. As always for working with AI agents, be aware of risk to your data and system.
+For Codex:
 
-- Token usage. As measured using Claude + DeepSeek, a typical run of domain build + idea generation consumes about 1M uncached input tokens, and 0.5M output tokens, in about an hour's running time. The token usage may vary depending on the specific tasks and LLM used. Be aware of token usage and costs.
-
-### Codex
-
-In CLI (or if run in Codex, put prefix `!`), run:
 ```bash
 codex plugin marketplace add tririver/arc --ref stable
 codex plugin add arc@arc
 ```
 
-### Claude Code
+For Claude Code:
 
-In the Claude Code environment, run:
 ```text
 /plugin marketplace add tririver/arc@stable
 /plugin install arc
 ```
 
-### DeepSeek Harness
-
-Install the optional DSH bundle directly from GitHub:
+For DeepSeek Harness:
 
 ```bash
 dsh plugin --profile arc add github:tririver/arc
 ```
 
-For local development, install a checkout instead:
+Check or prewarm the locked runtime:
 
 ```bash
-dsh plugin --profile arc add /path/to/arc
-dsh --profile arc --dump-config
+plugins/arc/bin/arc-runtime doctor
+plugins/arc/bin/arc-runtime setup
 ```
 
-The adapter registers the existing ARC Skill and its resource tree. It targets
-Linux, macOS, and WSL because ARC's portable runtime launcher is Bash-based.
-The bundle has no dependencies and does not make Node.js or a JavaScript
-package manager a requirement for ARC users on other agent hosts. With DSH's
-default workspace-write sandbox, launch from a writable project directory and
-set `ARC_HOME="$PWD/.arc"` so the lazy ARC runtime is installed inside that
-workspace.
+The default paper cache is `.arc/cache/arc-paper` below the launch directory;
+override it with `ARC_PAPER_CACHE`. Foundation runtime and neutral document
+state use `AC_HOME`, `AC_RUNTIME_HOME`, and `AC_DOCUMENT_CACHE`.
 
-The optional native bridge exposes DSH's configured `ctx.llm` service to
-ARC's `dsh` provider over an authenticated, per-process Unix socket. DSH keeps
-ownership of provider credentials, routing, retries, and streaming; ARC only
-receives normalized text, usage, and terminal events. In a DSH model shell,
-use `"$DSH_ARC_RUNTIME" arc-llm ...` when a bare `arc-llm` command is not on
-`PATH`. Set `ARC_DSH_PROVIDER` only when the desired DSH provider route is not
-`deepseek-official`.
+## Use
 
-### Other coding agents
-
-Give your coding agent this repository and ask it to inspect the repository and
-install ARC for its environment.
-
-## Upgrade
-
-### Codex
-
-```bash
-codex plugin marketplace upgrade arc
-codex plugin add arc@arc
-```
-
-## Start with ARC
-
-After installing ARC, ask for any academic `arc-paper` outcome directly;
-naming ARC is optional. This includes LLM-backed paper summaries:
+Ask an installed agent directly for ordinary paper outcomes:
 
 ```text
 Summarize arXiv:0911.3380.
-Find its references and papers that cite it.
+Find its references and citing papers.
 Show the context around equation 2.30.
 ```
 
-Explicitly name ARC for other capabilities, including the longer managed
-research workflows:
+Name ARC for managed research workflows:
 
 ```text
-Use ARC to build a domain from arXiv:0911.3380 with new papers since 2024.
-Use ARC to develop and review ideas from the resulting domain.
+Use ARC to build a domain from arXiv:0911.3380 with papers since 2024.
+Use ARC to develop and review ideas from that domain.
 Use ARC to check this calculation.
-Use ARC to translate this source.
-Use ARC to build a keyword inventory from this local document.
 ```
 
-An installed ARC plugin exposes its bundled Skill and manuals to the agent.
-The Skill loads only the manuals selected by the request. Those manuals provide
-task-oriented quick starts; built-in `--help` provides exact commands, options,
-and error guidance.
+## Citation
 
-## Development and release
+If ARC contributes to your research, please cite:
 
-ARC development requires Python 3.11 or newer. Read `AGENTS.md` before making
-changes.
+Yanjiao Ma, Yi Wang, and Xingkai Zhang. *ARC: An LLM-Native Agent Workflow
+for Theoretical Physics Research*. ChinaXiv:202606.00234, 2026.
+https://chinaxiv.org/abs/202606.00234
 
-Keep research runs and generated output below the git-ignored `local/` tree.
+## Development
 
-Run focused package tests first, then the combined offline test and build
-checks:
+Python 3.11 or newer is required. Read `AGENTS.md`, keep generated work below
+ignored `local/`, and run:
 
 ```bash
-python -m pytest --import-mode=importlib packages/*/tests
-scripts/check-packages.sh
+AC_FOUNDATION_REPO_ROOT=../ac-foundation python scripts/check-generated-foundation.py
+PYTHONPATH="$(find ../ac-foundation/packages packages -mindepth 2 -maxdepth 2 -type d -name src -print | paste -sd: -)" \
+  python -m pytest --import-mode=importlib packages/*/tests tests
+scripts/build-packages.sh
 ```
 
-Network and live-model tests are opt-in. Do not use them as the default
-development check.
-
-Releases are explicit human operations from a clean release checkout:
-
-```bash
-scripts/release-arc.sh <version>
-```
-
-The helper validates the release, updates package and plugin versions, and
-pauses before its mutating Git steps. See `AGENTS.md` for repository
-development, verification, and release constraints.
+Prepare an approved release from a clean checkout with
+`scripts/release-arc.sh <version>`. The script updates both packages and plugin
+manifests, validates them, and pins the release source commit; it does not tag
+or publish.

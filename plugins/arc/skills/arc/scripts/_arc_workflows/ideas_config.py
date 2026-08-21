@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from arc_jobs import canonical_json_bytes
+from ac_jobs import canonical_json_bytes
 from arc_paper import normalize_paper_id
 
 from _arc_workflows.domain_seed_provenance import (

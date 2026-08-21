@@ -9,7 +9,7 @@ nothing was found.
 
 Provider-neutral local import, deterministic parsing, frozen document reads,
 keyword inventories, rich-document export, and document-cache administration
-belong to `arc-document`; see `arc-document.md`. `arc-paper` may expose
+belong to `ac-document`; see `ac-document.md`. `arc-paper` may expose
 compatibility commands for these operations, but new neutral workflows should
 call their owning package.
 
@@ -308,13 +308,13 @@ arc-paper extract-keywords <source> \
 
 Use `unrestricted` only when explicitly granted; otherwise use `unknown`, and
 reuse the same value on resume. Restricted or unknown requests follow
-`manuals/arc-llm.md`. The target count is approximate: selected terms are
+`manuals/ac-llm.md`. The target count is approximate: selected terms are
 deduplicated and labeled with machine-counted occurrence frequency, without
 padding. Explicit indexes receive model review. `matched_sentences` are
 grounding hits, never definitions.
 
 Keyword extraction is durable. Resume with the returned descriptor and the
-same project/run identity; use `arc-jobs` for generic lifecycle operations.
+same project/run identity; use `ac-jobs` for generic lifecycle operations.
 
 ## Help, Cache, and Recovery
 

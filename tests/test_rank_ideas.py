@@ -11,9 +11,9 @@ from typing import Any, Mapping
 
 import pytest
 
-from arc_jobs import ResumeReason, RunEngine, RunRepository, RunSpec, RunStatus
-from arc_llm import InvalidRequestError, LLMCompleted, LLMFailed, LLMPaused
-from arc_proposer_reviewer import (
+from ac_jobs import ResumeReason, RunEngine, RunRepository, RunSpec, RunStatus
+from ac_llm import InvalidRequestError, LLMCompleted, LLMFailed, LLMPaused
+from ac_proposer_reviewer import (
     BatchFailurePolicy,
     BatchRequest,
     LoopSpec,
@@ -21,8 +21,8 @@ from arc_proposer_reviewer import (
     ProposerReviewerService,
     WorkerSpec,
 )
-from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
-from arc_proposer_reviewer.protocol import encode_batch_request
+from ac_proposer_reviewer.models import BATCH_SCHEMA_VERSION
+from ac_proposer_reviewer.protocol import encode_batch_request
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -417,7 +417,7 @@ class _ScriptedLLM:
         }
         return LLMCompleted(
             {
-                "schema_version": "arc.proposer_reviewer.review.v1",
+                "schema_version": "ac.proposer_reviewer.review.v1",
                 "action": "stop",
                 "reason": "The scripted assessment is complete.",
                 "feedback": feedback,

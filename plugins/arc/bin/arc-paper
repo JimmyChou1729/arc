@@ -2,4 +2,4 @@
 set -euo pipefail
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
-ARC_RUNTIME_TOOL="arc-paper" exec "$script_dir/../skills/arc/scripts/arc-runtime" "$@"
+exec "$script_dir/../skills/arc/scripts/arc-runtime" arc-paper "$@"

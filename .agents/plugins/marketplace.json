@@ -1,20 +1,13 @@
 {
   "name": "arc",
-  "interface": {
-    "displayName": "ARC"
-  },
+  "description": "ARC academic-paper and research workflows.",
+  "owner": {"name": "ARC"},
   "plugins": [
     {
       "name": "arc",
-      "source": {
-        "source": "local",
-        "path": "./plugins/arc"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
+      "description": "Agent Research Copilot research workflows.",
+      "source": "./plugins/arc",
+      "category": "research"
     }
   ]
 }

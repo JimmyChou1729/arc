@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from arc_proposer_reviewer import BatchFailurePolicy, BatchRequest
-from arc_proposer_reviewer.models import BATCH_SCHEMA_VERSION
+from ac_proposer_reviewer import BatchFailurePolicy, BatchRequest
+from ac_proposer_reviewer.models import BATCH_SCHEMA_VERSION
 
 from _arc_workflows.ideas_config import IdeasConfig
 from _arc_workflows.ideas_context import (

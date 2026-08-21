@@ -6,7 +6,7 @@ import os
 from collections.abc import Iterable
 from typing import Any, Mapping
 
-from arc_proposer_reviewer import BatchRequest, LoopSpec
+from ac_proposer_reviewer import BatchRequest, LoopSpec
 
 from _arc_workflows.ideas_config import ConfigError, IdeasConfig
 
@@ -66,7 +66,7 @@ def concurrency_warning(
         "WARNING: Running "
         f"{len(config.variants)} variants x {config.loops_per_variant} proposer-reviewer loops "
         f"with {round_text} and loop concurrency capped at {max_concurrent} ({proposal_count} loops). "
-        "The typed batch stores durable artifacts through arc-jobs."
+        "The typed batch stores durable artifacts through ac-jobs."
     )
 
 
