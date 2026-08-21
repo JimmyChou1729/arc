@@ -80,7 +80,7 @@ provide an explicit set; never create duplicate loops that differ only by ID.
 Step 1: Run:
 
 ```bash
-python3 <skill-dir>/scripts/run-ideas.py \
+<skill-dir>/scripts/arc-runtime script <skill-dir>/scripts/run-ideas.py \
   --config <project-dir>/.arc/ideas/<run-id>.config.json \
   --host-authority <host-authority> \
   --json
@@ -279,7 +279,7 @@ Publish the deterministic ranked report as PDF to both the per-run archive and
 the easy-to-find project root:
 
 ```bash
-python3 <skill-dir>/scripts/rank-ideas.py \
+<skill-dir>/scripts/arc-runtime script <skill-dir>/scripts/rank-ideas.py \
   --project-dir <project-dir> \
   --run-id <run-id> \
   --format pdf
@@ -297,7 +297,7 @@ For a paused or otherwise incomplete batch with trace-verified complete
 committed rounds, a diagnostic report may also be published explicitly:
 
 ```bash
-python3 <skill-dir>/scripts/rank-ideas.py \
+<skill-dir>/scripts/arc-runtime script <skill-dir>/scripts/rank-ideas.py \
   --project-dir <project-dir> \
   --run-id <run-id> \
   --mode partial \

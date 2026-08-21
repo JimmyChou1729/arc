@@ -72,7 +72,7 @@ Use ARC paper tools or web research when more document evidence is needed. Worke
 Run:
 
 ```bash
-python3 <skill-dir>/scripts/run-calculate.py \
+<skill-dir>/scripts/arc-runtime script <skill-dir>/scripts/run-calculate.py \
   --config <project-dir>/.arc/calculate/<run-id>/execute/calculate.config.json \
   --host-authority <host-authority>
 ```

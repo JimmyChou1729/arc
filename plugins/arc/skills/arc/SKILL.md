@@ -155,6 +155,12 @@ For example:
   --run-root <run-root> --run-id <run-id>
 ```
 
+Run Skill-owned Python workflow adapters inside that same private environment:
+
+```bash
+<skill-dir>/scripts/arc-runtime script <skill-dir>/scripts/<workflow>.py [args...]
+```
+
 `inspect`, `trace`, and `show-round` are the only public observation surface
 for a proposer-reviewer batch. `inspect` activity is best effort and cannot
 drive ranking, recovery, retries, or resume. `trace` exposes only verified

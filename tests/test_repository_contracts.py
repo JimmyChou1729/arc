@@ -137,3 +137,17 @@ def test_ci_exports_the_foundation_checkout_to_source_mode() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "AC_FOUNDATION_REPO_ROOT: ${{ github.workspace }}/local/ac-foundation" in workflow
     assert "git clone https://github.com/tririver/ac-foundation.git local/ac-foundation" in workflow
+
+
+def test_managed_workflow_scripts_use_the_private_runtime() -> None:
+    expected = {
+        "domain.md": ("write-domain-manifest.py",),
+        "ideas.md": ("run-ideas.py", "rank-ideas.py"),
+        "calculate.md": ("run-calculate.py",),
+    }
+    workflow_root = PLUGIN / "skills/arc/workflows"
+    for workflow, scripts in expected.items():
+        text = (workflow_root / workflow).read_text(encoding="utf-8")
+        for script in scripts:
+            assert f"arc-runtime script <skill-dir>/scripts/{script}" in text
+            assert f"python3 <skill-dir>/scripts/{script}" not in text

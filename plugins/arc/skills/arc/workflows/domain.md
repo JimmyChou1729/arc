@@ -343,7 +343,7 @@ typed domain view and accepts only the current closed v5 summary contract.
 Unsupported summary schemas and missing-record seed fallbacks are rejected.
 
 ```bash
-python3 <skill-dir>/scripts/write-domain-manifest.py \
+<skill-dir>/scripts/arc-runtime script <skill-dir>/scripts/write-domain-manifest.py \
   --project-dir <project-dir> \
   --json
 ```
