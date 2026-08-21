@@ -13,7 +13,7 @@ def test_arc_paper_metadata_publishes_only_the_supported_cli() -> None:
     )
     project = value["project"]
 
-    assert project["version"] == "1.1.0"
+    assert project["version"] == "1.1.1"
     assert project["scripts"] == {"arc-paper": "arc_paper.cli:main"}
     assert "arc-jobs>=1.1,<1.2" in project["dependencies"]
     assert "arc-llm>=1.1,<1.2" in project["dependencies"]
