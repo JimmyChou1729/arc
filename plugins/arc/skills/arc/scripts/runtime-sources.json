@@ -1,12 +1,11 @@
 {
-  "schema_version": "ac.runtime_sources.v1",
+  "schema_version": "ac.runtime_sources.v2",
   "profile": "arc",
   "sources": [
     {
       "id": "foundation",
       "repository": "https://github.com/tririver/ac-foundation.git",
-      "commit": "8cb4429605b09793cd6ce423063e42055acbd919",
-      "version": ">=2,<3",
+      "commit": "027a4a1aef084138760638fb0e0cff2a6b075402",
       "packages": [
         "ac-jobs",
         "ac-llm",
@@ -25,7 +24,6 @@
       "id": "product",
       "repository": "https://github.com/tririver/arc.git",
       "commit": "29c6af66197cccfc38d541bbaecae6f0af9b8610",
-      "version": ">=2,<3",
       "packages": [
         "arc-paper",
         "arc-domain"

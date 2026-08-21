@@ -13,11 +13,13 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from ac_document import DocumentCacheAdministrator
-from ac_jobs import canonical_json_bytes as _canonical_json_bytes
+from ac_jobs import (
+    atomic_write_bytes,
+    canonical_json_bytes as _canonical_json_bytes,
+    file_lease,
+)
 
 from ._cache_root import resolve_cache_root
-from ._durable_io import atomic_write_bytes
-from ._file_lock import exclusive_file_lock
 from .ids import normalize_paper_id
 from .providers.remote_cache import RemoteCacheAdminEntry, RemoteRequestCache
 
@@ -201,8 +203,9 @@ class PaperCacheIndex:
     @contextmanager
     def _entry_lock(self, entry_id: str) -> Iterator[None]:
         digest = hashlib.sha256(entry_id.encode("utf-8")).hexdigest()
-        with exclusive_file_lock(
-            self.root / "cache-admin" / "v3" / "locks" / f"{digest}.lock"
+        with file_lease(
+            self.root / "cache-admin" / "v3" / "locks" / f"{digest}.lock",
+            blocking=True,
         ):
             yield
 

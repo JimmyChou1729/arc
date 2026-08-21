@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
+from ac_jobs import atomic_write_bytes, file_lease, file_matches_sha256
+
 from ._cache_root import resolve_cache_root
-from ._durable_io import atomic_write_bytes, payload_matches
-from ._file_lock import exclusive_file_lock
 from .ids import arxiv_path_id, doi_value
 
 
@@ -186,7 +186,7 @@ class ReferenceMaterialCache:
         object_dir = self._resource_dir(digest)
         manifest_path = object_dir / "manifest.json"
         payload_path = object_dir / "resource"
-        with exclusive_file_lock(self._resource_lock(digest)):
+        with file_lease(self._resource_lock(digest), blocking=True):
             if manifest_path.exists():
                 size, media_types = self._read_resource_object(digest)
                 if size != len(payload):
@@ -210,7 +210,7 @@ class ReferenceMaterialCache:
                     )
             else:
                 object_dir.mkdir(parents=True, exist_ok=True)
-                if not payload_matches(payload_path, digest, len(payload)):
+                if not file_matches_sha256(payload_path, digest, len(payload)):
                     atomic_write_bytes(payload_path, payload)
                 atomic_write_bytes(
                     manifest_path,
@@ -239,7 +239,7 @@ class ReferenceMaterialCache:
         readable_resource: CachedResourceRef | None = None,
     ) -> CachedReferenceMaterial:
         incoming = CachedReferenceMaterial(identity, resources, readable_resource)
-        with exclusive_file_lock(self._records_lock()):
+        with file_lease(self._records_lock(), blocking=True):
             existing = self._all_materials_unlocked()
             compatible = [
                 item for item in existing if _identities_compatible(item.identity, identity)
@@ -312,7 +312,7 @@ class ReferenceMaterialCache:
                 lambda item: normalize_reference_title(item.identity.title)
                 == normalized_title
             )
-        with exclusive_file_lock(self._records_lock()):
+        with file_lease(self._records_lock(), blocking=True):
             matches = [item for item in self._all_materials_unlocked() if predicate(item)]
         if not matches:
             return None
@@ -326,7 +326,9 @@ class ReferenceMaterialCache:
     def read_resource(self, reference: CachedResourceRef) -> bytes:
         if not isinstance(reference, CachedResourceRef):
             raise TypeError("reference must be a CachedResourceRef")
-        with exclusive_file_lock(self._resource_lock(reference.resource_sha256)):
+        with file_lease(
+            self._resource_lock(reference.resource_sha256), blocking=True
+        ):
             size, media_types = self._read_resource_object(
                 reference.resource_sha256
             )
@@ -448,7 +450,7 @@ class ReferenceMaterialCache:
                 "reference_resource_manifest_invalid",
                 "cached resource manifest has an invalid schema",
             )
-        if not payload_matches(
+        if not file_matches_sha256(
             object_dir / "resource", digest, value["resource_size"]
         ):
             raise ReferenceCacheError(

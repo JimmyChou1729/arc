@@ -35,18 +35,18 @@ Use `arc-paper --help` and `arc-paper get-metadata --help` for the current
 paper, source, search, workflow, and cache commands.
 
 Provider-neutral export belongs to `ac-document`; use its output for direct
-`arc-render` composition:
+`alc-render` composition:
 
 ```bash
 ac-document export-rich-document ./note.md \
   --output-dir ./render-input \
-  --cache-root ./.arc/cache/ac-document
+  --cache-root ./.ac/cache/ac-document
 
-arc-render compose \
+alc-render compose \
   --source ./render-input/rich-source.json \
   --metadata ./render-input/metadata.json \
   --output ./render-input/publication.json
-arc-render render \
+alc-render render \
   --publication ./render-input/publication.json \
   --html ./render-input/reader.html
 ```

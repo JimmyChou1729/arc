@@ -1,4 +1,6 @@
 def test_package_imports():
     import arc_paper
+    from pathlib import Path
 
-    assert arc_paper.__version__ == "2.0.0"
+    version = (Path(__file__).resolve().parents[3] / "VERSION").read_text().strip()
+    assert arc_paper.__version__ == version

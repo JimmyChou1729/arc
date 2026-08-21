@@ -43,9 +43,9 @@ from ac_llm import (
 )
 
 from ..parse import ParsedDocument, parsed_document_from_document
-from ._llm import (
+from ac_document.workflow_support import (
+    DocumentWorkflowError as PaperWorkflowError,
     LLMCallProvenance,
-    PaperWorkflowError,
     TaskService,
     awaiting_from_pause,
     execute_routed as _execute_routed,

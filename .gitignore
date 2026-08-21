@@ -15,7 +15,6 @@ superpowers/
 !.env.example
 llm-providers.json
 llm-providers.local.json
-.arc-llm-providers.json
 
 # NPM, PNPM
 
@@ -63,5 +62,3 @@ Thumbs.db
 *.tmp
 *.swp
 *.swo
-.understand-anything/config.json
-.understand-anything/config.json

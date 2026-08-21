@@ -1025,7 +1025,7 @@ class ArcPaperService(AcDocumentService):
     ) -> dict[str, Any]:
         """Verify and atomically materialize one cached resource."""
 
-        from ._durable_io import atomic_write_bytes
+        from ac_jobs import atomic_write_bytes
 
         payload = ReferenceMaterialCache(self.cache_root).read_resource(resource)
         output_path = Path(output)

@@ -356,7 +356,7 @@ def _parser() -> _Parser:
 
     exported_rich = commands.add_parser(
         "export-rich-document",
-        help="export a local rich source for direct arc-render composition",
+        help="export a portable rich-document workspace for downstream rendering",
         description=(
             "Parse a local Markdown, HTML, or flattened TeX source and export "
             "a portable RichDocument workspace with verified resources."

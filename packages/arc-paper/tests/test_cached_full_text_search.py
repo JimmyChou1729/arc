@@ -22,8 +22,8 @@ from arc_paper import (
     SourceRepository,
 )
 from arc_paper._full_text_catalog import FullTextCatalog
-from arc_paper._parsed_document_cache import ParsedDocumentCache
-from arc_paper._ripgrep import RipgrepCandidateSelector, RipgrepError
+from ac_document._parsed_document_cache import ParsedDocumentCache
+from ac_document._ripgrep import RipgrepCandidateSelector, RipgrepError
 from arc_paper.cached_full_text_search import CachedFullTextSearcher
 from arc_paper.parse.parser import parse_artifact_bytes
 from arc_paper.registry import OperationRequestError, get_operation, to_json_value

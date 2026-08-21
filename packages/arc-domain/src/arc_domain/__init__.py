@@ -1,5 +1,7 @@
 """Durable research-domain construction for ARC."""
 
+__version__ = "2.0.0"
+
 from .build import (
     DOMAIN_BUILD_HANDLER,
     DOMAIN_BUILD_SEMANTIC_SCHEMA_VERSION,

@@ -15,6 +15,8 @@ EXPECTED = {
     "arc-paper": {"ac-document", "ac-jobs", "ac-llm"},
     "arc-domain": {"ac-jobs", "ac-llm", "arc-paper"},
 }
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+ARC_MAJOR = int(VERSION.split(".")[0])
 
 
 def _project(package: str) -> dict[str, object]:
@@ -28,7 +30,7 @@ def test_package_set_metadata_and_dependency_graph() -> None:
     for package, internal in EXPECTED.items():
         project = _project(package)
         assert project["name"] == package
-        assert project["version"] == "2.0.0"
+        assert project["version"] == VERSION
         assert project["authors"] == [{"name": "ARC"}]
         assert project["urls"]["Repository"] == "https://github.com/tririver/arc"
         dependencies = {
@@ -38,8 +40,10 @@ def test_package_set_metadata_and_dependency_graph() -> None:
         }
         assert dependencies == internal
         for dependency in project.get("dependencies", []):
-            if dependency.startswith(("ac-", "arc-")):
-                assert dependency.endswith(">=2,<3")
+            if dependency.startswith("arc-"):
+                assert dependency.endswith(f">={ARC_MAJOR},<{ARC_MAJOR + 1}")
+            elif dependency.startswith("ac-"):
+                assert re.search(r">=\d+,<\d+$", dependency)
 
 
 def test_research_packages_have_no_learning_or_legacy_core_dependency() -> None:
@@ -62,6 +66,23 @@ def test_research_packages_have_no_learning_or_legacy_core_dependency() -> None:
         assert stale not in source
 
 
+def test_arc_paper_has_no_private_foundation_forwarders() -> None:
+    package = PACKAGES / "arc-paper/src/arc_paper"
+    retired = {
+        "_durable_io.py",
+        "_file_lock.py",
+        "_parsed_document_cache.py",
+        "_ripgrep.py",
+    }
+    assert not retired.intersection(path.name for path in package.iterdir())
+    assert not list((package / "_parsing").glob("*.py"))
+    assert not (package / "workflows/_llm.py").exists()
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in package.rglob("*.py")
+    )
+    assert "from ac_document._" not in source
+
+
 def test_plugin_exposes_only_research_wrappers_and_workflows() -> None:
     wrappers = {path.name for path in (PLUGIN / "bin").iterdir() if path.is_file()}
     assert wrappers == {"arc-runtime", "arc-paper", "arc-domain"}
@@ -75,14 +96,14 @@ def test_plugin_exposes_only_research_wrappers_and_workflows() -> None:
         assert learning not in skill
 
 
-def test_runtime_source_lock_uses_full_shas_and_major_ranges() -> None:
+def test_runtime_source_lock_uses_full_shas() -> None:
     lock = json.loads((SCRIPTS / "runtime-sources.json").read_text(encoding="utf-8"))
-    assert lock["schema_version"] == "ac.runtime_sources.v1"
+    assert lock["schema_version"] == "ac.runtime_sources.v2"
     assert lock["profile"] == "arc"
     assert {source["id"] for source in lock["sources"]} == {"foundation", "product"}
     for source in lock["sources"]:
         assert re.fullmatch(r"[0-9a-f]{40}", source["commit"])
-        assert source["version"] == ">=2,<3"
+        assert "version" not in source
 
 
 def test_generated_foundation_copies_match_manifest() -> None:
@@ -102,6 +123,8 @@ def test_release_script_covers_all_packages_without_publishing() -> None:
     assert "runtime-sources.json" in release
     assert "git push" not in release
     assert "git tag" not in release
+    assert "check-generated-foundation.py" in release
+    assert "check-runtime-constraints.py" in release
 
 
 def test_build_outputs_are_checkout_local() -> None:

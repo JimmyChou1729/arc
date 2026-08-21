@@ -34,9 +34,9 @@ from ac_llm import (
 )
 
 from ..ids import arxiv_path_id, doi_value, extract_paper_ids, inspire_recid, normalize_paper_id
-from ._llm import (
+from ac_document.workflow_support import (
+    DocumentWorkflowError as PaperWorkflowError,
     LLMCallProvenance,
-    PaperWorkflowError,
     awaiting_from_pause,
     execute_routed,
     model_document,

@@ -9,11 +9,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from ac_jobs import canonical_json_bytes as _jobs_canonical_json_bytes
+from ac_jobs import (
+    atomic_write_bytes,
+    canonical_json_bytes as _jobs_canonical_json_bytes,
+    file_lease,
+    file_matches_sha256,
+)
 
 from .._cache_root import resolve_cache_root
-from .._durable_io import atomic_write_bytes, payload_matches
-from .._file_lock import exclusive_file_lock
 from ..source_repository import SourceRepository, SourceRepositoryError
 from ..sources import SourceArtifact, SourceFormat, SourceOrigin
 
@@ -583,7 +586,7 @@ class RemoteRequestCache:
             / _safe_namespace(namespace)
             / f"{digest}.lock"
         )
-        with exclusive_file_lock(path):
+        with file_lease(path, blocking=True):
             yield
 
     @staticmethod
@@ -643,7 +646,7 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _payload_matches(path: Path, digest: str, size: int) -> bool:
-    return payload_matches(path, digest, size)
+    return file_matches_sha256(path, digest, size)
 
 
 def _payload_is_valid(

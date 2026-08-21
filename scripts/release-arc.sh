@@ -25,6 +25,18 @@ if [ -n "$(git -C "$root" status --porcelain)" ]; then
   exit 65
 fi
 
+foundation_path="${AC_FOUNDATION_REPO_ROOT:-$root/../ac-foundation}"
+AC_FOUNDATION_REPO_ROOT="$foundation_path" \
+  "$python_bin" "$root/scripts/check-generated-foundation.py"
+constraint_args=()
+for project in "$foundation_path"/packages/ac-*/pyproject.toml \
+  "$root"/packages/arc-*/pyproject.toml; do
+  constraint_args+=(--package "$project")
+done
+"$python_bin" "$foundation_path/scripts/check-runtime-constraints.py" \
+  --constraints "$root/plugins/arc/skills/arc/scripts/runtime-constraints.txt" \
+  "${constraint_args[@]}"
+
 "$python_bin" - "$root" "$version" <<'PY'
 from __future__ import annotations
 
@@ -47,20 +59,26 @@ if observed != expected:
 current = (root / "VERSION").read_text(encoding="utf-8").strip()
 if tuple(map(int, version.split("."))) <= tuple(map(int, current.split("."))):
     raise SystemExit(f"release version must be newer than {current}: {version}")
-major = int(version.split(".")[0])
-internal_range = f">={major},<{major + 1}"
+current_major = int(current.split(".")[0])
+target_major = int(version.split(".")[0])
+current_range = f">={current_major},<{current_major + 1}"
+target_range = f">={target_major},<{target_major + 1}"
+
+updates: list[tuple[Path, str, Path, str]] = []
 
 for path in projects:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     if data["project"]["version"] != current:
         raise SystemExit(f"{path} version differs from VERSION")
     for dependency in data["project"].get("dependencies", []):
-        if dependency.startswith(("ac-", "arc-")) and internal_range not in dependency:
+        if dependency.startswith("arc-") and current_range not in dependency:
             raise SystemExit(
-                f"{path} AC/ARC dependency must use {internal_range}: {dependency}"
+                f"{path} ARC dependency must use {current_range}: {dependency}"
             )
+        if dependency.startswith("ac-") and re.search(r">=\d+,<\d+$", dependency) is None:
+            raise SystemExit(f"{path} AC dependency must use one major range: {dependency}")
     text = path.read_text(encoding="utf-8")
-    text, count = re.subn(
+    updated_text, count = re.subn(
         rf'(?m)^version = "{re.escape(current)}"$',
         f'version = "{version}"',
         text,
@@ -68,10 +86,14 @@ for path in projects:
     )
     if count != 1:
         raise SystemExit(f"could not update project version in {path}")
-    path.write_text(text, encoding="utf-8")
+    updated_text = re.sub(
+        rf'(?m)^(\s*"arc-[^"]*?){re.escape(current_range)}',
+        rf'\g<1>{target_range}',
+        updated_text,
+    )
     init_path = next((path.parent / "src").glob("*/__init__.py"))
     init_text = init_path.read_text(encoding="utf-8")
-    init_text, count = re.subn(
+    updated_init, count = re.subn(
         rf'(?m)^__version__ = "{re.escape(current)}"$',
         f'__version__ = "{version}"',
         init_text,
@@ -79,7 +101,7 @@ for path in projects:
     )
     if count != 1:
         raise SystemExit(f"could not update __version__ in {init_path}")
-    init_path.write_text(init_text, encoding="utf-8")
+    updates.append((path, updated_text, init_path, updated_init))
 
 for path in (
     root / "plugins/arc/.codex-plugin/plugin.json",
@@ -89,7 +111,7 @@ for path in (
     if document.get("version") != current:
         raise SystemExit(f"{path} version differs from VERSION")
     document["version"] = version
-    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    updates.append((path, json.dumps(document, indent=2) + "\n", path, ""))
 
 constraints = root / "plugins/arc/skills/arc/scripts/runtime-constraints.txt"
 text = constraints.read_text(encoding="utf-8")
@@ -101,16 +123,19 @@ text, count = re.subn(
 )
 if count != 1:
     raise SystemExit("runtime constraints release header is inconsistent")
-constraints.write_text(text, encoding="utf-8")
 (root / "VERSION").write_text(version + "\n", encoding="utf-8")
+for path, text, init_path, init_text in updates:
+    path.write_text(text, encoding="utf-8")
+    if init_path != path:
+        init_path.write_text(init_text, encoding="utf-8")
+constraints.write_text(text, encoding="utf-8")
 PY
 
 source_path="$(find "$root/packages" -mindepth 2 -maxdepth 2 -type d -name src -print | paste -sd: -)"
-foundation_path="${AC_FOUNDATION_REPO_ROOT:-$root/../ac-foundation}"
 foundation_source="$(find "$foundation_path/packages" -mindepth 2 -maxdepth 2 -type d -name src -print | paste -sd: -)"
 PYTHONPATH="$foundation_source:$source_path" "$python_bin" -m pytest \
   --import-mode=importlib "$root"/packages/*/tests "$root/tests"
-PATH="$(dirname "$(command -v "$python_bin")"):$PATH" "$root/scripts/build-packages.sh"
+PYTHON="$python_bin" "$root/scripts/build-packages.sh"
 
 git -C "$root" add VERSION packages plugins/arc
 git -C "$root" commit -m "chore: release v${version}"

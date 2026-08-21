@@ -18,7 +18,7 @@ from ac_jobs import canonical_json_bytes as _canonical_json_bytes
 
 from ._cache_admin import CACHE_INDEX_SCHEMA, CacheAdministrator, CacheEntry
 from ._cache_root import resolve_cache_root
-from ._durable_io import payload_matches
+from ac_jobs import file_matches_sha256
 from .source_repository import SourceRepository
 from .sources import SourceFormat
 
@@ -174,7 +174,7 @@ def import_cache_archive(
             if destination.exists():
                 if not destination.is_file() or destination.is_symlink():
                     structural.append(item.path)
-                elif payload_matches(destination, item.sha256, item.size):
+                elif file_matches_sha256(destination, item.sha256, item.size):
                     reused.append(item)
                 elif replace_conflicts:
                     replaced.append(item)
@@ -301,7 +301,7 @@ def _add_remote_entry(root: Path, entry_id: str, paths: set[str]) -> None:
             or not isinstance(size, int)
             or isinstance(size, bool)
             or size < 0
-            or not payload_matches(directory / payload_name, payload_digest, size)
+            or not file_matches_sha256(directory / payload_name, payload_digest, size)
         ):
             raise CacheArchiveError(
                 "cache_archive_dependency_corrupt", f"remote JSON payload is corrupt: {entry_id}"
@@ -362,7 +362,7 @@ def _add_catalog_entry(
             or not isinstance(payload_size, int)
             or isinstance(payload_size, bool)
             or payload_size < 0
-            or not payload_matches(document, payload_digest, payload_size)
+            or not file_matches_sha256(document, payload_digest, payload_size)
         ):
             raise CacheArchiveError(
                 "cache_archive_dependency_corrupt",

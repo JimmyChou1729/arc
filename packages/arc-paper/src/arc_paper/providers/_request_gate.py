@@ -12,9 +12,8 @@ from time import sleep, time
 from typing import Iterator
 
 import httpx
+from ac_jobs import atomic_write_bytes, file_lease
 
-from .._durable_io import atomic_write_bytes
-from .._file_lock import exclusive_file_lock
 
 
 class HostRequestGate:
@@ -70,7 +69,7 @@ class HostRequestGate:
             with self._lock:
                 yield
             return
-        with exclusive_file_lock(self._lock_path):
+        with file_lease(self._lock_path, blocking=True):
             yield
 
     def _read_next_start(self) -> float:

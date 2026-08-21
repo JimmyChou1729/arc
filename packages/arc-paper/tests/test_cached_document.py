@@ -20,7 +20,7 @@ from arc_paper import (
     get_operation,
     read_cached_source_range,
 )
-from arc_paper._parsed_document_cache import DERIVED_CACHE_REBUILT_WARNING
+from ac_document._parsed_document_cache import DERIVED_CACHE_REBUILT_WARNING
 from arc_paper.cli import main
 
 

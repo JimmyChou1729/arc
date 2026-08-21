@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+VERSION = (PACKAGE_ROOT.parents[1] / "VERSION").read_text(encoding="utf-8").strip()
 
 
 def test_arc_paper_metadata_publishes_only_the_supported_cli() -> None:
@@ -13,7 +14,7 @@ def test_arc_paper_metadata_publishes_only_the_supported_cli() -> None:
     )
     project = value["project"]
 
-    assert project["version"] == "2.0.0"
+    assert project["version"] == VERSION
     assert project["scripts"] == {"arc-paper": "arc_paper.cli:main"}
     assert "ac-jobs>=2,<3" in project["dependencies"]
     assert "ac-llm>=2,<3" in project["dependencies"]

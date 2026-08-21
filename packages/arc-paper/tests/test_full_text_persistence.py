@@ -23,7 +23,7 @@ from arc_paper import (
     ValidationPolicy,
 )
 from arc_paper._full_text_catalog import FullTextCatalog
-from arc_paper._parsed_document_cache import PARSER_CONTRACT, ParsedDocumentCache
+from ac_document._parsed_document_cache import PARSER_CONTRACT, ParsedDocumentCache
 from arc_paper.parse.parser import ParseError, parse_artifact_bytes
 from arc_paper.providers import Ar5ivProvider
 from arc_paper.providers.base import ProviderError

@@ -1,10 +1,10 @@
 {
   "schema_version": "ac.generated_sources.v1",
-  "foundation_commit": "8cb4429605b09793cd6ce423063e42055acbd919",
+  "foundation_commit": "027a4a1aef084138760638fb0e0cff2a6b075402",
   "files": {
     "ac_runtime.py": {
       "source": "runtime/ac_runtime.py",
-      "sha256": "82b5dc0f68350a94e971ea9bba70531557e61c0fe7ebebb836cf10924e839482"
+      "sha256": "634fa389c5df39486de34aab069a2623dce91bf2b25bf8eb2be3db20f27cca1e"
     },
     "arc-runtime": {
       "source": "runtime/ac-runtime",
