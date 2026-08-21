@@ -107,28 +107,36 @@ for path in (
     root / "plugins/arc/.codex-plugin/plugin.json",
     root / "plugins/arc/.claude-plugin/plugin.json",
 ):
-    document = json.loads(path.read_text(encoding="utf-8"))
+    manifest_text = path.read_text(encoding="utf-8")
+    document = json.loads(manifest_text)
     if document.get("version") != current:
         raise SystemExit(f"{path} version differs from VERSION")
-    document["version"] = version
-    updates.append((path, json.dumps(document, indent=2) + "\n", path, ""))
+    updated_manifest, count = re.subn(
+        rf'("version"\s*:\s*"){re.escape(current)}(")',
+        rf'\g<1>{version}\2',
+        manifest_text,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit(f"could not update plugin version in {path}")
+    updates.append((path, updated_manifest, path, ""))
 
 constraints = root / "plugins/arc/skills/arc/scripts/runtime-constraints.txt"
-text = constraints.read_text(encoding="utf-8")
-text, count = re.subn(
+constraints_text = constraints.read_text(encoding="utf-8")
+constraints_text, count = re.subn(
     rf"(?m)^# Direct external dependencies tested for ARC v{re.escape(current)}\.$",
     f"# Direct external dependencies tested for ARC v{version}.",
-    text,
+    constraints_text,
     count=1,
 )
 if count != 1:
     raise SystemExit("runtime constraints release header is inconsistent")
 (root / "VERSION").write_text(version + "\n", encoding="utf-8")
-for path, text, init_path, init_text in updates:
-    path.write_text(text, encoding="utf-8")
+for path, file_text, init_path, init_text in updates:
+    path.write_text(file_text, encoding="utf-8")
     if init_path != path:
         init_path.write_text(init_text, encoding="utf-8")
-constraints.write_text(text, encoding="utf-8")
+constraints.write_text(constraints_text, encoding="utf-8")
 PY
 
 source_path="$(find "$root/packages" -mindepth 2 -maxdepth 2 -type d -name src -print | paste -sd: -)"
