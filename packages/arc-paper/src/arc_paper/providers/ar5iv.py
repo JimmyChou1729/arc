@@ -56,7 +56,7 @@ class Ar5ivProvider:
             kind=SourceOriginKind.REMOTE_PROVIDER,
             provider="ar5iv",
             locator=url,
-            metadata={"arxiv_id": aid},
+            metadata={"arxiv_id": aid, "document_id": f"arXiv:{aid}"},
         )
         return self.cache.fetch_source(
             "ar5iv-html",

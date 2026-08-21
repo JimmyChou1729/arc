@@ -33,13 +33,7 @@ from ._cache_archive import (
     import_cache_archive,
 )
 from ._cache_root import resolve_cache_root
-from .parse import (
-    PDFTextExtractor,
-    PaperParserService,
-    ParseError,
-    ParsedDocument,
-    ParsedSection,
-)
+from .parse import PDFTextExtractor, ParseError, ParsedDocument
 from .parse.parser import PDFTextExtractionError
 from .cached_full_text_search import (
     CachedFullTextContextStatus,
@@ -56,11 +50,8 @@ from .cached_document import (
 )
 from .document_structure import (
     CachedDocumentStructureRef,
-    DocumentStructureCache,
-    DocumentStructureError,
     DocumentStructureOverlay,
     cached_document_structure_ref_from_document,
-    reconstruct_document_structure,
 )
 from .document_access import (
     DocumentTarget,
@@ -115,21 +106,11 @@ from .sources import (
     SourceFormat,
     SourceOrigin,
     SourceOriginKind,
-    ValidationPolicy,
 )
 
 if TYPE_CHECKING:
     from .rich_document import RichDocument
     from .terms import KeywordResult, TermInventoryStore
-
-
-_STANDALONE_MARKDOWN_IMAGE_RE = re.compile(
-    r'\s*!\[[^\]]*\]\(\S+?(?:\s+["\'].*?["\'])?\)\s*'
-)
-
-
-def _is_standalone_markdown_image(value: str) -> bool:
-    return _STANDALONE_MARKDOWN_IMAGE_RE.fullmatch(value) is not None
 
 
 class PaperInputError(ValueError):
@@ -174,9 +155,6 @@ class ArcPaperService(ArcDocumentService):
             pdf_text_extractor=pdf_text_extractor,
             keyword_task_service=keyword_task_service,
         )
-        self.parser = PaperParserService(
-            self.repository, pdf_text_extractor=pdf_text_extractor
-        )
         self.cache_index = PaperCacheIndex(root)
         self.cache_administrator = CacheAdministrator(root)
         self.inspire = inspire or InspireProvider(cache_root=root)
@@ -192,16 +170,10 @@ class ArcPaperService(ArcDocumentService):
         self._cached_full_text_searcher = CachedFullTextSearcher(root)
         self._reference_acquisition_service: ReferenceAcquisitionService | None = None
 
-    def import_source(
-        self,
-        path: str | Path,
-        *,
-        source_format: SourceFormat | str | None = None,
-    ) -> SourceArtifact:
-        source = self.repository.import_path(path, source_format=source_format)
-        self.parser.parse_source(source)
-        self._record_local_source(source)
-        return source
+    def _input_error(
+        self, message: str, *, code: str = "invalid_request"
+    ) -> PaperInputError:
+        return PaperInputError(message, code=code)
 
     def resolve_local_or_arxiv_source(
         self, source: str | Path, *, refresh: bool = False
@@ -244,67 +216,6 @@ class ArcPaperService(ArcDocumentService):
             request_key=arxiv_path_id(paper_id),
         )
         return source
-
-    def parse_bundle(
-        self,
-        bundle: SourceBundle,
-        *,
-        policy: ValidationPolicy | str | None = None,
-    ) -> ParseOutcome:
-        resolved = ValidationPolicy(policy) if policy is not None else None
-        return self.parser.parse(bundle, policy=resolved)
-
-    def parse_local(
-        self,
-        primary_path: str | Path,
-        *,
-        validator_paths: Sequence[str | Path] = (),
-        primary_format: SourceFormat | str | None = None,
-        validator_formats: Sequence[SourceFormat | str | None] = (),
-        policy: ValidationPolicy | str | None = None,
-    ) -> ParseOutcome:
-        if validator_formats and len(validator_formats) != len(validator_paths):
-            raise PaperInputError(
-                "validator_formats must be empty or match validator_paths"
-            )
-        primary = self.repository.import_path(
-            primary_path, source_format=primary_format
-        )
-        formats = (
-            tuple(validator_formats)
-            if validator_formats
-            else (None,) * len(validator_paths)
-        )
-        validators = tuple(
-            self.repository.import_path(path, source_format=source_format)
-            for path, source_format in zip(validator_paths, formats, strict=True)
-        )
-        outcome = self.parse_bundle(
-            SourceBundle(primary=primary, validators=validators),
-            policy=policy,
-        )
-        self._record_local_source(primary)
-        for validator in validators:
-            self._record_local_source(validator)
-        return outcome
-
-    def export_rich_document(
-        self,
-        source: str | Path,
-        *,
-        output_dir: str | Path,
-        validator: str | Path | None = None,
-        source_format: SourceFormat | str | None = None,
-    ) -> dict[str, object]:
-        from .rich_document import export_rich_document_workspace
-
-        return export_rich_document_workspace(
-            self.repository,
-            source,
-            output_dir=output_dir,
-            validator=validator,
-            source_format=source_format,
-        )
 
     def parse_arxiv_auto(
         self,
@@ -1021,130 +932,6 @@ class ArcPaperService(ArcDocumentService):
             )
         return tuple(resolved), tuple(failures)
 
-    def cache_document(
-        self, source: SourceArtifact | ParsedDocument
-    ) -> CachedDocumentRef:
-        """Return a logical handle for one verified cached document.
-
-        This operation may populate or repair deterministic derived parse data,
-        but it never fetches a provider.  The source bytes must already belong
-        to this service's content-addressed repository.
-        """
-
-        expected_digest: str | None = None
-        if isinstance(source, ParsedDocument):
-            artifact = source.source
-            expected_digest = source.document_digest
-        elif isinstance(source, SourceArtifact):
-            artifact = source
-        else:
-            raise PaperInputError(
-                "cached document source must be a SourceArtifact or ParsedDocument"
-            )
-        document, _ = self.parser.materialize_source(artifact)
-        if (
-            expected_digest is not None
-            and document.document_digest != expected_digest
-        ):
-            raise CachedDocumentError(
-                "cached_document_digest_mismatch",
-                "parsed document does not match the verified cached projection",
-            )
-        return self._cached_document_ref(artifact, document)
-
-    def reconstruct_cached_structure(
-        self,
-        document: CachedDocumentRef,
-        outline_document: CachedDocumentRef,
-    ) -> CachedDocumentStructureRef:
-        """Reconcile Markdown headings with an independently cached PDF outline."""
-
-        parsed, _ = self._resolve_cached_document(document)
-        outline, _ = self._resolve_cached_document(outline_document)
-        cached = self._document_structure_cache.lookup(
-            document, outline_document
-        )
-        if cached is not None:
-            return cached.reference
-        markdown_payload = self.repository.read_bytes(parsed.source)
-        pdf_payload = self.repository.read_bytes(outline.source)
-        overlay = reconstruct_document_structure(
-            document,
-            outline_document,
-            markdown_payload=markdown_payload,
-            pdf_payload=pdf_payload,
-            pdf_pages=tuple(page.text for page in outline.pages),
-        )
-        return self._document_structure_cache.store(overlay)
-
-    def _get_cached_table_of_contents(
-        self,
-        document: CachedDocumentRef,
-        *,
-        structure: CachedDocumentStructureRef | None = None,
-    ) -> CachedTableOfContents:
-        parsed, warnings = self._resolve_cached_document(document)
-        if structure is not None:
-            overlay = self._resolve_cached_structure(document, structure)
-            return CachedTableOfContents(
-                document=document,
-                entries=tuple(
-                    TableOfContentsEntry(
-                        item.section_id,
-                        item.title,
-                        item.level,
-                        item.ordinal,
-                        item.pdf_page_start,
-                        item.pdf_page_end,
-                    )
-                    for item in overlay.entries
-                ),
-                warnings=(*warnings, *overlay.warnings),
-            )
-        return CachedTableOfContents(
-            document=document,
-            entries=_table_of_contents(parsed),
-            warnings=warnings,
-        )
-
-    def _get_cached_section(
-        self,
-        document: CachedDocumentRef,
-        selector: str | int,
-        *,
-        structure: CachedDocumentStructureRef | None = None,
-    ) -> CachedSection:
-        parsed, warnings = self._resolve_cached_document(document)
-        if structure is not None:
-            overlay = self._resolve_cached_structure(document, structure)
-            entry = _select_structure_entry(overlay.entries, selector)
-            source_range = self.read_cached_source_range(
-                document, entry.source_line_start, entry.source_line_end
-            )
-            return CachedSection(
-                document=document,
-                section_id=entry.section_id,
-                title=entry.title,
-                text=source_range.text,
-                level=entry.level,
-                ordinal=entry.ordinal,
-                page_start=entry.pdf_page_start,
-                page_end=entry.pdf_page_end,
-                warnings=(*warnings, *overlay.warnings),
-            )
-        section = _select_section(parsed, selector)
-        return CachedSection(
-            document=document,
-            section_id=section.section_id,
-            title=section.title,
-            text=section.text,
-            level=section.level,
-            ordinal=section.ordinal,
-            page_start=section.page_start,
-            page_end=section.page_end,
-            warnings=warnings,
-        )
-
     def lookup_reference(
         self,
         *,
@@ -1185,7 +972,7 @@ class ArcPaperService(ArcDocumentService):
         if structure is not None:
             if target.kind is not DocumentTargetKind.DOCUMENT or target.document is None:
                 raise PaperInputError("structure applies only to exact document targets")
-            cached = self._get_cached_table_of_contents(
+            cached = self.get_cached_table_of_contents(
                 target.document, structure=structure
             )
             source = ResolvedDocumentInfo(
@@ -1215,7 +1002,7 @@ class ArcPaperService(ArcDocumentService):
         if structure is not None:
             if target.kind is not DocumentTargetKind.DOCUMENT or target.document is None:
                 raise PaperInputError("structure applies only to exact document targets")
-            cached = self._get_cached_section(
+            cached = self.get_cached_section(
                 target.document, selector, structure=structure
             )
             source = ResolvedDocumentInfo(
@@ -1274,29 +1061,9 @@ class ArcPaperService(ArcDocumentService):
             )
 
         identity = _reference_identity_for_query(target.reference)
-        warnings: list[str] = []
         material = None if refresh else _lookup_reference_identity(
             ReferenceMaterialCache(self.cache_root), identity
         )
-        if (
-            identity.arxiv_id
-            and not refresh
-            and (
-                material is None
-                or (
-                    requested_format is not None
-                    and _select_reference_resource(material, requested_format) is None
-                )
-            )
-        ):
-            legacy_material = self._admit_legacy_catalog_reference(
-                identity, source_format=requested_format
-            )
-            if legacy_material is not None:
-                material = legacy_material
-                warnings.append(
-                    "selected a legacy catalog representation and admitted it to the reference cache"
-                )
         if material is None or (
             requested_format is not None
             and _select_reference_resource(material, requested_format) is None
@@ -1322,7 +1089,10 @@ class ArcPaperService(ArcDocumentService):
                 kind=SourceOriginKind.REPOSITORY,
                 locator=resource.source_locator,
                 metadata=(
-                    {"arxiv_id": material.identity.arxiv_id}
+                    {
+                        "arxiv_id": material.identity.arxiv_id,
+                        "document_id": f"arXiv:{material.identity.arxiv_id}",
+                    }
                     if material.identity.arxiv_id
                     else {}
                 ),
@@ -1330,52 +1100,11 @@ class ArcPaperService(ArcDocumentService):
         )
         parsed, parse_warnings = self.parser.materialize_source(source)
         document_ref = self._cached_document_ref(source, parsed)
-        combined = tuple(dict.fromkeys((*warnings, *parse_warnings)))
         return parsed, ResolvedDocumentInfo(
             document=document_ref,
             identity=material.identity,
             requested_reference=target.reference,
-            warnings=combined,
-        )
-
-    def _admit_legacy_catalog_reference(
-        self,
-        identity: ReferenceIdentity,
-        *,
-        source_format: SourceFormat | None,
-    ) -> CachedReferenceMaterial | None:
-        from ._full_text_catalog import FullTextCatalog
-
-        canonical = f"arXiv:{identity.arxiv_id}"
-        entry = next(
-            (
-                item
-                for item in FullTextCatalog(self.cache_root).current_entries()
-                if item.kind == "arxiv" and canonical in item.paper_ids
-            ),
-            None,
-        )
-        if entry is None:
-            return None
-        by_format = {item.source_format: item for item in entry.representations}
-        selected = (
-            by_format.get(source_format.value)
-            if source_format is not None
-            else by_format.get("html") or by_format.get("pdf")
-        )
-        if selected is None:
-            return None
-        source_identity = selected.source_identity
-        source = self.repository.get(
-            source_identity["source_format"], source_identity["artifact_digest"]
-        )
-        payload = self.repository.read_bytes(source)
-        return self._reference_acquisition().admit_reference_bytes(
-            payload,
-            identity,
-            media_type=source.media_type,
-            source_locator=source.origin.locator,
-            filename=f"{identity.arxiv_id}.{source.source_format.value}",
+            warnings=parse_warnings,
         )
 
     def admit_reference(
@@ -1423,216 +1152,6 @@ class ArcPaperService(ArcDocumentService):
                 arxiv_pdf=self.arxiv_pdf,
             )
         return self._reference_acquisition_service
-
-    def _resolve_cached_structure(
-        self,
-        document: CachedDocumentRef,
-        structure: CachedDocumentStructureRef,
-    ) -> DocumentStructureOverlay:
-        if not isinstance(structure, CachedDocumentStructureRef):
-            raise PaperInputError(
-                "structure must be a CachedDocumentStructureRef"
-            )
-        if structure.document != document:
-            raise DocumentStructureError(
-                "document_structure_source_mismatch",
-                "document structure overlay belongs to a different source",
-            )
-        return self._document_structure_cache.read(structure)
-
-    def read_cached_source_range(
-        self,
-        document: CachedDocumentRef,
-        start_line: int,
-        end_line: int,
-        *,
-        text_only: bool = False,
-    ) -> CachedSourceRange:
-        parsed, _ = self._resolve_cached_document(document)
-        if (
-            isinstance(start_line, bool)
-            or not isinstance(start_line, int)
-            or isinstance(end_line, bool)
-            or not isinstance(end_line, int)
-            or start_line < 1
-            or end_line < start_line
-        ):
-            raise CachedDocumentError(
-                "invalid_source_range",
-                "source range requires one-based start_line <= end_line",
-            )
-        if not isinstance(text_only, bool):
-            raise CachedDocumentError(
-                "invalid_text_only",
-                "text_only must be a boolean",
-            )
-        if parsed.source.source_format is SourceFormat.PDF:
-            raise CachedDocumentError(
-                "cached_source_not_text",
-                "raw source ranges are unavailable for PDF sources",
-            )
-        payload = self.repository.read_bytes(parsed.source)
-        try:
-            text = payload.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise CachedDocumentError(
-                "cached_source_not_utf8",
-                "cached source is not valid UTF-8 text",
-            ) from exc
-        lines = text.splitlines()
-        total_lines = len(lines)
-        if end_line > total_lines:
-            raise CachedDocumentError(
-                "source_range_out_of_bounds",
-                f"source range ends at {end_line}, but source has {total_lines} lines",
-            )
-        selected_lines = lines[start_line - 1 : end_line]
-        if text_only and parsed.source.source_format is SourceFormat.MARKDOWN:
-            selected_lines = self._markdown_text_only_range(
-                parsed.source,
-                lines,
-                start_line=start_line,
-                end_line=end_line,
-            )
-        return CachedSourceRange(
-            document=document,
-            start_line=start_line,
-            end_line=end_line,
-            total_lines=total_lines,
-            text="\n".join(selected_lines),
-        )
-
-    def _markdown_text_only_range(
-        self,
-        source: SourceArtifact,
-        lines: Sequence[str],
-        *,
-        start_line: int,
-        end_line: int,
-    ) -> list[str]:
-        """Project a Markdown range without standalone figure source lines."""
-
-        from .rich_document import RichBlockKind, RichDocumentParserService
-
-        document = RichDocumentParserService(self.repository).parse_source(source)
-        excluded: set[int] = set()
-        replacements: dict[int, str] = {}
-        for block in document.blocks:
-            if block.kind is not RichBlockKind.FIGURE:
-                continue
-            line_start = block.locator.line_start
-            line_end = block.locator.line_end
-            if (
-                line_start is None
-                or line_end is None
-                or line_start < 1
-                or line_start > len(lines)
-                or not _is_standalone_markdown_image(lines[line_start - 1])
-            ):
-                continue
-            excluded.update(range(line_start, line_end + 1))
-            caption = str(block.payload.get("caption", "")).strip()
-            if caption:
-                replacements[line_start] = caption
-        projected: list[str] = []
-        for line_number in range(start_line, end_line + 1):
-            if line_number not in excluded:
-                projected.append(lines[line_number - 1])
-                continue
-            replacement = replacements.get(line_number)
-            if replacement is not None:
-                projected.append(replacement)
-        return projected
-
-    def _resolve_cached_document(
-        self, reference: CachedDocumentRef
-    ) -> tuple[ParsedDocument, tuple[str, ...]]:
-        if not isinstance(reference, CachedDocumentRef):
-            raise CachedDocumentError(
-                "invalid_cached_document_ref",
-                "document must be a CachedDocumentRef",
-            )
-        source = self.repository.get(
-            reference.source_format,
-            reference.source_sha256,
-        )
-        if (
-            source.size != reference.source_size
-            or source.media_type != reference.media_type
-        ):
-            raise CachedDocumentError(
-                "cached_document_source_mismatch",
-                "cached source metadata does not match the document reference",
-            )
-        parser_contract = self.parser.parser_contract_for(source)
-        if parser_contract != reference.parser_contract:
-            raise CachedDocumentError(
-                "cached_document_parser_contract_mismatch",
-                "current parser contract does not match the document reference",
-            )
-        parsed, warnings = self.parser.materialize_source(source)
-        if parsed.document_digest != reference.parsed_document_sha256:
-            raise CachedDocumentError(
-                "cached_document_digest_mismatch",
-                "cached parsed document does not match the document reference",
-            )
-        return parsed, warnings
-
-    def _cached_document_ref(
-        self,
-        source: SourceArtifact,
-        document: ParsedDocument,
-    ) -> CachedDocumentRef:
-        return CachedDocumentRef(
-            source_format=source.source_format,
-            source_sha256=source.artifact_digest,
-            source_size=source.size,
-            media_type=source.media_type,
-            parser_contract=self.parser.parser_contract_for(source),
-            parsed_document_sha256=document.document_digest,
-        )
-
-    def search_full_text(
-        self,
-        documents: ParsedDocument | Iterable[ParsedDocument],
-        query: str,
-        *,
-        limit: int = 20,
-        context_lines: int = 1,
-        case_sensitive: bool = False,
-    ) -> FullTextSearchResult:
-        return _search_full_text(
-            documents,
-            query,
-            limit=limit,
-            context_lines=context_lines,
-            case_sensitive=case_sensitive,
-        )
-
-    def search_equations(
-        self,
-        documents: ParsedDocument | Iterable[ParsedDocument],
-        query: str,
-        *,
-        limit: int = 20,
-        case_sensitive: bool = False,
-    ) -> EquationSearchResult:
-        return _search_equations(
-            documents,
-            query,
-            limit=limit,
-            case_sensitive=case_sensitive,
-        )
-
-    def table_of_contents(
-        self, document: ParsedDocument
-    ) -> tuple[TableOfContentsEntry, ...]:
-        return _table_of_contents(document)
-
-    def select_section(
-        self, document: ParsedDocument, selector: str | int
-    ) -> ParsedSection:
-        return _select_section(document, selector)
 
     def _fetch_arxiv_auto_materialized(
         self, paper_id: str, *, refresh: bool
@@ -1696,26 +1215,6 @@ class ArcPaperService(ArcDocumentService):
             )
         except (OSError, TypeError, ValueError):
             return
-
-    def _record_local_source(self, source: SourceArtifact) -> None:
-        from ._full_text_catalog import FullTextCatalog
-
-        entry_id = (
-            f"local:{source.source_format.value}:{source.artifact_digest}"
-        )
-        try:
-            entry = next(
-                item
-                for item in FullTextCatalog(self.cache_root).admin_entries()
-                if item.entry_id == entry_id
-            )
-            self.cache_index.record_local(
-                source,
-                cached_at=entry.cached_at,
-            )
-        except (OSError, StopIteration, TypeError, ValueError):
-            return
-
 
 def extract_paper_ids(text: str) -> list[str]:
     return _extract_paper_ids(str(text))
@@ -2002,35 +1501,6 @@ def _select_reference_resource(
         if source_format is None or resolved is source_format:
             return resource
     return None
-
-
-def _select_structure_entry(entries, selector: str | int):
-    if isinstance(selector, bool):
-        raise PaperInputError("section selector cannot be boolean")
-    if isinstance(selector, int):
-        if selector < 0 or selector >= len(entries):
-            raise PaperInputError(
-                "section ordinal is outside the document structure"
-            )
-        return entries[selector]
-    normalized = " ".join(str(selector).split()).casefold()
-    if not normalized:
-        raise PaperInputError("section selector is empty")
-    exact_ids = [item for item in entries if item.section_id == selector]
-    if exact_ids:
-        return exact_ids[0]
-    matches = [
-        item
-        for item in entries
-        if " ".join(item.title.split()).casefold() == normalized
-    ]
-    if not matches:
-        raise PaperInputError(f"document structure section not found: {selector}")
-    if len(matches) > 1:
-        raise PaperInputError(
-            f"document structure section title is ambiguous: {selector}"
-        )
-    return matches[0]
 
 
 def list_cache(

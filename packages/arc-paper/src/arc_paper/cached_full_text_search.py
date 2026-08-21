@@ -8,17 +8,17 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from arc_document.cached_full_text_search import (
+from arc_document import (
     CachedFullTextDocument as _DocumentFullTextDocument,
     CachedFullTextOccurrence as _DocumentFullTextOccurrence,
     CachedFullTextSearchError as _DocumentFullTextSearchError,
     CachedFullTextSearcher as _DocumentFullTextSearcher,
     CandidateSelector,
+    FullTextCatalog,
     search_document_occurrences as _search_document_occurrences,
 )
 
 from ._cache_root import resolve_cache_root
-from ._full_text_catalog import FullTextCatalog, FullTextCatalogEntry
 from .cached_document import CachedDocumentRef
 from .parse.models import ParsedDocument
 
@@ -105,9 +105,6 @@ class CachedFullTextSearcher:
         self._searcher = _DocumentFullTextSearcher(
             self.root,
             candidate_selector=candidate_selector,
-            _catalog=self.catalog,
-            _identified_kind="arxiv",
-            _entry_identifiers=_paper_ids,
         )
         self.candidate_selector = self._searcher.candidate_selector
 
@@ -164,16 +161,12 @@ def search_document_occurrences(
     return tuple(_paper_occurrence(item) for item in occurrences)
 
 
-def _paper_ids(entry: FullTextCatalogEntry) -> tuple[str, ...]:
-    return entry.paper_ids
-
-
 def _paper_occurrence(
     occurrence: _DocumentFullTextOccurrence,
 ) -> CachedFullTextOccurrence:
     return CachedFullTextOccurrence(
-        source_kind=occurrence.source_kind,
-        arxiv_ids=occurrence.document_ids,
+        source_kind=_paper_source_kind(occurrence.source_kind),
+        arxiv_ids=_arxiv_ids(occurrence.document_ids),
         source_format=occurrence.source_format,
         source_digest=occurrence.source_digest,
         document_digest=occurrence.document_digest,
@@ -192,10 +185,18 @@ def _paper_document(
     document: _DocumentFullTextDocument,
 ) -> CachedFullTextDocument:
     return CachedFullTextDocument(
-        source_kind=document.source_kind,
-        arxiv_ids=document.document_ids,
+        source_kind=_paper_source_kind(document.source_kind),
+        arxiv_ids=_arxiv_ids(document.document_ids),
         document=document.document,
     )
+
+
+def _paper_source_kind(value: str) -> str:
+    return "arxiv" if value == "identified" else value
+
+
+def _arxiv_ids(values: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(value for value in values if value.startswith("arXiv:"))
 
 
 __all__ = [

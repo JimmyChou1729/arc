@@ -83,7 +83,14 @@ def _store(
                 else SourceOriginKind.LOCAL_IMPORT
             ),
             provider="fixture" if arxiv_id else "",
-            metadata={"arxiv_id": arxiv_id} if arxiv_id else {},
+            metadata=(
+                {
+                    "arxiv_id": arxiv_id,
+                    "document_id": f"arXiv:{arxiv_id}",
+                }
+                if arxiv_id
+                else {}
+            ),
         ),
     )
 
@@ -537,7 +544,10 @@ def test_current_refresh_html_preference_alias_merge_and_local_identity(
         origin=SourceOrigin(
             SourceOriginKind.REMOTE_PROVIDER,
             provider="fixture",
-            metadata={"arxiv_id": "hep-th/0601001"},
+            metadata={
+                "arxiv_id": "hep-th/0601001",
+                "document_id": "arXiv:hep-th/0601001",
+            },
         ),
     )
     PaperParserService(repository).parse_source(same_source)

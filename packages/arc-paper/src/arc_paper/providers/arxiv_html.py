@@ -59,7 +59,7 @@ class ArxivHtmlProvider:
             kind=SourceOriginKind.REMOTE_PROVIDER,
             provider="arxiv-html",
             locator=url,
-            metadata={"arxiv_id": aid},
+            metadata={"arxiv_id": aid, "document_id": f"arXiv:{aid}"},
         )
         known_not_found = self._is_known_not_found(aid)
         if not refresh and known_not_found:
@@ -103,7 +103,11 @@ class ArxivHtmlProvider:
                 kind=SourceOriginKind.REMOTE_PROVIDER,
                 provider="arxiv-html",
                 locator=url,
-                metadata={"arxiv_id": aid, "arxiv_version": revision},
+                metadata={
+                    "arxiv_id": aid,
+                    "document_id": f"arXiv:{aid}",
+                    "arxiv_version": revision,
+                },
             ),
         )
 

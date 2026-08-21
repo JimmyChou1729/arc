@@ -60,7 +60,7 @@ class ArxivPdfProvider:
             kind=SourceOriginKind.REMOTE_PROVIDER,
             provider="arxiv-pdf",
             locator=url,
-            metadata={"arxiv_id": aid},
+            metadata={"arxiv_id": aid, "document_id": f"arXiv:{aid}"},
         )
         return self.cache.fetch_source(
             "arxiv-pdf",

@@ -122,6 +122,7 @@ def test_official_arxiv_html_fetches_directly_and_replays_from_cache(tmp_path):
     assert first.origin.metadata == {
         "arxiv_id": "0911.3380",
         "arxiv_version": "v3",
+        "document_id": "arXiv:0911.3380",
     }
     assert replay.origin.metadata == first.origin.metadata
     assert calls == ["https://arxiv.org/html/0911.3380"]
@@ -151,7 +152,10 @@ def test_official_html_ignores_absent_or_malformed_revision_base(tmp_path, paylo
 
     artifact = provider.fetch("0911.3380")
 
-    assert artifact.origin.metadata == {"arxiv_id": "0911.3380"}
+    assert artifact.origin.metadata == {
+        "arxiv_id": "0911.3380",
+        "document_id": "arXiv:0911.3380",
+    }
 
 
 def test_official_arxiv_html_caches_404_and_refresh_rechecks_it(tmp_path):

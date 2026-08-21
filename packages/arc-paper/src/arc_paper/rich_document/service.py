@@ -1,28 +1,10 @@
-"""Paper-aware rich-document parser specialization."""
+"""Compatibility rich-document parser names."""
 
-from arc_document.rich_document.service import *  # noqa: F401,F403
-from arc_document.rich_document.service import (
-    RichDocumentParserService as _DocumentRichDocumentParserService,
-)
-
-from ..parse import PaperParserService
+from arc_document import RichDocumentParserService as _DocumentRichDocumentParserService
 
 
 class RichDocumentParserService(_DocumentRichDocumentParserService):
-    """Use paper corpus indexing with the neutral rich parser."""
+    """Backward-compatible name for the document-owned rich parser."""
 
-    def __init__(
-        self,
-        repository,
-        *,
-        pdf_text_extractor=None,
-        asset_importer=None,
-    ):
-        super().__init__(
-            repository,
-            pdf_text_extractor=pdf_text_extractor,
-            asset_importer=asset_importer,
-        )
-        self.standard_parser = PaperParserService(
-            repository, pdf_text_extractor=pdf_text_extractor
-        )
+
+__all__ = ["RichDocumentParserService"]
