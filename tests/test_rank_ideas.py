@@ -181,6 +181,22 @@ def test_report_normalizes_latex_delimiters_without_mangling_commands() -> None:
     assert r"\$" not in rendered
 
 
+def test_report_preserves_multiline_display_math_with_attached_delimiters() -> None:
+    _load_rank_module()
+    report_module = sys.modules["_arc_workflows.ideas_report"]
+    source = (
+        "Definition:\n"
+        r"$$\langle\zeta^4\rangle_c=A,\qquad" "\n"
+        r"\mathcal T_s=B.$$" "\n"
+        "Next paragraph."
+    )
+
+    rendered = report_module._math_markdown_text(source)
+
+    assert rendered == source
+    assert rendered.count("$$") == 2
+
+
 def test_scientific_readiness_uses_four_non_gating_states() -> None:
     _load_rank_module()
     policy = sys.modules["_arc_workflows.ideas_policy"]

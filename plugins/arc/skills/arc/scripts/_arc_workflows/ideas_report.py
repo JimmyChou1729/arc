@@ -697,6 +697,14 @@ def _inline_raw_math_tokens(text: str) -> str:
 
 
 def _display_math_lines(text: str) -> str:
+    parts = re.split(r"(\$\$.*?\$\$)", text, flags=re.DOTALL)
+    return "".join(
+        part if index % 2 else _display_math_outside_spans(part)
+        for index, part in enumerate(parts)
+    )
+
+
+def _display_math_outside_spans(text: str) -> str:
     lines: list[str] = []
     in_display_math = False
     for line in text.splitlines():
@@ -715,7 +723,10 @@ def _display_math_lines(text: str) -> str:
             lines.extend(["$$", _format_math(stripped), "$$"])
         else:
             lines.append(line)
-    return "\n".join(lines)
+    rendered = "\n".join(lines)
+    if text.endswith("\n"):
+        rendered += "\n"
+    return rendered
 
 
 def _looks_like_display_equation(text: str) -> bool:
