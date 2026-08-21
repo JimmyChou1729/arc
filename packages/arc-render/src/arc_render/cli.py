@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from arc_document import rich_document_from_document
 
+from ._json import strict_json_loads
 from .contracts import Publication, source_identity_from_rich_document
 from .browser_validation import validate_reader_in_browser
 from .html import (
@@ -234,29 +235,12 @@ def _publication_metadata(path: Path | None) -> dict[str, Any]:
 
 def _read_json(path: Path, description: str) -> Mapping[str, Any]:
     try:
-        value = json.loads(
-            path.read_text(encoding="utf-8"),
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_constant,
-        )
+        value = strict_json_loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"{description} JSON is unreadable or invalid: {path}") from exc
     if not isinstance(value, Mapping):
         raise ValueError(f"{description} JSON must be an object")
     return value
-
-
-def _unique_object(values: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in values:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-
-def _reject_constant(value: str) -> None:
-    raise ValueError(f"non-finite JSON number: {value}")
 
 
 if __name__ == "__main__":  # pragma: no cover

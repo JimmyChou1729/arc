@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import tempfile
 from typing import Any, Mapping
 
-from ._json import canonical_json_bytes
+from ._io import atomic_write_bytes
+from ._json import canonical_json_bytes, strict_json_loads
 from .contracts import (
     Layer,
     Publication,
@@ -146,12 +146,8 @@ def relative_fragment_path(
 def _read_json(path: Path, description: str) -> Mapping[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
-        value = json.loads(
-            text,
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_constant,
-        )
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        value = strict_json_loads(text)
+    except (OSError, UnicodeError, ValueError) as exc:
         raise RenderWorkspaceError(
             f"{description} JSON is unreadable or invalid: {path}"
         ) from exc
@@ -160,33 +156,8 @@ def _read_json(path: Path, description: str) -> Mapping[str, Any]:
     return value
 
 
-def _unique_object(values: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in values:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-
-def _reject_constant(value: str) -> None:
-    raise ValueError(f"non-finite JSON number: {value}")
-
-
 def _atomic_write(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent
-    )
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-    except BaseException:
-        Path(temporary_name).unlink(missing_ok=True)
-        raise
+    atomic_write_bytes(path, payload)
 
 
 __all__ = [

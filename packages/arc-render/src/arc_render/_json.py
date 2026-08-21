@@ -32,6 +32,29 @@ def canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def strict_json_loads(value: str) -> Any:
+    """Decode JSON while rejecting duplicate keys and non-finite numbers."""
+
+    return json.loads(
+        value,
+        object_pairs_hook=_unique_object,
+        parse_constant=_reject_constant,
+    )
+
+
+def _unique_object(values: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in values:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
 def freeze_json(value: Any, description: str = "value") -> JsonValue:
     """Validate JSON compatibility and return an immutable projection."""
 
@@ -106,5 +129,6 @@ __all__ = [
     "require_integer",
     "require_list",
     "require_string",
+    "strict_json_loads",
     "thaw_json",
 ]

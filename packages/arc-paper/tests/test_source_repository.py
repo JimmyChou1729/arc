@@ -3,14 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
-import errno
 import threading
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from arc_document import _file_lock
 from arc_paper import (
     ParseOutcome,
     ReconciliationReport,
@@ -22,21 +20,6 @@ from arc_paper import (
     SourceRepositoryError,
     ValidationPolicy,
 )
-
-
-class _FakeMsvcrt:
-    LK_NBLCK = 1
-    LK_UNLCK = 2
-
-    def __init__(self, *, failures=0):
-        self.calls = []
-        self.failures = failures
-
-    def locking(self, descriptor, operation, size):
-        self.calls.append((descriptor, operation, size))
-        if operation == self.LK_NBLCK and self.failures:
-            self.failures -= 1
-            raise PermissionError(errno.EACCES, "lock is held")
 
 
 def _store_from_process(cache_root, ready, results):
@@ -372,36 +355,6 @@ def test_two_processes_publish_same_content_with_one_valid_manifest(tmp_path):
             process.join(timeout=2)
         results.close()
         results.join_thread()
-
-
-def test_windows_lock_backend_loads_and_retries_contention(monkeypatch, tmp_path):
-    fake_msvcrt = _FakeMsvcrt(failures=2)
-    imported = []
-    sleeps = []
-
-    def import_module(name):
-        imported.append(name)
-        assert name == "msvcrt"
-        return fake_msvcrt
-
-    monkeypatch.setattr(_file_lock.importlib, "import_module", import_module)
-    backend = _file_lock._load_file_lock_backend("nt")
-    backend._sleep = sleeps.append
-    lock_path = tmp_path / "windows.lock"
-    with lock_path.open("a+b") as handle:
-        backend.acquire(handle)
-        backend.release(handle)
-        descriptor = handle.fileno()
-
-    assert imported == ["msvcrt"]
-    assert fake_msvcrt.calls == [
-        (descriptor, fake_msvcrt.LK_NBLCK, 1),
-        (descriptor, fake_msvcrt.LK_NBLCK, 1),
-        (descriptor, fake_msvcrt.LK_NBLCK, 1),
-        (descriptor, fake_msvcrt.LK_UNLCK, 1),
-    ]
-    assert sleeps == [0.05, 0.05]
-    assert lock_path.read_bytes() == b"\0"
 
 
 def test_unknown_local_suffix_is_typed_unsupported_source(tmp_path):

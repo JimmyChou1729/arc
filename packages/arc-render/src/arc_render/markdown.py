@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import unicodedata
 from pathlib import Path
@@ -11,7 +10,7 @@ from typing import Any
 
 from arc_document import RichBlock, RichBlockKind
 
-from ._json import canonical_json_bytes
+from ._json import canonical_json_bytes, strict_json_loads
 from .contracts import (
     FragmentRevision,
     FragmentRevisionRef,
@@ -159,12 +158,8 @@ def decode_fragment_revision(
     if not marker:
         raise ValueError("fragment revision has unterminated JSON front matter")
     try:
-        metadata: Any = json.loads(
-            metadata_text,
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_json_constant,
-        )
-    except (json.JSONDecodeError, ValueError) as exc:
+        metadata: Any = strict_json_loads(metadata_text)
+    except ValueError as exc:
         raise ValueError("fragment revision front matter is not valid JSON") from exc
     revision = fragment_revision_from_document(metadata, markdown_body)
     if filename is not None:
@@ -196,19 +191,6 @@ def fragment_revision_ref(
         revision=revision.revision,
         semantic_digest=revision.semantic_digest,
     )
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError(f"duplicate JSON object key: {key}")
-        value[key] = item
-    return value
-
-
-def _reject_json_constant(value: str) -> Any:
-    raise ValueError(f"unsupported JSON number: {value}")
 
 
 __all__ = [

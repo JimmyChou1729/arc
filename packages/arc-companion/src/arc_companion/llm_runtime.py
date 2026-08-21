@@ -14,7 +14,6 @@ from arc_jobs import (
     Paused,
     ResumeReason,
     RunContext,
-    RunError,
     StoppedError,
 )
 from arc_llm import (
@@ -28,8 +27,10 @@ from arc_llm import (
     LLMTaskService,
     RESUME_SCHEMA_VERSION,
     ResumeInput,
+    awaiting_from_pause,
     decode_resume_input,
-    resume_input_matches,
+    execute_or_resume_matching,
+    run_error_from_failure,
 )
 
 from .generation_validation import CompanionContentError
@@ -70,19 +71,7 @@ def outer_resume_input(context: RunContext) -> ResumeInput | None:
         return None
 
 
-def execute_task(
-    service: LLMTaskService,
-    context: RunContext,
-    request: LLMRequest,
-    *,
-    resume_input: ResumeInput | None,
-    options: LLMExecutionOptions,
-) -> LLMTaskOutcome:
-    if resume_input is not None and resume_input_matches(request, resume_input):
-        return service.execute_or_resume(
-            context, request, input=resume_input, options=options
-        )
-    return service.execute_or_resume(context, request, options=options)
+execute_task = execute_or_resume_matching
 
 
 def execute_semantically_validated_task(
@@ -307,25 +296,6 @@ def _semantic_retry_pause(
                 "output_attempts": 2,
             },
         )
-    )
-
-
-def awaiting_from_pause(outcome: LLMPaused) -> Awaiting:
-    return Awaiting(
-        outcome.reason,
-        outcome.resume_key,
-        outcome.input_required,
-        outcome.request_ref,
-        outcome.response_contract,
-        outcome.details,
-    )
-
-
-def run_error_from_failure(outcome: LLMFailed) -> RunError:
-    return RunError(
-        outcome.error.code.value,
-        str(outcome.error),
-        outcome.error.details,
     )
 
 

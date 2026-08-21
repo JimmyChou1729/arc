@@ -36,8 +36,10 @@ from arc_llm import (
     ModelSelection,
     RESUME_SCHEMA_VERSION,
     ResumeInput,
+    awaiting_from_pause,
     decode_resume_input,
-    resume_input_matches,
+    execute_or_resume_matching,
+    run_error_from_failure,
 )
 from arc_document import RichBlockKind, literal_term_occurs, rich_block_to_document
 from arc_render import (
@@ -1166,19 +1168,7 @@ def outer_resume_input(context: RunContext) -> ResumeInput | None:
         return None
 
 
-def _execute(
-    service: Any,
-    context: RunContext,
-    request: LLMRequest,
-    *,
-    resume_input: ResumeInput | None,
-    options: LLMExecutionOptions,
-) -> Any:
-    if resume_input is not None and resume_input_matches(request, resume_input):
-        return service.execute_or_resume(
-            context, request, input=resume_input, options=options
-        )
-    return service.execute_or_resume(context, request, options=options)
+_execute = execute_or_resume_matching
 
 
 def _validate_language_output(value: Any) -> dict[str, Any]:
@@ -1794,23 +1784,36 @@ def _validate_draft_window(
     value: Mapping[str, Any],
     blocks: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, str]]:
-    _require_fields(value, {"translations"}, "translation draft")
-    translations = _mapping_list(
-        value["translations"], "translation draft entries"
+    return _validate_translation_window(
+        value,
+        blocks,
+        container_description="translation draft",
+        entries_description="translation draft entries",
+        mismatch_message="translation block IDs must exactly match source order",
+        item_description="translated block",
     )
+
+
+def _validate_translation_window(
+    value: Mapping[str, Any],
+    blocks: Sequence[Mapping[str, Any]],
+    *,
+    container_description: str,
+    entries_description: str,
+    mismatch_message: str,
+    item_description: str,
+) -> list[dict[str, str]]:
+    _require_fields(value, {"translations"}, container_description)
+    translations = _mapping_list(value["translations"], entries_description)
     expected = [str(item["block_id"]) for item in blocks]
     if [item.get("block_id") for item in translations] != expected:
         raise TranslationWorkflowError(
             "translation_coverage_invalid",
-            "translation block IDs must exactly match source order",
+            mismatch_message,
         )
     output: list[dict[str, str]] = []
-    for translated, block in zip(translations, blocks, strict=True):
-        _require_fields(
-            translated,
-            {"block_id", "text"},
-            "translated block",
-        )
+    for translated, _block in zip(translations, blocks, strict=True):
+        _require_fields(translated, {"block_id", "text"}, item_description)
         text = translated["text"]
         if not isinstance(text, str):
             raise TranslationWorkflowError(
@@ -1840,34 +1843,14 @@ def _validate_accepted_window(
     value: Mapping[str, Any],
     blocks: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, str]]:
-    _require_fields(value, {"translations"}, "accepted translation window")
-    translations = _mapping_list(
-        value["translations"], "accepted translation entries"
+    return _validate_translation_window(
+        value,
+        blocks,
+        container_description="accepted translation window",
+        entries_description="accepted translation entries",
+        mismatch_message="accepted translations must exactly match source order",
+        item_description="accepted translation",
     )
-    expected = [str(item["block_id"]) for item in blocks]
-    if [item.get("block_id") for item in translations] != expected:
-        raise TranslationWorkflowError(
-            "translation_coverage_invalid",
-            "accepted translations must exactly match source order",
-        )
-    output: list[dict[str, str]] = []
-    for translated, block in zip(translations, blocks, strict=True):
-        _require_fields(translated, {"block_id", "text"}, "accepted translation")
-        text = translated["text"]
-        if not isinstance(text, str):
-            raise TranslationWorkflowError(
-                "translation_coverage_invalid", "translation text must be a string"
-            )
-        output.append({"block_id": str(translated["block_id"]), "text": text})
-    _validate_window_formula_identity(blocks, output)
-    for translated, block in zip(output, blocks, strict=True):
-        try:
-            validate_translation_text(translated["text"], block)
-        except TranslationSourceError as exc:
-            raise TranslationWorkflowError(
-                exc.code, str(exc), exc.details
-            ) from exc
-    return output
 
 
 def _validate_window_formula_identity(
@@ -2214,23 +2197,8 @@ def _publish_translation_result(
     )
 
 
-def _awaiting(outcome: LLMPaused) -> Awaiting:
-    return Awaiting(
-        outcome.reason,
-        outcome.resume_key,
-        outcome.input_required,
-        outcome.request_ref,
-        outcome.response_contract,
-        outcome.details,
-    )
-
-
-def _run_error(outcome: LLMFailed) -> RunError:
-    return RunError(
-        outcome.error.code.value,
-        str(outcome.error),
-        outcome.error.details,
-    )
+_awaiting = awaiting_from_pause
+_run_error = run_error_from_failure
 
 
 def _read_json_artifact(

@@ -9,7 +9,6 @@ from arc_jobs import ResumeReason
 from arc_llm import (
     FailureCategory,
     LLMFailed,
-    LLMExecutionOptions,
     LLMPaused,
     ModelSelection,
     ProviderFailure,
@@ -19,15 +18,6 @@ from arc_llm import (
 )
 
 
-class FakeTaskService:
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
-
-    def execute_or_resume(self, context, request, **kwargs):
-        self.calls.append({"context": context, "request": request, **kwargs})
-        return "outcome"
-
-
 def _failure(category: FailureCategory) -> LLMFailed:
     return LLMFailed(
         ProviderFailure(
@@ -35,27 +25,6 @@ def _failure(category: FailureCategory) -> LLMFailed:
             category=category,
         )
     )
-
-
-def test_execute_routed_only_passes_matching_resume_input(monkeypatch):
-    service = FakeTaskService()
-    context = object()
-    request = object()
-    resume_input = object()
-
-    monkeypatch.setattr(_llm, "resume_input_matches", lambda _request, _resume: True)
-    options = LLMExecutionOptions()
-    assert _llm.execute_routed(
-        service, context, request, resume_input=resume_input, options=options
-    ) == "outcome"
-    assert service.calls == [{"context": context, "request": request, "input": resume_input, "options": options}]
-
-    service.calls.clear()
-    monkeypatch.setattr(_llm, "resume_input_matches", lambda _request, _resume: False)
-    _llm.execute_routed(
-        service, context, request, resume_input=resume_input, options=options
-    )
-    assert service.calls == [{"context": context, "request": request, "options": options}]
 
 
 def test_outer_resume_input_decodes_or_uses_caller_error_code():

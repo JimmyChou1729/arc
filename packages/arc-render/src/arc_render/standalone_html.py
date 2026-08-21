@@ -13,11 +13,11 @@ from html import escape
 from html.parser import HTMLParser
 import json
 import mimetypes
-import os
 from pathlib import Path
 import re
-import tempfile
 from urllib.parse import unquote, urlsplit
+
+from ._io import atomic_write_bytes
 
 
 _CSP = (
@@ -387,22 +387,7 @@ def write_standalone_html(index: Path, output: Path) -> None:
 
     payload = standalone_html_bytes(index)
     output = output.resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{output.name}.", dir=output.parent
-    )
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, output)
-    except BaseException:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
+    atomic_write_bytes(output, payload)
 
 
 class _HtmlInliner(HTMLParser):

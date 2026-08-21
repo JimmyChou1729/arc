@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from arc_document import DocumentCacheAdministrator
+from arc_jobs import canonical_json_bytes as _canonical_json_bytes
 
 from ._cache_root import resolve_cache_root
 from ._durable_io import atomic_write_bytes
@@ -471,15 +472,6 @@ def _parse_utc(value: str) -> datetime:
 
 def _format_utc(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
 
 
 __all__ = [

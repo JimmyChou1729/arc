@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from arc_jobs import canonical_json_bytes as _jobs_canonical_json_bytes
+
 from .._cache_root import resolve_cache_root
 from .._durable_io import atomic_write_bytes, payload_matches
 from .._file_lock import exclusive_file_lock
@@ -633,12 +635,7 @@ def _normalize_media_type(media_type: str) -> str:
 
 def _canonical_json_bytes(value: Any) -> bytes:
     try:
-        return json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        return _jobs_canonical_json_bytes(value)
     except (TypeError, ValueError) as exc:
         raise RemoteCacheError(
             "remote_cache_json_invalid", "remote JSON response is not serializable"

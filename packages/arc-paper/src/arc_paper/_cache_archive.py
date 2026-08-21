@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Iterable, Mapping, Sequence
 
 from arc_document import FullTextCatalogAdminEntry
+from arc_jobs import canonical_json_bytes as _canonical_json_bytes
 
 from ._cache_admin import CACHE_INDEX_SCHEMA, CacheAdministrator, CacheEntry
 from ._cache_root import resolve_cache_root
@@ -718,12 +719,6 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
 
 
 def _is_sha256(value: object) -> bool:

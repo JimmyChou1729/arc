@@ -8,8 +8,6 @@ newest successfully published export generation.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Mapping
@@ -27,6 +25,7 @@ from arc_jobs import (
     RunStatus,
     StateConflictError,
     StateContract,
+    atomic_write_bytes,
     canonical_json_bytes,
     validate_simple_id,
 )
@@ -467,31 +466,7 @@ def _validate_run_id(value: str, *, field_name: str) -> None:
 
 
 def _atomic_write_bytes(path: Path, content: bytes) -> None:
-    """Publish one export file without exposing a partial replacement."""
-
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _fsync_directory(path: Path) -> None:
-    if os.name == "nt":  # pragma: no cover - Windows
-        return
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    atomic_write_bytes(path, content)
 
 
 __all__ = [
