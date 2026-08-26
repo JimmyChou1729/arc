@@ -43,7 +43,9 @@ def test_package_set_metadata_and_dependency_graph() -> None:
             if dependency.startswith("arc-"):
                 assert dependency.endswith(f">={ARC_MAJOR},<{ARC_MAJOR + 1}")
             elif dependency.startswith("ac-"):
-                assert re.search(r">=\d+,<\d+$", dependency)
+                ac_range = re.search(r">=(\d+)(?:\.\d+\.\d+)?,<(\d+)$", dependency)
+                assert ac_range is not None
+                assert int(ac_range[2]) == int(ac_range[1]) + 1
 
 
 def test_research_packages_have_no_learning_or_legacy_core_dependency() -> None:

@@ -75,8 +75,14 @@ for path in projects:
             raise SystemExit(
                 f"{path} ARC dependency must use {current_range}: {dependency}"
             )
-        if dependency.startswith("ac-") and re.search(r">=\d+,<\d+$", dependency) is None:
-            raise SystemExit(f"{path} AC dependency must use one major range: {dependency}")
+        if dependency.startswith("ac-"):
+            ac_range = re.search(
+                r">=(\d+)(?:\.\d+\.\d+)?,<(\d+)$", dependency
+            )
+            if ac_range is None or int(ac_range[2]) != int(ac_range[1]) + 1:
+                raise SystemExit(
+                    f"{path} AC dependency must use a bounded major range: {dependency}"
+                )
     text = path.read_text(encoding="utf-8")
     updated_text, count = re.subn(
         rf'(?m)^version = "{re.escape(current)}"$',
