@@ -1,6 +1,6 @@
 {
   "name": "arc",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Agent Research Copilot for academic papers and theoretical-physics research workflows.",
   "author": {"name": "ARC"},
   "homepage": "https://github.com/tririver/arc",
