@@ -1,6 +1,6 @@
 {
   "name": "arc",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Agent Research Copilot for academic papers and theoretical-physics research workflows.",
   "author": {"name": "ARC"},
   "license": "MIT",

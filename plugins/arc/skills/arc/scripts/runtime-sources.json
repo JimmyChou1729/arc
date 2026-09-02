@@ -23,7 +23,7 @@
     {
       "id": "product",
       "repository": "https://github.com/tririver/arc.git",
-      "commit": "97a9e7c55346dfd21fee274e7e9c9ed9c45db26e",
+      "commit": "6fefdc722eb8db82bb645849a25e16f421ac3129",
       "packages": [
         "arc-paper",
         "arc-domain"
