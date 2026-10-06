@@ -13,6 +13,7 @@ from _arc_workflows.domain_relationships import (
     RELATIONSHIP_LLM_RUN_DIRNAME,
     DomainRelationshipError,
     RelationshipRunner,
+    RelationshipLLMAwaiting,
     _default_relationship_runner,
     _llm_relationships,
     normalize_domain_relationship_pairs,
@@ -30,7 +31,7 @@ from _arc_workflows.domain_seed_provenance import (
 from _arc_workflows.workflow_io import write_json_object
 
 
-SCHEMA_VERSION = "arc.workflow.domain_manifest.v4"
+SCHEMA_VERSION = "arc.workflow.domain_manifest.v5"
 SEED_PROVENANCE_DIRECTORY = "seed-provenance"
 
 
@@ -76,6 +77,7 @@ def write_domain_manifest(
         inputs = collect_domain_manifest_inputs(project_dir)
         relationship_result: dict[str, Any] | None
         relationship_warning = ""
+        relationship_awaiting = None
         if len(inputs.domains) == 1:
             relationship_result = {"pairs": []}
         else:
@@ -94,6 +96,9 @@ def write_domain_manifest(
                         or _default_relationship_runner
                     ),
                 )
+            except RelationshipLLMAwaiting as exc:
+                relationship_result = None
+                relationship_awaiting = exc.resume
             except Exception as exc:
                 relationship_result = None
                 relationship_warning = str(exc)
@@ -102,6 +107,9 @@ def write_domain_manifest(
             relationship_result=relationship_result,
             relationship_warning=relationship_warning,
         )
+        if relationship_awaiting is not None:
+            prepared.manifest["domain_relationships"].update({"status": "paused", "warnings": [],
+                                                               "awaiting": relationship_awaiting})
         _publish_prepared(prepared, destination=destination)
         return destination
     finally:

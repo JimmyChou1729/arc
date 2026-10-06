@@ -406,7 +406,7 @@ def test_dry_run_has_closed_workers_and_direct_research_policy(tmp_path: Path) -
     runner = _load_runner_module()
     result = runner.run_ideas(_config(tmp_path), dry_run=True)
     worker = result["batch_request"]["loops"][0]["proposers"][0]
-    assert result["schema_version"] == "arc.workflow.ideas.result.v5"
+    assert result["schema_version"] == "arc.workflow.ideas.result.v6"
     assert result["status"] == "dry_run"
     assert result["generation_mode"] == "model_selected_route"
     assert result["proposal_count"] == 3
@@ -722,7 +722,7 @@ def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(
         portfolio_assessment_runner=portfolio,
     )
 
-    assert first["schema_version"] == "arc.workflow.ideas.result.v5"
+    assert first["schema_version"] == "arc.workflow.ideas.result.v6"
     assert first["status"] == "succeeded"
     assessment = first["portfolio_assessment"]
     assert assessment["status"] == "available"

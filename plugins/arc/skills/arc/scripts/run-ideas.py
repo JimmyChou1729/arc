@@ -13,7 +13,7 @@ from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
 
 bootstrap_arc_pythonpath()
 
-from ac_jobs import EventSink, RunEngine, RunRepository, RunSnapshot, RunSpec
+from ac_jobs import EventSink, RunEngine, RunRepository, RunSnapshot, RunSpec, RunStatus
 from ac_llm import HostAuthority, LLMExecutionOptions, LLMTaskService
 from ac_proposer_reviewer import (
     BatchInputPayload,
@@ -141,6 +141,19 @@ def run_ideas(
             workspace_inputs=input_metadata,
         )
 
+    relationships = ideas_config.domain_manifest["domain_relationships"]
+    if relationships["status"] == "paused":
+        resume = relationships["awaiting"]
+        result = not_started_result(
+            ideas_config, request=request, ideas=ideas, warnings=warnings,
+            max_concurrent=max_concurrent, status="paused", workspace_inputs=input_metadata,
+        )
+        result["pending_stages"] = ["domain_relationships"]
+        result["resume"] = resume
+        if resume.get("details", {}).get("code") == "awaiting_host" and not resume.get("stop_requested"):
+            result["status"] = "awaiting_host"
+        return result
+
     repository = RunRepository(ideas_config.run_dir)
 
     effective_progress = combined_progress_callback(
@@ -173,7 +186,7 @@ def run_ideas(
     execution_error: Exception | None = None
     try:
         runner = BatchRunner()
-        runner.prepare(
+        prepared = runner.prepare(
             request,
             repository,
             ideas_config.run_id,
@@ -190,11 +203,17 @@ def run_ideas(
         ):
             try:
                 if executor is None:
-                    snapshot = RunEngine(repository).execute(
-                        spec,
-                        handler,
-                        event_sink=package_progress,
-                    )
+                    engine = RunEngine(repository)
+                    if prepared.status is RunStatus.PAUSED:
+                        view = repository.inspect(ideas_config.run_id)
+                        if view.stop_request is not None or prepared.awaiting is not None and prepared.awaiting.input_required:
+                            snapshot = prepared
+                        else:
+                            snapshot = engine.resume(ideas_config.run_id, handler, event_sink=package_progress)
+                    elif prepared.status is RunStatus.RUNNING:
+                        snapshot = engine.resume(ideas_config.run_id, handler, event_sink=package_progress)
+                    else:
+                        snapshot = engine.execute(spec, handler, event_sink=package_progress)
                 else:
                     snapshot = executor(
                         repository,
@@ -289,6 +308,21 @@ def run_ideas(
         trace=trace,
         portfolio_assessment=portfolio_assessment,
     )
+    if snapshot is not None and snapshot.awaiting is not None:
+        details = snapshot.awaiting.details
+        if details.get("code") == "awaiting_host" or details.get("llm_code") == "awaiting_host" or details.get("host_response_required"):
+            from ac_llm import HostTaskService
+            view = repository.inspect(ideas_config.run_id)
+            result["research_status"] = result["status"]
+            result["status"] = "paused" if view.stop_request is not None else "awaiting_host"
+            result["resume"] = {"run_root": str(repository.root), "run_id": ideas_config.run_id,
+                                "details": dict(details), "stop_requested": view.stop_request is not None,
+                                "host_tasks": HostTaskService().pending(run_root=repository.root, run_id=ideas_config.run_id)}
+    if portfolio_assessment.get("status") == "paused" and isinstance(portfolio_assessment.get("resume"), Mapping):
+        result["pending_stages"] = ["portfolio_assessment"]
+        if portfolio_assessment["resume"]["details"].get("code") == "awaiting_host":
+            result.setdefault("research_status", result["status"])
+            result["status"] = "paused" if portfolio_assessment["resume"].get("stop_requested") else "awaiting_host"
     _maybe_publish_partial(ideas_config, result, warnings)
     progress.emit(
         {"event": "ideas_batch_finished", "status": result["status"]}

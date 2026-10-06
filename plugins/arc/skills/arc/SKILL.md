@@ -119,6 +119,13 @@ not optional.
   `manuals/ac-jobs.md`.
 - Host LLM/provider detection, model choice, direct prompt tests, or provider
   troubleshooting: read `manuals/ac-llm.md`.
+- Host model handoff, `awaiting_host`, or subagent coordination: read
+  `manuals/host-execution.md`. Check actual coordinator capabilities; export and
+  submit through public `ac-llm` operations, then resume the original workflow.
+  Work/Cowork/dot use Host; coding agents prefer their native provider with
+  conservative pre-launch fallback. Scientific workers require independent
+  contexts. Model preferences may use the host model when unsupported, with
+  truthful provenance. Never edit private run state or bypass user stops.
 - Typed proposer-reviewer batch construction, resume, or safe observation of
   committed rounds: read `manuals/ac-proposer-reviewer.md`.
 - User-facing Markdown report export: use the ordinary blocking

@@ -349,7 +349,7 @@ Unsupported summary schemas and missing-record seed fallbacks are rejected.
 ```
 
 The command must complete successfully before a requested ideas workflow
-starts. It writes `arc.workflow.domain_manifest.v4`, preserving every
+starts. It writes `arc.workflow.domain_manifest.v5`, preserving every
 seed-specific domain package as its own evidence card. It first publishes a
 content-addressed
 `arc.workflow.domain_seed_provenance.v1` artifact and records that artifact's
@@ -367,9 +367,11 @@ classifications, confidence, reasons, and evidence are embedded under
 `domain_relationships` as advisory context only. They do not route, rank,
 merge, delete, or disqualify ideas.
 
-An invalid relationship payload, runner exception, typed pause, failure, or
-stop sets `domain_relationships.status` to `unavailable`, records a visible
-warning, and still publishes the package-complete manifest. Do not invent a
+A typed pause preserves `domain_relationships.status=paused` and an `awaiting`
+descriptor while still publishing every package card. For Host, follow
+`manuals/host-execution.md` and rerun the same manifest command after submission.
+An invalid relationship payload, runner exception, failure, or stop sets the
+relationship status to `unavailable` with a visible warning. Do not invent a
 relationship result or inspect private LLM artifacts. The helper holds one
 project lease while it validates inputs, requests optional relationship
 context, and prepares publication. It verifies or writes immutable seed

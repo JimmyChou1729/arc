@@ -34,13 +34,19 @@ Step 3: Replace `<run-id>`, `<project-dir>`, `<user_intent>`, and
 `<skill-workflow-json-dir>`.
 
 Set `domain_manifest_path` to
-`<project-dir>/.arc/domain/domain-manifest.json`. Current manifest v4 includes
+`<project-dir>/.arc/domain/domain-manifest.json`. Current manifest v5 includes
 its validated `arc.workflow.domain_seed_provenance.v1` artifact, every
 package-level domain card, and `domain_relationships`. Pair classifications,
 confidence, and warnings are scientific context, not routing instructions.
 An unavailable relationship analysis leaves all package cards usable and does
 not block Ideas. A missing, unsupported, or invalid manifest must be
 regenerated before any ideas work.
+
+A v5 manifest whose relationships are paused carries an `awaiting` descriptor.
+Ideas returns that dependency as `pending_stages=["domain_relationships"]`
+before starting its batch. Submit/resume the relationship task and regenerate
+the manifest, then rerun Ideas. A stopped dependency stays paused until an
+explicit resume; legacy v4 completed manifests remain readable.
 
 Proceed only when the domain-build handoff status is `completed` or `degraded`.
 For a degraded handoff, print its warnings and use only the verified domain
@@ -268,12 +274,18 @@ helper remains read-only: it does not invoke this assessment, mutate the batch,
 or reinterpret its results. It may only preserve or render advisory content
 that the completed run supplies through its public handoff.
 
-The run result contract is `arc.workflow.ideas.result.v5`. The formal JSON
+The run result contract is `arc.workflow.ideas.result.v6`. The formal JSON
 ranking contract is `arc.ideas.selected_rounds.v8`; partial rankings use
 `arc.ideas.partial_selected_rounds.v4`. Read scientific `status`
 separately from `durable_lifecycle`: a durable batch may finish successfully
 while the scientific status is `degraded` because one or more loops failed.
 The current contracts have no `run_lifecycle` alias.
+
+For Host pauses, follow `manuals/host-execution.md`. Batch `resume` and
+`portfolio_assessment.resume` identify separate owning runs. `research_status`
+retains the observed scientific frontier while `awaiting_host` and
+`pending_stages` identify unfinished coordination. Rerunning the same config
+consumes submitted work without repeating accepted research or committed rounds.
 
 Publish the deterministic ranked report as PDF to both the per-run archive and
 the easy-to-find project root:

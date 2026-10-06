@@ -216,6 +216,7 @@ def _generate_locked(
     task_service: LLMTaskService | None,
     llm_options: LLMExecutionOptions,
 ) -> dict[str, Any]:
+    durable_run_id = f"portfolio-{input_digest[:24]}" if runner is None else None
     try:
         if runner is None:
             outcome = _run_default_assessment(
@@ -232,6 +233,9 @@ def _generate_locked(
                 options=llm_options,
             )
             outcome = getattr(generated, "outcome", generated)
+            snapshot = getattr(generated, "snapshot", None)
+            if snapshot is not None:
+                durable_run_id = snapshot.run_id
     except Exception as exc:
         return _status(
             "failed",
@@ -239,11 +243,16 @@ def _generate_locked(
             reason=type(exc).__name__,
         )
     if isinstance(outcome, LLMPaused):
-        return _status(
+        from _arc_workflows.workflow_io import llm_pause_document
+
+        result = _status(
             "paused",
             input_digest=input_digest,
             reason=_enum_value(outcome.reason),
         )
+        result["resume"] = llm_pause_document(outcome, run_root=assessment_run_root,
+                                              run_id=durable_run_id)
+        return result
     if isinstance(outcome, LLMFailed):
         return _status(
             "failed",
@@ -326,14 +335,14 @@ def _run_default_assessment(
         snapshot = repository.inspect(durable_run_id).snapshot
         if snapshot.status is RunStatus.PAUSED:
             assert snapshot.awaiting is not None
-            if snapshot.awaiting.input_required:
+            if snapshot.awaiting.input_required or repository.inspect(durable_run_id).stop_request is not None:
                 awaiting = snapshot.awaiting
                 return LLMPaused(
                     awaiting.reason,
                     awaiting.resume_key,
                     details=awaiting.details,
                     request_ref=awaiting.request_ref,
-                    input_required=True,
+                    input_required=awaiting.input_required,
                     response_contract=awaiting.response_contract,
                 )
             return client.resume(

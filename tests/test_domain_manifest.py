@@ -189,7 +189,8 @@ def test_manifest_helper_uses_source_bootstrap_and_typed_llm_contract() -> None:
     )
 
     assert "bootstrap_arc_pythonpath()" in source
-    assert "LLMClient().generate" in relationships_source
+    assert "client.generate(" in relationships_source
+    assert "client.resume(" in relationships_source
     assert "run_json" not in source + relationships_source
     assert "LLMAbortScope" not in source + relationships_source
 
@@ -301,7 +302,7 @@ def test_manifest_uses_distinct_domain_ids_and_relative_paths(tmp_path: Path) ->
 
     payload = publish.build_domain_manifest(project)
 
-    assert payload["schema_version"] == "arc.workflow.domain_manifest.v4"
+    assert payload["schema_version"] == "arc.workflow.domain_manifest.v5"
     assert payload["package_count"] == 2
     assert payload["domain_relationships"]["status"] == "unavailable"
     assert "research_scope" not in payload
@@ -1163,12 +1164,12 @@ def test_write_manifest_warns_for_incomplete_typed_llm_outcomes(
         payload = json.loads(
             destination.read_text(encoding="utf-8")
         )
-        assert payload["domain_relationships"]["status"] == (
-            "unavailable"
-        )
-        assert message in payload["domain_relationships"][
-            "warnings"
-        ][0]
+        if isinstance(outcome, LLMPaused):
+            assert payload["domain_relationships"]["status"] == "paused"
+            assert payload["domain_relationships"]["awaiting"]["resume_key"] == outcome.resume_key
+        else:
+            assert payload["domain_relationships"]["status"] == "unavailable"
+            assert message in payload["domain_relationships"]["warnings"][0]
         assert payload["package_count"] == 2
 
 

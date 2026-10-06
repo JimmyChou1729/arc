@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -42,7 +43,14 @@ from _arc_workflows.calculate_prompts import (
 )
 
 
-BatchExecutor = Callable[[BatchRequest, Path, str], CommittedRound]
+@dataclass(frozen=True)
+class BatchAwaiting:
+    status: str
+    resume: Mapping[str, Any]
+    durable_frontier: Mapping[str, Any]
+
+
+BatchExecutor = Callable[[BatchRequest, Path, str], CommittedRound | BatchAwaiting]
 
 
 class BatchExecutionError(RuntimeError):
@@ -157,6 +165,9 @@ def _run_calculation_locked(
             accepted_step_outputs=accepted_step_outputs,
         )
         step_results.append(step_result)
+        if step_result["status"] in {"awaiting_host", "paused"}:
+            overall_status = step_result["status"]
+            break
         if step_result["status"] in {"blocked_for_user", "blocked_for_revision"}:
             overall_status = step_result["status"]
             break
@@ -258,6 +269,16 @@ def _run_calculation_step(
                 )
             attempts.append(failed_attempt)
             return _failed_step_result(step, attempts=attempts, error=str(exc))
+        if isinstance(committed_round, BatchAwaiting):
+            attempts.append({"attempt_number": attempt_number, "calculator_ids": list(calculator_ids),
+                             "batch_run_id": batch_run_id, "batch_loop_id": attempt_id,
+                             "status": committed_round.status,
+                             "durable_frontier": copy.deepcopy(dict(committed_round.durable_frontier)),
+                             "warnings_summary": _empty_warnings_summary()})
+            return {"step_id": step.step_id, "kind": step.kind, "status": committed_round.status,
+                    "attempts": attempts, "accepted_output": None, "blocked_output": None,
+                    "reviewer_decision": None, "error": None,
+                    "resume": copy.deepcopy(dict(committed_round.resume))}
         attempt_record = {
             "attempt_number": attempt_number,
             "calculator_ids": list(calculator_ids),
@@ -365,20 +386,21 @@ def _execute_public_batch(
     *,
     llm_options: LLMExecutionOptions = LLMExecutionOptions(),
     max_concurrent_calculators: int = len(CALCULATOR_IDS),
-) -> CommittedRound:
+) -> CommittedRound | BatchAwaiting:
     """Execute one independent batch and expand only its committed first round."""
 
     runner = BatchRunner()
     try:
-        snapshot = runner.run(
-            request,
-            run_root,
-            run_id,
-            options=ExecutionOptions(
-                max_concurrent_workers=max_concurrent_calculators,
-                llm=llm_options,
-            ),
-        )
+        options = ExecutionOptions(max_concurrent_workers=max_concurrent_calculators, llm=llm_options)
+        snapshot = runner.prepare(request, run_root, run_id)
+        if snapshot.status is RunStatus.PAUSED:
+            view = runner.inspect(run_root, run_id)
+            if view.stop_request is None and snapshot.awaiting is not None and not snapshot.awaiting.input_required:
+                snapshot = runner.resume(run_root, run_id, options=options)
+        elif snapshot.status is RunStatus.RUNNING:
+            snapshot = runner.resume(run_root, run_id, options=options)
+        elif snapshot.status is RunStatus.PENDING:
+            snapshot = runner.run(request, run_root, run_id, options=options)
     except Exception as exc:
         return _recover_committed_round_or_raise(
             runner,
@@ -387,6 +409,21 @@ def _execute_public_batch(
             run_id,
             error=exc,
         )
+    if snapshot.status is RunStatus.PAUSED:
+        inspection = runner.projection(run_root, run_id).inspect()
+        view = runner.inspect(run_root, run_id)
+        awaiting = _jsonable(snapshot.awaiting)
+        details = {} if snapshot.awaiting is None else snapshot.awaiting.details
+        is_host = details.get("code") == "awaiting_host" or details.get("llm_code") == "awaiting_host"
+        resume = {"run_root": str(run_root), "run_id": run_id, "awaiting": awaiting,
+                  "stop_requested": view.stop_request is not None,
+                  "next_step": "Submit pending host responses, then rerun this calculation command." if is_host
+                               else "Resolve the pause through the owning batch resume command."}
+        if is_host:
+            from ac_llm import HostTaskService
+            resume["host_tasks"] = HostTaskService().pending(run_root=run_root, run_id=run_id)
+        return BatchAwaiting("awaiting_host" if is_host and view.stop_request is None else "paused",
+                             resume, _jsonable(inspection))
     if snapshot.status is not RunStatus.SUCCEEDED:
         detail = ""
         if snapshot.error is not None:

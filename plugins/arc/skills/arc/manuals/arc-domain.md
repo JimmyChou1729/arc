@@ -159,13 +159,17 @@ stable or pass one explicit local cache on both build and resume.
 ## Managed Workflow Semantics
 
 The managed workflow records visible summary warnings and publishes
-`arc.workflow.domain_manifest.v4` only after verified exports. The manifest
+`arc.workflow.domain_manifest.v5` only after verified exports. The manifest
 references the content-addressed `arc.workflow.domain_seed_provenance.v1`
 artifact and preserves every domain package before an Ideas workflow starts.
 Pairwise `domain_relationships` are advisory evidence with confidence and
 warnings; they never choose an Ideas route. If relationship analysis is
 unavailable, the manifest remains usable and Ideas proceeds from package cards
 with a visible warning.
+
+Relationship pauses retain an `awaiting` descriptor and all verified cards.
+Host coordinators use `manuals/host-execution.md` and rerun the same manifest
+command. Ideas can still read existing v4 manifests.
 
 ## Help
 

@@ -680,6 +680,9 @@ def test_default_executor_uses_public_engine_and_committed_round(
             return expected
 
     class FakeRunner:
+        def prepare(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(status=modules.runner.RunStatus.PENDING)
+
         def run(
             self,
             passed_request: Any,
@@ -794,6 +797,9 @@ def test_default_executor_recovers_committed_frontier_after_exception(
             return expected
 
     class FakeRunner:
+        def prepare(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(status=modules.runner.RunStatus.PENDING)
+
         def run(self, *args: Any, **kwargs: Any) -> Any:
             raise RuntimeError("engine boundary failed after commit")
 
@@ -864,6 +870,9 @@ def test_succeeded_batch_projection_failure_reports_durable_frontier(
             raise ValueError("committed round digest mismatch")
 
     class FakeRunner:
+        def prepare(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(status=modules.runner.RunStatus.PENDING)
+
         def run(self, *args: Any, **kwargs: Any) -> Any:
             return SimpleNamespace(
                 status=modules.runner.RunStatus.SUCCEEDED,

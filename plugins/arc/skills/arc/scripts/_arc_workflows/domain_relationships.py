@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from _arc_workflows.domain_manifest_inputs import ManifestError
-from _arc_workflows.workflow_io import read_json_object
+from _arc_workflows.workflow_io import read_json_object, llm_pause_document
 
 
 RELATIONSHIP_LLM_RUN_DIRNAME = "domain-relationships-llm"
@@ -26,10 +26,35 @@ class RelationshipLLMOutcomeError(RuntimeError):
     """The relationship request did not produce a completed value."""
 
 
-def _default_relationship_runner(request: Any, run_root: Path) -> Any:
-    from ac_llm import LLMClient
+class RelationshipLLMAwaiting(RelationshipLLMOutcomeError):
+    def __init__(self, resume: dict[str, Any]) -> None:
+        super().__init__("Domain relationship analysis awaits resumable execution.")
+        self.resume = resume
 
-    return LLMClient().generate(request, run_root=run_root)
+
+def _default_relationship_runner(request: Any, run_root: Path) -> Any:
+    from ac_llm import LLMClient, LLMRunResult, LLMPaused
+    from ac_jobs import RunRepository, RunStatus
+
+    client = LLMClient()
+    run_id = client.run_id_for(request)
+    repository = RunRepository(run_root)
+    if (repository.run_directory(run_id) / "snapshot.json").exists():
+        view = repository.inspect(run_id)
+        snapshot = view.snapshot
+        if snapshot.status is RunStatus.PAUSED:
+            awaiting = snapshot.awaiting
+            assert awaiting is not None
+            if view.stop_request is not None or awaiting.input_required:
+                return LLMRunResult(snapshot, LLMPaused(
+                    awaiting.reason, awaiting.resume_key, details=awaiting.details,
+                    request_ref=awaiting.request_ref, input_required=awaiting.input_required,
+                    response_contract=awaiting.response_contract,
+                ))
+            return client.resume(run_root=run_root, run_id=run_id)
+        if snapshot.status is RunStatus.RUNNING:
+            return client.resume(run_root=run_root, run_id=run_id)
+    return client.generate(request, run_root=run_root)
 
 
 def _llm_relationships(
@@ -69,10 +94,9 @@ def _llm_relationships(
             )
         return dict(outcome.value)
     if isinstance(outcome, LLMPaused):
-        raise RelationshipLLMOutcomeError(
-            "domain relationship analysis is paused: "
-            f"{outcome.reason.value} ({outcome.resume_key})"
-        )
+        snapshot = getattr(result, "snapshot", None)
+        raise RelationshipLLMAwaiting(llm_pause_document(outcome, run_root=run_root,
+                                                        run_id=None if snapshot is None else snapshot.run_id))
     if isinstance(outcome, LLMFailed):
         raise RelationshipLLMOutcomeError(
             "domain relationship analysis failed: "

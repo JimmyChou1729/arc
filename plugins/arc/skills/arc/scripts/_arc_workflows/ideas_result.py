@@ -24,7 +24,7 @@ from _arc_workflows.ideas_ranking import (
 from _arc_workflows.ideas_models import IdeaPlan
 
 
-IDEAS_RESULT_SCHEMA = "arc.workflow.ideas.result.v5"
+IDEAS_RESULT_SCHEMA = "arc.workflow.ideas.result.v6"
 
 
 def observed_result(
@@ -271,7 +271,7 @@ def _portfolio_assessment_summary(
             "reason": "run_not_observed",
         }
     ref = value.get("ref")
-    return {
+    summary = {
         "status": str(value.get("status", "failed")),
         "input_digest": (
             str(value["input_digest"])
@@ -286,6 +286,9 @@ def _portfolio_assessment_summary(
             else None
         ),
     }
+    if isinstance(value.get("resume"), Mapping):
+        summary["resume"] = dict(value["resume"])
+    return summary
 
 
 def round_score_table(
