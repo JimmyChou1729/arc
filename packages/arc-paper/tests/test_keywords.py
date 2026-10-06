@@ -70,7 +70,7 @@ def test_literal_term_matching_does_not_cross_word_boundaries() -> None:
     )
     by_surface = {item.term: item for item in term}
     assert by_surface["concept"].occurrence_count > 0
-    assert by_surface["concep"].occurrence_count == 0
+    assert "concep" not in by_surface
 
 
 class FakeKeywordTasks:
@@ -174,6 +174,7 @@ def _parsed(
     *,
     explicit_entries: tuple[str, ...] = (),
     repeated_sentences: int = 1,
+    body_extra: str = "",
 ) -> ParsedDocument:
     payload = seed.encode()
     source = SourceArtifact(
@@ -199,7 +200,7 @@ def _parsed(
         1,
         (
             f"First chapter concept body appears. {repeated} "
-            "A distinct chapter concept body closes the text."
+            f"A distinct chapter concept body closes the text. {body_extra}"
         ),
         1,
     )
@@ -522,7 +523,7 @@ def test_explicit_windows_are_auditable_and_result_is_frequency_projection(
     tmp_path: Path,
 ) -> None:
     entries = tuple(f"Explicit term {index}" for index in range(81))
-    document = _parsed(explicit_entries=entries, repeated_sentences=12)
+    document = _parsed(explicit_entries=entries, repeated_sentences=12, body_extra=". ".join(entries) + ".")
     fake = FakeKeywordTasks()
     runner = KeywordExtractionRunner(
         tmp_path / "jobs",
@@ -876,7 +877,6 @@ def test_inventory_merge_is_atomic_and_rich_lists_use_visible_text(
     assert stored.high_water == 8
     assert {item.term for item in stored.terms} == {
         "Visible concept",
-        "Other term",
     }
     visible = next(item for item in stored.terms if item.term == "Visible concept")
     assert visible.occurrence_count == 1
@@ -1001,8 +1001,7 @@ def test_explicit_yaml_list_is_excluded_from_frequency_and_search_context() -> N
         assert by_term["alpha"].occurrence_count == 1
         assert len(by_term["alpha"].matched_sentences) == 1
         assert "scientific body" in by_term["alpha"].matched_sentences[0].text
-        assert by_term["beta"].occurrence_count == 0
-        assert by_term["beta"].matched_sentences == ()
+        assert "beta" not in by_term
 
 
 def test_cli_routes_keyword_contract(

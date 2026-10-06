@@ -260,6 +260,7 @@ def test_arxiv_document_operations_do_not_fall_back_after_official_failure(
     fallback = FakeHtmlProvider(repository, provider="ar5iv")
     service = ArcPaperService(
         repository=repository,
+        inspire=FakeInspire(),  # type: ignore[arg-type]
         arxiv_html=official,  # type: ignore[arg-type]
         ar5iv=fallback,  # type: ignore[arg-type]
         arxiv_pdf=ForbiddenPDF(),
