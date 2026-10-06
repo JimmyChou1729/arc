@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -111,6 +115,9 @@ def test_runtime_source_lock_uses_full_shas() -> None:
 def test_generated_foundation_copies_match_manifest() -> None:
     manifest = json.loads((SCRIPTS / "generated-sources.json").read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "ac.generated_sources.v1"
+    lock = json.loads((SCRIPTS / "runtime-sources.json").read_text(encoding="utf-8"))
+    foundation = next(source for source in lock["sources"] if source["id"] == "foundation")
+    assert manifest["foundation_commit"] == foundation["commit"]
     for relative, metadata in manifest["files"].items():
         path = (SCRIPTS / relative).resolve()
         assert hashlib.sha256(path.read_bytes()).hexdigest() == metadata["sha256"]
@@ -138,7 +145,23 @@ def test_build_outputs_are_checkout_local() -> None:
 def test_ci_exports_the_foundation_checkout_to_source_mode() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "AC_FOUNDATION_REPO_ROOT: ${{ github.workspace }}/local/ac-foundation" in workflow
-    assert "git clone https://github.com/tririver/ac-foundation.git local/ac-foundation" in workflow
+    assert 'source["repository"]' in workflow
+    assert 'source["commit"]' in workflow
+    assert 'git clone "$FOUNDATION_REPOSITORY" local/ac-foundation' in workflow
+    assert 'checkout --detach "$FOUNDATION_SHA"' in workflow
+
+
+def test_ci_reads_repository_and_sha_from_the_same_lock(tmp_path) -> None:
+    document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    step = next(item for item in document["jobs"]["test"]["steps"] if item.get("id") == "foundation")
+    output = tmp_path / "step-output"
+    completed = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=ROOT,
+                               env={**os.environ, "GITHUB_OUTPUT": str(output)}, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    observed = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    lock = json.loads((SCRIPTS / "runtime-sources.json").read_text(encoding="utf-8"))
+    source = next(item for item in lock["sources"] if item["id"] == "foundation")
+    assert observed == {"repository": source["repository"], "sha": source["commit"]}
 
 
 def test_managed_workflow_scripts_use_the_private_runtime() -> None:

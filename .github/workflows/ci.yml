@@ -18,12 +18,26 @@ jobs:
         with:
           node-version: "22"
       - run: python -m pip install build pytest PyYAML Pillow
-      - name: Read Foundation SHA
+      - name: Read Foundation source lock
         id: foundation
         run: |
-          echo "sha=$(python -c 'import json; p=json.load(open("plugins/arc/skills/arc/scripts/runtime-sources.json")); print(next(s["commit"] for s in p["sources"] if s["id"] == "foundation"))')" >> "$GITHUB_OUTPUT"
-      - run: git clone https://github.com/tririver/ac-foundation.git local/ac-foundation
-      - run: git -C local/ac-foundation checkout ${{ steps.foundation.outputs.sha }}
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          lock = json.loads(Path("plugins/arc/skills/arc/scripts/runtime-sources.json").read_text())
+          source = next(item for item in lock["sources"] if item["id"] == "foundation")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print("repository=" + source["repository"], file=output)
+              print("sha=" + source["commit"], file=output)
+          PY
+      - name: Checkout locked Foundation
+        env:
+          FOUNDATION_REPOSITORY: ${{ steps.foundation.outputs.repository }}
+          FOUNDATION_SHA: ${{ steps.foundation.outputs.sha }}
+        run: |
+          git clone "$FOUNDATION_REPOSITORY" local/ac-foundation
+          git -C local/ac-foundation checkout --detach "$FOUNDATION_SHA"
       - run: python scripts/check-generated-foundation.py
       - run: >-
           python -m pip install

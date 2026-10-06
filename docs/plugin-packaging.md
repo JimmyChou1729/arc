@@ -74,9 +74,13 @@ AC_RUNTIME_HOME=<new-development-runtime-directory> \
 ```
 
 Use a new runtime directory; never patch an existing content-addressed runtime.
-Default locked installation must be tested separately after an approved
-version/pin change. The default lock must point to reachable tested commits;
-an archive with new scripts and an old Foundation pin is a development bundle.
+Source overrides and default Git installation are separate checks. The
+`plugin-dev` lock selects immutable, tested Foundation and ARC commits from
+the contributor's forks so a development ZIP can install the Host code without
+local checkouts. CI reads both the repository URL and SHA from that same lock.
+Generated Foundation copies and their checksums must match its Foundation SHA.
+The release version remains unchanged until approval. Public release locks
+must select the final approved, reachable release commits.
 
 ## Public submission
 

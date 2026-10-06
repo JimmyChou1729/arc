@@ -117,5 +117,6 @@ manifests, validates them, and pins the release source commit; it does not tag
 or publish.
 
 Use [`docs/plugin-packaging.md`](docs/plugin-packaging.md) for deterministic
-private/local and public skills-only ZIPs. Development bundles preserve the
-existing release version and pins until an approved release is prepared.
+private/local and public skills-only ZIPs. The `plugin-dev` development lock
+selects tested commits from the contributor's forks; release versions remain
+unchanged. A public release requires approved versions and final release pins.
