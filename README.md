@@ -52,6 +52,23 @@ plugins/arc/bin/arc-runtime doctor
 plugins/arc/bin/arc-runtime setup
 ```
 
+After setup, diagnose providers, the Host coordinator, proxy dependencies,
+optional scientific libraries, and PDF tools/fonts without model calls:
+
+```bash
+plugins/arc/bin/arc-runtime script plugins/arc/skills/arc/scripts/doctor-arc.py \
+  --project-dir <existing-project>
+plugins/arc/bin/arc-runtime ac-llm doctor --provider host --environment
+```
+
+Runtime `doctor` checks lock identity/readiness; workflow doctor checks the
+active Python environment. Neither probes network access or authentication.
+Host coordination is described in
+[`host-execution.md`](plugins/arc/skills/arc/manuals/host-execution.md).
+During development, use both `AC_FOUNDATION_REPO_ROOT` and
+`AC_PRODUCT_REPO_ROOT` with `AC_INSTALL_SOURCE=local`; changing only the code
+does not update the published SHA-locked runtime.
+
 The default paper cache is `.arc/cache/arc-paper` below the launch directory;
 override it with `ARC_PAPER_CACHE`. Foundation runtime and neutral document
 state use `AC_HOME`, `AC_RUNTIME_HOME`, and `AC_DOCUMENT_CACHE`.

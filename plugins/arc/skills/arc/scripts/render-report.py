@@ -24,6 +24,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--project-dir", required=True)
     parser.add_argument("--input", required=True, dest="source")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--main-font", help="PDF font family (or ARC_REPORT_MAIN_FONT)")
+    parser.add_argument("--cjk-font", help="CJK font family (or ARC_REPORT_CJK_FONT)")
     return parser
 
 
@@ -34,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
             project_dir=args.project_dir,
             source=args.source,
             output=args.output,
+            main_font=args.main_font,
+            cjk_font=args.cjk_font,
         )
     except ReportDeliveryContractError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

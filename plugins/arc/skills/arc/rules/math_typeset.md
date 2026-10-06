@@ -46,7 +46,12 @@ python3 <skill-dir>/scripts/render-report.py \
 ```
 
 The renderer uses Pandoc, XeLaTeX, the report directory as a resource path,
-1.5 cm margins, and `Noto Sans CJK SC`; allow up to 600 seconds. A missing
+1.5 cm margins, and `Noto Sans CJK SC` by default; allow up to 600 seconds.
+Choose installed families with `--main-font` / `--cjk-font` or
+`ARC_REPORT_MAIN_FONT` / `ARC_REPORT_CJK_FONT`. Diagnose tools and exact font
+families with `arc-runtime script <skill-dir>/scripts/doctor-arc.py`;
+font availability is unknown when Fontconfig cannot enumerate families.
+A missing
 renderer, invalid PDF, or conversion failure means the report has not been
 delivered. Preserve the Markdown as editable project source, report the exact
 failure, and do not claim PDF delivery. The failure is delivery-only: it does

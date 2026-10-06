@@ -17,6 +17,37 @@ class ReportDeliveryUnavailable(RuntimeError):
     """A valid delivery request could not be rendered or published."""
 
 
+def report_fonts(main_font: str | None = None, cjk_font: str | None = None) -> dict[str, str]:
+    fonts = {"mainfont": main_font if main_font is not None else os.environ.get("ARC_REPORT_MAIN_FONT", "Noto Sans CJK SC"),
+             "CJKmainfont": cjk_font if cjk_font is not None else os.environ.get("ARC_REPORT_CJK_FONT", "Noto Sans CJK SC")}
+    for name, value in fonts.items():
+        if not isinstance(value, str) or not value.strip() or len(value) > 200 or any(char in value for char in "\x00\r\n"):
+            raise ReportDeliveryContractError(f"{name} must be a non-empty font family name of at most 200 characters")
+    return fonts
+
+
+def report_dependencies(*, main_font: str | None = None, cjk_font: str | None = None) -> dict:
+    """Probe tools and exact font families without rendering a report."""
+    tools = {name: shutil.which(name) is not None for name in ("pandoc", "xelatex", "fc-list")}
+    try:
+        fonts = report_fonts(main_font, cjk_font)
+    except ReportDeliveryContractError as exc:
+        return {"tools": tools, "fonts": {}, "status": "invalid_configuration", "guidance": str(exc)}
+    families = None
+    if tools["fc-list"]:
+        try:
+            completed = subprocess.run(["fc-list", "--format", "%{family}\n"], capture_output=True, text=True, timeout=10, check=False)
+            if completed.returncode == 0:
+                families = {family.strip().casefold() for line in completed.stdout.splitlines() for family in line.split(",")}
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    checks = {name: {"family": family, "status": "unknown" if families is None else "available" if family.casefold() in families else "missing"}
+              for name, family in fonts.items()}
+    return {"tools": tools, "fonts": checks,
+            "status": "unavailable" if not tools["pandoc"] or not tools["xelatex"] or any(item["status"] == "missing" for item in checks.values()) else "font_check_unavailable" if families is None else "available",
+            "guidance": "Install Pandoc/XeLaTeX and the chosen fonts, or set ARC_REPORT_MAIN_FONT and ARC_REPORT_CJK_FONT. Retry delivery with the existing Markdown; scientific runs need not restart."}
+
+
 def project_path(
     value: str | Path,
     project: Path,
@@ -43,7 +74,10 @@ def render_markdown_pdf(
     project_dir: str | Path,
     source: str | Path,
     output: str | Path,
+    main_font: str | None = None,
+    cjk_font: str | None = None,
 ) -> Path:
+    fonts = report_fonts(main_font, cjk_font)
     project = Path(project_dir).expanduser().resolve()
     if not project.is_dir():
         raise ReportDeliveryContractError("project directory does not exist")
@@ -73,11 +107,9 @@ def render_markdown_pdf(
                 f"--resource-path={source_path.parent}{os.pathsep}.",
                 "-V",
                 "geometry:margin=1.5cm",
-                "-V",
-                "mainfont=Noto Sans CJK SC",
-                "-V",
-                "CJKmainfont=Noto Sans CJK SC",
             ]
+            for name, family in fonts.items():
+                command.extend(["-V", f"{name}={family}"])
             completed = subprocess.run(
                 command,
                 cwd=project,
