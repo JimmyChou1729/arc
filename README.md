@@ -115,3 +115,7 @@ Prepare an approved release from a clean checkout with
 `scripts/release-arc.sh <version>`. The script updates both packages and plugin
 manifests, validates them, and pins the release source commit; it does not tag
 or publish.
+
+Use [`docs/plugin-packaging.md`](docs/plugin-packaging.md) for deterministic
+private/local and public skills-only ZIPs. Development bundles preserve the
+existing release version and pins until an approved release is prepared.

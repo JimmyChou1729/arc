@@ -8,7 +8,7 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "ARC",
-    "shortDescription": "Academic papers and research workflows",
+    "shortDescription": "Academic research tools",
     "longDescription": "Agent Skill and SHA-locked CLIs for paper access, research-domain construction, idea review, planning, calculation, and checking.",
     "developerName": "ARC",
     "category": "Productivity",
@@ -17,6 +17,8 @@
       "Summarize arXiv:0911.3380",
       "Use ARC to build a research domain from arXiv:0911.3380",
       "Use ARC to check this calculation"
-    ]
+    ],
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/composer-icon.svg"
   }
 }
