@@ -63,6 +63,33 @@ development-installed Foundation packages and the full brokered host-turn
 contract. This proves packaged script portability with that environment,
 not the currently published runtime lock.
 
+The separate `fresh-plugin` CI job runs `scripts/verify-fresh-plugin.py` on the
+final ZIP outside the checkout with a new runtime/cache and no source overlays.
+It verifies the six installed package Git SHAs, constraints digest, default
+SOCKS dependency, the public Host acceptance/replay cycle, the optional numerical
+profile, and real Chinese/math PDF delivery on the documented Ubuntu profile.
+Its PDF pages and machine-readable evidence are retained as CI artifacts.
+
+For a local cold check, use a new directory outside the source checkout:
+
+```bash
+python scripts/verify-fresh-plugin.py --zip local/plugin-bundles/arc-public-skills-dev.zip \
+  --output-dir <new-directory-outside-checkout> --report --scientific
+```
+
+Real paper access remains opt-in: set `ARC_RUN_NET_TESTS=1` and add
+`--network-paper arXiv:0911.3380`. It starts with an empty paper cache, reads
+metadata/HTML/one section, then uses the exact cached document handle with
+network providers blocked to verify an unchanged warm-cache fingerprint.
+Installation downloads are separate from this opt-in research-network check.
+External-service failures retain their raw evidence; they are not counted as
+successful end-to-end paper access.
+
+The normal Linux CI job requires DSH socket tests with
+`ARC_REQUIRE_DSH_TESTS=1`. Other test hosts may skip only a probe-confirmed
+EPERM/EACCES restriction, with the explicit reason; other failures remain
+failures. Host model handoff does not depend on the DSH socket bridge.
+
 To test a fresh source-override installation, set both checked-out roots:
 
 ```bash

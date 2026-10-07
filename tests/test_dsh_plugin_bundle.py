@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -16,6 +17,25 @@ BRIDGE_TEST = ROOT / "tests/test_dsh_llm_bridge.mjs"
 PATCH = ROOT / "plugins/arc/dsh/cordis.patch.yml"
 SKILL = ROOT / "plugins/arc/skills/arc/SKILL.md"
 NODE_AVAILABLE = shutil.which("node") is not None
+
+
+@pytest.fixture(scope="module")
+def unix_socket_capability():
+    probe = """
+    import { createServer } from 'node:net';
+    import { mkdtempSync, rmSync } from 'node:fs';
+    import { tmpdir } from 'node:os';
+    import { join } from 'node:path';
+    const root=mkdtempSync(join(tmpdir(),'arc-socket-probe-'));
+    const server=createServer();
+    server.on('error',error=>{rmSync(root,{recursive:true,force:true}); console.error(error.code);
+      process.exit(['EPERM','EACCES'].includes(error.code)?77:1)});
+    server.listen(join(root,'probe.sock'),()=>server.close(()=>rmSync(root,{recursive:true,force:true})));
+    """
+    result = subprocess.run(["node", "--input-type=module", "--eval", probe], capture_output=True, text=True)
+    if result.returncode == 77 and os.environ.get("ARC_REQUIRE_DSH_TESTS") != "1":
+        pytest.skip("Host denies Unix socket listen: " + result.stderr.strip())
+    assert result.returncode == 0, "Required DSH socket capability failed: " + result.stderr
 
 
 def test_dsh_bundle_manifest_points_to_adapter_patch() -> None:
@@ -37,8 +57,11 @@ def test_dsh_patch_loads_package_entry() -> None:
     assert "name: arc-dsh" in patch
 
 
-@pytest.mark.skipif(not NODE_AVAILABLE, reason="DSH adapter requires Node.js")
-def test_dsh_adapter_registers_existing_arc_skill() -> None:
+@pytest.mark.skipif(
+    not NODE_AVAILABLE and os.environ.get("ARC_REQUIRE_DSH_TESTS") != "1",
+    reason="DSH adapter requires Node.js",
+)
+def test_dsh_adapter_registers_existing_arc_skill(unix_socket_capability) -> None:
     script = """
       import { mkdtempSync, rmSync } from 'node:fs'
       import { tmpdir } from 'node:os'
@@ -77,14 +100,20 @@ def test_dsh_adapter_registers_existing_arc_skill() -> None:
     )
 
 
-@pytest.mark.skipif(not NODE_AVAILABLE, reason="DSH adapter requires Node.js")
+@pytest.mark.skipif(
+    not NODE_AVAILABLE and os.environ.get("ARC_REQUIRE_DSH_TESTS") != "1",
+    reason="DSH adapter requires Node.js",
+)
 def test_dsh_adapter_has_valid_node_syntax() -> None:
     subprocess.run(["node", "--check", str(ADAPTER)], cwd=ROOT, check=True)
     subprocess.run(["node", "--check", str(BRIDGE)], cwd=ROOT, check=True)
 
 
-@pytest.mark.skipif(not NODE_AVAILABLE, reason="DSH adapter requires Node.js")
-def test_dsh_native_bridge_protocol_smoke() -> None:
+@pytest.mark.skipif(
+    not NODE_AVAILABLE and os.environ.get("ARC_REQUIRE_DSH_TESTS") != "1",
+    reason="DSH adapter requires Node.js",
+)
+def test_dsh_native_bridge_protocol_smoke(unix_socket_capability) -> None:
     subprocess.run(["node", str(BRIDGE_TEST)], cwd=ROOT, check=True)
 
 

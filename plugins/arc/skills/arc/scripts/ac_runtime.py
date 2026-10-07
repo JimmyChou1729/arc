@@ -302,6 +302,7 @@ def _fingerprint(
     mode: str,
     roots: dict[str, Path] | None,
     constraints_path: Path,
+    extra_requirements: tuple[str, ...] = (),
 ) -> tuple[str, dict[str, Any]]:
     identity: dict[str, Any] = {
         "launcher_version": LAUNCHER_VERSION,
@@ -313,6 +314,8 @@ def _fingerprint(
         ),
         "sources": [],
     }
+    if extra_requirements:
+        identity["extra_requirements"] = list(extra_requirements)
     for source in lock.sources:
         source_identity: dict[str, Any] = {
             "id": source.source_id,
@@ -436,6 +439,33 @@ def _requirements(lock: RuntimeLock, mode: str, roots: dict[str, Path] | None) -
     return requirements
 
 
+def load_extra_requirements(path: Path | None, lock: RuntimeLock) -> tuple[str, ...]:
+    """Read an explicit pinned optional environment without overriding sources."""
+    if path is None:
+        return ()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeConfigError(f"Cannot read optional requirements: {path}") from exc
+    normalize = lambda name: re.sub(r"[-_.]+", "-", name).lower()
+    source_packages = {normalize(package) for source in lock.sources for package in source.packages}
+    requirements = {}
+    for number, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([0-9][A-Za-z0-9.!+-]*)", line)
+        if match is None:
+            raise RuntimeConfigError(f"Optional requirement must be a plain exact package pin at line {number}")
+        name = normalize(match[1])
+        if name in source_packages or name in requirements:
+            raise RuntimeConfigError(f"Optional requirement duplicates or overrides a locked source: {name}")
+        requirements[name] = f"{name}=={match[2]}"
+    if not requirements:
+        raise RuntimeConfigError("Optional requirements must not be empty")
+    return tuple(requirements[name] for name in sorted(requirements))
+
+
 def _run_logged(command: list[str], log_path: Path) -> None:
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
     output = completed.stdout + completed.stderr
@@ -458,7 +488,7 @@ def _install(
     venv = runtime_dir / "venv"
     if venv.exists():
         shutil.rmtree(venv)
-    requirements = _requirements(lock, mode, roots)
+    requirements = _requirements(lock, mode, roots) + list(identity.get("extra_requirements", ()))
     uv_override = os.environ.get("AC_INSTALL_UV")
     uv = uv_override or shutil.which("uv")
     log_path = runtime_dir / "install.log"
@@ -553,6 +583,7 @@ def _ensure_runtime(
 
 def _parser(launcher: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=launcher)
+    parser.add_argument("--requirements", type=Path, help="explicit exact optional pins; creates a separate runtime fingerprint")
     subparsers = parser.add_subparsers(dest="operation")
     setup = subparsers.add_parser("setup", help="install or verify private runtime")
     setup.add_argument("--retry", action="store_true")
@@ -588,10 +619,17 @@ def main(argv: list[str] | None = None) -> int:
     ).expanduser().resolve()
     try:
         lock = load_lock(lock_path)
+        launcher = os.environ.get("AC_RUNTIME_LAUNCHER_NAME", "ac-runtime")
+        arguments = list(sys.argv[1:] if argv is None else argv)
+        if arguments and arguments[0] in lock.tools:
+            arguments = ["run", *arguments]
+        parser = _parser(launcher)
+        namespace = parser.parse_args(arguments)
+        extra_requirements = load_extra_requirements(namespace.requirements, lock)
         mode, roots = _source_selection(lock)
         environment = _runtime_environment(lock, roots)
         fingerprint, identity = _fingerprint(
-            lock_path, lock, mode, roots, constraints_path
+            lock_path, lock, mode, roots, constraints_path, extra_requirements
         )
     except RuntimeConfigError as exc:
         _die(str(exc))
@@ -601,12 +639,6 @@ def main(argv: list[str] | None = None) -> int:
         / lock.profile
         / fingerprint
     )
-    launcher = os.environ.get("AC_RUNTIME_LAUNCHER_NAME", "ac-runtime")
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments and arguments[0] in lock.tools:
-        arguments = ["run", *arguments]
-    parser = _parser(launcher)
-    namespace = parser.parse_args(arguments)
     retry = bool(getattr(namespace, "retry", False)) or os.environ.get(
         "AC_INSTALL_RETRY", "0"
     ).lower() in {"1", "true", "yes", "on"}
@@ -620,6 +652,7 @@ def main(argv: list[str] | None = None) -> int:
             "ready": _ready(runtime_dir, fingerprint, lock.tools),
             "environment": environment,
             "sources": identity["sources"],
+            "extra_requirements": list(extra_requirements),
         }
         print(json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2))
         return 0 if document["ready"] else 1

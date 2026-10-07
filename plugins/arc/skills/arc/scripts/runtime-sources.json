@@ -5,7 +5,7 @@
     {
       "id": "foundation",
       "repository": "https://github.com/JimmyChou1729/ac-foundation.git",
-      "commit": "cc309bca012b161a85f8d578b7e234fe410151f1",
+      "commit": "29dafb66baf63fe290fd430f9dde4408171088b1",
       "packages": [
         "ac-jobs",
         "ac-llm",
@@ -23,7 +23,7 @@
     {
       "id": "product",
       "repository": "https://github.com/JimmyChou1729/arc.git",
-      "commit": "9989e0f9d55e22c8a5cd113f8e03caa9a74b8540",
+      "commit": "35626c774453cb2390f0f4e3dda342f353f94e48",
       "packages": [
         "arc-paper",
         "arc-domain"

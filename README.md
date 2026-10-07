@@ -65,6 +65,9 @@ Runtime `doctor` checks lock identity/readiness; workflow doctor checks the
 active Python environment. Neither probes network access or authentication.
 Host coordination is described in
 [`host-execution.md`](plugins/arc/skills/arc/manuals/host-execution.md).
+Explicit report-font provisioning, TeX prerequisites, real PDF verification,
+and an optional numerical Python environment are documented in
+[`environment-setup.md`](plugins/arc/skills/arc/manuals/environment-setup.md).
 During development, use both `AC_FOUNDATION_REPO_ROOT` and
 `AC_PRODUCT_REPO_ROOT` with `AC_INSTALL_SOURCE=local`; changing only the code
 does not update the published SHA-locked runtime.

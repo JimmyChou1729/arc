@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AC_FOUNDATION_REPO_ROOT: ${{ github.workspace }}/local/ac-foundation
+      ARC_REQUIRE_DSH_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -50,3 +51,30 @@ jobs:
       - run: python -m pytest --import-mode=importlib packages/*/tests tests
       - run: node tests/test_dsh_llm_bridge.mjs
       - run: scripts/build-packages.sh
+
+  fresh-plugin:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install jsonschema PyYAML Pillow
+      - name: Initialize the supported report system profile
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pandoc texlive-xetex texlive-lang-chinese texlive-latex-extra texlive-fonts-recommended fontconfig poppler-utils
+      - name: Build the actual public skills ZIP
+        run: python scripts/plugin_bundle.py build --profile public-skills --output "$RUNNER_TEMP/arc.zip"
+      - name: Verify cold Git installation, protocol, scientific environment and real PDF
+        run: python scripts/verify-fresh-plugin.py --zip "$RUNNER_TEMP/arc.zip" --output-dir "$RUNNER_TEMP/arc-fresh" --report --scientific
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fresh-plugin-verification
+          path: |
+            ${{ runner.temp }}/arc-fresh/verification.json
+            ${{ runner.temp }}/arc-fresh/*.stdout
+            ${{ runner.temp }}/arc-fresh/*.stderr
+            ${{ runner.temp }}/arc-fresh/report-proof/report-verification.pdf
+            ${{ runner.temp }}/arc-fresh/report-proof/page-*.png
