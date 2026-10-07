@@ -17,7 +17,8 @@ import importlib.metadata as metadata
 import json, os, sys
 from pathlib import Path
 import httpx, socksio
-from ac_llm import HostCoordinator,HostTaskService,JsonOutput,LLMClient,LLMCompleted,LLMExecutionOptions,LLMPaused,LLMRequest,ModelSelection
+from jsonschema import Draft202012Validator
+from ac_llm import InvalidRequestError, HostCoordinator,HostTaskService,JsonOutput,LLMClient,LLMCompleted,LLMExecutionOptions,LLMPaused,LLMRequest,ModelSelection
 root=Path(sys.argv[1]); lock=json.loads(Path(sys.argv[2]).read_text())
 provenance={}
 for source in lock['sources']:
@@ -37,12 +38,21 @@ finally:
         if value is None:os.environ.pop(key,None)
         else:os.environ[key]=value
 client=LLMClient(); service=HostTaskService()
-opts=LLMExecutionOptions(host_coordinator=HostCoordinator('fresh-zip-fixture',native_fallback=False))
+opts=LLMExecutionOptions(host_coordinator=HostCoordinator('fresh-zip-fixture',native_fallback=False,fresh_context=True),task_binding={'fresh_context_required':True})
 req=LLMRequest('fresh-zip-smoke','Return the fixture value 42.',JsonOutput({'type':'object','properties':{'answer':{'const':42}},'required':['answer'],'additionalProperties':False}),ModelSelection(provider='host'))
 location={'run_root':root/'runs','run_id':'host-smoke'}
 first=client.generate(req,**location,options=opts); assert isinstance(first.outcome,LLMPaused)
 task=service.export(**location,task_id=service.pending(**location)[0]['task_id'])
-response={'schema_version':'ac.llm.host_response.v1','task_id':task['task_id'],'request_sha256':task['request_sha256'],'actor':{'actor_id':'offline-fixture','kind':'fake'},'output':{'schema_version':'ac.llm.host_turn.v1','state':'complete','result':{'answer':42},'host_request':None}}
+response={'schema_version':'ac.llm.host_response.v1','task_id':task['task_id'],'request_sha256':task['request_sha256'],'actor':{'actor_id':'offline-fixture','kind':'fake','context_id':'offline-fixture-context'},'isolation':'fresh_context','output':{'schema_version':'ac.llm.host_turn.v1','state':'complete','result':{'answer':42},'host_request':None}}
+Draft202012Validator(task['response_schema']).validate(response)
+bad={**response,'actor':{**response['actor'],'kind':'agent'}}
+assert not Draft202012Validator(task['response_schema']).is_valid(bad)
+try:
+    service.submit(**location,response=bad)
+except InvalidRequestError as exc:
+    assert 'actor.kind' in str(exc)
+else:
+    raise AssertionError('fresh task accepted coordinator actor')
 service.submit(**location,response=response)
 completed=client.resume(**location,options=opts); assert isinstance(completed.outcome,LLMCompleted)
 assert completed.outcome.value=={'answer':42}

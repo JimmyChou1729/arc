@@ -69,3 +69,31 @@ def test_arc_doctor_runs_offline_and_does_not_claim_host_tools(monkeypatch, tmp_
     assert "scipy" in report["scientific_libraries"]
     assert os.path.normpath(report["scientific_python"]["executable"]) == os.path.normpath(sys.executable)
     assert report["scientific_python"]["scope"] == "current_interpreter_only"
+
+
+def test_uninitialized_export_doctor_gives_public_commands_without_installing(tmp_path):
+    import shutil
+    scripts = tmp_path / "skill/scripts"
+    shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__"))
+    env = dict(os.environ)
+    for name in ("ARC_REQUIRE_REPO_ROOT", "AC_FOUNDATION_REPO_ROOT", "AC_PRODUCT_REPO_ROOT", "PYTHONPATH"):
+        env.pop(name, None)
+    env['AC_RUNTIME_HOME'] = str(tmp_path / 'never-installed')
+    before = set(tmp_path.rglob('*'))
+    # -S represents an interpreter without the installed AC distributions.
+    result = subprocess.run([sys.executable, '-S', str(scripts / 'doctor-arc.py'), '--project-dir', str(tmp_path)],
+                            env=env, cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert 'Traceback' not in result.stderr
+    report = json.loads(result.stdout)
+    assert report['environment']['code'] == 'runtime_dependencies_missing'
+    assert 'ac_jobs' in report['environment']['message']
+    commands = report['environment']['commands']
+    assert commands['setup'] == ['bash', str(scripts / 'arc-runtime'), 'setup']
+    assert commands['workflow_doctor'][-2:] == ['--project-dir', str(tmp_path)]
+    assert report['report']['status'] == 'not_checked'
+    assert set(tmp_path.rglob('*')) == before
+    help_result = subprocess.run([sys.executable, '-S', str(scripts / 'doctor-arc.py'), '--help'],
+                                 env=env, capture_output=True, text=True)
+    assert help_result.returncode == 0 and '--project-dir' in help_result.stdout
+    assert not (tmp_path / 'never-installed').exists()

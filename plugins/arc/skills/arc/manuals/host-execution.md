@@ -76,6 +76,13 @@ workflow. Shared filesystem access is not OS isolation, and independent agents
 need not be different models. If the host lacks independent contexts, report
 the limitation instead of changing roles in one conversation.
 
+For independent workers, the exported schema requires `actor.kind=subagent`,
+a nonblank `actor.context_id`, and `isolation=fresh_context`. The template uses
+`subagent` but leaves identity and isolation unconfirmed. Fill those fields only
+from actual execution; a template is not evidence that a new context exists.
+After an upgrade, use a new empty export directory to obtain updated schemas
+without overwriting prior outputs. Existing task IDs and receipts stay valid.
+
 Set a truthful actor ID, actor kind, and context ID. Different workers in one
 loop/scope cannot share a context ID; a worker can continue its own context.
 Unknown actual model, effort, and usage are null. Fake actors are used only in

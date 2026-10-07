@@ -23,7 +23,13 @@ caches and temporary storage by default. Explicit `UV_CACHE_DIR`,
 unwritable explicit paths produce a path-specific error and require correction.
 No HOME change, chmod of system directories or sudo is needed for the Python
 runtime. `arc-runtime doctor` reports selected paths, readiness, last failure
-and a read-only probe of an existing kernel lock. It never installs packages.
+and a read-only probe of an existing kernel lock. It never installs packages. The
+workflow diagnostic `doctor-arc.py` should be invoked through
+`arc-runtime script <skill-dir>/scripts/doctor-arc.py`. If it is run in an
+interpreter missing AC dependencies, it returns structured
+`runtime_dependencies_missing` guidance with the exact public setup/diagnostic
+commands and exits 1. It does not install packages or infer that report/provider
+checks passed. `--help` remains available before runtime initialization.
 
 After a platform interruption, preserve that platform's cancellation message
 separately, then run:

@@ -7,12 +7,11 @@ import argparse
 import importlib.util
 import importlib.metadata
 import json
+from pathlib import Path
 import sys
 
 sys.dont_write_bytecode = True
 from _arc_workflows._arc_script_bootstrap import bootstrap_arc_pythonpath
-bootstrap_arc_pythonpath()
-from _arc_workflows.report_delivery import report_dependencies
 
 
 def main(argv=None):
@@ -21,10 +20,26 @@ def main(argv=None):
     parser.add_argument("--report-environment", help="explicit report-environment.json")
     args = parser.parse_args(argv)
     try:
+        bootstrap_arc_pythonpath()
+    except (ImportError, RuntimeError, OSError, ValueError) as exc:
+        script = Path(__file__).resolve()
+        launcher = ["bash", str(script.with_name("arc-runtime"))]
+        result = {"schema_version": "arc.doctor.v1", "environment": {
+            "status": "runtime_unavailable",
+            "code": "runtime_dependencies_missing" if isinstance(exc, ImportError) else "runtime_bootstrap_failed",
+            "error_type": type(exc).__name__, "message": str(exc), "python": sys.executable,
+            "guidance": "Use the pinned private runtime. Check runtime doctor, explicitly run setup if needed, then invoke this diagnostic through arc-runtime script. Check any source override paths reported in the error; this command installs nothing.",
+            "commands": {"runtime_doctor": [*launcher, "doctor"], "setup": [*launcher, "setup"],
+                         "workflow_doctor": [*launcher, "script", str(script), *(sys.argv[1:] if argv is None else argv)]}},
+            "providers": {}, "report": {"status": "not_checked"}}
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 1
+    from _arc_workflows.report_delivery import report_dependencies
+    try:
         from ac_llm import environment_diagnostics
         environment = environment_diagnostics(project_dir=args.project_dir)
     except ImportError:
-        environment = {"status": "foundation_update_required", "guidance": "Use the tested Foundation source override during development; the release lock must include the Host implementation."}
+        environment = {"status": "foundation_update_required", "guidance": "Use the current pinned private runtime through arc-runtime; inspect runtime doctor and explicitly run setup if needed."}
     from ac_llm.providers import default_registry
     providers = {}
     for name in ("codex", "claude", "kimi", "dsh", "host"):
