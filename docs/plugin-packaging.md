@@ -68,6 +68,11 @@ final ZIP outside the checkout with a new runtime/cache and no source overlays.
 It verifies the six installed package Git SHAs, constraints digest, default
 SOCKS dependency, the public Host acceptance/replay cycle, the optional numerical
 profile, and real Chinese/math PDF delivery on the documented Ubuntu profile.
+The Linux test job also executes the locked Foundation bootstrap/recovery
+suite, including a real uv subprocess that retains its kernel lock after the
+coordinator is killed. Foreign PID namespace ownership records are simulated;
+this does not certify a deployment's namespace or shared-mount configuration.
+
 Cold CI installs with real uv while `XDG_CACHE_HOME` points at a read-only
 system path. `--verify-private-cache` requires a populated private uv cache,
 and repeated public `setup` / `setup --retry` must retain the success marker.

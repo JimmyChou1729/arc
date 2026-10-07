@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: python -m pip install build pytest PyYAML Pillow
+      - run: python -m pip install build pytest PyYAML Pillow uv
       - name: Read Foundation source lock
         id: foundation
         run: |
@@ -54,6 +54,12 @@ jobs:
           -e local/ac-foundation/packages/ac-proposer-reviewer
           -e packages/arc-paper
           -e packages/arc-domain
+      - name: Locked Foundation runtime recovery on Linux
+        run: >-
+          python -m pytest --import-mode=importlib
+          local/ac-foundation/tests/test_runtime_bootstrap.py
+          local/ac-foundation/tests/test_runtime_recovery.py
+          --basetemp "$RUNNER_TEMP/ac-runtime-recovery" -q -ra
       - name: Offline suite
         run: python -m pytest --import-mode=importlib packages/*/tests tests -ra
       - name: Explicit live paper-network checks
