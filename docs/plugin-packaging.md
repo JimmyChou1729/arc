@@ -86,9 +86,10 @@ External-service failures retain their raw evidence; they are not counted as
 successful end-to-end paper access.
 
 The normal Linux CI job requires DSH socket tests with
-`ARC_REQUIRE_DSH_TESTS=1`. Other test hosts may skip only a probe-confirmed
-EPERM/EACCES restriction, with the explicit reason; other failures remain
-failures. Host model handoff does not depend on the DSH socket bridge.
+`ARC_REQUIRE_DSH_TESTS=1`; missing Node.js fails this required check. Other
+test hosts may skip when Node.js is absent. With Node.js installed, they may
+skip only a probe-confirmed EPERM/EACCES restriction, with the explicit reason;
+other failures remain failures. Host model handoff does not depend on the DSH socket bridge.
 
 To test a fresh source-override installation, set both checked-out roots:
 
