@@ -15,6 +15,7 @@ import sys
 import time
 import tempfile
 import uuid
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
@@ -558,6 +559,7 @@ def load_extra_requirements(path: Path | None, lock: RuntimeLock) -> tuple[str, 
 
 
 def _run_logged(command: list[str], log_path: Path, *, env: dict[str, str] | None = None, lock_fd: int | None = None) -> None:
+    output_tail: deque[str] = deque(maxlen=8)
     with log_path.open("a", encoding="utf-8") as log:
         os.chmod(log_path, 0o600)
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -567,13 +569,25 @@ def _run_logged(command: list[str], log_path: Path, *, env: dict[str, str] | Non
         assert process.stdout is not None
         try:
             for line in process.stdout:
-                log.write(re.sub(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", r"\1[REDACTED]@", line))
+                line = re.sub(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", r"\1[REDACTED]@", line)
+                log.write(line)
                 log.flush()
+                if line.strip():
+                    output_tail.append(line.strip()[:500])
             status = process.wait()
         finally:
             process.stdout.close()
         if status != 0:
-            raise RuntimeError(f"command failed with exit status {status}")
+            detail = "\nInstaller output (last lines):\n" + "\n".join(output_tail) if output_tail else ""
+            raise RuntimeError(f"command failed with exit status {status}{detail}\nInstall log: {log_path}")
+
+
+def _previous_install_failure(path: Path) -> str:
+    saved = _read_json(path)
+    detail = f"\n{saved['error']}" if saved.get("error") else ""
+    log = f"\nInstall log: {saved['log']}" if saved.get("log") and str(saved["log"]) not in detail else ""
+    return (f"previous runtime install failed: {path}{detail}{log}\n"
+            "After fixing the cause, rerun setup --retry.")
 
 
 def _install(
@@ -665,15 +679,12 @@ def _ensure_runtime(
         _die(str(exc), 1)
     failure = runtime_dir / "install.failed"
     if failure.exists() and not retry:
-        _die(
-            f"previous runtime install failed: {failure}; rerun setup --retry after fixing cause",
-            1,
-        )
+        _die(_previous_install_failure(failure), 1)
     with InstallLock(runtime_dir / "install.lock") as ownership:
         if _ready(runtime_dir, fingerprint, lock.tools):
             return
         if failure.exists() and not retry:
-            _die(f"previous runtime install failed: {failure}", 1)
+            _die(_previous_install_failure(failure), 1)
         try:
             previous = _read_json(runtime_dir / "install.active")
             if previous:

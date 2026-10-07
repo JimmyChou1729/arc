@@ -14,6 +14,16 @@ incomplete installation; use a fresh runtime with the current source lock.
 Successful SOCKS client initialization does not prove that external services
 are reachable. Diagnose actual DNS, TLS, proxy and HTTP failures separately.
 
+At task startup, check `arc-runtime doctor`. If it is not ready, initialize
+the locked runtime with `arc-runtime setup` before research calls; the launcher
+also retains lazy initialization for direct use. Failed installs report a
+bounded, URL-userinfo-redacted output tail and the retained attempt log path.
+An ordinary call after failure reports the saved error without reinstalling.
+Once the cause is corrected, the coordinating Agent may use `setup --retry`
+within the task's existing authority, then continue the original task. Respect
+user stops and host permission decisions; do not turn retries into an automatic
+loop or bypass a denied network request.
+
 ## Restricted-host setup and interruption recovery
 
 Set `AC_RUNTIME_HOME` to a writable private directory, then use the public
