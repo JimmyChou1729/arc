@@ -5,7 +5,7 @@
     {
       "id": "foundation",
       "repository": "https://github.com/JimmyChou1729/ac-foundation.git",
-      "commit": "29dafb66baf63fe290fd430f9dde4408171088b1",
+      "commit": "e221388694b2fe8fe448d7093b615dcd7ff8af71",
       "packages": [
         "ac-jobs",
         "ac-llm",

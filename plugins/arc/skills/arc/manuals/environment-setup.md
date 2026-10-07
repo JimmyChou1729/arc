@@ -14,6 +14,49 @@ incomplete installation; use a fresh runtime with the current source lock.
 Successful SOCKS client initialization does not prove that external services
 are reachable. Diagnose actual DNS, TLS, proxy and HTTP failures separately.
 
+## Restricted-host setup and interruption recovery
+
+Set `AC_RUNTIME_HOME` to a writable private directory, then use the public
+`arc-runtime setup` entry point. Bootstrap layout v2 chooses private uv/pip
+caches and temporary storage by default. Explicit `UV_CACHE_DIR`,
+`PIP_CACHE_DIR`, and the first of `TMPDIR`/`TEMP`/`TMP` remain authoritative;
+unwritable explicit paths produce a path-specific error and require correction.
+No HOME change, chmod of system directories or sudo is needed for the Python
+runtime. `arc-runtime doctor` reports selected paths, readiness, last failure
+and a read-only probe of an existing kernel lock. It never installs packages.
+
+After a platform interruption, preserve that platform's cancellation message
+separately, then run:
+
+```bash
+<skill-dir>/scripts/arc-runtime doctor
+<skill-dir>/scripts/arc-runtime setup --retry
+```
+
+`lock_occupied` means a coordinator or surviving installer still holds the
+kernel lock. `lock_wait_timeout` returns exit 75 without takeover. Inspect or
+wait for that existing process; do not delete its lock or endlessly retry.
+`lock_recovered` means the kernel lock became available after an unfinished
+owner record, not that a user cancelled the work. `lock_ownership_unverifiable`
+requires a supported runtime filesystem. No host/PID/TTL heuristic decides
+ownership, and platform approval cancellation is not bypassed through elevated
+permissions.
+
+Every attempt writes to its own retained directory and log. Only a complete
+venv with a matching success marker is published; retries preserve prior
+failure evidence. Already-ready v2 environments are reused. New v2 runtime
+paths are separate from older v1 paths so legacy clients and uncertain legacy
+locks cannot race with recovery. Old state is preserved automatically; manual
+lock cleanup is unnecessary. v2 setup currently requires POSIX flock on a
+filesystem with reliable locking. Cross-PID-namespace tests simulate foreign
+owner records on shared local inodes; DOT's actual namespace/mount behavior and
+Windows setup are not certified by those tests.
+
+If runtime setup is not ready, Host, paper access and scientific execution have
+not thereby been validated. After it succeeds, run those checks and the
+explicit report initialization below separately. PDF failure never requires
+rerunning an already accepted scientific calculation.
+
 ## Supported PDF profile
 
 The supported Linux reference profile is Ubuntu 24.04 with its packaged

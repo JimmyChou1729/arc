@@ -109,7 +109,7 @@ def report_dependencies(*, main_font=None, cjk_font=None, environment=None) -> d
         status = "font_check_unavailable"
     return {"tools": tools, "fonts": checks, "tex_packages": tex, "status": status,
             "environment": None if profile is None else profile["path"],
-            "guidance": "Use the explicit report setup and documented system prerequisites. Retry delivery from the existing Markdown; accepted scientific results need not restart."}
+            "guidance": "See manuals/environment-setup.md. With Pandoc/Perl/Fontconfig/Poppler on Linux x86_64/glibc, explicitly run setup-report.py --tex-dir <new-owned-tex-directory> --output-dir <new-profile-directory>. Other hosts need the documented system prerequisites. Retry delivery from the existing Markdown; accepted scientific results need not restart."}
 
 
 def project_path(

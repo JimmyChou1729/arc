@@ -68,6 +68,13 @@ final ZIP outside the checkout with a new runtime/cache and no source overlays.
 It verifies the six installed package Git SHAs, constraints digest, default
 SOCKS dependency, the public Host acceptance/replay cycle, the optional numerical
 profile, and real Chinese/math PDF delivery on the documented Ubuntu profile.
+Cold CI installs with real uv while `XDG_CACHE_HOME` points at a read-only
+system path. `--verify-private-cache` requires a populated private uv cache,
+and repeated public `setup` / `setup --retry` must retain the success marker.
+The report check also inspects the public renderer's `delivery_status`; exit
+code zero alone is insufficient. Attempt logs and state are retained in CI
+artifacts, including unsuccessful installs.
+
 The CI matrix validates both preinstalled system TeX and the explicit owned
 TeX setup. Its PDF pages, package installation receipt and machine-readable
 evidence are retained as separately named CI artifacts. Add `--owned-tex` to

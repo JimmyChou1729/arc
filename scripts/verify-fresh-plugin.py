@@ -93,6 +93,7 @@ def main(argv=None):
     parser.add_argument("--scientific", action="store_true")
     parser.add_argument("--owned-tex", action="store_true", help="with --report, explicitly initialize pinned user-owned TeX")
     parser.add_argument("--network-paper")
+    parser.add_argument("--verify-private-cache", action="store_true", help="require real uv to populate the selected private cache")
     args = parser.parse_args(argv)
     if args.owned_tex and not args.report:
         parser.error("--owned-tex requires --report")
@@ -120,7 +121,7 @@ def main(argv=None):
         env.pop(name, None)
     env.update(AC_INSTALL_SOURCE="git", AC_HOME=str(root / "ac"), AC_RUNTIME_HOME=str(root / "runtimes"),
                AC_DOCUMENT_CACHE=str(root / "document-cache"), ARC_PAPER_CACHE=str(root / "paper-cache"),
-               UV_NO_CACHE="1", PIP_NO_CACHE_DIR="1", PYTHONDONTWRITEBYTECODE="1", AC_INSTALL_PYTHON_BIN=sys.executable,
+               PYTHONDONTWRITEBYTECODE="1", AC_INSTALL_PYTHON_BIN=sys.executable,
                AC_LLM_HOST_COORDINATOR=json.dumps({"coordinator_id": "fresh-zip-fixture", "default_provider": "host", "native_fallback": False}))
     result = {"schema_version": "arc.fresh_plugin_verification.v1", "zip_sha256": hashlib.sha256(args.zip.read_bytes()).hexdigest(),
               "commands": [], "checks": {name: {"executed": False, "status": "not_requested"} for name, enabled in (("scientific", args.scientific), ("report", args.report), ("network", args.network_paper)) if not enabled}}
@@ -140,6 +141,19 @@ def main(argv=None):
         installed = json.loads((Path(runtime["runtime"]) / "install.ok").read_text())
         assert installed["identity"]["constraints_sha256"] == expected_constraints
         result["checks"]["runtime"] = runtime
+        marker = Path(runtime["runtime"]) / "install.ok"
+        committed = marker.read_bytes()
+        command("setup-repeat", [*launcher, "setup"])
+        command("setup-retry-ready", [*launcher, "setup", "--retry"])
+        assert marker.read_bytes() == committed
+        result["checks"]["setup_idempotent"] = {"executed": True, "passed": True}
+        if args.verify_private_cache:
+            selected_cache = runtime["install_paths"]["UV_CACHE_DIR"]
+            cache = Path(selected_cache["path"])
+            assert selected_cache["source"] == "private_default" and selected_cache["active"]
+            assert cache.is_relative_to(Path(runtime["runtime"])) and any(cache.iterdir())
+            result["checks"]["private_cache"] = {"executed": True, "passed": True, "path": str(cache),
+                "default_xdg_cache": env.get("XDG_CACHE_HOME"), "evidence": "real package installation populated private uv cache"}
         smoke = root / "host-smoke.py"
         smoke.write_text(SMOKE)
         result["checks"]["host"] = json.loads(command("host-smoke", [*launcher, "script", str(smoke), str(root), str(scripts / "runtime-sources.json")]))
@@ -154,6 +168,11 @@ def main(argv=None):
             result["checks"]["report_setup"] = profile
             result["checks"]["report"] = json.loads(command("report-verify", [*launcher, "script", str(scripts / "verify-report.py"), "--project-dir", str(root / "report-proof"), "--environment", profile["environment"]]))
             command("report-pages", ["pdftoppm", "-png", "-scale-to", "1600", str(root / "report-proof/report-verification.pdf"), str(root / "report-proof/page")])
+            delivery = json.loads(command("report-cli", [*launcher, "script", str(scripts / "render-report.py"),
+                "--project-dir", str(root / "report-proof"), "--input", str(root / "report-proof/.arc/report-verification.md"),
+                "--output", str(root / "report-proof/report-cli.pdf"), "--environment", profile["environment"]]))
+            assert delivery["delivery_status"] == "published" and delivery["artifacts"]
+            result["checks"]["report_cli"] = delivery
         if args.network_paper:
             network = root / "network-probe.py"
             network.write_text(NETWORK)

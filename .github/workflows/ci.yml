@@ -76,7 +76,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install jsonschema PyYAML Pillow
+      - run: python -m pip install jsonschema PyYAML Pillow uv
       - name: Initialize the supported report system profile
         run: |
           sudo apt-get update
@@ -87,10 +87,12 @@ jobs:
       - name: Build the actual public skills ZIP
         run: python scripts/plugin_bundle.py build --profile public-skills --output "$RUNNER_TEMP/arc.zip"
       - name: Verify cold Git installation, protocol, scientific environment and real PDF
+        env:
+          XDG_CACHE_HOME: /sys/ac-runtime-unwritable-cache
         run: |
           extra=()
           if [ "${{ matrix.report-profile }}" = owned ]; then extra+=(--owned-tex); fi
-          python scripts/verify-fresh-plugin.py --zip "$RUNNER_TEMP/arc.zip" --output-dir "$RUNNER_TEMP/arc-fresh" --report --scientific "${extra[@]}"
+          python scripts/verify-fresh-plugin.py --zip "$RUNNER_TEMP/arc.zip" --output-dir "$RUNNER_TEMP/arc-fresh" --report --scientific --verify-private-cache "${extra[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -102,3 +104,5 @@ jobs:
             ${{ runner.temp }}/arc-fresh/report-proof/report-verification.pdf
             ${{ runner.temp }}/arc-fresh/report-proof/page-*.png
             ${{ runner.temp }}/arc-fresh/report-tex/arc-tex-install.json
+            ${{ runner.temp }}/arc-fresh/runtimes/**/attempts/*/install.log
+            ${{ runner.temp }}/arc-fresh/runtimes/**/attempts/*/state.json
