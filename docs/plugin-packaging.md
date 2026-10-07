@@ -84,6 +84,14 @@ The CI matrix validates both preinstalled system TeX and the explicit owned
 TeX setup. Its PDF pages, package installation receipt and machine-readable
 evidence are retained as separately named CI artifacts. Add `--owned-tex` to
 `--report` when testing the latter locally on Linux x86_64/glibc.
+The owned profile also queries read-only installation status before/after
+setup and repeats explicit `--retry` on a ready tree without creating another
+attempt. Phase events, command logs and terminal receipts are uploaded without
+the downloaded archive or TeX binaries. Offline subprocess tests separately
+kill the TeX coordinator, prove the surviving command blocks concurrent retry,
+then recover from the verified archive in a new mutable attempt. This simulates
+process interruption; it does not reproduce a host approval service or certify
+an arbitrary shared mount.
 
 Default CI remains offline for research-provider requests. The manual
 `workflow_dispatch` input `run_network=true` explicitly enables the two real

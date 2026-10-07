@@ -174,8 +174,22 @@ def main(argv=None):
             result["checks"]["scientific"] = json.loads(command("scientific-verify", [*selected, "script", str(scripts / "scientific-python.py"), "--verify"]))
         if args.report:
             tex_args = ["--tex-dir", str(root / "report-tex")] if args.owned_tex else []
+            setup_script = [*launcher, "script", str(scripts / "setup-report.py")]
+            if args.owned_tex:
+                before = json.loads(command("tex-status-before", [*setup_script, "--status", *tex_args]))
+                assert before["tex"]["state"] == "not_started"
+                assert not Path(before["tex"]["directory"]).exists()
             profile = json.loads(command("report-setup", [*launcher, "script", str(scripts / "setup-report.py"), "--output-dir", str(root / "report-profile"), *tex_args]))
             result["checks"]["report_setup"] = profile
+            if args.owned_tex:
+                after = json.loads(command("tex-status-after", [*setup_script, "--status", *tex_args, "--output-dir", str(root / "report-profile")]))
+                assert after["tex"]["state"] == "succeeded" and after["profile"]["present"]
+                attempt = after["tex"]["current"]["attempt_id"]
+                repeated = json.loads(command("tex-retry-ready", [*setup_script, "--retry", *tex_args, "--output-dir", str(root / "report-profile")]))
+                assert repeated["tex"]["reused"] and repeated["status"] == "ready"
+                final = json.loads(command("tex-status-repeat", [*setup_script, "--status", *tex_args]))
+                assert final["tex"]["current"]["attempt_id"] == attempt
+                result["checks"]["tex_operation"] = {"executed": True, "passed": True, "readonly_before": before, "after": after, "retry_reused": True}
             result["checks"]["report"] = json.loads(command("report-verify", [*launcher, "script", str(scripts / "verify-report.py"), "--project-dir", str(root / "report-proof"), "--environment", profile["environment"]]))
             command("report-pages", ["pdftoppm", "-png", "-scale-to", "1600", str(root / "report-proof/report-verification.pdf"), str(root / "report-proof/page")])
             delivery = json.loads(command("report-cli", [*launcher, "script", str(scripts / "render-report.py"),

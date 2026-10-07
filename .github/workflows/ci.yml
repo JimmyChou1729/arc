@@ -60,6 +60,7 @@ jobs:
           local/ac-foundation/tests/test_runtime_bootstrap.py
           local/ac-foundation/tests/test_runtime_recovery.py
           local/ac-foundation/packages/ac-llm/tests/test_host_provider.py
+          local/ac-foundation/packages/ac-jobs/tests/test_installation.py
           --basetemp "$RUNNER_TEMP/ac-runtime-recovery" -q -ra
       - name: Offline suite
         run: python -m pytest --import-mode=importlib packages/*/tests tests -ra
@@ -111,5 +112,11 @@ jobs:
             ${{ runner.temp }}/arc-fresh/report-proof/report-verification.pdf
             ${{ runner.temp }}/arc-fresh/report-proof/page-*.png
             ${{ runner.temp }}/arc-fresh/report-tex/arc-tex-install.json
+            ${{ runner.temp }}/arc-fresh/.report-tex.ac-install/state.json
+            ${{ runner.temp }}/arc-fresh/.report-tex.ac-install/attempts/*/state.json
+            ${{ runner.temp }}/arc-fresh/.report-tex.ac-install/attempts/*/events/*.json
+            ${{ runner.temp }}/arc-fresh/.report-tex.ac-install/attempts/*/commands/*/*.json
+            ${{ runner.temp }}/arc-fresh/.report-tex.ac-install/attempts/*/commands/*/*.log
             ${{ runner.temp }}/arc-fresh/runtimes/**/attempts/*/install.log
             ${{ runner.temp }}/arc-fresh/runtimes/**/attempts/*/state.json
+          include-hidden-files: true

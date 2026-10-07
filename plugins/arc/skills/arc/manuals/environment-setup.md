@@ -97,11 +97,66 @@ Package revisions, engine version and source identity are saved in
 `arc-tex-install.json`; upstream licenses remain in the TeX tree.
 
 Setup invokes only that tree's `tlmgr`, without sudo, system registration or
-shell-profile edits. Temporary installation failures leave the destination
-unchanged. An intact installation can be reused; corrupt or unrelated trees
-are preserved and rejected. Use a new font profile when switching its recorded
-TeX tools. The explicit `--tex-dir` option is required for these downloads;
-ordinary font setup, doctor and rendering still never install TeX.
+shell-profile edits. Its temporary paths stay inside the owned attempt. The
+destination is published only after staged validation, then checked at its
+final path. An intact installation can be reused; corrupt or unrelated trees
+are preserved and rejected with advice to choose a new empty directory. Use a
+new font profile when switching its recorded TeX tools. The explicit `--tex-dir`
+option is required for downloads; font-only setup, doctor and rendering never
+install TeX.
+
+### Query and recover an interrupted TeX setup
+
+Use the original destination even if the host execution session is no longer
+queryable. First confirm that the Python runtime is already initialized with
+`arc-runtime doctor`: the wrapper's `script` command may initialize a missing
+Python runtime. With that prerequisite met, the report status script reads
+durable records without Pandoc, downloads or tool execution, and does not create
+installation directories:
+
+```bash
+<skill-dir>/scripts/arc-runtime script <skill-dir>/scripts/setup-report.py \
+  --status --tex-dir <owned-tex-directory> --output-dir <report-profile-directory>
+```
+
+The sibling `.<tex-directory-name>.ac-install/` contains the source-bound
+operation, retained attempts, phase events, verified archive and command
+stdout/stderr/terminal receipts. `running` means its kernel lease is occupied;
+a retry returns `installation_busy` and exit 75 without starting another
+installer. `interrupted` means the lease is free but no operation completion
+was recorded. `failed` retains the command outcome. `unverifiable` requires
+inspection rather than takeover. PIDs and timestamps are diagnostic only;
+there is no timeout-based lock deletion. Query exit zero means the query
+succeeded, not that installation or PDF delivery succeeded.
+
+Once the lease is free, explicitly retry:
+
+```bash
+<skill-dir>/scripts/arc-runtime script <skill-dir>/scripts/setup-report.py \
+  --retry --tex-dir <owned-tex-directory> --output-dir <report-profile-directory>
+```
+
+Retry preserves every prior mutable TeX tree and creates a new attempt from
+the exact SHA-256-verified cached archive. It never resumes an uncertain
+`tlmgr` mutation in place. A valid already-published tree is rechecked and
+reused, including recovery after publication but before operation completion.
+A damaged published tree requires a new empty `--tex-dir`. Source-lock changes
+also require a new destination. The permanent lease inode must not be deleted.
+
+Supervised commands stream durable logs and inherit the lease. They remain
+under the platform's existing execution authority. If only the coordinator
+dies, a surviving installer blocks retry; if the platform terminates the whole
+process group/container, the last phase and available receipts remain the
+evidence. A platform approval-review cancellation is not proof of user
+cancellation or directory permission denial. Do not escalate or loop retries
+to bypass that policy. Shared-mount locking remains deployment-specific.
+
+Older installers without these records cannot have their lost execution
+session reconstructed. Preserve their files, check any still-running original
+process through the host, and use a new empty destination once safe. An
+existing archive can be supplied with `--tex-archive <archive.tar.gz>`; its
+exact locked size and SHA-256 must match before it is used. This imports only
+verified source bytes, never an unknown extracted tree.
 
 On other platforms, provide the documented system tools or an independently
 managed TeX installation on `PATH`. The owned installer reports unsupported
@@ -110,6 +165,8 @@ extraction. Network restrictions may block either release/archive downloads
 or the frozen package repository; setup reports that failure and retains
 accepted scientific work. The ZIP contains source locks and scripts, not TeX
 binaries or a venv.
+
+### Provision the report font profile
 
 Provision ARC's report fonts explicitly:
 
