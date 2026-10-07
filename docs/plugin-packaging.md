@@ -134,9 +134,11 @@ AC_RUNTIME_HOME=<new-development-runtime-directory> \
 
 Use a new runtime directory; never patch an existing content-addressed runtime.
 Source overrides and default Git installation are separate checks. The
-`plugin-dev` lock selects immutable, tested Foundation and ARC commits from
-the contributor's forks so a development ZIP can install the Host code without
-local checkouts. CI reads both the repository URL and SHA from that same lock.
+upstream `dev` lock selects immutable, tested commits from
+`tririver/ac-foundation` and `tririver/arc` so a development ZIP can install the
+Host code without local checkouts or contributor forks. Use the ARC `dev`
+branch when preparing a team test build, and retain its source commit in the
+separate test evidence. CI reads both the repository URL and SHA from that lock.
 Generated Foundation copies and their checksums must match its Foundation SHA.
 The release version remains unchanged until approval. Public release locks
 must select the final approved, reachable release commits.

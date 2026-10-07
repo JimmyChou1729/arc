@@ -120,6 +120,9 @@ manifests, validates them, and pins the release source commit; it does not tag
 or publish.
 
 Use [`docs/plugin-packaging.md`](docs/plugin-packaging.md) for deterministic
-private/local and public skills-only ZIPs. The `plugin-dev` development lock
-selects tested commits from the contributor's forks; release versions remain
-unchanged. A public release requires approved versions and final release pins.
+private/local and public skills-only ZIPs. The upstream `dev` branch is the
+shared preview for team testing. Its runtime lock selects exact, tested commits
+from `tririver/ac-foundation` and `tririver/arc`, so testers do not need a
+contributor's fork. Development pushes retain the current release versions;
+identify a test build by its ARC commit and runtime source lock. A public
+release requires approved versions and final release pins.

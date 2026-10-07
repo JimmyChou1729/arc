@@ -4,7 +4,7 @@
   "sources": [
     {
       "id": "foundation",
-      "repository": "https://github.com/JimmyChou1729/ac-foundation.git",
+      "repository": "https://github.com/tririver/ac-foundation.git",
       "commit": "9f458803fd60e40502ffdab0ce73b00a955e0ba2",
       "packages": [
         "ac-jobs",
@@ -22,7 +22,7 @@
     },
     {
       "id": "product",
-      "repository": "https://github.com/JimmyChou1729/arc.git",
+      "repository": "https://github.com/tririver/arc.git",
       "commit": "35626c774453cb2390f0f4e3dda342f353f94e48",
       "packages": [
         "arc-paper",
