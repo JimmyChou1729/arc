@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import importlib.metadata
 import json
 import sys
 
@@ -33,7 +34,14 @@ def main(argv=None):
                                "authentication": "not_checked"}
         except Exception as exc:
             providers[name] = {"available": False, "configuration_error": type(exc).__name__}
+    scientific_versions = {}
+    for name in ("numpy", "scipy", "sympy", "matplotlib"):
+        try:
+            scientific_versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            scientific_versions[name] = None
     result = {"schema_version": "arc.doctor.v1", "environment": environment, "providers": providers,
+              "scientific_python": {"executable": sys.executable, "scope": "current_interpreter_only", "versions": scientific_versions, "imports_checked": False},
               "scientific_libraries": {name: importlib.util.find_spec(name) is not None for name in ("numpy", "scipy", "sympy", "matplotlib")},
               "report": report_dependencies(environment=args.report_environment)}
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))

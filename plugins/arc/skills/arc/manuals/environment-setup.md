@@ -76,6 +76,40 @@ visible PDF output. Check `delivery_status` and `warnings`; unavailable delivery
 intentionally retains exit code 0 under `arc.report_delivery.v2`. A failed
 preflight, conversion, or missing-glyph check preserves the previous PDF.
 
+## Optional scientific Python
+
+The base runtime is sufficient for paper/text tasks. For numerical work, select
+the explicit requirements file on each setup, doctor or script command:
+
+```bash
+<skill-dir>/scripts/arc-runtime --requirements <skill-dir>/scripts/scientific-requirements.txt setup
+<skill-dir>/scripts/arc-runtime --requirements <skill-dir>/scripts/scientific-requirements.txt doctor
+<skill-dir>/scripts/arc-runtime --requirements <skill-dir>/scripts/scientific-requirements.txt \
+  script <skill-dir>/scripts/scientific-python.py --verify
+```
+
+This creates a separate runtime containing NumPy 2.3.5 and SciPy 1.17.0, whose
+declared Python minimum is 3.11. It does not install into the base runtime.
+Keep the same `--requirements` selection when running a worker's numerical
+script, or use the private interpreter reported by `scientific-python.py`.
+Record that output and the actual script/output hashes in the worker's evidence.
+Doctor reports only its current interpreter and metadata; it does not claim
+that other host Python environments lack these packages or that an import has
+been executed successfully.
+
+The verification fixture integrates the dimensionless scalar IVP for
+`mu=m/H` equal to 0, 1, 1.5 and 2. Two integration methods are compared against
+the corresponding analytic solutions on a finite sample grid, using mixed
+absolute/relative tolerance near zeros. This is numerical compatibility
+evidence, not a strict global error bound or a substitute for independent
+calculator/referee work. `scientific_accepted` remains null for this fixture.
+
+SymPy and Matplotlib are optional. Select a caller-owned requirements file with
+tested exact pins when a task needs them. Optional files accept plain exact
+package pins and cannot override the packages owned by the source lock.
+Changing their contents selects another runtime fingerprint. No dependency
+installation occurs in doctor, model calls or ordinary report rendering.
+
 References:
 
 - [HTTPX SOCKS support](https://www.python-httpx.org/advanced/proxies/)

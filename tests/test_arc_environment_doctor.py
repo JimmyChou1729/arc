@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -66,3 +67,5 @@ def test_arc_doctor_runs_offline_and_does_not_claim_host_tools(monkeypatch, tmp_
     assert report["environment"]["host"]["runtime_tools_verified"] is False
     assert report["environment"]["write"]["status"] == "available"
     assert "scipy" in report["scientific_libraries"]
+    assert os.path.normpath(report["scientific_python"]["executable"]) == os.path.normpath(sys.executable)
+    assert report["scientific_python"]["scope"] == "current_interpreter_only"
