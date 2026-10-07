@@ -8,6 +8,13 @@ and approximate keyword inventory come from `ac-document` and remain exposed
 through the compatible `arc-paper` API. Generic model execution and durable-run
 mechanics remain in `ac-llm` and `ac-jobs`.
 
+Default dependencies include SOCKS support for inherited HTTPX proxy settings,
+including `socks5h`. Provider clients preserve the environment's proxy policy.
+An incomplete installation returns `proxy_dependency_missing`; create a fresh
+runtime from the current lock rather than patching an existing immutable
+runtime. A successful client initialization does not establish network or
+paper-service availability.
+
 ## Running the CLI
 
 An installed package provides the `arc-paper` console script. The ARC Skill

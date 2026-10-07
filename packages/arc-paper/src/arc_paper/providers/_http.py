@@ -7,6 +7,21 @@ import httpx
 from .base import ProviderError
 
 
+def create_http_client(**kwargs) -> httpx.Client:
+    """Preserve HTTPX proxy inheritance and diagnose incomplete installations."""
+    try:
+        return httpx.Client(**kwargs)
+    except ImportError as exc:
+        if "socksio" not in str(exc):
+            raise
+        raise ProviderError(
+            "proxy_dependency_missing",
+            "Inherited SOCKS proxy requires socksio. Create a fresh runtime with "
+            "the current ARC source lock, or install ARC's declared dependencies "
+            "in your own environment. Proxy settings were preserved.",
+        ) from exc
+
+
 def require_https_host(url: str, host: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname != host:
@@ -35,4 +50,4 @@ def validate_response_size(
         raise ProviderError(code, f"remote response exceeds {maximum} bytes")
 
 
-__all__ = ["require_https_host", "response_media_type", "validate_response_size"]
+__all__ = ["create_http_client", "require_https_host", "response_media_type", "validate_response_size"]

@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ._http import create_http_client
+
 from ..ids import arxiv_path_id, doi_value, inspire_recid, normalize_paper_id
 from .base import ProviderError
 from .remote_cache import RemoteCacheError, RemoteRequestCache
@@ -82,7 +84,7 @@ class InspireProvider:
         cache_root: str | Path | None = None,
         request_cache: RemoteRequestCache | None = None,
     ):
-        self.client = client or httpx.Client(timeout=timeout, follow_redirects=True)
+        self.client = client or create_http_client(timeout=timeout, follow_redirects=True)
         self.timeout = timeout
         self.cache = request_cache or RemoteRequestCache(cache_root)
 
