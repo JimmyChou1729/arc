@@ -50,7 +50,10 @@ The renderer uses Pandoc, XeLaTeX, the report directory as a resource path,
 Choose installed families with `--main-font` / `--cjk-font` or
 `ARC_REPORT_MAIN_FONT` / `ARC_REPORT_CJK_FONT`. Diagnose tools and exact font
 families with `arc-runtime script <skill-dir>/scripts/doctor-arc.py`;
-font availability is unknown when Fontconfig cannot enumerate families.
+font availability is unknown when Fontconfig cannot inspect families.
+Use the explicit [environment setup](../manuals/environment-setup.md) to
+provision verified fonts and check the required TeX packages. Select the
+resulting profile with `--environment` or `ARC_REPORT_ENVIRONMENT`.
 A missing
 renderer, invalid PDF, or conversion failure means the report has not been
 delivered. Preserve the Markdown as editable project source, report the exact

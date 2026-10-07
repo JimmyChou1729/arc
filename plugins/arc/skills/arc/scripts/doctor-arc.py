@@ -17,6 +17,7 @@ from _arc_workflows.report_delivery import report_dependencies
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-dir", help="existing project to probe write access")
+    parser.add_argument("--report-environment", help="explicit report-environment.json")
     args = parser.parse_args(argv)
     try:
         from ac_llm import environment_diagnostics
@@ -34,7 +35,7 @@ def main(argv=None):
             providers[name] = {"available": False, "configuration_error": type(exc).__name__}
     result = {"schema_version": "arc.doctor.v1", "environment": environment, "providers": providers,
               "scientific_libraries": {name: importlib.util.find_spec(name) is not None for name in ("numpy", "scipy", "sympy", "matplotlib")},
-              "report": report_dependencies()}
+              "report": report_dependencies(environment=args.report_environment)}
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0
 

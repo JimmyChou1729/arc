@@ -8,6 +8,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from _arc_workflows.report_environment import (
+    ReportEnvironmentError, load_report_environment, report_process_environment,
+)
+
+REQUIRED_TEX_PACKAGES = ("fontspec.sty", "xeCJK.sty", "unicode-math.sty", "amsmath.sty", "geometry.sty", "bookmark.sty", "xcolor.sty", "longtable.sty", "booktabs.sty", "fancyvrb.sty", "graphicx.sty")
+
 
 class ReportDeliveryContractError(ValueError):
     """A caller supplied an invalid project-local delivery request."""
@@ -15,6 +21,10 @@ class ReportDeliveryContractError(ValueError):
 
 class ReportDeliveryUnavailable(RuntimeError):
     """A valid delivery request could not be rendered or published."""
+
+    def __init__(self, message, *, code="pdf_render_unavailable"):
+        super().__init__(message)
+        self.code = code
 
 
 def report_fonts(main_font: str | None = None, cjk_font: str | None = None) -> dict[str, str]:
@@ -26,26 +36,76 @@ def report_fonts(main_font: str | None = None, cjk_font: str | None = None) -> d
     return fonts
 
 
-def report_dependencies(*, main_font: str | None = None, cjk_font: str | None = None) -> dict:
-    """Probe tools and exact font families without rendering a report."""
-    tools = {name: shutil.which(name) is not None for name in ("pandoc", "xelatex", "fc-list")}
+def _settings(main_font=None, cjk_font=None, environment=None):
+    fonts = report_fonts(main_font, cjk_font)
     try:
-        fonts = report_fonts(main_font, cjk_font)
+        profile = load_report_environment(environment)
+    except ReportEnvironmentError as exc:
+        raise ReportDeliveryContractError(str(exc)) from exc
+    options = {}
+    if profile:
+        directory = profile["font_directory"]
+        if any(char in directory for char in "{}\x00\r\n"):
+            raise ReportDeliveryContractError("Report font directory contains unsupported TeX path characters")
+        for name, explicit in (("mainfont", main_font is not None or "ARC_REPORT_MAIN_FONT" in os.environ),
+                               ("CJKmainfont", cjk_font is not None or "ARC_REPORT_CJK_FONT" in os.environ)):
+            if not explicit:
+                fonts[name] = "NotoSansCJKsc-Regular.otf"
+                options["mainfontoptions" if name == "mainfont" else "CJKoptions"] = f"Path={{{directory}/}},BoldFont=NotoSansCJKsc-Bold.otf"
+    return fonts, options, profile, report_process_environment(profile)
+
+
+def _probe(command, env):
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10, check=False, env=env)
+        return result.stdout.strip() if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _covers_chinese(charset):
+    ranges = []
+    try:
+        for item in charset.split():
+            bounds = item.split("-")
+            ranges.append((int(bounds[0], 16), int(bounds[-1], 16)))
+    except ValueError:
+        return False
+    return all(any(start <= ord(char) <= end for start, end in ranges) for char in "中文数学验证")
+
+
+def report_dependencies(*, main_font=None, cjk_font=None, environment=None) -> dict:
+    """Read tool, TeX-package and font coverage state without installing anything."""
+    try:
+        fonts, options, profile, env = _settings(main_font, cjk_font, environment)
     except ReportDeliveryContractError as exc:
-        return {"tools": tools, "fonts": {}, "status": "invalid_configuration", "guidance": str(exc)}
-    families = None
-    if tools["fc-list"]:
-        try:
-            completed = subprocess.run(["fc-list", "--format", "%{family}\n"], capture_output=True, text=True, timeout=10, check=False)
-            if completed.returncode == 0:
-                families = {family.strip().casefold() for line in completed.stdout.splitlines() for family in line.split(",")}
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    checks = {name: {"family": family, "status": "unknown" if families is None else "available" if family.casefold() in families else "missing"}
-              for name, family in fonts.items()}
-    return {"tools": tools, "fonts": checks,
-            "status": "unavailable" if not tools["pandoc"] or not tools["xelatex"] or any(item["status"] == "missing" for item in checks.values()) else "font_check_unavailable" if families is None else "available",
-            "guidance": "Install Pandoc/XeLaTeX and the chosen fonts, or set ARC_REPORT_MAIN_FONT and ARC_REPORT_CJK_FONT. Retry delivery with the existing Markdown; scientific runs need not restart."}
+        return {"tools": {}, "fonts": {}, "tex_packages": {}, "status": "invalid_configuration", "guidance": str(exc)}
+    tools = {name: shutil.which(name, path=env.get("PATH")) is not None for name in ("pandoc", "xelatex", "kpsewhich", "fc-match", "fc-scan")}
+    tex = {name: bool(_probe(["kpsewhich", name], env)) if tools["kpsewhich"] else None for name in REQUIRED_TEX_PACKAGES}
+    checks = {}
+    for name, family in fonts.items():
+        managed = ("mainfontoptions" if name == "mainfont" else "CJKoptions") in options
+        command = ["fc-scan", "--format", "%{family}\n%{charset}", str(Path(profile["font_directory"]) / family)] if managed else ["fc-match", "--format", "%{family}\n%{charset}", family]
+        raw = _probe(command, env) if tools[command[0]] else None
+        status, coverage = "unknown", None
+        if raw is not None:
+            lines = raw.splitlines()
+            matches = bool(lines) and (managed or family.casefold() in {part.strip().casefold() for part in lines[0].split(",")})
+            coverage = _covers_chinese(lines[1]) if len(lines) > 1 else False
+            status = "available" if matches and (name != "CJKmainfont" or coverage) else "missing" if not matches else "missing_cjk_coverage"
+        checks[name] = {"family": family, "status": status, "cjk_sample_coverage": coverage, "managed": managed}
+    status = "available"
+    if not all(tools[name] for name in ("pandoc", "xelatex", "kpsewhich")):
+        status = "tools_missing"
+    elif not all(tex.values()):
+        status = "tex_packages_missing"
+    elif any(item["status"] in {"missing", "missing_cjk_coverage"} for item in checks.values()):
+        status = "fonts_missing"
+    elif any(item["status"] == "unknown" for item in checks.values()):
+        status = "font_check_unavailable"
+    return {"tools": tools, "fonts": checks, "tex_packages": tex, "status": status,
+            "environment": None if profile is None else profile["path"],
+            "guidance": "Use the explicit report setup and documented system prerequisites. Retry delivery from the existing Markdown; accepted scientific results need not restart."}
 
 
 def project_path(
@@ -76,8 +136,9 @@ def render_markdown_pdf(
     output: str | Path,
     main_font: str | None = None,
     cjk_font: str | None = None,
+    environment: str | Path | None = None,
 ) -> Path:
-    fonts = report_fonts(main_font, cjk_font)
+    fonts, font_options, profile, env = _settings(main_font, cjk_font, environment)
     project = Path(project_dir).expanduser().resolve()
     if not project.is_dir():
         raise ReportDeliveryContractError("project directory does not exist")
@@ -89,6 +150,15 @@ def render_markdown_pdf(
         )
     if output_path.suffix.lower() != ".pdf":
         raise ReportDeliveryContractError("output must use the .pdf suffix")
+
+    diagnostic = report_dependencies(main_font=main_font, cjk_font=cjk_font, environment=environment)
+    codes = {"tools_missing": "pdf_tools_missing", "tex_packages_missing": "pdf_tex_packages_missing", "fonts_missing": "pdf_fonts_missing"}
+    if diagnostic["status"] in codes:
+        missing = [name for name, available in diagnostic["tex_packages"].items() if available is False]
+        raise ReportDeliveryUnavailable(
+            f"PDF preflight {diagnostic['status']}: " + (", ".join(missing) or str(diagnostic["fonts"])) + ". " + diagnostic["guidance"],
+            code=codes[diagnostic["status"]],
+        )
 
     try:
         scratch = project / ".arc" / "report-render"
@@ -110,6 +180,8 @@ def render_markdown_pdf(
             ]
             for name, family in fonts.items():
                 command.extend(["-V", f"{name}={family}"])
+            for name, value in font_options.items():
+                command.extend(["-V", f"{name}={value}"])
             completed = subprocess.run(
                 command,
                 cwd=project,
@@ -117,6 +189,7 @@ def render_markdown_pdf(
                 capture_output=True,
                 text=True,
                 timeout=600,
+                env=env,
             )
             if completed.returncode != 0:
                 detail = completed.stderr.strip() or completed.stdout.strip()
@@ -125,6 +198,8 @@ def render_markdown_pdf(
                     f"({completed.returncode}): "
                     f"{detail or 'no diagnostic output'}"
                 )
+            if "Missing character:" in completed.stderr:
+                raise ReportDeliveryUnavailable("PDF rendering reported missing glyphs; the previous report was preserved.", code="pdf_glyphs_missing")
             if not rendered.is_file() or not rendered.read_bytes().startswith(b"%PDF-"):
                 raise ReportDeliveryUnavailable(
                     "Pandoc did not produce a valid PDF file"

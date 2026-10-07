@@ -14,6 +14,7 @@ RANK_SCRIPT = ROOT / "plugins/arc/skills/arc/scripts/rank-ideas.py"
 
 
 def _fake_pandoc(bin_dir: Path) -> None:
+    _fake_report_tools(bin_dir)
     executable = bin_dir / "pandoc"
     executable.write_text(
         """#!/usr/bin/env python3
@@ -29,6 +30,7 @@ output.write_bytes(b"%PDF-1.7\\nARC test report\\n%%EOF\\n")
 
 
 def _failing_pandoc(bin_dir: Path) -> None:
+    _fake_report_tools(bin_dir)
     executable = bin_dir / "pandoc"
     executable.write_text(
         """#!/usr/bin/env python3
@@ -39,6 +41,15 @@ raise SystemExit(2)
         encoding="utf-8",
     )
     executable.chmod(0o755)
+
+
+def _fake_report_tools(bin_dir):
+    for name in ("xelatex", "kpsewhich", "fc-match", "fc-scan"):
+        path = bin_dir / name
+        path.write_text("#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n"
+                        "name=Path(sys.argv[0]).name\n"
+                        "print('/fixture/'+sys.argv[-1] if name=='kpsewhich' else 'Noto Sans CJK SC\\n0-10ffff')\n")
+        path.chmod(0o755)
 
 
 def _run(project: Path, source: Path, output: Path, bin_dir: Path):

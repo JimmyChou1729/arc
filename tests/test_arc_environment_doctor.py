@@ -15,15 +15,19 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/arc/skills/arc/scripts"
 def delivery_module():
     spec = importlib.util.spec_from_file_location("report_dependencies_fixture", SCRIPTS / "_arc_workflows/report_delivery.py")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(SCRIPTS))
     return module
 
 
 def test_missing_tools_and_unknown_fonts_are_not_reported_available(monkeypatch):
     module = delivery_module()
-    monkeypatch.setattr(module.shutil, "which", lambda name: None)
+    monkeypatch.setattr(module.shutil, "which", lambda name, **kwargs: None)
     report = module.report_dependencies(main_font="Fixture", cjk_font="Fixture")
-    assert report["status"] == "unavailable"
+    assert report["status"] == "tools_missing"
     assert report["fonts"]["mainfont"]["status"] == "unknown"
     monkeypatch.setenv("ARC_REPORT_MAIN_FONT", "")
     assert module.report_dependencies()["status"] == "invalid_configuration"
@@ -31,7 +35,7 @@ def test_missing_tools_and_unknown_fonts_are_not_reported_available(monkeypatch)
 
 def test_font_match_requires_exact_family_and_render_uses_configuration(tmp_path, monkeypatch):
     module = delivery_module()
-    monkeypatch.setattr(module.shutil, "which", lambda name: "/fixture/bin/" + name)
+    monkeypatch.setattr(module.shutil, "which", lambda name, **kwargs: "/fixture/bin/" + name)
     monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="Fixture Sans\n", stderr=""))
     report = module.report_dependencies(main_font="Fixture Sans", cjk_font="Missing CJK")
     assert report["fonts"]["mainfont"]["status"] == "available"
@@ -44,6 +48,7 @@ def test_font_match_requires_exact_family_and_render_uses_configuration(tmp_path
         Path(command[command.index("-o") + 1]).write_bytes(b"%PDF-1.7\nfixture")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
     monkeypatch.setattr(module.subprocess, "run", render)
+    monkeypatch.setattr(module, "report_dependencies", lambda **kwargs: {"status": "available"})
     monkeypatch.setenv("ARC_REPORT_MAIN_FONT", "Fixture Sans")
     module.render_markdown_pdf(project_dir=tmp_path, source=source, output=tmp_path / "report.pdf", cjk_font="Fixture CJK")
     assert "mainfont=Fixture Sans" in calls[0]

@@ -26,6 +26,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True)
     parser.add_argument("--main-font", help="PDF font family (or ARC_REPORT_MAIN_FONT)")
     parser.add_argument("--cjk-font", help="CJK font family (or ARC_REPORT_CJK_FONT)")
+    parser.add_argument("--environment", help="explicit report-environment.json (or ARC_REPORT_ENVIRONMENT)")
     return parser
 
 
@@ -38,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
             output=args.output,
             main_font=args.main_font,
             cjk_font=args.cjk_font,
+            environment=args.environment,
         )
     except ReportDeliveryContractError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -55,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
                     "artifacts": [],
                     "warnings": [
                         {
-                            "code": "pdf_render_unavailable",
+                            "code": exc.code,
                             "message": str(exc),
                         }
                     ],
