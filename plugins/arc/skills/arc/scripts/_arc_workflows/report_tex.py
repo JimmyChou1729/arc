@@ -94,7 +94,7 @@ def setup_report_tex(destination):
         _run([manager, "--repository", lock["repository"], "install", *lock["packages"]], env)
         _check(staged)
         saved = {"schema_version": "arc.report_tex_install.v1", "source_lock_sha256": lock_sha,
-                 "source": lock, "packages": _run([manager, "info", "--only-installed", "--data", "name,revision"], env),
+                 "source": lock, "packages": _run([manager, "info", "--only-installed", "--data", "name,localrev"], env),
                  "xelatex": _run([str(binary / "xelatex"), "--version"], env)}
         (staged / receipt.name).write_text(json.dumps(saved, indent=2) + "\n")
         if destination.exists():

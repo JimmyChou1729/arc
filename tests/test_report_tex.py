@@ -43,6 +43,8 @@ def owned_setup(tmp_path, monkeypatch):
         assert Path(command[0]).is_relative_to(tmp_path)
         assert env["PATH"].split(":")[0] == str(Path(command[0]).parent)
         commands.append(command)
+        if command[1] == "info":
+            assert command[-2:] == ["--data", "name,localrev"]
         if command[1] in {"--version", "info"}:
             return "fixture provenance"
         if command[0].endswith("kpsewhich"):
