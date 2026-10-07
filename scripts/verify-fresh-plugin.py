@@ -91,8 +91,11 @@ def main(argv=None):
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--report", action="store_true")
     parser.add_argument("--scientific", action="store_true")
+    parser.add_argument("--owned-tex", action="store_true", help="with --report, explicitly initialize pinned user-owned TeX")
     parser.add_argument("--network-paper")
     args = parser.parse_args(argv)
+    if args.owned_tex and not args.report:
+        parser.error("--owned-tex requires --report")
     root = args.output_dir.expanduser().resolve()
     if root.exists():
         parser.error("output-dir must not exist; cold verification never reuses old state")
@@ -146,7 +149,9 @@ def main(argv=None):
             command("scientific-setup", [*selected, "setup"])
             result["checks"]["scientific"] = json.loads(command("scientific-verify", [*selected, "script", str(scripts / "scientific-python.py"), "--verify"]))
         if args.report:
-            profile = json.loads(command("report-setup", [*launcher, "script", str(scripts / "setup-report.py"), "--output-dir", str(root / "report-profile")]))
+            tex_args = ["--tex-dir", str(root / "report-tex")] if args.owned_tex else []
+            profile = json.loads(command("report-setup", [*launcher, "script", str(scripts / "setup-report.py"), "--output-dir", str(root / "report-profile"), *tex_args]))
+            result["checks"]["report_setup"] = profile
             result["checks"]["report"] = json.loads(command("report-verify", [*launcher, "script", str(scripts / "verify-report.py"), "--project-dir", str(root / "report-proof"), "--environment", profile["environment"]]))
             command("report-pages", ["pdftoppm", "-png", "-scale-to", "1600", str(root / "report-proof/report-verification.pdf"), str(root / "report-proof/page")])
         if args.network_paper:

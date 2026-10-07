@@ -68,7 +68,18 @@ final ZIP outside the checkout with a new runtime/cache and no source overlays.
 It verifies the six installed package Git SHAs, constraints digest, default
 SOCKS dependency, the public Host acceptance/replay cycle, the optional numerical
 profile, and real Chinese/math PDF delivery on the documented Ubuntu profile.
-Its PDF pages and machine-readable evidence are retained as CI artifacts.
+The CI matrix validates both preinstalled system TeX and the explicit owned
+TeX setup. Its PDF pages, package installation receipt and machine-readable
+evidence are retained as separately named CI artifacts. Add `--owned-tex` to
+`--report` when testing the latter locally on Linux x86_64/glibc.
+
+Default CI remains offline for research-provider requests. The manual
+`workflow_dispatch` input `run_network=true` explicitly enables the two real
+paper integration tests in a separate step; a skipped network step is not a
+passed network check. The cold verifier records `not_requested` for optional
+checks that were not selected. Keep host-local test records such as
+`verification.json` and absolute runtime paths outside distributed ZIPs; ship
+provenance and test evidence as separate artifacts.
 
 For a local cold check, use a new directory outside the source checkout:
 

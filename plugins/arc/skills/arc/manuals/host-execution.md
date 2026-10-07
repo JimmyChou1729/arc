@@ -31,8 +31,14 @@ context rather than forking the coordinator's complete history; on other hosts,
 use their equivalent tool. Discover the current tool names and parameters.
 The generic Python packages do not call host-specific agent APIs.
 
-Without an explicit model preference, workers inherit the host model and
-effort. When the host supports selection, pass the requested model/effort to
+Without explicit preferences, ARC leaves the model and reasoning effort unset;
+the Host model resolution is `inherit` for every tier. The coordinator should
+request the host defaults or inheritance using its available tools. Actual
+subagent inheritance depends on those tools and is not guaranteed by Python.
+`model_tier: "high"` does not set `reasoning_effort: "high"`. Calculate and Ideas
+worker templates currently expose provider/model/tier, while the underlying
+`ac-llm` request also supports explicit reasoning effort.
+When the host supports selection, pass the requested model/effort to
 its subagent interface. Otherwise, or when that model is unavailable, use the
 host model under the configured `use_host_model` policy and record the actual
 selection or null when unverified. Do not translate GPT model names into Claude

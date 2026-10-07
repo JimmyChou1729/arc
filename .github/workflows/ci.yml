@@ -3,6 +3,12 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_network:
+        description: Run real paper-network integration tests
+        type: boolean
+        default: false
 
 jobs:
   test:
@@ -48,12 +54,23 @@ jobs:
           -e local/ac-foundation/packages/ac-proposer-reviewer
           -e packages/arc-paper
           -e packages/arc-domain
-      - run: python -m pytest --import-mode=importlib packages/*/tests tests
+      - name: Offline suite
+        run: python -m pytest --import-mode=importlib packages/*/tests tests -ra
+      - name: Explicit live paper-network checks
+        if: github.event_name == 'workflow_dispatch' && inputs.run_network
+        env:
+          ARC_RUN_NET_TESTS: "1"
+        run: python -m pytest tests/integration/test_paper_query_network.py -v -ra
       - run: node tests/test_dsh_llm_bridge.mjs
       - run: scripts/build-packages.sh
 
   fresh-plugin:
+    name: Cold ZIP / ${{ matrix.report-profile }} TeX
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        report-profile: [system, owned]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -63,18 +80,25 @@ jobs:
       - name: Initialize the supported report system profile
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pandoc texlive-xetex texlive-lang-chinese texlive-latex-extra texlive-fonts-recommended lmodern fontconfig poppler-utils
+          sudo apt-get install -y --no-install-recommends pandoc fontconfig poppler-utils perl
+          if [ "${{ matrix.report-profile }}" = system ]; then
+            sudo apt-get install -y --no-install-recommends texlive-xetex texlive-lang-chinese texlive-latex-extra texlive-fonts-recommended lmodern
+          fi
       - name: Build the actual public skills ZIP
         run: python scripts/plugin_bundle.py build --profile public-skills --output "$RUNNER_TEMP/arc.zip"
       - name: Verify cold Git installation, protocol, scientific environment and real PDF
-        run: python scripts/verify-fresh-plugin.py --zip "$RUNNER_TEMP/arc.zip" --output-dir "$RUNNER_TEMP/arc-fresh" --report --scientific
+        run: |
+          extra=()
+          if [ "${{ matrix.report-profile }}" = owned ]; then extra+=(--owned-tex); fi
+          python scripts/verify-fresh-plugin.py --zip "$RUNNER_TEMP/arc.zip" --output-dir "$RUNNER_TEMP/arc-fresh" --report --scientific "${extra[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: fresh-plugin-verification
+          name: fresh-plugin-verification-${{ matrix.report-profile }}
           path: |
             ${{ runner.temp }}/arc-fresh/verification.json
             ${{ runner.temp }}/arc-fresh/*.stdout
             ${{ runner.temp }}/arc-fresh/*.stderr
             ${{ runner.temp }}/arc-fresh/report-proof/report-verification.pdf
             ${{ runner.temp }}/arc-fresh/report-proof/page-*.png
+            ${{ runner.temp }}/arc-fresh/report-tex/arc-tex-install.json

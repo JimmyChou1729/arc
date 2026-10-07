@@ -2,6 +2,8 @@
 """Explicitly provision verified report fonts in a caller-owned directory."""
 import argparse
 import json
+import shutil
+from pathlib import Path
 import sys
 
 sys.dont_write_bytecode = True
@@ -14,9 +16,20 @@ from _arc_workflows.report_delivery import report_dependencies
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--tex-dir", help="explicitly install pinned portable TeX in this new owned directory (Linux x86_64/glibc)")
     args = parser.parse_args(argv)
     try:
-        result = setup_report_environment(args.output_dir)
+        tools = None
+        tex = None
+        if args.tex_dir:
+            if shutil.which("pandoc") is None:
+                raise RuntimeError("Install Pandoc before explicit owned TeX setup.")
+            from _arc_workflows.report_tex import setup_report_tex
+            tex = setup_report_tex(args.tex_dir)
+            tools = {"pandoc": shutil.which("pandoc"), **{name: str(Path(tex["bin"]) / name) for name in ("xelatex", "kpsewhich")}}
+        result = setup_report_environment(args.output_dir, tools=tools, tex_root=args.tex_dir)
+        if tex is not None:
+            result["tex"] = tex
         result["diagnostics"] = report_dependencies(environment=result["environment"])
         if result["diagnostics"]["status"] != "available":
             result["status"] = "prerequisites_missing"

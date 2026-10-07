@@ -51,31 +51,43 @@ def load_report_environment(path=None):
             value = config.get("tools", {}).get(name)
             if not isinstance(value, str) or not Path(value).is_absolute() or not Path(value).is_file() or not os.access(value, os.X_OK):
                 raise ReportEnvironmentError(f"Configured report tool is missing: {name}")
+        tex_root = config.get("tex_root")
+        if tex_root is not None:
+            if not isinstance(tex_root, str) or not Path(tex_root).is_absolute() or not Path(tex_root).is_dir():
+                raise ReportEnvironmentError("Owned TeX root must be an existing absolute directory")
+            if any(not Path(tools[name]).resolve().is_relative_to(Path(tex_root).resolve()) for name in ("xelatex", "kpsewhich")):
+                raise ReportEnvironmentError("Owned TeX tools must belong to the selected root")
         return {**config, "path": str(config_path), "font_directory": str(config_path.parent)}
     except (OSError, json.JSONDecodeError, AttributeError, TypeError) as exc:
         raise ReportEnvironmentError(f"Report profile is unreadable or malformed: {type(exc).__name__}") from exc
 
 
 def report_process_environment(profile):
-    env = dict(os.environ)
+    if profile and profile.get("tex_root"):
+        from .report_tex import _environment
+        env = _environment(Path(profile["tex_root"]))
+    else:
+        env = dict(os.environ)
     if profile:
-        directories = list(dict.fromkeys(str(Path(path).parent) for path in profile["tools"].values()))
+        directories = list(dict.fromkeys(str(Path(profile["tools"][name]).parent) for name in ("xelatex", "kpsewhich", "pandoc")))
         env["PATH"] = os.pathsep.join([*directories, env.get("PATH", "")])
     return env
 
 
-def setup_report_environment(destination, *, fetch=None):
+def setup_report_environment(destination, *, fetch=None, tools=None, tex_root=None):
     """Install verified fonts only when explicitly invoked; retain the OFL."""
     destination = Path(destination).expanduser().absolute()
     if destination.is_symlink():
         raise ReportEnvironmentError("Report setup destination must be a real directory.")
     existing = destination / "report-environment.json"
     if existing.is_file():
-        load_report_environment(existing)
+        profile = load_report_environment(existing)
+        if tools is not None and profile["tools"] != tools:
+            raise ReportEnvironmentError("Report profile uses different tools; choose a new profile directory.")
         return {"status": "ready", "reused": True, "environment": str(existing)}
     if destination.exists() and any(destination.iterdir()):
         raise ReportEnvironmentError("Report setup requires an empty destination; existing files were preserved.")
-    tools = {name: shutil.which(name) for name in ("pandoc", "xelatex", "kpsewhich")}
+    tools = tools if tools is not None else {name: shutil.which(name) for name in ("pandoc", "xelatex", "kpsewhich")}
     missing = [name for name, path in tools.items() if path is None]
     if missing:
         raise ReportEnvironmentError("Missing report tools: " + ", ".join(missing) + ". Install the documented system report prerequisites first.")
@@ -97,6 +109,8 @@ def setup_report_environment(destination, *, fetch=None):
             (staged / entry["name"]).write_bytes(payload)
         config = {"schema_version": "arc.report_environment.v1", "font_lock_sha256": _digest(FONT_LOCK),
                   "tools": tools, "font_source": font_lock()["upstream_commit"]}
+        if tex_root is not None:
+            config["tex_root"] = str(Path(tex_root).expanduser().absolute())
         (staged / "report-environment.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         load_report_environment(staged / "report-environment.json")
         if destination.exists():

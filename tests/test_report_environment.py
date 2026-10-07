@@ -79,3 +79,38 @@ def test_diagnostic_detects_missing_distribution_template_font(monkeypatch):
     diagnostic = delivery.report_dependencies()
     assert diagnostic["status"] == "tex_packages_missing"
     assert diagnostic["tex_packages"]["lmodern.sty"] is False
+
+
+def test_selected_tool_paths_override_competing_path_entries(tmp_path, monkeypatch):
+    system = tmp_path / "system"
+    owned = tmp_path / "owned"
+    system.mkdir()
+    (owned / "bin/x86_64-linux").mkdir(parents=True)
+    tools = {"pandoc": str(system / "pandoc"), **{name: str(owned / "bin/x86_64-linux" / name) for name in ("xelatex", "kpsewhich")}}
+    profile = {"tools": tools, "tex_root": str(owned)}
+    monkeypatch.setenv("PATH", str(system))
+    monkeypatch.setenv("TEXMFCNF", "/unrelated/tex")
+    monkeypatch.setenv("TEXMFVAR", "/unrelated/cache")
+    env = environment.report_process_environment(profile)
+    assert env["PATH"].split(":")[0] == str(owned / "bin/x86_64-linux")
+    assert "TEXMFCNF" not in env
+    assert env["TEXMFVAR"] == str(owned / "texmf-var")
+    assert delivery._tool("xelatex", profile) == tools["xelatex"]
+    assert delivery._tool("kpsewhich", profile) == tools["kpsewhich"]
+    assert delivery._tool("pandoc", profile) == tools["pandoc"]
+
+
+def test_renderer_invokes_selected_pandoc_and_tex_engine(tmp_path, monkeypatch):
+    import subprocess
+    source = tmp_path / "source.md"
+    source.write_text("# fixture")
+    profile = {"tools": {"pandoc": "/selected/pandoc", "xelatex": "/owned/xelatex", "kpsewhich": "/owned/kpsewhich"}}
+    monkeypatch.setattr(delivery, "_settings", lambda *args: ({}, {}, profile, {}))
+    monkeypatch.setattr(delivery, "report_dependencies", lambda **kwargs: {"status": "available"})
+    def render(command, **kwargs):
+        assert command[0] == "/selected/pandoc"
+        assert "--pdf-engine=/owned/xelatex" in command
+        Path(command[command.index("-o") + 1]).write_bytes(b"%PDF-fixture")
+        return subprocess.CompletedProcess(command, 0, "", "")
+    monkeypatch.setattr(delivery.subprocess, "run", render)
+    delivery.render_markdown_pdf(project_dir=tmp_path, source=source, output=tmp_path / "report.pdf")

@@ -55,6 +55,10 @@ def _settings(main_font=None, cjk_font=None, environment=None):
     return fonts, options, profile, report_process_environment(profile)
 
 
+def _tool(name, profile):
+    return profile["tools"][name] if profile else name
+
+
 def _probe(command, env):
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=10, check=False, env=env)
@@ -81,7 +85,7 @@ def report_dependencies(*, main_font=None, cjk_font=None, environment=None) -> d
     except ReportDeliveryContractError as exc:
         return {"tools": {}, "fonts": {}, "tex_packages": {}, "status": "invalid_configuration", "guidance": str(exc)}
     tools = {name: shutil.which(name, path=env.get("PATH")) is not None for name in ("pandoc", "xelatex", "kpsewhich", "fc-match", "fc-scan")}
-    tex = {name: bool(_probe(["kpsewhich", name], env)) if tools["kpsewhich"] else None for name in REQUIRED_TEX_PACKAGES}
+    tex = {name: bool(_probe([_tool("kpsewhich", profile), name], env)) if tools["kpsewhich"] else None for name in REQUIRED_TEX_PACKAGES}
     checks = {}
     for name, family in fonts.items():
         managed = ("mainfontoptions" if name == "mainfont" else "CJKoptions") in options
@@ -169,11 +173,11 @@ def render_markdown_pdf(
         ) as temporary:
             rendered = Path(temporary) / "report.pdf"
             command = [
-                "pandoc",
+                _tool("pandoc", profile),
                 str(source_path),
                 "-o",
                 str(rendered),
-                "--pdf-engine=xelatex",
+                "--pdf-engine=" + _tool("xelatex", profile),
                 f"--resource-path={source_path.parent}{os.pathsep}.",
                 "-V",
                 "geometry:margin=1.5cm",

@@ -27,12 +27,40 @@ sudo apt-get install -y pandoc texlive-xetex texlive-lang-chinese \
   texlive-latex-extra texlive-fonts-recommended lmodern fontconfig poppler-utils
 ```
 
-On another host, provide equivalent tools on `PATH`. ARC does not invoke
-sudo, alter system fonts, or update an existing TeX installation. Where system
-installation is unavailable, the profile remains unavailable until the host
-provides those prerequisites. A separate user-owned TinyTeX installation can
-also supply them; configure its bin directory on `PATH` and use its documented
-package management rather than modifying an unrelated system installation.
+For Linux x86_64/glibc hosts with Pandoc, Perl, Fontconfig and Poppler but
+missing TeX packages, initialize a separate caller-owned TeX tree explicitly:
+
+```bash
+<skill-dir>/scripts/arc-runtime script <skill-dir>/scripts/setup-report.py \
+  --tex-dir <new-owned-tex-directory> --output-dir <new-report-profile-directory>
+export ARC_REPORT_ENVIRONMENT=<report-profile-directory>/report-environment.json
+<skill-dir>/scripts/arc-runtime script <skill-dir>/scripts/verify-report.py \
+  --project-dir <verification-project>
+```
+
+This downloads the SHA-256-verified TinyTeX-1 v2026.02 archive (TeX Live 2025,
+about 71 MB compressed), then installs xeCJK and its dependency closure from
+the frozen TeX Live 2025 final repository. The source lock is
+`scripts/_arc_workflows/report-tex.json`. The older fixed distribution is
+intentional: both its engine and package repository belong to the same TeX
+Live release. No moving `latest` download or cross-year package update is used.
+Package revisions, engine version and source identity are saved in
+`arc-tex-install.json`; upstream licenses remain in the TeX tree.
+
+Setup invokes only that tree's `tlmgr`, without sudo, system registration or
+shell-profile edits. Temporary installation failures leave the destination
+unchanged. An intact installation can be reused; corrupt or unrelated trees
+are preserved and rejected. Use a new font profile when switching its recorded
+TeX tools. The explicit `--tex-dir` option is required for these downloads;
+ordinary font setup, doctor and rendering still never install TeX.
+
+On other platforms, provide the documented system tools or an independently
+managed TeX installation on `PATH`. The owned installer reports unsupported
+platforms explicitly. It requires Python 3.11.8+ or 3.12+ for safe archive
+extraction. Network restrictions may block either release/archive downloads
+or the frozen package repository; setup reports that failure and retains
+accepted scientific work. The ZIP contains source locks and scripts, not TeX
+binaries or a venv.
 
 Provision ARC's report fonts explicitly:
 
