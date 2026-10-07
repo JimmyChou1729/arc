@@ -24,7 +24,7 @@ the host administrator:
 ```bash
 sudo apt-get update
 sudo apt-get install -y pandoc texlive-xetex texlive-lang-chinese \
-  texlive-latex-extra texlive-fonts-recommended fontconfig poppler-utils
+  texlive-latex-extra texlive-fonts-recommended lmodern fontconfig poppler-utils
 ```
 
 On another host, provide equivalent tools on `PATH`. ARC does not invoke
@@ -58,9 +58,9 @@ to XeLaTeX's fontspec/xeCJK options; system font registration is unnecessary.
 Explicit `--main-font`, `--cjk-font`, `ARC_REPORT_MAIN_FONT`, or
 `ARC_REPORT_CJK_FONT` takes priority for the corresponding font. Preflight
 checks exact family matching, representative Chinese character coverage, and
-the TeX packages required by the current template, including fontspec and
-xeCJK. Reported missing glyphs prevent publication. Fontconfig checks may be
-unknown on other platforms, so genuine rendering remains the final check.
+the TeX packages required by the current template, including fontspec,
+xeCJK and the lmodern package used by distribution Pandoc templates. Reported
+missing glyphs prevent publication. Fontconfig checks may be unknown on other platforms, so genuine rendering remains the final check.
 
 Verification uses the original renderer for a real PDF with Chinese, inline
 math and display math. It checks pages and extracted text through Poppler;

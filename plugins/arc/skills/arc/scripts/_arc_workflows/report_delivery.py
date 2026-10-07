@@ -12,7 +12,7 @@ from _arc_workflows.report_environment import (
     ReportEnvironmentError, load_report_environment, report_process_environment,
 )
 
-REQUIRED_TEX_PACKAGES = ("fontspec.sty", "xeCJK.sty", "unicode-math.sty", "amsmath.sty", "geometry.sty", "bookmark.sty", "xcolor.sty", "longtable.sty", "booktabs.sty", "fancyvrb.sty", "graphicx.sty")
+REQUIRED_TEX_PACKAGES = ("fontspec.sty", "xeCJK.sty", "lmodern.sty", "unicode-math.sty", "amsmath.sty", "geometry.sty", "bookmark.sty", "xcolor.sty", "longtable.sty", "booktabs.sty", "fancyvrb.sty", "graphicx.sty")
 
 
 class ReportDeliveryContractError(ValueError):

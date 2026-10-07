@@ -63,7 +63,7 @@ jobs:
       - name: Initialize the supported report system profile
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pandoc texlive-xetex texlive-lang-chinese texlive-latex-extra texlive-fonts-recommended fontconfig poppler-utils
+          sudo apt-get install -y --no-install-recommends pandoc texlive-xetex texlive-lang-chinese texlive-latex-extra texlive-fonts-recommended lmodern fontconfig poppler-utils
       - name: Build the actual public skills ZIP
         run: python scripts/plugin_bundle.py build --profile public-skills --output "$RUNNER_TEMP/arc.zip"
       - name: Verify cold Git installation, protocol, scientific environment and real PDF
