@@ -24,23 +24,69 @@ exact day count back to the corresponding calendar date two years earlier.
 
 ### Phase 1: Preflight and Resolve Domain Origins
 
-Step 1: For a source-sensitive request, freeze the intended post-fix checkout
-before collecting papers. If the request refers to a refactor/fix, resolve that
-requirement to a commit in the intended checkout and use the source verifier:
+Step 1: For a source-sensitive request, record the intended checkout and
+required fix before collecting papers. Use Git directly; a ready runtime alone
+does not establish that its packages include the requested fix:
 
 ```bash
-export ARC_REQUIRE_REPO_ROOT=<checkout-root>
-python3 <skill-dir>/scripts/verify-source-runtime.py \
-  --repo-root <checkout-root> \
-  --require-clean \
-  --require-ancestor <required-refactor-commitish> \
-  --output <project-dir>/source-provenance.json
+ARC_CHECKOUT=<checkout-root>
+ARC_REQUIRED_COMMIT=<required-refactor-commitish>
+git -C "$ARC_CHECKOUT" rev-parse --show-toplevel || exit 1
+git -C "$ARC_CHECKOUT" rev-parse HEAD || exit 1
+git -C "$ARC_CHECKOUT" rev-parse --verify "${ARC_REQUIRED_COMMIT}^{commit}" || exit 1
+git -C "$ARC_CHECKOUT" merge-base --is-ancestor "$ARC_REQUIRED_COMMIT" HEAD || exit 1
+git -C "$ARC_CHECKOUT" status --porcelain=v1 --untracked-files=all || exit 1
 ```
 
-Record the requested commit-ish, its resolved ancestor, and the verifier's
-frozen HEAD in `context.json`. Do not reuse an earlier worktree merely because
-it has a previous ARC build. If the requirement cannot be resolved or is not
-an ancestor of HEAD, print `WARNING:` and stop before a paper or LLM call.
+Check that the reported top-level directory is the intended checkout, the
+required commit resolves, and `merge-base` exits zero. Record both resolved
+commits in `context.json`. Require a clean checkout for an unmodified commit
+check. For an explicitly requested local patch, record the changed paths and
+patch identity separately; do not describe it as the clean commit. Apply the
+same source/dirty-state recording to the Foundation checkout. If a requirement
+cannot be verified, print `WARNING:` and stop before a paper or LLM call.
+
+To run those checkouts through ARC's existing private runtime, select both
+sources explicitly and save the read-only runtime diagnostic:
+
+```bash
+export AC_INSTALL_SOURCE=local
+export AC_PRODUCT_REPO_ROOT=<checkout-root>
+export AC_FOUNDATION_REPO_ROOT=<foundation-checkout-root>
+# Require Skill scripts to import the same source checkouts.
+export ARC_REQUIRE_REPO_ROOT=<checkout-root>
+mkdir -p <project-dir>
+<skill-dir>/scripts/arc-runtime doctor > <project-dir>/source-provenance.json
+```
+
+Check `source_mode: local` and each `sources[]` entry's `root`, `revision`, and
+`content_sha256` against the selected checkouts. The content digest identifies
+the package snapshot including local patches; also retain a digest of any
+tracked diff and non-ignored untracked source files when recording local
+patches. Do not include patch contents or credentials in diagnostics. If
+`ready` is false, follow `manuals/environment-setup.md` for explicit setup and
+repeat the diagnostic. Doctor itself installs nothing.
+
+After readiness, use the Python executable below the diagnostic's `runtime`
+path to inspect the installed packages used by console tools:
+
+```bash
+<runtime>/venv/bin/python -B -c 'import importlib, json, sys; from pathlib import Path; names = ("arc_paper", "arc_domain", "ac_jobs", "ac_llm", "ac_document", "ac_proposer_reviewer"); paths = {name: str(Path(importlib.import_module(name).__file__).resolve()) for name in names}; print(json.dumps({"python": sys.executable, "prefix": sys.prefix, "modules": paths}, indent=2)); assert all(Path(path).is_relative_to(Path(sys.prefix).resolve()) for path in paths.values()), "imports are outside the selected runtime"'
+```
+
+Retain this module-path evidence with the runtime diagnostic. Run subsequent
+package calls through the same `arc-runtime` with the same source settings;
+repeat preflight after changing source files. Local runtime installs are
+package snapshots, not live editable imports. Skill scripts use a different
+path: run them from the selected checkout with `ARC_REQUIRE_REPO_ROOT` set;
+the existing bootstrap verifies all six imports against the ARC and Foundation
+source directories and rejects a mismatch. Complete source checkouts can also
+activate this overlay automatically. An overlay does not switch console tools
+or prove an installed Git runtime matches that checkout. Keep both checkouts
+frozen so the overlay and recorded package snapshots describe the same code.
+For ordinary pinned Git-runtime use, record the doctor's `source_mode: git`
+and locked source commits rather than claiming checkout provenance. Do not
+reuse an earlier worktree merely because it contains a previous ARC build.
 
 Step 2: Create `<project-dir>/domain/`.
 

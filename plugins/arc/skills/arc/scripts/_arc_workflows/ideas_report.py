@@ -693,9 +693,11 @@ def _display_math_outside_spans(text: str) -> str:
         if in_display_math:
             lines.append(line)
             continue
-        math_span = re.fullmatch(r"\$(.+)\$", stripped)
+        math_span = re.fullmatch(r"\$((?:\\.|[^$\\])+)\$", stripped)
         if math_span and _looks_like_display_equation(math_span.group(1)):
             lines.extend(["$$", math_span.group(1), "$$"])
+        elif "$" in stripped or "`" in stripped:
+            lines.append(line)
         elif _looks_like_display_equation(stripped):
             lines.extend(["$$", _format_math(stripped), "$$"])
         else:

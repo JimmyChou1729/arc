@@ -349,6 +349,15 @@ def _maybe_generate_portfolio_assessment(
             "ref": None,
             "reason": "committed_trace_unavailable",
         }
+    if inspection.durable_lifecycle not in {"succeeded", "failed"} or any(
+        loop.lifecycle not in {"succeeded", "failed"} for loop in inspection.loops
+    ):
+        return {
+            "status": "not_run",
+            "input_digest": None,
+            "ref": None,
+            "reason": "batch_not_terminal",
+        }
     if not any(loop.lifecycle == "succeeded" for loop in inspection.loops):
         return {
             "status": "not_run",

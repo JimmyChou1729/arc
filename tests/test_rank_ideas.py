@@ -197,6 +197,25 @@ def test_report_preserves_multiline_display_math_with_attached_delimiters() -> N
     assert rendered.count("$$") == 2
 
 
+@pytest.mark.parametrize("source", [
+    r"general_idea_001 固定 $\rho/m$，而 $\gamma=(g^2/H^2)F$ 仍含耦合。",
+    r"$x_1=1$ 而 $y_1=2$，两者不同。",
+    r"$f(x)=1$ and $g(x)=2$",
+    r"general_idea_001 uses $x=1$ and costs \$5.",
+])
+def test_report_does_not_wrap_prose_containing_inline_math(source):
+    _load_rank_module()
+    report = sys.modules["_arc_workflows.ideas_report"]
+    assert report._math_markdown_text(source) == source
+
+
+@pytest.mark.parametrize("source", [r"\rho=m^2", r"$f(x)=x^2$", r"f(x)=x^2"])
+def test_report_still_displays_standalone_equations(source):
+    _load_rank_module()
+    rendered = sys.modules["_arc_workflows.ideas_report"]._math_markdown_text(source)
+    assert rendered.startswith("$$\n") and rendered.endswith("\n$$")
+
+
 def test_scientific_readiness_uses_four_non_gating_states() -> None:
     _load_rank_module()
     policy = sys.modules["_arc_workflows.ideas_policy"]

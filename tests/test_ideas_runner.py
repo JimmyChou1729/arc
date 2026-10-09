@@ -9,6 +9,8 @@ from threading import Event, Lock, Thread
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from ac_jobs import (
     Awaiting,
     Failed,
@@ -705,6 +707,73 @@ def test_run_uses_one_explicit_runtime_carrier(tmp_path: Path) -> None:
     assert source.source_run_id == "ideas-test"
     assert source.source_artifact_id.endswith("domain-markdown-001")
     assert "# Brief" not in fake.requests[0].prompt
+
+
+@pytest.mark.parametrize("batch_state,other_state", [
+    ("paused", "paused"), ("running", "running"), ("running", "pending"),
+    ("failed", "integrity_error"), ("failed", "paused"), ("paused", "succeeded"),
+])
+def test_portfolio_is_deferred_until_entire_batch_is_terminal(tmp_path, monkeypatch, batch_state, other_state):
+    runner = _load_runner_module()
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Nonterminal batch must not create a portfolio request")
+    monkeypatch.setattr(runner, "generate_portfolio_assessment", forbidden)
+    warnings = []
+    result = runner._maybe_generate_portfolio_assessment(
+        SimpleNamespace(run_id="fixture", user_intent="fixture"),
+        repository=SimpleNamespace(root=tmp_path),
+        inspection=SimpleNamespace(durable_lifecycle=batch_state, loops=[SimpleNamespace(lifecycle="succeeded"), SimpleNamespace(lifecycle=other_state)]),
+        trace=object(), warnings=warnings, task_service=None, runner=None, llm_options=LLMExecutionOptions())
+    assert result["status"] == "not_run" and result["reason"] == "batch_not_terminal"
+    assert not warnings
+
+
+@pytest.mark.parametrize("batch_state", ["succeeded", "failed"])
+def test_terminal_failed_loop_does_not_block_available_portfolio(tmp_path, monkeypatch, batch_state):
+    runner = _load_runner_module()
+    calls = []
+    def assess(*args, **kwargs):
+        calls.append(kwargs["inspection"])
+        return {"status": "available"}
+    monkeypatch.setattr(runner, "generate_portfolio_assessment", assess)
+    result = runner._maybe_generate_portfolio_assessment(
+        SimpleNamespace(run_id="fixture", user_intent="fixture"), repository=SimpleNamespace(root=tmp_path),
+        inspection=SimpleNamespace(durable_lifecycle=batch_state, loops=[SimpleNamespace(lifecycle="succeeded"), SimpleNamespace(lifecycle="failed")]),
+        trace=object(), warnings=[], task_service=None, runner=None, llm_options=LLMExecutionOptions())
+    assert result["status"] == "available" and len(calls) == 1
+
+
+def test_partial_batch_resume_creates_only_one_complete_portfolio(tmp_path, monkeypatch):
+    from ac_llm import HostCoordinator
+    runner = _load_runner_module()
+    monkeypatch.setattr(runner, "_maybe_publish_partial", lambda *args: None)
+    class PausedReviewer(_FakeLLM):
+        hold = True
+        def execute(self, context, request, *, options):
+            if self.hold and options.task_binding.get("loop_id") == "general_idea_002" and options.task_binding.get("role") == "reviewer":
+                self.held_request = request
+                return LLMPaused(ResumeReason.EXTERNAL_CONDITION, "fixture-review", input_required=False)
+            return super().execute(context, request, options=options)
+        def resume(self, context, task_id, *, input, options):
+            assert task_id == self.held_request.task_id and not self.hold
+            return super().execute(context, self.held_request, options=options)
+    config = _config(tmp_path)
+    config["loops_per_variant"] = 2
+    fake, portfolio = PausedReviewer(), _FakePortfolioRunner()
+    options = LLMExecutionOptions(host_coordinator=HostCoordinator("offline"))
+    kwargs = dict(llm_service=fake, llm_options=options, portfolio_assessment_runner=portfolio)
+    first = runner.run_ideas(config, **kwargs)
+    assert first["batch"]["durable_lifecycle"] == "paused"
+    assert first["portfolio_assessment"]["reason"] == "batch_not_terminal"
+    assert not portfolio.requests
+    fake.hold = False
+    completed = runner.run_ideas(config, **kwargs)
+    assert completed["status"] == "succeeded" and completed["portfolio_assessment"]["status"] == "available"
+    assert len(portfolio.requests) == 1
+    ids = portfolio.requests[0].output.schema["properties"]["candidate_notes"]["items"]["properties"]["candidate_id"]["enum"]
+    assert ids == ["general_idea_001", "general_idea_002"]
+    replay = runner.run_ideas(config, **kwargs)
+    assert replay["portfolio_assessment"]["reused"] and len(portfolio.requests) == 1
 
 
 def test_portfolio_assessment_is_high_tier_content_addressed_and_reused(

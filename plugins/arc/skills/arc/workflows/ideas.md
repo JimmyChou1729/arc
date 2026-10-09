@@ -258,6 +258,9 @@ preserving the scientific assessment and revision feedback for every complete
 candidate. It emits logical artifact IDs and content digests, never physical
 proposal or review paths.
 
+Wait until the batch is terminal and every loop has succeeded or failed;
+paused, pending, running or integrity-error loops defer the assessment. Failed
+terminal loops do not prevent an advisory over the available succeeded loops.
 After the batch completes, run one post-batch portfolio-level scientific
 assessment by default. This is a single advisory over the portfolio, not
 another scoring pass. It is holistic and free-topic: a common core shared by

@@ -11,6 +11,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from ac_jobs import canonical_json_bytes
 from arc_paper import ReferenceInferenceResult, extract_paper_ids, normalize_paper_id
 
 from .text import normalize_authors, paper_key, token_overlap_score
@@ -244,8 +245,8 @@ def candidate_audit_prompt(
             "Citation directions are optional hints such as references/citers to inspect; they are not selected papers.",
             f"Low-citation heuristic: fewer than {min_citation_count} citations normally means low priority as selected foundation unless no better-supported same-scope foundation is available.",
             f"User intent:\n{intent or '(none)'}",
-            f"Seed paper:\n{dict(seed_metadata)}",
-            f"Candidate papers:\n{[dict(candidate) for candidate in candidates]}",
+            f"Seed paper:\n{canonical_json_bytes(dict(seed_metadata)).decode('utf-8')}",
+            f"Candidate papers:\n{canonical_json_bytes([dict(candidate) for candidate in candidates]).decode('utf-8')}",
             "Before submitting, check required coverage and verify that every paper ID and citation direction comes only from the supplied records.",
             "Return JSON only.",
     ]
@@ -498,8 +499,8 @@ def foundation_selection_prompt(
             "A parent foundation must be earlier than, or from the same year as, selected_foundation; a later paper cannot be a parent.",
             f"Candidates with fewer than {min_citation_count} citations should normally have low priority as selected foundation unless no better-supported same-scope foundation is supplied.",
             f"User intent:\n{intent or '(none)'}",
-            f"Seed paper:\n{dict(seed_metadata)}",
-            f"Candidate papers:\n{[dict(candidate) for candidate in candidates]}",
+            f"Seed paper:\n{canonical_json_bytes(dict(seed_metadata)).decode('utf-8')}",
+            f"Candidate papers:\n{canonical_json_bytes([dict(candidate) for candidate in candidates]).decode('utf-8')}",
             "Before submitting, check all required choices, preserve contract order, and verify that every selected or rejected paper ID comes only from the supplied candidates.",
             "Return JSON only.",
     ]

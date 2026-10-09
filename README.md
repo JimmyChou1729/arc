@@ -108,11 +108,17 @@ Python 3.11 or newer is required. Read `AGENTS.md`, keep generated work below
 ignored `local/`, and run:
 
 ```bash
-AC_FOUNDATION_REPO_ROOT=../ac-foundation python scripts/check-generated-foundation.py
-PYTHONPATH="$(find ../ac-foundation/packages packages -mindepth 2 -maxdepth 2 -type d -name src -print | paste -sd: -)" \
+export AC_FOUNDATION_REPO_ROOT="$(cd ../ac-foundation && pwd)"
+python scripts/check-generated-foundation.py
+PYTHONPATH="$(find "$AC_FOUNDATION_REPO_ROOT/packages" "$PWD/packages" -mindepth 2 -maxdepth 2 -type d -name src -print | paste -sd: -)" \
   python -m pytest --import-mode=importlib packages/*/tests tests
 scripts/build-packages.sh
 ```
+
+Use a development interpreter with the test dependencies installed. Generic
+tests isolate inherited `AC_LLM_HOST_COORDINATOR` and `ARC_REPORT_ENVIRONMENT`;
+Host/report tests set their own profiles explicitly. Source-root settings remain
+active so imported package provenance is still checked.
 
 Prepare an approved release from a clean checkout with
 `scripts/release-arc.sh <version>`. The script updates both packages and plugin
