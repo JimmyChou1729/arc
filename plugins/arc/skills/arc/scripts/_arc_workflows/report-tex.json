@@ -1,0 +1,12 @@
+{
+  "schema_version": "arc.report_tex_source.v1",
+  "platform": "linux-x86_64-glibc",
+  "distribution": "TinyTeX-1 v2026.02 / TeX Live 2025",
+  "url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.02/TinyTeX-1-v2026.02.tar.gz",
+  "bytes": 71355351,
+  "sha256": "b56079da87a6d26a18fe8f4a751fde7a5f3596c93260bc1dd3663f7590aef44c",
+  "repository": "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2025/tlnet-final",
+  "packages": ["xecjk"],
+  "licenses": ["LICENSE.TL", "LICENSE.CTAN"],
+  "upstream": "https://github.com/rstudio/tinytex-releases/releases/tag/v2026.02"
+}
