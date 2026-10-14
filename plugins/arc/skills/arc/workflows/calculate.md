@@ -95,6 +95,12 @@ Inspect the returned JSON and saved calculation state. Large or slow runs are
 runtime facts, not workflow blocks. Use the owning package's status command or
 the host's background-command facility instead of frequent manual polling.
 
+`arc.workflow.calculate.result.v4` also returns `awaiting_host` or `paused`.
+Read `steps[].resume`, follow `manuals/host-execution.md`, and rerun the same
+config after submitting responses. The current batch/attempt remains bound;
+accepted prior steps and partially complete workers are reused. A stopped batch
+requires explicit user continuation through its owning resume command.
+
 When a completed attempt needs durable inspection, use only the public proposer-reviewer inspection surface with the returned batch run ID:
 
 ```bash

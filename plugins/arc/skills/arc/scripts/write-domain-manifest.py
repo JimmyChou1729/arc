@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         payload = read_json_object(destination)
         result = {
-            "status": "completed",
+            "status": "paused" if payload["domain_relationships"]["status"] == "paused" else "completed",
             "manifest_path": str(destination),
             "package_count": payload["package_count"],
             "domain_relationships_status": payload[
@@ -50,6 +50,10 @@ def main(argv: list[str] | None = None) -> int:
             ]["status"],
             "duplicate_count": len(payload["duplicates"]),
         }
+        if result["status"] == "paused":
+            result["resume"] = payload["domain_relationships"]["awaiting"]
+            if result["resume"]["details"].get("code") == "awaiting_host" and not result["resume"].get("stop_requested"):
+                result["status"] = "awaiting_host"
         print(
             json.dumps(result, ensure_ascii=False)
             if args.json

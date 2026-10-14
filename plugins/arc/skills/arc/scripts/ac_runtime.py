@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -12,12 +13,15 @@ import socket
 import subprocess
 import sys
 import time
-from urllib.parse import urlsplit
+import tempfile
+import uuid
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
+from urllib.parse import urlsplit
 
-LAUNCHER_VERSION = 1
+LAUNCHER_VERSION = 2
 LOCK_SCHEMA = "ac.runtime_sources.v2"
 COMMIT_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 IDENTIFIER_RE = re.compile(r"[a-z][a-z0-9-]*")
@@ -197,10 +201,65 @@ def _local_roots(lock: RuntimeLock) -> dict[str, Path] | None:
     return roots
 
 
+def _expanded_runtime_path(value: str | Path) -> Path:
+    """Make a runtime path absolute without resolving a private-venv symlink."""
+
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else Path.cwd() / path
+
+
+def _venv_bin_dir(runtime_dir: Path) -> Path:
+    return runtime_dir / "venv" / ("Scripts" if os.name == "nt" else "bin")
+
+
+def _venv_python(runtime_dir: Path) -> Path:
+    return _venv_bin_dir(runtime_dir) / ("python.exe" if os.name == "nt" else "python")
+
+
+def _venv_tool(runtime_dir: Path, tool: str) -> Path:
+    suffix = ".exe" if os.name == "nt" else ""
+    return _venv_bin_dir(runtime_dir) / f"{tool}{suffix}"
+
+
+def _private_runtime_environment(
+    runtime_dir: Path, environ: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Return child environment with this literal private venv path first.
+
+    In particular, do not call ``resolve()`` here.  Console-script shebangs can
+    point through a symlinked Python, while sibling private commands still need
+    the original venv ``bin``/``Scripts`` directory on ``PATH``.
+    """
+
+    result = dict(os.environ if environ is None else environ)
+    private_bin = str(_venv_bin_dir(runtime_dir))
+    inherited = result.get("PATH")
+    result["PATH"] = (
+        private_bin if not inherited else f"{private_bin}{os.pathsep}{inherited}"
+    )
+    return result
+
+
 def _source_selection(lock: RuntimeLock) -> tuple[str, dict[str, Path] | None]:
     requested = os.environ.get("AC_INSTALL_SOURCE", "auto")
-    if requested not in {"auto", "local", "git"}:
-        raise RuntimeConfigError("AC_INSTALL_SOURCE must be auto, local, or git")
+    if requested not in {"auto", "local", "git", "mixed"}:
+        raise RuntimeConfigError("AC_INSTALL_SOURCE must be auto, local, git, or mixed")
+    if requested == "mixed":
+        roots: dict[str, Path] = {}
+        for source in lock.sources:
+            value = os.environ.get(source.local_root_env)
+            if value is None:
+                continue
+            if not value.strip():
+                raise RuntimeConfigError(f"mixed install root {source.local_root_env} is empty")
+            root = Path(value).expanduser().resolve()
+            for package in source.packages:
+                if not (root / "packages" / package / "pyproject.toml").is_file():
+                    raise RuntimeConfigError(
+                        f"mixed install root {source.local_root_env} lacks packages/{package}/pyproject.toml"
+                    )
+            roots[source.source_id] = root
+        return "mixed", roots
     roots = _local_roots(lock)
     if requested == "local" and roots is None:
         missing = ", ".join(source.local_root_env for source in lock.sources)
@@ -216,11 +275,11 @@ def _expand_default(value: str, *, cwd: Path, ac_home: Path) -> str:
 
 def _runtime_environment(lock: RuntimeLock, roots: dict[str, Path] | None) -> dict[str, str]:
     cwd = Path.cwd().resolve()
-    ac_home = Path(os.environ.get("AC_HOME", Path.home() / ".ac")).expanduser().resolve()
+    ac_home = _expanded_runtime_path(os.environ.get("AC_HOME", Path.home() / ".ac"))
     os.environ["AC_HOME"] = str(ac_home)
-    runtime_home = Path(
+    runtime_home = _expanded_runtime_path(
         os.environ.get("AC_RUNTIME_HOME", ac_home / "runtimes")
-    ).expanduser().resolve()
+    )
     os.environ["AC_RUNTIME_HOME"] = str(runtime_home)
     if "AC_DOCUMENT_CACHE" not in os.environ:
         cache = cwd / ".ac" / "cache" / "ac-document"
@@ -247,6 +306,7 @@ def _fingerprint(
     mode: str,
     roots: dict[str, Path] | None,
     constraints_path: Path,
+    extra_requirements: tuple[str, ...] = (),
 ) -> tuple[str, dict[str, Any]]:
     identity: dict[str, Any] = {
         "launcher_version": LAUNCHER_VERSION,
@@ -258,6 +318,8 @@ def _fingerprint(
         ),
         "sources": [],
     }
+    if extra_requirements:
+        identity["extra_requirements"] = list(extra_requirements)
     for source in lock.sources:
         source_identity: dict[str, Any] = {
             "id": source.source_id,
@@ -265,7 +327,9 @@ def _fingerprint(
             "commit": source.commit,
             "packages": source.packages,
         }
-        if roots is not None:
+        if mode == "mixed":
+            source_identity["mode"] = "local" if roots and source.source_id in roots else "git"
+        if roots is not None and source.source_id in roots:
             root = roots[source.source_id]
             source_identity.update(
                 root=str(root),
@@ -297,74 +361,162 @@ def _atomic_json(path: Path, document: Any) -> None:
     os.replace(temporary, path)
 
 
+def _diagnostic(code: str, **details: Any) -> None:
+    print(json.dumps({"schema_version": "ac.runtime_event.v1", "code": code, **details}), file=sys.stderr, flush=True)
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 class InstallLock:
+    """Permanent inode, kernel ownership; owner records are diagnostic only."""
+
     def __init__(self, path: Path) -> None:
         self.path = path
-        self.owner = f"{socket.gethostname()}:{os.getpid()}:{time.time_ns()}"
+        self.fd: int | None = None
+        self.record = path.with_name("install.owner.json")
 
-    def __enter__(self) -> "InstallLock":
-        timeout = int(os.environ.get("AC_INSTALL_LOCK_TIMEOUT_SEC", "600"))
-        stale_after = int(os.environ.get("AC_INSTALL_LOCK_STALE_SEC", "1800"))
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                self.path.mkdir(mode=0o700)
-                _atomic_json(
-                    self.path / "owner.json",
-                    {
-                        "owner": self.owner,
-                        "host": socket.gethostname(),
-                        "pid": os.getpid(),
-                        "created": time.time(),
-                    },
-                )
-                return self
-            except FileExistsError:
-                if self._stale(stale_after):
-                    stale = self.path.with_name(f"{self.path.name}.stale.{os.getpid()}")
-                    try:
-                        os.replace(self.path, stale)
-                    except OSError:
-                        continue
-                    shutil.rmtree(stale)
-                    continue
-                if time.monotonic() >= deadline:
-                    _die(f"timed out waiting for runtime install lock: {self.path}", 75)
-                time.sleep(0.2)
-
-    def _stale(self, stale_after: int) -> bool:
+    def __enter__(self) -> InstallLock:
         try:
-            owner = json.loads((self.path / "owner.json").read_text(encoding="utf-8"))
-            age = time.time() - float(owner["created"])
-            if owner["host"] != socket.gethostname():
-                return age >= stale_after
-            pid = int(owner["pid"])
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return True
-            except PermissionError:
-                return age >= stale_after
-            return False
-        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-            try:
-                return time.time() - self.path.stat().st_mtime >= 5
-            except OSError:
-                return False
+            import fcntl
+        except ImportError:
+            _diagnostic("lock_ownership_unverifiable", reason="POSIX flock unavailable", path=str(self.path))
+            _die("runtime installation requires a filesystem with POSIX flock support", 75)
+        try:
+            timeout = float(os.environ.get("AC_INSTALL_LOCK_TIMEOUT_SEC", "600"))
+        except ValueError:
+            _die("AC_INSTALL_LOCK_TIMEOUT_SEC must be a finite non-negative number")
+        if timeout < 0 or not math.isfinite(timeout):
+            _die("AC_INSTALL_LOCK_TIMEOUT_SEC must be a finite non-negative number")
+        deadline = time.monotonic() + timeout
+        try:
+            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+            waiting = False
+            while True:
+                try:
+                    fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if not waiting:
+                        _diagnostic("lock_occupied", path=str(self.path), owner_record=_read_json(self.record))
+                        waiting = True
+                    if time.monotonic() >= deadline:
+                        _diagnostic("lock_wait_timeout", path=str(self.path), timeout_seconds=timeout)
+                        _die(f"timed out waiting for runtime install lock: {self.path}; an installer may still be running; no takeover was attempted", 75)
+                    time.sleep(0.1)
+            previous = _read_json(self.record)
+            if previous.get("state") == "held":
+                _diagnostic("lock_recovered", path=str(self.path), previous_owner=previous,
+                            evidence="kernel lock acquired; previous interruption cause unknown")
+            elif self.record.exists() and not previous:
+                _diagnostic("lock_record_unreadable", path=str(self.record), evidence="kernel lock acquired")
+            _atomic_json(self.record, {"state": "held", "pid": os.getpid(), "host": socket.gethostname(),
+                                      "acquired_at": time.time(), "previous": previous.get("acquired_at")})
+            return self
+        except OSError as exc:
+            _diagnostic("lock_ownership_unverifiable", path=str(self.path), errno=exc.errno, error=str(exc))
+            self._close()
+            _die("cannot establish exclusive runtime ownership; use a supported private runtime filesystem", 75)
+        except BaseException:
+            self._close()
+            raise
+
+    def _close(self) -> None:
+        if self.fd is not None:
+            # LOCK_UN would release descriptors inherited by a surviving installer.
+            os.close(self.fd)
+            self.fd = None
 
     def __exit__(self, *_: object) -> None:
         try:
-            owner = json.loads((self.path / "owner.json").read_text(encoding="utf-8"))
-            if owner.get("owner") == self.owner:
-                shutil.rmtree(self.path)
-        except (OSError, json.JSONDecodeError):
-            return
+            owner = _read_json(self.record)
+            _atomic_json(self.record, {**owner, "state": "released", "released_at": time.time()})
+        finally:
+            self._close()
+
+
+def _lock_diagnostic(path: Path) -> dict[str, Any]:
+    """Probe an existing inode without creating files or changing owner records."""
+    try:
+        import fcntl
+        fd = os.open(path, os.O_RDONLY)
+    except FileNotFoundError:
+        return {"state": "not_created"}
+    except (ImportError, OSError) as exc:
+        return {"state": "ownership_unverifiable", "reason": type(exc).__name__}
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {"state": "occupied", "evidence": "kernel lock"}
+        except OSError as exc:
+            return {"state": "ownership_unverifiable", "errno": exc.errno}
+        return {"state": "available", "evidence": "kernel lock; process identity not inferred"}
+    finally:
+        os.close(fd)
+
+
+def _installation_environment(runtime_dir: Path) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    env = dict(os.environ)
+    env["UV_PYTHON_DOWNLOADS"] = "never"
+    paths: dict[str, dict[str, Any]] = {"runtime": {"path": str(runtime_dir), "source": "AC_RUNTIME_HOME", "active": True}}
+    for name, relative, disabled in (("UV_CACHE_DIR", "cache/uv", "UV_NO_CACHE"), ("PIP_CACHE_DIR", "cache/pip", "PIP_NO_CACHE_DIR")):
+        explicit = name in env
+        if explicit and not env[name].strip():
+            raise RuntimeConfigError(f"{name} must not be empty")
+        env[name] = str(_expanded_runtime_path(env[name] if explicit else runtime_dir / relative))
+        paths[name] = {"path": env[name], "source": "explicit" if explicit else "private_default",
+                       "active": env.get(disabled, "").lower() not in {"1", "true", "yes", "on"}}
+    temp_key = next((name for name in ("TMPDIR", "TEMP", "TMP") if env.get(name)), None)
+    temporary = _expanded_runtime_path(env[temp_key] if temp_key else runtime_dir / "tmp")
+    # All installer descendants see the same selected temp directory.
+    env.update({name: str(temporary) for name in ("TMPDIR", "TEMP", "TMP")})
+    paths["temporary"] = {"path": str(temporary), "source": temp_key or "private_default", "active": True}
+    return env, paths
+
+
+def _path_diagnostic(path: Path) -> dict[str, Any]:
+    """Read-only estimate; setup verifies with a real write before installation."""
+    ancestor = path
+    try:
+        while not ancestor.exists():
+            if ancestor == ancestor.parent:
+                break
+            ancestor = ancestor.parent
+        if not ancestor.is_dir():
+            return {"writable": False, "reason": "not_a_directory", "checked_ancestor": str(ancestor)}
+        read_only = bool(os.statvfs(ancestor).f_flag & getattr(os, "ST_RDONLY", 1)) if hasattr(os, "statvfs") else False
+        return {"writable": not read_only and os.access(ancestor, os.W_OK | os.X_OK),
+                "reason": "read_only_filesystem" if read_only else "access_estimate", "checked_ancestor": str(ancestor)}
+    except OSError as exc:
+        return {"writable": None, "reason": "unverifiable", "errno": exc.errno}
+
+
+def _prepare_install_paths(paths: dict[str, dict[str, Any]]) -> None:
+    for name, selected in paths.items():
+        if not selected["active"]:
+            continue
+        path = Path(selected["path"])
+        try:
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with tempfile.TemporaryFile(dir=path) as probe:
+                probe.write(b"runtime path probe")
+                probe.flush()
+                os.fsync(probe.fileno())
+        except OSError as exc:
+            _diagnostic("install_path_unwritable", selection=name, path=str(path), errno=exc.errno, error=str(exc))
+            raise RuntimeConfigError(f"Cannot write selected {name} path {path}: {exc}. Configure that path to a writable directory; HOME is unchanged.") from exc
 
 
 def _requirements(lock: RuntimeLock, mode: str, roots: dict[str, Path] | None) -> list[str]:
     requirements: list[str] = []
     for source in lock.sources:
-        if mode == "local":
+        if mode == "local" or (mode == "mixed" and roots is not None and source.source_id in roots):
             assert roots is not None
             requirements.extend(
                 str(roots[source.source_id] / "packages" / package)
@@ -379,14 +531,63 @@ def _requirements(lock: RuntimeLock, mode: str, roots: dict[str, Path] | None) -
     return requirements
 
 
-def _run_logged(command: list[str], log_path: Path) -> None:
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
-    output = completed.stdout + completed.stderr
-    output = re.sub(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", r"\1[REDACTED]@", output)
-    log_path.write_text(output, encoding="utf-8")
-    os.chmod(log_path, 0o600)
-    if completed.returncode != 0:
-        raise RuntimeError(f"command failed with exit status {completed.returncode}")
+def load_extra_requirements(path: Path | None, lock: RuntimeLock) -> tuple[str, ...]:
+    """Read an explicit pinned optional environment without overriding sources."""
+    if path is None:
+        return ()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeConfigError(f"Cannot read optional requirements: {path}") from exc
+    normalize = lambda name: re.sub(r"[-_.]+", "-", name).lower()
+    source_packages = {normalize(package) for source in lock.sources for package in source.packages}
+    requirements = {}
+    for number, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([0-9][A-Za-z0-9.!+-]*)", line)
+        if match is None:
+            raise RuntimeConfigError(f"Optional requirement must be a plain exact package pin at line {number}")
+        name = normalize(match[1])
+        if name in source_packages or name in requirements:
+            raise RuntimeConfigError(f"Optional requirement duplicates or overrides a locked source: {name}")
+        requirements[name] = f"{name}=={match[2]}"
+    if not requirements:
+        raise RuntimeConfigError("Optional requirements must not be empty")
+    return tuple(requirements[name] for name in sorted(requirements))
+
+
+def _run_logged(command: list[str], log_path: Path, *, env: dict[str, str] | None = None, lock_fd: int | None = None) -> None:
+    output_tail: deque[str] = deque(maxlen=8)
+    with log_path.open("a", encoding="utf-8") as log:
+        os.chmod(log_path, 0o600)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                   errors="replace", env=env, pass_fds=() if lock_fd is None else (lock_fd,))
+        log.write(f"[ac-runtime] started {Path(command[0]).name} pid={process.pid}\n")
+        log.flush()
+        assert process.stdout is not None
+        try:
+            for line in process.stdout:
+                line = re.sub(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", r"\1[REDACTED]@", line)
+                log.write(line)
+                log.flush()
+                if line.strip():
+                    output_tail.append(line.strip()[:500])
+            status = process.wait()
+        finally:
+            process.stdout.close()
+        if status != 0:
+            detail = "\nInstaller output (last lines):\n" + "\n".join(output_tail) if output_tail else ""
+            raise RuntimeError(f"command failed with exit status {status}{detail}\nInstall log: {log_path}")
+
+
+def _previous_install_failure(path: Path) -> str:
+    saved = _read_json(path)
+    detail = f"\n{saved['error']}" if saved.get("error") else ""
+    log = f"\nInstall log: {saved['log']}" if saved.get("log") and str(saved["log"]) not in detail else ""
+    return (f"previous runtime install failed: {path}{detail}{log}\n"
+            "After fixing the cause, rerun setup --retry.")
 
 
 def _install(
@@ -397,62 +598,66 @@ def _install(
     constraints_path: Path,
     fingerprint: str,
     identity: dict[str, Any],
+    *,
+    lock_fd: int | None = None,
 ) -> None:
-    venv = runtime_dir / "venv"
-    if venv.exists():
-        shutil.rmtree(venv)
-    requirements = _requirements(lock, mode, roots)
-    uv_override = os.environ.get("AC_INSTALL_UV")
-    uv = uv_override or shutil.which("uv")
-    log_path = runtime_dir / "install.log"
+    attempt = runtime_dir / "attempts" / uuid.uuid4().hex
+    attempt.mkdir(parents=True, mode=0o700)
+    venv = attempt / "venv"
+    log_path = attempt / "install.log"
+    log_path.touch(mode=0o600)
+    active = {"schema_version": "ac.runtime_attempt.v1", "attempt": str(attempt), "state": "installing", "started_at": time.time()}
+    _atomic_json(attempt / "state.json", active)
+    _atomic_json(runtime_dir / "install.active", active)
+    requirements = _requirements(lock, mode, roots) + list(identity.get("extra_requirements", ()))
+    uv = os.environ.get("AC_INSTALL_UV") or shutil.which("uv")
     try:
+        env, paths = _installation_environment(runtime_dir)
+        _prepare_install_paths(paths)
         if uv:
-            _run_logged([uv, "venv", str(venv), "--python", ">=3.11"], log_path)
-            command = [uv, "pip", "install", "--python", str(venv / "bin/python")]
+            _run_logged([uv, "venv", str(venv), "--python", sys.executable], log_path, env=env, lock_fd=lock_fd)
+            command = [uv, "pip", "install", "--python", str(_venv_python(attempt))]
         else:
-            _run_logged([sys.executable, "-m", "venv", str(venv)], log_path)
-            command = [str(venv / "bin/python"), "-m", "pip", "install"]
+            _run_logged([sys.executable, "-m", "venv", str(venv)], log_path, env=env, lock_fd=lock_fd)
+            command = [str(_venv_python(attempt)), "-m", "pip", "install"]
         if constraints_path.is_file():
             command.extend(["--constraint", str(constraints_path)])
         command.extend(requirements)
-        _run_logged(command, log_path)
-        for tool in lock.tools:
-            if not (venv / "bin" / tool).is_file():
-                raise RuntimeError(f"installed runtime lacks command: {tool}")
-        _atomic_json(
-            runtime_dir / "install.ok",
-            {
-                "schema_version": "ac.runtime_install.v1",
-                "fingerprint": fingerprint,
-                "identity": identity,
-                "installed_at": time.time(),
-            },
-        )
-        failure = runtime_dir / "install.failed"
-        if failure.exists():
-            failure.unlink()
-    except Exception as exc:
-        if venv.exists():
-            shutil.rmtree(venv)
-        _atomic_json(
-            runtime_dir / "install.failed",
-            {
-                "schema_version": "ac.runtime_failure.v1",
-                "error": f"{type(exc).__name__}: {exc}",
-                "log": str(log_path),
-            },
-        )
+        _run_logged(command, log_path, env=env, lock_fd=lock_fd)
+        if not _venv_python(attempt).is_file() or any(not _venv_tool(attempt, tool).is_file() for tool in lock.tools):
+            raise RuntimeError("installed runtime lacks Python or a required command")
+        # Never move an installed venv: its scripts contain absolute shebangs.
+        link = runtime_dir / (".venv-" + attempt.name)
+        link.symlink_to(venv, target_is_directory=True)
+        os.replace(link, runtime_dir / "venv")
+        _atomic_json(runtime_dir / "install.ok", {
+            "schema_version": "ac.runtime_install.v2", "fingerprint": fingerprint,
+            "identity": identity, "venv": str(venv), "installed_at": time.time(), "log": str(log_path),
+        })
+        _atomic_json(attempt / "state.json", {**active, "state": "completed", "completed_at": time.time()})
+        (runtime_dir / "install.failed").unlink(missing_ok=True)
+        (runtime_dir / "install.active").unlink(missing_ok=True)
+    except BaseException as exc:
+        failure = {**active, "state": "failed" if isinstance(exc, Exception) else "interrupted",
+                   "error": f"{type(exc).__name__}: {exc}", "log": str(log_path), "cause": "installer_exception; caller cancellation intent unknown"}
+        with log_path.open("a", encoding="utf-8") as log:
+            log.write(failure["error"] + "\n")
+        _atomic_json(attempt / "state.json", failure)
+        _atomic_json(runtime_dir / "install.failed", failure)
         raise
 
 
 def _ready(runtime_dir: Path, fingerprint: str, tools: tuple[str, ...]) -> bool:
+    marker = _read_json(runtime_dir / "install.ok")
     try:
-        marker = json.loads((runtime_dir / "install.ok").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        return (marker.get("schema_version") == "ac.runtime_install.v2"
+                and marker.get("fingerprint") == fingerprint
+                and (runtime_dir / "venv").is_symlink()
+                and str((runtime_dir / "venv").readlink()) == marker.get("venv")
+                and _venv_python(runtime_dir).is_file()
+                and all(_venv_tool(runtime_dir, tool).is_file() for tool in tools))
+    except OSError:
         return False
-    return marker.get("fingerprint") == fingerprint and all(
-        (runtime_dir / "venv" / "bin" / tool).is_file() for tool in tools
-    )
 
 
 def _ensure_runtime(
@@ -468,19 +673,22 @@ def _ensure_runtime(
 ) -> None:
     if _ready(runtime_dir, fingerprint, lock.tools):
         return
-    runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        _prepare_install_paths({"runtime": {"path": str(runtime_dir), "active": True}})
+    except RuntimeConfigError as exc:
+        _die(str(exc), 1)
     failure = runtime_dir / "install.failed"
     if failure.exists() and not retry:
-        _die(
-            f"previous runtime install failed: {failure}; rerun setup --retry after fixing cause",
-            1,
-        )
-    with InstallLock(runtime_dir / "install.lock"):
+        _die(_previous_install_failure(failure), 1)
+    with InstallLock(runtime_dir / "install.lock") as ownership:
         if _ready(runtime_dir, fingerprint, lock.tools):
             return
         if failure.exists() and not retry:
-            _die(f"previous runtime install failed: {failure}", 1)
+            _die(_previous_install_failure(failure), 1)
         try:
+            previous = _read_json(runtime_dir / "install.active")
+            if previous:
+                _diagnostic("install_attempt_abandoned", previous=previous, cause="interruption_unknown; previous attempt preserved")
             _install(
                 runtime_dir,
                 lock,
@@ -489,13 +697,15 @@ def _ensure_runtime(
                 constraints_path,
                 fingerprint,
                 identity,
+                lock_fd=ownership.fd,
             )
         except Exception as exc:
-            _die(f"runtime install failed: {exc}; see {runtime_dir / 'install.log'}", 1)
+            _die(f"runtime install failed: {exc}; see {runtime_dir / 'install.failed'} and retained attempt logs", 1)
 
 
 def _parser(launcher: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=launcher)
+    parser.add_argument("--requirements", type=Path, help="explicit exact optional pins; creates a separate runtime fingerprint")
     subparsers = parser.add_subparsers(dest="operation")
     setup = subparsers.add_parser("setup", help="install or verify private runtime")
     setup.add_argument("--retry", action="store_true")
@@ -517,7 +727,7 @@ def _python_script_command(
     script = Path(raw_path).expanduser().resolve()
     if not script.is_file():
         raise RuntimeConfigError(f"Python script does not exist: {script}")
-    python = runtime_dir / "venv" / "bin" / "python"
+    python = _venv_python(runtime_dir)
     return python, [str(python), str(script), *args]
 
 
@@ -531,10 +741,17 @@ def main(argv: list[str] | None = None) -> int:
     ).expanduser().resolve()
     try:
         lock = load_lock(lock_path)
+        launcher = os.environ.get("AC_RUNTIME_LAUNCHER_NAME", "ac-runtime")
+        arguments = list(sys.argv[1:] if argv is None else argv)
+        if arguments and arguments[0] in lock.tools:
+            arguments = ["run", *arguments]
+        parser = _parser(launcher)
+        namespace = parser.parse_args(arguments)
+        extra_requirements = load_extra_requirements(namespace.requirements, lock)
         mode, roots = _source_selection(lock)
         environment = _runtime_environment(lock, roots)
         fingerprint, identity = _fingerprint(
-            lock_path, lock, mode, roots, constraints_path
+            lock_path, lock, mode, roots, constraints_path, extra_requirements
         )
     except RuntimeConfigError as exc:
         _die(str(exc))
@@ -544,18 +761,23 @@ def main(argv: list[str] | None = None) -> int:
         / lock.profile
         / fingerprint
     )
-    launcher = os.environ.get("AC_RUNTIME_LAUNCHER_NAME", "ac-runtime")
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments and arguments[0] in lock.tools:
-        arguments = ["run", *arguments]
-    parser = _parser(launcher)
-    namespace = parser.parse_args(arguments)
     retry = bool(getattr(namespace, "retry", False)) or os.environ.get(
         "AC_INSTALL_RETRY", "0"
     ).lower() in {"1", "true", "yes", "on"}
     if namespace.operation == "doctor":
+        path_error = None
+        try:
+            _install_env, paths = _installation_environment(runtime_dir)
+        except RuntimeConfigError as exc:
+            paths, path_error = {}, str(exc)
         document = {
             "schema_version": "ac.runtime_doctor.v1",
+            "path_configuration_error": path_error,
+            "install_paths": {name: {**item, **_path_diagnostic(Path(item["path"]))} for name, item in paths.items()},
+            "path_check": "read_only_estimate; setup performs actual write probes",
+            "lock": {"mechanism": "POSIX flock", "owner_record": _read_json(runtime_dir / "install.owner.json"), "probe": _lock_diagnostic(runtime_dir / "install.lock")},
+            "last_attempt": _read_json(runtime_dir / "install.active"),
+            "last_failure": _read_json(runtime_dir / "install.failed"),
             "profile": lock.profile,
             "source_mode": mode,
             "fingerprint": fingerprint,
@@ -563,9 +785,10 @@ def main(argv: list[str] | None = None) -> int:
             "ready": _ready(runtime_dir, fingerprint, lock.tools),
             "environment": environment,
             "sources": identity["sources"],
+            "extra_requirements": list(extra_requirements),
         }
         print(json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2))
-        return 0 if document["ready"] else 1
+        return 0 if document["ready"] and path_error is None else 1
     if namespace.operation is None:
         parser.print_usage(sys.stderr)
         return 64
@@ -589,13 +812,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         except RuntimeConfigError as exc:
             _die(str(exc), 64)
-        os.execv(executable, command)
+        os.execve(str(executable), command, _private_runtime_environment(runtime_dir))
         raise AssertionError("unreachable")
     if namespace.tool not in lock.tools:
         _die(f"command is not present in source lock: {namespace.tool}", 64)
-    os.execv(
-        runtime_dir / "venv" / "bin" / namespace.tool,
+    os.execve(
+        str(_venv_tool(runtime_dir, namespace.tool)),
         [namespace.tool, *namespace.args],
+        _private_runtime_environment(runtime_dir),
     )
     raise AssertionError("unreachable")
 

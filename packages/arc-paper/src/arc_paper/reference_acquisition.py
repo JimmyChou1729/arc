@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .providers._http import create_http_client
+
 from .epub import (
     EPUB_MEDIA_TYPE,
     EPUB_READABLE_MEDIA_TYPE,
@@ -89,7 +91,7 @@ class ReferenceAcquisitionService:
         http: HttpResourceProvider | None = None,
         backends: Sequence[ReferenceAcquisitionBackend] = (),
     ):
-        shared_client = client or httpx.Client(timeout=60.0, follow_redirects=True)
+        shared_client = client or create_http_client(timeout=60.0, follow_redirects=True)
         self.cache = cache or ReferenceMaterialCache(cache_root)
         self.inspire = inspire or InspireProvider(
             cache_root=self.cache.root, client=shared_client
@@ -601,6 +603,8 @@ def _optional_inspire_metadata(
 def _media_type_for_file(path: Path, payload: bytes) -> str:
     if path.suffix.casefold() == ".epub":
         return EPUB_MEDIA_TYPE
+    if path.suffix.casefold() in {".md", ".markdown"}:
+        return "text/markdown"
     media_type = mimetypes.guess_type(path.name)[0]
     if media_type:
         return media_type

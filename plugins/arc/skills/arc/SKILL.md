@@ -119,6 +119,13 @@ not optional.
   `manuals/ac-jobs.md`.
 - Host LLM/provider detection, model choice, direct prompt tests, or provider
   troubleshooting: read `manuals/ac-llm.md`.
+- Host model handoff, `awaiting_host`, or subagent coordination: read
+  `manuals/host-execution.md`. Check actual coordinator capabilities; export and
+  submit through public `ac-llm` operations, then resume the original workflow.
+  Work/Cowork/dot use Host; coding agents prefer their native provider with
+  conservative pre-launch fallback. Scientific workers require independent
+  contexts. Model preferences may use the host model when unsupported, with
+  truthful provenance. Never edit private run state or bypass user stops.
 - Typed proposer-reviewer batch construction, resume, or safe observation of
   committed rounds: read `manuals/ac-proposer-reviewer.md`.
 - User-facing Markdown report export: use the ordinary blocking
@@ -168,11 +175,14 @@ committed-round refs and revision vectors; `show-round` alone expands a
 committed proposal/review JSON payload. Never read durable loop or artifact
 layout to substitute for these queries.
 
-The first real CLI call lazily installs the immutable locked runtime. Managed,
-CI, or offline-preparation environments may prewarm it with
-`<skill-dir>/scripts/arc-runtime setup`; diagnose it with
-`<skill-dir>/scripts/arc-runtime doctor`. The base Skill never
-installs or starts MCP.
+The first real CLI call lazily installs the immutable locked runtime. At task
+startup, use `<skill-dir>/scripts/arc-runtime doctor` to check readiness; if
+needed, initialize with `<skill-dir>/scripts/arc-runtime setup` before research
+calls. Installation needs access to its locked sources and dependencies. If it
+fails, inspect the reported installer output/log and correct the cause, then
+use `setup --retry` within the task's existing authority. Respect user stops
+and host permission decisions; do not repeat retries without a changed cause.
+The base Skill never installs or starts MCP.
 
 The launcher defaults `AC_HOME` to `$HOME/.ac`; set `AC_RUNTIME_HOME` for an
 explicit portable runtime location. Neutral document cache defaults to

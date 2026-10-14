@@ -148,6 +148,20 @@ rebuilt. ARC does not automatically classify those recovery choices. A stop is
 resumable, not a failed replacement run, and the previously active domain
 generation remains published until a recovered build fully validates.
 
+For runs created before canonical foundation-prompt serialization, changing
+only dictionary key order may have caused `idempotency_conflict`. The fixed
+serializer stabilizes new requests; it does not rebind old task IDs or consume
+Host receipts from a previous recovery epoch automatically. Preserve the old
+request, response and submission receipt. Before adopting an old audit/selection
+result, verify its schema, task/request identity, execution provenance and
+scientific input equivalence (including candidate order and user intent).
+Use the public `working_state` candidate paths for
+`domain/foundation-audit.json` or `domain/foundation-selection.json` and resume
+the same Domain run. Adopt the validated scientific result, not the Host
+envelope; retain the receipt and adoption provenance separately. If equivalence
+cannot be established, request a fresh result. Never rewrite task hashes,
+private lifecycle state or accepted scientific artifacts to suppress a conflict.
+
 After every attempt, read status, warnings, and published artifact references
 before deciding whether to deliver, recover, or resume.
 
@@ -159,13 +173,17 @@ stable or pass one explicit local cache on both build and resume.
 ## Managed Workflow Semantics
 
 The managed workflow records visible summary warnings and publishes
-`arc.workflow.domain_manifest.v4` only after verified exports. The manifest
+`arc.workflow.domain_manifest.v5` only after verified exports. The manifest
 references the content-addressed `arc.workflow.domain_seed_provenance.v1`
 artifact and preserves every domain package before an Ideas workflow starts.
 Pairwise `domain_relationships` are advisory evidence with confidence and
 warnings; they never choose an Ideas route. If relationship analysis is
 unavailable, the manifest remains usable and Ideas proceeds from package cards
 with a visible warning.
+
+Relationship pauses retain an `awaiting` descriptor and all verified cards.
+Host coordinators use `manuals/host-execution.md` and rerun the same manifest
+command. Ideas can still read existing v4 manifests.
 
 ## Help
 

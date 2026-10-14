@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
+import pytest
+from ac_jobs import canonical_json_bytes
 from jsonschema import validate
 
 from arc_domain import foundation
+
+
+@pytest.mark.parametrize("builder", [foundation.candidate_audit_prompt, foundation.foundation_selection_prompt])
+def test_foundation_prompt_is_stable_after_json_round_trip(builder):
+    seed = {"title": "Seed", "paper_id": "seed", "extra": {"z": 1, "a": 2}}
+    candidates = [{"title": "A", "paper_id": "a"}, {"title": "B", "paper_id": "b"}]
+    restored = json.loads(canonical_json_bytes({"seed": seed, "candidates": candidates}))
+    first = builder(seed_metadata=seed, candidates=candidates, intent="same scope")
+    assert first == builder(seed_metadata=restored["seed"], candidates=restored["candidates"], intent="same scope")
+    assert first != builder(seed_metadata={**seed, "title": "Changed"}, candidates=candidates, intent="same scope")
+    assert first != builder(seed_metadata=seed, candidates=list(reversed(candidates)), intent="same scope")
 
 
 def _paper(paper_id: str, *, title: str, year: int, citations: int, abstract: str = "") -> dict[str, object]:
