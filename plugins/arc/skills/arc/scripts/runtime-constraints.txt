@@ -1,4 +1,4 @@
-# Direct external dependencies tested for ARC v2.0.3.
+# Direct external dependencies tested for ARC v2.1.0.
 beautifulsoup4==4.14.3
 httpx==0.28.1
 socksio==1.0.0
