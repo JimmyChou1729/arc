@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 
 import pytest
@@ -9,11 +10,14 @@ from arc_paper.reference_cache import ReferenceIdentity, ReferenceMaterialCache
 from arc_paper.service import ArcPaperService, PaperInputError
 
 
+@pytest.mark.parametrize("suffix", [".md", ".markdown", ".MD"])
+@pytest.mark.parametrize("guessed_type", [None, "application/octet-stream"])
 def test_general_read_resolves_reference_and_returns_exact_document_ref(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch, suffix: str, guessed_type: str | None,
 ) -> None:
+    monkeypatch.setattr(mimetypes, "guess_type", lambda name: (guessed_type, None))
     cache_root = tmp_path / "cache"
-    source = tmp_path / "paper.md"
+    source = tmp_path / f"paper{suffix}"
     source.write_text("# Introduction\nAlpha.\n\n# Conclusion\nOmega.\n")
     service = ArcPaperService(cache_root=cache_root)
     service.admit_reference(source, title="Exact Paper")
@@ -29,6 +33,14 @@ def test_general_read_resolves_reference_and_returns_exact_document_ref(
     assert toc.source.document.source_format.value == "markdown"
     assert toc.source.identity == section.source.identity
     assert section.text.endswith("Omega.")
+
+
+def test_local_markdown_admission_preserves_explicit_media_type(tmp_path: Path) -> None:
+    source = tmp_path / "paper.md"
+    source.write_text("# Notes\nContent.\n")
+    service = ArcPaperService(cache_root=tmp_path / "cache")
+    material = service.admit_reference(source, title="Notes", media_type="text/plain")
+    assert material.resources[0].media_type == "text/plain"
 
 
 def test_general_read_exact_document_never_accepts_provider_controls(

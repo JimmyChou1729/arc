@@ -603,6 +603,8 @@ def _optional_inspire_metadata(
 def _media_type_for_file(path: Path, payload: bytes) -> str:
     if path.suffix.casefold() == ".epub":
         return EPUB_MEDIA_TYPE
+    if path.suffix.casefold() in {".md", ".markdown"}:
+        return "text/markdown"
     media_type = mimetypes.guess_type(path.name)[0]
     if media_type:
         return media_type
