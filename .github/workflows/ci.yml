@@ -3,28 +3,78 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_network:
+        description: Run real paper-network integration tests
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
+  validate-tag:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Require a version tag on upstream main
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          python scripts/check-release-tag.py --tag "$RELEASE_TAG"
+
   test:
+    needs: validate-tag
+    if: always() && (needs.validate-tag.result == 'success' || needs.validate-tag.result == 'skipped')
     runs-on: ubuntu-latest
     env:
       AC_FOUNDATION_REPO_ROOT: ${{ github.workspace }}/local/ac-foundation
+      ARC_REQUIRE_DSH_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: python -m pip install build pytest
-      - name: Read Foundation SHA
+      - run: python -m pip install build pytest PyYAML Pillow uv
+      - name: Read Foundation source lock
         id: foundation
         run: |
-          echo "sha=$(python -c 'import json; p=json.load(open("plugins/arc/skills/arc/scripts/runtime-sources.json")); print(next(s["commit"] for s in p["sources"] if s["id"] == "foundation"))')" >> "$GITHUB_OUTPUT"
-      - run: git clone https://github.com/tririver/ac-foundation.git local/ac-foundation
-      - run: git -C local/ac-foundation checkout ${{ steps.foundation.outputs.sha }}
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          lock = json.loads(Path("plugins/arc/skills/arc/scripts/runtime-sources.json").read_text())
+          source = next(item for item in lock["sources"] if item["id"] == "foundation")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print("repository=" + source["repository"], file=output)
+              print("sha=" + source["commit"], file=output)
+          PY
+      - name: Checkout locked Foundation
+        env:
+          FOUNDATION_REPOSITORY: ${{ steps.foundation.outputs.repository }}
+          FOUNDATION_SHA: ${{ steps.foundation.outputs.sha }}
+        run: |
+          git clone "$FOUNDATION_REPOSITORY" local/ac-foundation
+          git -C local/ac-foundation checkout --detach "$FOUNDATION_SHA"
       - run: python scripts/check-generated-foundation.py
+      - name: Verify tagged runtime sources
+        if: github.ref_type == 'tag'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/check-release-tag.py --tag "$RELEASE_TAG" --check-pins --foundation-root local/ac-foundation
       - run: >-
           python -m pip install
           -e local/ac-foundation/packages/ac-jobs
@@ -33,6 +83,20 @@ jobs:
           -e local/ac-foundation/packages/ac-proposer-reviewer
           -e packages/arc-paper
           -e packages/arc-domain
-      - run: python -m pytest --import-mode=importlib packages/*/tests tests
+      - name: Locked Foundation runtime and Host contracts on Linux
+        run: >-
+          python -m pytest --import-mode=importlib
+          local/ac-foundation/tests/test_runtime_bootstrap.py
+          local/ac-foundation/tests/test_runtime_recovery.py
+          local/ac-foundation/packages/ac-llm/tests/test_host_provider.py
+          local/ac-foundation/packages/ac-jobs/tests/test_installation.py
+          --basetemp "$RUNNER_TEMP/ac-runtime-recovery" -q -ra
+      - name: Offline suite
+        run: python -m pytest --import-mode=importlib packages/*/tests tests -ra
+      - name: Explicit live paper-network checks
+        if: github.event_name == 'workflow_dispatch' && inputs.run_network
+        env:
+          ARC_RUN_NET_TESTS: "1"
+        run: python -m pytest tests/integration/test_paper_query_network.py -v -ra
       - run: node tests/test_dsh_llm_bridge.mjs
       - run: scripts/build-packages.sh

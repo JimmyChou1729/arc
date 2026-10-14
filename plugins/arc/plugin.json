@@ -1,0 +1,40 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "arc",
+  "version": "2.0.3",
+  "description": "Agent Research Copilot for academic papers and theoretical-physics research workflows.",
+  "author": {
+    "name": "ARC"
+  },
+  "homepage": "https://github.com/tririver/arc",
+  "repository": "https://github.com/tririver/arc",
+  "license": "MIT",
+  "keywords": [
+    "arc",
+    "papers",
+    "arxiv",
+    "inspire",
+    "research"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "ARC",
+        "shortDescription": "Academic research tools",
+        "longDescription": "Agent Skill and SHA-locked CLIs for paper access, research-domain construction, idea review, planning, calculation, and checking.",
+        "developerName": "ARC",
+        "category": "Productivity",
+        "capabilities": [
+          "Research"
+        ],
+        "defaultPrompt": [
+          "Summarize arXiv:0911.3380",
+          "Use ARC to build a research domain from arXiv:0911.3380",
+          "Use ARC to check this calculation"
+        ],
+        "logo": "./assets/logo.svg",
+        "composerIcon": "./assets/composer-icon.svg"
+      }
+    }
+  }
+}
