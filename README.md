@@ -28,14 +28,14 @@ publication is assumed.
 For Codex:
 
 ```bash
-codex plugin marketplace add tririver/arc --ref stable
+codex plugin marketplace add tririver/arc --ref main
 codex plugin add arc@arc
 ```
 
 For Claude Code:
 
 ```text
-/plugin marketplace add tririver/arc@stable
+/plugin marketplace add tririver/arc@main
 /plugin install arc
 ```
 
@@ -157,5 +157,5 @@ For a local version check, run `python scripts/check-release-tag.py --tag vX.Y.Z
 For source provenance also pass `--check-pins --foundation-root <checkout>`;
 the Foundation checkout must be at the locked SHA with `origin/main` available.
 The CI ancestry check uses the repository's `origin/main`; a fork tag is not
-an upstream release. Branches such as `stable` remain movable installation
-pointers and are synchronized separately after validation.
+an upstream release. Installation follows `main`; `stable` preserves the
+previous upstream baseline and is managed separately from version tags.
