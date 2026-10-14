@@ -6,6 +6,8 @@ from typing import Any
 
 import httpx
 
+from ._http import create_http_client
+
 from ..html_dependencies import (
     AR5IV_HTML_ACQUISITION_NAMESPACE,
     AR5IV_HTML_DEPENDENCY_NAMESPACE,
@@ -62,7 +64,7 @@ class Ar5ivProvider:
         max_total_dependency_bytes: int = DEFAULT_MAX_TOTAL_DEPENDENCY_BYTES,
         max_dependency_redirects: int = DEFAULT_MAX_DEPENDENCY_REDIRECTS,
     ):
-        self.client = client or httpx.Client(timeout=timeout, follow_redirects=True)
+        self.client = client or create_http_client(timeout=timeout, follow_redirects=True)
         self.timeout = timeout
         self.cache = request_cache or RemoteRequestCache(
             cache_root, source_repository=source_repository

@@ -39,6 +39,7 @@ from ac_llm import (
     decode_resume_input,
 )
 from arc_paper import ArcPaperService
+from arc_paper.providers.base import ProviderError
 
 from . import (
     DOMAIN_BUILD_POLICY_SCHEMA_VERSION,
@@ -651,12 +652,14 @@ def main(argv: list[str] | None = None) -> int:
             ),
             exit_code=2,
         )
-    except (AcJobsError, DomainPublicationError, OSError, ValueError) as exc:
+    except (AcJobsError, DomainPublicationError, ProviderError, OSError, ValueError) as exc:
         code = {
             "RunNotFoundError": "run_not_found",
             "RunBusyError": "run_busy",
             "IdempotencyConflictError": "idempotency_conflict",
         }.get(type(exc).__name__, "domain_command_failed")
+        if isinstance(exc, ProviderError):
+            code = exc.code
         return _emit(
             CommandResult(
                 CommandStatus.FAILED,

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import httpx
 
+from ._http import create_http_client
+
 from ..ids import arxiv_path_id
 from ..source_repository import SourceRepository
 from ..sources import SourceArtifact, SourceFormat, SourceOrigin, SourceOriginKind
@@ -44,7 +46,7 @@ class ArxivPdfProvider:
         request_cache: RemoteRequestCache | None = None,
         request_gate: HostRequestGate | None = None,
     ):
-        self.client = client or httpx.Client(timeout=timeout, follow_redirects=True)
+        self.client = client or create_http_client(timeout=timeout, follow_redirects=True)
         self.timeout = timeout
         self.cache = request_cache or RemoteRequestCache(
             cache_root, source_repository=source_repository

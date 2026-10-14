@@ -7,6 +7,8 @@ from urllib.parse import unquote, urlparse
 
 import httpx
 
+from ._http import create_http_client
+
 from ..reference_cache import normalize_reference_url
 from ._http import response_media_type, validate_response_size
 from .base import ProviderError
@@ -34,7 +36,7 @@ class HttpResourceProvider:
         timeout: float = 60.0,
         maximum_bytes: int = MAX_HTTP_RESOURCE_BYTES,
     ):
-        self.client = client or httpx.Client(timeout=timeout, follow_redirects=True)
+        self.client = client or create_http_client(timeout=timeout, follow_redirects=True)
         self.timeout = timeout
         self.maximum_bytes = maximum_bytes
 
