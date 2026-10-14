@@ -710,6 +710,98 @@ def test_foundation_group_units_replay_after_selection_pause(tmp_path: Path) -> 
     assert paper.calls.count(("references", SEED)) == 1
 
 
+@pytest.mark.parametrize("phase", ["foundation-audit-", "foundation-select-"])
+def test_foundation_host_submit_resumes_same_request_after_persistence(tmp_path, phase):
+    from ac_llm import HostCoordinator, HostTaskService, LLMExecutionOptions, LLMTaskService, ModelSelection
+    class HostPhaseService(FakeTaskService):
+        def __init__(self):
+            super().__init__()
+            self.host = LLMTaskService()
+            self.requests = []
+        def execute_or_resume(self, context, request, **kwargs):
+            if request.task_id.startswith(phase):
+                self.requests.append(request)
+                return self.host.execute_or_resume(context, request, **kwargs)
+            return super().execute_or_resume(context, request, **kwargs)
+    repository = RunRepository(tmp_path / "runs")
+    runner, tasks, paper = DomainBuildRunner(repository), HostPhaseService(), FakePaperAccess()
+    options = LLMExecutionOptions(host_coordinator=HostCoordinator("offline"))
+    kwargs = dict(paper_access=paper, task_service=tasks, reference_service=NoReferenceInference(), llm=options)
+    paused = runner.execute(replace(_request(), model=ModelSelection("host")), **kwargs)
+    assert paused.status is RunStatus.PAUSED
+    assert runner.resume(paused.run_id, **kwargs).status is RunStatus.PAUSED
+    assert tasks.requests[0] == tasks.requests[1]
+    host, location = HostTaskService(), dict(run_root=repository.root, run_id=paused.run_id)
+    task = host.export(**location, task_id=host.pending(**location)[0]["task_id"])
+    result = FakeTaskService().execute_or_resume(None, tasks.requests[0]).value
+    schema = task["request"]["output_contract"]["schema"]
+    if schema.get("properties", {}).get("schema_version", {}).get("const") == "ac.llm.host_turn.v1":
+        result = {"schema_version": "ac.llm.host_turn.v1", "state": "complete", "result": result, "host_request": None}
+    response = {"schema_version": "ac.llm.host_response.v1", "task_id": task["task_id"],
+                "request_sha256": task["request_sha256"], "actor": {"actor_id": "offline", "kind": "fake"}, "output": result}
+    host.submit(**location, response=response)
+    resumed = runner.resume(paused.run_id, **kwargs)
+    assert resumed.status is RunStatus.SUCCEEDED
+    assert resumed.run_id == paused.run_id
+    assert all(request == tasks.requests[0] for request in tasks.requests)
+    assert host.submit(**location, response=response)["reused"]
+    assert len(host.pending(**location, include_completed=True)) == 1
+    assert paper.calls.count(("metadata", SEED)) == 2  # Initial seed plus candidate metadata; never reacquired on resume.
+    assert paper.calls.count(("references", SEED)) == 1
+
+
+def test_legacy_foundation_response_requires_explicit_candidate_adoption(tmp_path, monkeypatch):
+    from ac_llm import HostCoordinator, HostTaskService, LLMExecutionOptions, LLMTaskService, ModelSelection
+    from ac_jobs import canonical_json_bytes
+    from arc_domain import build
+    original = build.candidate_audit_prompt
+    def legacy(**kwargs):
+        return original(**kwargs).replace(
+            canonical_json_bytes(dict(kwargs["seed_metadata"])).decode(), str(dict(kwargs["seed_metadata"]))
+        ).replace(canonical_json_bytes([dict(c) for c in kwargs["candidates"]]).decode(), str([dict(c) for c in kwargs["candidates"]]))
+    class HostAudit(FakeTaskService):
+        def __init__(self):
+            super().__init__()
+            self.host = LLMTaskService()
+            self.request = None
+        def execute_or_resume(self, context, request, **kwargs):
+            if request.task_id.startswith("foundation-audit-"):
+                self.request = request
+                return self.host.execute_or_resume(context, request, **kwargs)
+            return super().execute_or_resume(context, request, **kwargs)
+    repo = RunRepository(tmp_path / "runs")
+    runner, tasks = DomainBuildRunner(repo), HostAudit()
+    kwargs = dict(paper_access=FakePaperAccess(), task_service=tasks, reference_service=NoReferenceInference(),
+                  llm=LLMExecutionOptions(host_coordinator=HostCoordinator("offline")))
+    monkeypatch.setattr(build, "candidate_audit_prompt", legacy)
+    paused = runner.execute(replace(_request(), model=ModelSelection("host")), **kwargs)
+    assert paused.status is RunStatus.PAUSED
+    host, location = HostTaskService(), dict(run_root=repo.root, run_id=paused.run_id)
+    task = host.export(**location, task_id=host.pending(**location)[0]["task_id"])
+    scientific = FakeTaskService().execute_or_resume(None, tasks.request).value
+    output = scientific
+    if task["request"]["output_contract"]["schema"].get("properties", {}).get("schema_version", {}).get("const") == "ac.llm.host_turn.v1":
+        output = {"schema_version": "ac.llm.host_turn.v1", "state": "complete", "result": scientific, "host_request": None}
+    response = {"schema_version": "ac.llm.host_response.v1", "task_id": task["task_id"], "request_sha256": task["request_sha256"],
+                "actor": {"actor_id": "offline", "kind": "fake"}, "output": output}
+    host.submit(**location, response=response)
+    monkeypatch.setattr(build, "candidate_audit_prompt", original)
+    failed = runner.resume(paused.run_id, **kwargs)
+    assert failed.status is RunStatus.FAILED and failed.error.code == "idempotency_conflict"
+    assert host.export(**location, task_id=task["task_id"]) == task
+    assert host.submit(**location, response=response)["reused"]
+    receipts = {path: path.read_bytes() for path in repo.run_directory(paused.run_id).rglob(f"{task['task_id']}.json")}
+    assert receipts
+    # The fixture's known-equivalent scientific result is adopted through the public recovery surface.
+    repo.working_state(paused.run_id).write_candidate_json("domain/foundation-audit.json", scientific)
+    resumed = runner.resume(paused.run_id, **kwargs)
+    assert resumed.status is RunStatus.SUCCEEDED and resumed.run_id == paused.run_id
+    assert all(path.read_bytes() == content for path, content in receipts.items())
+    from ac_llm import InvalidRequestError
+    with pytest.raises(InvalidRequestError, match="current recovery epoch"):
+        host.export(**location, task_id=task["task_id"])
+
+
 def test_pack_warnings_replay_after_summary_pause(tmp_path: Path) -> None:
     repository = RunRepository(tmp_path / "runs-root")
     runner = DomainBuildRunner(repository)

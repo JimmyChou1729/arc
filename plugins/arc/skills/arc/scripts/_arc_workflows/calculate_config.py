@@ -17,7 +17,7 @@ from _arc_workflows.workflow_io import (
 
 
 CALCULATE_CONFIG_SCHEMA = "arc.workflow.calculate.config.v4"
-CALCULATE_RESULT_SCHEMA = "arc.workflow.calculate.result.v3"
+CALCULATE_RESULT_SCHEMA = "arc.workflow.calculate.result.v4"
 CALCULATOR_IDS = ("proposer_001", "proposer_002")
 CALCULATION_STEP_KINDS = frozenset(
     {"new_derivation", "check_known_result", "formal_setup"}

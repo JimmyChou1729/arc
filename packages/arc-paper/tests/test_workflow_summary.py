@@ -16,6 +16,9 @@ from ac_jobs import (
     RunStatus,
 )
 from ac_llm import (
+    HostCoordinator,
+    HostTaskService,
+    LLMExecutionOptions,
     InvalidRequestError,
     JsonOutput,
     LLMCompleted,
@@ -28,6 +31,8 @@ from ac_llm import (
     ResumeReason,
     resume_input_to_document,
 )
+
+
 from ac_llm.identity import semantic_key as llm_semantic_key
 
 from arc_paper.parse import ParsedDocument, ParsedSection, parsed_document_to_document
@@ -471,3 +476,39 @@ def test_collect_records_every_terminal_item_and_locator_does_not_change_semanti
         ),
     )
     assert relocated.semantic_document() == items[0].semantic_document()
+
+
+def test_summary_implicit_calls_complete_through_host_and_replay(tmp_path):
+    repository = RunRepository(tmp_path)
+    document = _parsed("a", section_count=2)
+    items = (SummaryBatchItem("paper", document, _publish(repository, document, run_id="parse-host")),)
+    runner = SummaryBatchRunner(repository)
+    options = LLMExecutionOptions(host_coordinator=HostCoordinator("offline-summary"))
+    model = ModelSelection(provider="host", tier="low")
+    service = HostTaskService()
+    location = {"run_root": tmp_path, "run_id": "host-summary"}
+    snapshot = runner.execute(location["run_id"], items, model=model, options=options)
+    for _ in range(4):
+        if snapshot.status is RunStatus.SUCCEEDED:
+            break
+        assert snapshot.status is RunStatus.PAUSED
+        pending = service.pending(**location)
+        assert pending
+        for task in pending:
+            exported = service.export(**location, task_id=task["task_id"])
+            if exported["llm_task_id"].startswith("summary-section-"):
+                section_id = _prompt_value(exported["request"]["task_prompt"], "Section ID")
+                value = {"section_id": section_id, "summary": "Offline source fixture.", "warnings": []}
+            else:
+                value = {"title": "Offline paper", "high_value_summary": ["Source fixture"], "reading_guide": [], "warnings": []}
+            output = {"schema_version": "ac.llm.host_turn.v1", "state": "complete", "result": value, "host_request": None}
+            service.submit(**location, response={"schema_version": "ac.llm.host_response.v1", "task_id": exported["task_id"],
+                "request_sha256": exported["request_sha256"], "actor": {"actor_id": "offline-summary", "kind": "fake"}, "output": output})
+        snapshot = runner.resume(location["run_id"], items, model=model, options=options)
+    assert snapshot.status is RunStatus.SUCCEEDED
+    tasks = service.pending(**location, include_completed=True)
+    assert len(tasks) == 3
+    result_ref = snapshot.result_ref
+    replay = runner.execute(location["run_id"], items, model=model, options=options)
+    assert replay.result_ref == result_ref
+    assert service.pending(**location, include_completed=True) == tasks

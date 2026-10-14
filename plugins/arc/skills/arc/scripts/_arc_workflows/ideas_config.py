@@ -26,7 +26,7 @@ from _arc_workflows.source_checkout import validate_strict_checkout_path
 
 IDEAS_CONFIG_SCHEMA = "arc.workflow.ideas.config.v3"
 IDEAS_VARIANT_SCHEMA = "arc.workflow.ideas.variant.v2"
-DOMAIN_MANIFEST_SCHEMA = "arc.workflow.domain_manifest.v4"
+DOMAIN_MANIFEST_SCHEMA = "arc.workflow.domain_manifest.v5"
 
 
 class ConfigError(ValueError):
@@ -272,7 +272,7 @@ def _load_domain_manifest(
         raise ConfigError(f"Could not read domain manifest {path}: {exc}") from exc
     except NonObjectJsonError as exc:
         raise ConfigError(f"domain manifest must be an object: {path}") from exc
-    if payload.get("schema_version") != DOMAIN_MANIFEST_SCHEMA:
+    if payload.get("schema_version") not in {DOMAIN_MANIFEST_SCHEMA, "arc.workflow.domain_manifest.v4"}:
         raise ConfigError(
             f"{path}.schema_version must be {DOMAIN_MANIFEST_SCHEMA}; "
             "regenerate the domain manifest before running Ideas"
@@ -317,18 +317,25 @@ def _load_domain_manifest(
     relationships = payload.get("domain_relationships")
     if not isinstance(relationships, dict):
         raise ConfigError(f"{path}.domain_relationships must be an object")
-    if set(relationships) != {
+    status = str(relationships.get("status", "")).strip()
+    if status == "paused" and payload["schema_version"] != DOMAIN_MANIFEST_SCHEMA:
+        raise ConfigError(f"{path}.domain_relationships.status=paused requires {DOMAIN_MANIFEST_SCHEMA}")
+    expected_fields = {
         "status",
         "method",
         "pair_classifications",
         "warnings",
-    }:
+    }
+    if status == "paused" and payload["schema_version"] == DOMAIN_MANIFEST_SCHEMA:
+        expected_fields.add("awaiting")
+        if not isinstance(relationships.get("awaiting"), dict):
+            raise ConfigError(f"{path}.domain_relationships.awaiting must be an object")
+    if set(relationships) != expected_fields:
         raise ConfigError(
             f"{path}.domain_relationships must contain exactly status, "
-            "method, pair_classifications, and warnings"
+            "method, pair_classifications, warnings, and awaiting only when paused"
         )
-    status = str(relationships.get("status", "")).strip()
-    if status not in {"available", "not_applicable", "unavailable"}:
+    if status not in {"available", "not_applicable", "unavailable", "paused"}:
         raise ConfigError(
             f"{path}.domain_relationships.status is invalid"
         )

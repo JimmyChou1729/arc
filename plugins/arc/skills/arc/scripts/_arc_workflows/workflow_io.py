@@ -10,6 +10,22 @@ from typing import Any
 from ac_jobs import InvalidRunIdError, atomic_write_bytes, validate_simple_id
 
 
+def llm_pause_document(outcome: Any, *, run_root: str | Path, run_id: str | None) -> dict[str, Any]:
+    """Expose the owning workflow's public pause and coordinator locations."""
+    from ac_jobs import RunRepository, encode_artifact_ref
+
+    stopped = run_id is not None and RunRepository(run_root).inspect(run_id).stop_request is not None
+    document = {"run_root": str(run_root), "run_id": run_id, "reason": outcome.reason.value,
+                "resume_key": outcome.resume_key, "input_required": outcome.input_required,
+                "response_contract": outcome.response_contract, "details": dict(outcome.details),
+                "request_ref": None if outcome.request_ref is None else encode_artifact_ref(outcome.request_ref),
+                "stop_requested": stopped}
+    if outcome.details.get("code") == "awaiting_host" and run_id is not None:
+        from ac_llm import HostTaskService
+        document["host_tasks"] = HostTaskService().pending(run_root=run_root, run_id=run_id)
+    return document
+
+
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
