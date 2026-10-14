@@ -5,7 +5,7 @@
     {
       "id": "foundation",
       "repository": "https://github.com/tririver/ac-foundation.git",
-      "commit": "9f458803fd60e40502ffdab0ce73b00a955e0ba2",
+      "commit": "251c0f06bb45a4905d0b3f5e7649a40786fc2698",
       "packages": [
         "ac-jobs",
         "ac-llm",

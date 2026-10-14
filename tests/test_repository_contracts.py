@@ -50,6 +50,7 @@ def test_package_set_metadata_and_dependency_graph() -> None:
                 ac_range = re.search(r">=(\d+)(?:\.\d+\.\d+)?,<(\d+)$", dependency)
                 assert ac_range is not None
                 assert int(ac_range[2]) == int(ac_range[1]) + 1
+                assert dependency.endswith(">=2.2.0,<3")
 
 
 def test_research_packages_have_no_learning_or_legacy_core_dependency() -> None:
