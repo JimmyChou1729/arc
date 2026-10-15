@@ -100,3 +100,56 @@ jobs:
         run: python -m pytest tests/integration/test_paper_query_network.py -v -ra
       - run: node tests/test_dsh_llm_bridge.mjs
       - run: scripts/build-packages.sh
+
+  auto-tag:
+    needs: test
+    if: >-
+      ${{ !cancelled() && needs.test.result == 'success' &&
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          github.repository == 'tririver/arc' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Select merged release PR
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(python scripts/auto-release-tag.py candidate)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Checkout release Foundation source
+        if: steps.release.outputs.tag != ''
+        run: |
+          python - <<'PYTHON'
+          import json, subprocess
+          from pathlib import Path
+          lock = json.loads(Path("plugins/arc/skills/arc/scripts/runtime-sources.json").read_text())
+          source = next(item for item in lock["sources"] if item["id"] == "foundation")
+          if source["repository"] != "https://github.com/tririver/ac-foundation.git":
+              raise SystemExit("Release requires upstream Foundation")
+          subprocess.run(["git", "clone", source["repository"], "local/ac-foundation"], check=True)
+          subprocess.run(["git", "-C", "local/ac-foundation", "checkout", "--detach", source["commit"]], check=True)
+          PYTHON
+      - name: Validate release before tagging
+        if: steps.release.outputs.tag != ''
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          AC_FOUNDATION_REPO_ROOT: ${{ github.workspace }}/local/ac-foundation
+        run: |
+          python scripts/check-generated-foundation.py
+          python scripts/check-release-tag.py --tag "$RELEASE_TAG" --check-pins --foundation-root local/ac-foundation
+      # GITHUB_TOKEN tag pushes do not trigger another CI run; validate first.
+      - name: Publish immutable version tag
+        if: steps.release.outputs.tag != ''
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: python scripts/auto-release-tag.py publish --tag "$RELEASE_TAG"

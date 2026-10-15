@@ -101,12 +101,18 @@ scripts/build-packages.sh
 
 ## Release
 
-Prepare package versions and runtime pins from a clean branch:
+Choose the next `X.Y.Z` version and prepare package versions and runtime pins
+from a clean task branch:
 
 ```bash
 scripts/release-arc.sh X.Y.Z
 ```
 
-Merge Foundation updates first and pin their upstream commit. After the PR
-passes CI and merges into `main`, create an annotated `vX.Y.Z` tag on the merged
-commit. Tags must match the package versions and remain immutable.
+Include the version and source-pin updates in the release PR. When updating
+Foundation too, merge it first and pin its upstream commit. Use a merge commit
+to preserve the pinned product source SHA.
+
+When a PR changes `VERSION` and merges into `main`, CI validates the release
+and automatically creates an annotated `vX.Y.Z` tag after all checks pass.
+Other PRs do not create tags. If tagging fails, rerun the failed CI run.
+Published tags are immutable.
